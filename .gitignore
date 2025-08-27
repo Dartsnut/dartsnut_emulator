@@ -1,0 +1,12 @@
+# ignore egg-info directories
+*.egg-info/
+
+# Ignore Python cache files and folders
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyc
+*.pyo
+*.pyd
+*.pycache/

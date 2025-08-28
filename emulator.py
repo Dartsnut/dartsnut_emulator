@@ -182,7 +182,7 @@ try:
             # map to 128*128 pixels
             if (mouse_x <= 128*8) & (mouse_y <= 128*8):
                 x = mouse_x // 8 * 299 + 1800
-                y = (127 - mouse_y // 8) * 299 + 1300
+                y = mouse_y // 8 * 299 + 1800
                 if pygame.key.get_pressed()[pygame.K_F2]:
                     darts[1] = [x, y]
                 elif pygame.key.get_pressed()[pygame.K_F3]:

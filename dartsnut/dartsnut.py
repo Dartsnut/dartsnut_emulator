@@ -2,6 +2,7 @@ from multiprocessing import shared_memory, resource_tracker
 import argparse
 import sys
 import json
+import math
 
 class Dartsnut:
     def __init__(self):
@@ -108,6 +109,7 @@ class Dartsnut:
                 darts.append([x_mapped, y_mapped])
             else:
                 darts.append([-1, -1])
+        print(darts)
         return darts
 
     def get_buttons(self):

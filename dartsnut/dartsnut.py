@@ -92,19 +92,19 @@ class Dartsnut:
             x = buf[i*4+1] + (buf[i*4+2] << 8)
             y = buf[i*4+3] + (buf[i*4+4] << 8)
             if (x != 0xffff) & (y != 0xffff):
-                if (y <= 1300):
+                if (y <= 1800):
                     y_mapped = 127
-                elif (y >= 39300):
+                elif (y >= 39800):
                     y_mapped = 0
                 else:
-                    y_mapped = 127 - (y - 1300) // 299
+                    y_mapped = math.floor((y - 1800) / 299)
                 
                 if (x <= 1800):
                     x_mapped = 0
                 elif (x >= 39800):
                     x_mapped = 127
                 else:
-                    x_mapped = (x - 1800) // 299
+                    x_mapped = math.floor((x - 1800) / 299)
                 darts.append([x_mapped, y_mapped])
             else:
                 darts.append([-1, -1])

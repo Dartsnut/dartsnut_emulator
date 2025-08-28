@@ -94,9 +94,9 @@ class Dartsnut:
             y = buf[i*4+3] + (buf[i*4+4] << 8)
             if (x != 0xffff) & (y != 0xffff):
                 if (y <= 1800):
-                    y_mapped = 127
-                elif (y >= 39800):
                     y_mapped = 0
+                elif (y >= 39800):
+                    y_mapped = 127
                 else:
                     y_mapped = math.floor((y - 1800) / 299)
                 
@@ -109,7 +109,6 @@ class Dartsnut:
                 darts.append([x_mapped, y_mapped])
             else:
                 darts.append([-1, -1])
-        print(darts)
         return darts
 
     def get_buttons(self):

@@ -207,12 +207,13 @@ try:
                     darts[11] = [x, y]
                 else:
                     darts[0] = [x, y]
+                    
         elif pygame.mouse.get_pressed()[2]:  # Right mouse button
             mouse_x, mouse_y = pygame.mouse.get_pos()
             # map to 128*128 pixels
             if (mouse_x <= 128*8) & (mouse_y <= 128*8):
                 x = mouse_x // 8 * 299 + 1800
-                y = (127 - mouse_y // 8) * 299 + 1300
+                y = mouse_y // 8 * 299 + 1800
                 for i in range(12):
                     if darts[i] == [x, y]:
                         darts[i] = [-1, -1]

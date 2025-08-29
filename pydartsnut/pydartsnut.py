@@ -3,6 +3,7 @@ import argparse
 import sys
 import json
 import math
+import time
 
 class Dartsnut:
     def __init__(self):
@@ -112,7 +113,31 @@ class Dartsnut:
         return darts
 
     def get_buttons(self):
-        return self.shm_pdo_buf[0]
+        buttons = {
+            "btn_a": bool(self.shm_pdo_buf[0] & 1),
+            "btn_b": bool(self.shm_pdo_buf[0] & 2),
+            "btn_up": bool(self.shm_pdo_buf[0] & 4),
+            "btn_right": bool(self.shm_pdo_buf[0] & 8),
+            "btn_left": bool(self.shm_pdo_buf[0] & 16),
+            "btn_down": bool(self.shm_pdo_buf[0] & 32),
+            "btn_home": bool(self.shm_pdo_buf[0] & 64),
+            "btn_reserved" : bool(self.shm_pdo_buf[0] & 128),
+        }
+        if not hasattr(self, "_button_states"):
+            self._button_states = {k: False for k in buttons}
+            self._button_last = {k: False for k in buttons}
+            self._button_times = {k: 0 for k in buttons}
+            self._debounce_delay = 0.05  # 50 ms debounce
+
+        now = time.time()
+        for k in buttons:
+            if buttons[k] != self._button_last[k]:
+                self._button_times[k] = now
+                self._button_last[k] = buttons[k]
+            if now - self._button_times[k] >= self._debounce_delay:
+                self._button_states[k] = buttons[k]
+            buttons[k] = self._button_states[k]
+        return buttons
 
     def set_brightness(self, brightness):
         if (10 <= brightness <= 100):

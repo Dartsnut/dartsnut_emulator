@@ -1,9 +1,9 @@
 import calendar
-import dartsnut
+from pydartsnut import Dartsnut
 import time
 from PIL import Image, ImageDraw, ImageFont
 
-dartsnut = dartsnut.Dartsnut()
+dartsnut = Dartsnut()
 
 # image size
 WIDTH, HEIGHT = 128, 160

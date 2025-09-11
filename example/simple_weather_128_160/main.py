@@ -110,11 +110,15 @@ def draw_weather(city="", lat=None, lng=None, forecast="0", unit="celsius"):
                     for entry in weather_data["list"]:
                         # Convert UTC timestamp to local time
                         local_dt = datetime.datetime.fromtimestamp(entry["dt"], datetime.timezone.utc) + datetime.timedelta(seconds=timezone_shift)
-                        # Check if time is noon (11:00)
-                        if local_dt.hour == 11 and local_dt.date() != datetime.datetime.now().date():
-                            forecasts.append((local_dt.date(), entry))
-                            if len(forecasts) == 3:
-                                break
+
+                        # Find the time closest to noon (12:00)
+                        if local_dt.date() not in [f[0] for f in forecasts]:
+                            hour_diff = abs(local_dt.hour - 12)
+                            # Only consider times between 9:00 and 15:00 for noon forecast
+                            if hour_diff <= 3:
+                                forecasts.append((local_dt.date(), entry))
+                                if len(forecasts) == 3:
+                                    break
 
                     # Draw 3-day forecast
                     # Draw forecast icons and temps for 3 days
@@ -164,11 +168,15 @@ def draw_weather(city="", lat=None, lng=None, forecast="0", unit="celsius"):
                     forecasts = []
                     for entry in weather_data["list"]:
                         local_dt = datetime.datetime.fromtimestamp(entry["dt"], datetime.timezone.utc) + datetime.timedelta(seconds=timezone_shift)
-                        # Check if time is noon (11:00)
-                        if local_dt.hour == 11 and local_dt.date() != datetime.datetime.now().date():
-                            forecasts.append((local_dt.date(), entry))
-                            if len(forecasts) == 5:
-                                break
+                        
+                        # Find the time closest to noon (12:00)
+                        if local_dt.date() not in [f[0] for f in forecasts]:
+                            hour_diff = abs(local_dt.hour - 12)
+                            # Only consider times between 9:00 and 15:00 for noon forecast
+                            if hour_diff <= 3:
+                                forecasts.append((local_dt.date(), entry))
+                                if len(forecasts) == 5:
+                                    break
 
                     # Draw 5-day forecast vertically
                     for i, (date, entry) in enumerate(forecasts):

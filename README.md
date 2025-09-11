@@ -31,6 +31,6 @@ python emulator.py --path your_app_relative_path --params your_app_params_json
 ## Examples
 
 ```bash
-python emulator.py --path "example/simple_clock_128_128" --params '{"city":"chicago"}'
+python emulator.py --path "example/simple_clock_128_128" --params '{\"city\":\"chicago\"}'
 python emulator.py --path "example/simple_weather_128_160" --params '{\"city\":\"chicago\"}'
 ```

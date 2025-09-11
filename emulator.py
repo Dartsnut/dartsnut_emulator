@@ -1,26 +1,19 @@
 import sys
 from multiprocessing import shared_memory
 import subprocess
-import time
-import cv2
 import os
 import numpy as np
 import pygame
-
+import json
 import argparse
 import sys
+
 parser = argparse.ArgumentParser(description="Dartsnut")
 parser.add_argument(
     "--params",
     type=str,
     default="{}",
     help="JSON string for widget parameters"
-)
-parser.add_argument(
-    "--display",
-    type=int,
-    default="0",
-    help="Shared memory name"
 )
 parser.add_argument(
     "--path",
@@ -30,8 +23,6 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# create the shared memory for display
-display_mode = args.display
 shm_pdi_name = "shmpdi"
 # remove the previous shared memory if it exists
 try:
@@ -42,21 +33,9 @@ except FileNotFoundError:
     pass
 except FileExistsError:
     shared_memory.SharedMemory(name=shm_pdi_name).unlink()
-# full screen 128*160
-if display_mode == 0:
-    shm_pdi = shared_memory.SharedMemory(name=shm_pdi_name, create=True, size=128*160*3+1)  # 10 MB
-# main screen 128*128
-elif display_mode == 1:
-    shm_pdi = shared_memory.SharedMemory(name=shm_pdi_name, create=True, size=128*128*3+1)
-# small screen 128*64
-elif display_mode == 2:
-    shm_pdi = shared_memory.SharedMemory(name=shm_pdi_name, create=True, size=128*64*3+1)
-# secondary screen 64*32
-elif display_mode == 3:
-    shm_pdi = shared_memory.SharedMemory(name=shm_pdi_name, create=True, size=64*32*3+1)
-else:
-    print("Invalid display mode provided")
-    sys.exit(1)
+
+# init the shm for display
+shm_pdi = shared_memory.SharedMemory(name=shm_pdi_name, create=True, size=128*160*3+1)
 
 # create the shared memory for darts and buttons
 shm_pdo_name = "pdoshm"
@@ -71,7 +50,7 @@ except FileExistsError:
     shared_memory.SharedMemory(name=shm_pdo_name).unlink()
 shm_pdo = shared_memory.SharedMemory(name=shm_pdo_name, create=True, size=49)  # 12 darts, each with x and y coordinates
 
-#start the process
+# start the process
 command = [sys.executable, os.path.join(os.getcwd(), args.path, "main.py")]
 command.extend(["--params", args.params])
 command.extend(["--shm",shm_pdi_name])
@@ -80,22 +59,22 @@ process = subprocess.Popen(
     cwd=args.path,
 )
 
-#init darts
-darts = [[-1, -1] for _ in range(12)]
-
 #init pygame
 pygame.init()
-if display_mode == 0:
-    screen = pygame.display.set_mode((1024, 1280))
-elif display_mode == 1:
-    screen = pygame.display.set_mode((1024, 1024))
-elif display_mode == 2:
-    screen = pygame.display.set_mode((1024, 512))
-elif display_mode == 3:
-    screen = pygame.display.set_mode((512, 256))
+
+# read the conf.json at args.path/conf.json to get the display mode
+with open(os.path.join(os.getcwd(), args.path, "conf.json")) as f:
+    config = json.load(f)
+
+display_size = config.get("size", [128,160])
+screen = pygame.display.set_mode((display_size[0]*8, display_size[1]*8))
+pygame.display.set_caption("Dartsnut Emulator - " + config.get("name", "Unknown Widget"))
 clock = pygame.time.Clock()
 running = True
 last_right_click = 0
+
+#init darts
+darts = [[-1, -1] for _ in range(12)]
 
 try:
     while running:
@@ -114,15 +93,8 @@ try:
         
         # render the frame buffer
         if shm_pdi.buf[0] == 0:
-            frame = np.frombuffer(shm_pdi.buf[1:shm_pdi.size], dtype=np.uint8)
-            if display_mode == 0:
-                frame = frame.reshape((160, 128, 3))
-            elif display_mode == 1:
-                frame = frame.reshape((128, 128, 3))
-            elif display_mode == 2:
-                frame = frame.reshape((64, 128, 3))
-            elif display_mode == 3:
-                frame = frame.reshape((32, 64, 3))
+            frame = np.frombuffer(shm_pdi.buf[1:display_size[0]*display_size[1]*3+1], dtype=np.uint8)
+            frame = frame.reshape((display_size[1], display_size[0], 3))
 
             # Enlarge pixels and add borders
             height, width, channels = frame.shape
@@ -132,7 +104,7 @@ try:
             out_width = width * scale
             out_frame = np.zeros((out_height, out_width, channels), dtype=np.uint8)
 
-            if display_mode == 0:
+            if display_size == [128, 160]:
                 for y in range(128):
                     for x in range(128):
                         y_start = y * scale

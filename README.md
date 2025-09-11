@@ -1,0 +1,2 @@
+# dartsnut_emulator
+The dartsnut_emulator module allows developers to create and test widgets and games on Windows, simulating the environment of Dartsnut hardware. This tool streamlines development and debugging before deploying to actual devices.

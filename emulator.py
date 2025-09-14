@@ -7,6 +7,7 @@ import pygame
 import json
 import argparse
 import sys
+import tempfile
 
 parser = argparse.ArgumentParser(description="Dartsnut")
 parser.add_argument(
@@ -50,9 +51,28 @@ except FileExistsError:
     shared_memory.SharedMemory(name=shm_pdo_name).unlink()
 shm_pdo = shared_memory.SharedMemory(name=shm_pdo_name, create=True, size=49)  # 12 darts, each with x and y coordinates
 
+# read the conf.json at args.path/conf.json to get the display mode
+with open(os.path.join(os.getcwd(), args.path, "conf.json")) as f:
+    config = json.load(f)
+params = json.loads(args.params)
+
+for param in config["fields"]:
+    if param["type"] == "files":
+        # if the param is of type files, and the params has it, convert the list to absolute path
+        if param["id"] in params:
+            file_list = params[param["id"]]
+            temp_files = []
+            for file_path in file_list:
+                with open(os.path.join(os.getcwd(), args.path, file_path), "rb") as src_file:
+                    temp_file = tempfile.NamedTemporaryFile(delete=False)
+                    temp_file.write(src_file.read())
+                    temp_file.close()
+                    temp_files.append(temp_file.name)
+            params[param["id"]] = temp_files
+
 # start the process
 command = [sys.executable, os.path.join(os.getcwd(), args.path, "main.py")]
-command.extend(["--params", args.params])
+command.extend(["--params", json.dumps(params)])
 command.extend(["--shm",shm_pdi_name])
 process = subprocess.Popen(
     command,
@@ -61,10 +81,6 @@ process = subprocess.Popen(
 
 #init pygame
 pygame.init()
-
-# read the conf.json at args.path/conf.json to get the display mode
-with open(os.path.join(os.getcwd(), args.path, "conf.json")) as f:
-    config = json.load(f)
 
 display_size = config.get("size", [128,160])
 screen = pygame.display.set_mode((display_size[0]*8, display_size[1]*8))

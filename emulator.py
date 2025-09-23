@@ -64,7 +64,7 @@ for param in config["fields"]:
             temp_files = []
             for file_path in file_list:
                 with open(os.path.join(os.getcwd(), args.path, file_path), "rb") as src_file:
-                    temp_file = tempfile.NamedTemporaryFile(delete=False)
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_path)[1])
                     temp_file.write(src_file.read())
                     temp_file.close()
                     temp_files.append(temp_file.name)

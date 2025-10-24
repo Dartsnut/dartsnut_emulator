@@ -57,18 +57,20 @@ with open(os.path.join(os.getcwd(), args.path, "conf.json")) as f:
 params = json.loads(args.params)
 
 for param in config["fields"]:
-    if param["type"] == "files":
-        # if the param is of type files, and the params has it, convert the list to absolute path
+    if param["type"] == "image":
+        # if the param is of type image, and the params has it, convert the list to absolute path
         if param["id"] in params:
-            file_list = params[param["id"]]
-            temp_files = []
-            for file_path in file_list:
-                with open(os.path.join(os.getcwd(), args.path, file_path), "rb") as src_file:
-                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_path)[1])
-                    temp_file.write(src_file.read())
-                    temp_file.close()
-                    temp_files.append(temp_file.name)
-            params[param["id"]] = temp_files
+            image = params[param["id"]]
+            image_path = image["image"]
+            cropbox = image["cropbox"]
+            with open(os.path.join(os.getcwd(), args.path, image_path), "rb") as src_file:
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(image_path)[1])
+                temp_file.write(src_file.read())
+                temp_file.close()
+                params[param["id"]] = {
+                    "image": temp_file.name,
+                    "cropbox": cropbox
+                }
 
 # start the process
 command = [sys.executable, os.path.join(os.getcwd(), args.path, "main.py")]

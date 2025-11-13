@@ -84,14 +84,16 @@ process = subprocess.Popen(
 #init pygame
 pygame.init()
 
-display_size = config.get("size", [128,160])
-screen = pygame.display.set_mode((display_size[0]*8, display_size[1]*8))
+widget_size = config.get("size", [128,160])
+screen = pygame.display.set_mode((588, 800))
+background = pygame.image.load("PixelDarts.png")
 pygame.display.set_caption("Dartsnut Emulator - " + config.get("name", "Unknown Widget"))
 clock = pygame.time.Clock()
 running = True
 last_right_click = 0
 
 #init darts
+darts_offset = [38,38]
 darts = [[-1, -1] for _ in range(12)]
 
 try:
@@ -111,41 +113,51 @@ try:
         
         # render the frame buffer
         if shm_pdi.buf[0] == 0:
-            frame = np.frombuffer(shm_pdi.buf[1:display_size[0]*display_size[1]*3+1], dtype=np.uint8)
-            frame = frame.reshape((display_size[1], display_size[0], 3))
+            frame = np.frombuffer(shm_pdi.buf[1:widget_size[0]*widget_size[1]*3+1], dtype=np.uint8)
+            frame = frame.reshape((widget_size[1], widget_size[0], 3))
 
             # Enlarge pixels and add borders
             height, width, channels = frame.shape
-            scale = 8
+            scale = 4
             border = 1
-            out_height = height * scale
-            out_width = width * scale
-            out_frame = np.zeros((out_height, out_width, channels), dtype=np.uint8)
+            out_frame_main = np.zeros((128*4, 128*4, channels), dtype=np.uint8)
+            out_frame_small = np.zeros((176, 342, channels), dtype=np.uint8)
 
-            if display_size == [128, 160]:
+            if widget_size == [128, 160]:
                 for y in range(128):
                     for x in range(128):
                         y_start = y * scale
                         x_start = x * scale
-                        out_frame[y_start:y_start+scale, x_start:x_start+scale] = [0, 0, 0]
-                        out_frame[y_start+border:y_start+scale-border, x_start+border:x_start+scale-border] = frame[y, x]
+                        out_frame_main[y_start:y_start+scale, x_start:x_start+scale] = [0, 0, 0]
+                        out_frame_main[y_start+border:y_start+scale-border, x_start+border:x_start+scale-border] = frame[y, x]
                 for y in range(128, 160):
                     for x in range(64):
-                        y_start = y * scale
-                        x_start = x * scale + 32 * scale
-                        out_frame[y_start:y_start+scale, x_start:x_start+scale] = [0, 0, 0]
-                        out_frame[y_start+border:y_start+scale-border, x_start+border:x_start+scale-border] = frame[y, x]
+                        y_start = int((y-128) * 5.3)
+                        x_start = int(x * 5.5)
+                        out_frame_small[y_start:y_start+scale, x_start:x_start+scale] = [0, 0, 0]
+                        out_frame_small[y_start+border:y_start+scale-border, x_start+border:x_start+scale-border] = frame[y, x]
             else:
-                for y in range(height):
-                    for x in range(width):
-                        y_start = y * scale
-                        x_start = x * scale
-                        out_frame[y_start:y_start+scale, x_start:x_start+scale] = [0, 0, 0]
-                        out_frame[y_start+border:y_start+scale-border, x_start+border:x_start+scale-border] = frame[y, x]
+                if widget_size == [64, 32]:
+                    for y in range(32):
+                        for x in range(64):
+                            y_start = int(y * 5.3)
+                            x_start = int(x * 5.5)
+                            out_frame_small[y_start:y_start+scale, x_start:x_start+scale] = [0, 0, 0]
+                            out_frame_small[y_start+border:y_start+scale-border, x_start+border:x_start+scale-border] = frame[y, x]
+                else:
+                    for y in range(height):
+                        for x in range(width):
+                            y_start = y * scale
+                            x_start = x * scale
+                            out_frame_main[y_start:y_start+scale, x_start:x_start+scale] = [0, 0, 0]
+                            out_frame_main[y_start+border:y_start+scale-border, x_start+border:x_start+scale-border] = frame[y, x]
 
             # Convert to surface and blit to pygame screen
-            surface = pygame.surfarray.make_surface(np.transpose(out_frame, (1, 0, 2)))
-            screen.blit(surface, (0, 0))
+            surface_main = pygame.surfarray.make_surface(np.transpose(out_frame_main, (1, 0, 2)))
+            surface_small = pygame.surfarray.make_surface(np.transpose(out_frame_small, (1, 0, 2)))
+            screen.blit(background, (0, 0))
+            screen.blit(surface_main, (38, 38))
+            screen.blit(surface_small, (125, 603))
             pygame.display.flip()
             shm_pdi.buf[0] = 1
 
@@ -170,9 +182,9 @@ try:
         if pygame.mouse.get_pressed()[0]:  # Left mouse button
             mouse_x, mouse_y = pygame.mouse.get_pos()
             # map to 128*128 pixels
-            if (mouse_x <= 128*8) & (mouse_y <= 128*8):
-                x = mouse_x // 8 * 299 + 1800
-                y = mouse_y // 8 * 299 + 1800
+            if (mouse_x <= 128*scale + darts_offset[0]) & (mouse_y <= 128*scale + darts_offset[1]) & (mouse_x >= darts_offset[0]) & (mouse_y >= darts_offset[1]):
+                x = (mouse_x-darts_offset[0]) // scale * 299 + 1800
+                y = (mouse_y-darts_offset[1]) // scale * 299 + 1800
                 if pygame.key.get_pressed()[pygame.K_F2]:
                     darts[1] = [x, y]
                 elif pygame.key.get_pressed()[pygame.K_F3]:
@@ -201,9 +213,9 @@ try:
         elif pygame.mouse.get_pressed()[2]:  # Right mouse button
             mouse_x, mouse_y = pygame.mouse.get_pos()
             # map to 128*128 pixels
-            if (mouse_x <= 128*8) & (mouse_y <= 128*8):
-                x = mouse_x // 8 * 299 + 1800
-                y = mouse_y // 8 * 299 + 1800
+            if (mouse_x <= 128*scale + darts_offset[0]) & (mouse_y <= 128*scale + darts_offset[1]) & (mouse_x >= darts_offset[0]) & (mouse_y >= darts_offset[1]):
+                x = (mouse_x-darts_offset[0]) // scale * 299 + 1800
+                y = (mouse_y-darts_offset[1]) // scale * 299 + 1800
                 for i in range(12):
                     if darts[i] == [x, y]:
                         darts[i] = [-1, -1]

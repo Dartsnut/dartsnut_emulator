@@ -7,10 +7,11 @@ import pygame
 import json
 import argparse
 import tempfile
+from datetime import datetime
 
 # Constants
 SCALE_FACTOR = 4
-BORDER_WIDTH = 1
+BORDER_WIDTH = 0
 SMALL_SCALE_X = 5.5
 SMALL_SCALE_Y = 5.3
 DART_OFFSET = [38, 38]
@@ -22,9 +23,9 @@ DOUBLE_CLICK_THRESHOLD = 500
 # Button masks
 BUTTON_A = 0x01
 BUTTON_B = 0x02
-BUTTON_LEFT = 0x04
-BUTTON_UP = 0x08
-BUTTON_RIGHT = 0x10
+BUTTON_LEFT = 0x10
+BUTTON_UP = 0x04
+BUTTON_RIGHT = 0x08
 BUTTON_DOWN = 0x20
 
 parser = argparse.ArgumentParser(description="Dartsnut")
@@ -68,6 +69,25 @@ with open(os.path.join(os.getcwd(), args.path, "conf.json")) as f:
     config = json.load(f)
 params = json.loads(args.params)
 
+widget_size = config.get("size", [128, 160])
+
+
+def sanitize_name(name: str) -> str:
+    """Sanitize widget/game name for safe filesystem use."""
+    if not name:
+        return "capture"
+    # Replace problematic characters with underscore
+    invalid_chars = '<>:"/\\|?*'
+    sanitized = "".join("_" if c in invalid_chars else c for c in name)
+    # Collapse whitespace into single underscores
+    sanitized = "_".join(sanitized.split())
+    return sanitized or "capture"
+
+
+# Decide whether screenshots should capture the main (game/128 widget) or secondary surface
+capture_main_surface = widget_size in ([128, 128], [128, 160])
+capture_base_name = sanitize_name(config.get("name", "capture"))
+
 for param in config["fields"]:
     if param["type"] == "image":
         # if the param is of type image, and the params has it, convert the list to absolute path
@@ -87,16 +107,22 @@ for param in config["fields"]:
 # start the process
 command = [sys.executable, os.path.join(os.getcwd(), args.path, "main.py")]
 command.extend(["--params", json.dumps(params)])
-command.extend(["--shm",shm_pdi_name])
-process = subprocess.Popen(
-    command,
-    cwd=args.path,
-)
+command.extend(["--shm", shm_pdi_name])
+
+
+def start_widget_process():
+    """Launch the widget subprocess."""
+    return subprocess.Popen(
+        command,
+        cwd=args.path,
+    )
+
+
+process = start_widget_process()
 
 # Initialize Pygame
 pygame.init()
 
-widget_size = config.get("size", [128, 160])
 screen = pygame.display.set_mode((588, 800))
 background = pygame.image.load("PixelDarts.png")
 pygame.display.set_caption("Dartsnut Emulator - " + config.get("name", "Unknown Widget"))
@@ -110,14 +136,20 @@ previous_button_state = 0
 previous_darts = [[-1, -1] for _ in range(12)]
 
 # Pre-allocate frame buffers to avoid repeated allocations
-out_frame_main = np.zeros((128*SCALE_FACTOR, 128*SCALE_FACTOR, 3), dtype=np.uint8)
+out_frame_main = np.zeros((128 * SCALE_FACTOR, 128 * SCALE_FACTOR, 3), dtype=np.uint8)
 out_frame_small = np.zeros((176, 342, 3), dtype=np.uint8)
+
+# Keep track of the last rendered raw frame for screenshots
+last_frame = None
 
 
 def scale_pixel_with_border(out_frame, frame, x, y, x_start, y_start, scale, border):
     """Scale a single pixel with border into the output frame."""
-    out_frame[y_start:y_start+scale, x_start:x_start+scale] = [0, 0, 0]
-    out_frame[y_start+border:y_start+scale-border, x_start+border:x_start+scale-border] = frame[y, x]
+    if border > 0:
+        out_frame[y_start:y_start+scale, x_start:x_start+scale] = [0, 0, 0]
+        out_frame[y_start+border:y_start+scale-border, x_start+border:x_start+scale-border] = frame[y, x]
+    else:
+        out_frame[y_start:y_start+scale, x_start:x_start+scale] = frame[y, x]
 
 
 def render_frame_optimized(frame, widget_size, out_frame_main, out_frame_small):
@@ -156,6 +188,58 @@ def render_frame_optimized(frame, widget_size, out_frame_main, out_frame_small):
                 scale_pixel_with_border(out_frame_main, frame, x, y, x_start, y_start, SCALE_FACTOR, BORDER_WIDTH)
     
     return out_frame_main, out_frame_small
+
+
+def get_capture_region(frame, widget_size, capture_main):
+    """
+    Return the raw borderless region to capture based on widget size.
+
+    - [128,128]: main is full frame.
+    - [128,160]: main is top 128x128; secondary is bottom 32x128.
+    - other sizes (e.g. [64,32]): entire frame is treated as secondary.
+    """
+    height, width = widget_size[1], widget_size[0]
+
+    # Safety check
+    if frame is None:
+        return None
+
+    if widget_size == [128, 128]:
+        # Only main display exists; capture full frame
+        return frame
+    elif widget_size == [128, 160]:
+        if capture_main:
+            # Top 128x128
+            return frame[0:128, 0:128]
+        else:
+            # Bottom 32x128
+            return frame[128:160, 0:128]
+    else:
+        # Other sizes: entire frame is considered secondary
+        return frame
+
+
+def capture_screenshot(frame):
+    """Capture and save a screenshot of the appropriate display region."""
+    global capture_main_surface, capture_base_name
+
+    region = get_capture_region(frame, widget_size, capture_main_surface)
+    if region is None:
+        return
+
+    # Convert region to a Pygame surface (width x height x 3 -> transpose for surfarray)
+    surface = pygame.surfarray.make_surface(np.transpose(region, (1, 0, 2)))
+
+    # Ensure capture directory exists next to emulator.py
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    capture_dir = os.path.join(script_dir, "capture")
+    os.makedirs(capture_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"{capture_base_name}_{timestamp}.png"
+    filepath = os.path.join(capture_dir, filename)
+
+    pygame.image.save(surface, filepath)
 
 
 def get_button_state(keys):
@@ -208,6 +292,19 @@ try:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                    process = start_widget_process()
+                elif event.key == pygame.K_p:
+                    # Capture screenshot using the last rendered raw frame
+                    if last_frame is not None:
+                        capture_screenshot(last_frame)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
                 if pygame.time.get_ticks() - last_right_click < DOUBLE_CLICK_THRESHOLD:
                     # Clear all darts on double right-click
@@ -219,6 +316,9 @@ try:
         if shm_pdi.buf[0] == 0:
             frame = np.frombuffer(shm_pdi.buf[1:widget_size[0]*widget_size[1]*3+1], dtype=np.uint8)
             frame = frame.reshape((widget_size[1], widget_size[0], 3))
+
+            # Store last rendered raw frame for screenshots
+            last_frame = frame.copy()
 
             # Render with optimized function
             out_frame_main, out_frame_small = render_frame_optimized(

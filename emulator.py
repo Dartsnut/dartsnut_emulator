@@ -324,13 +324,13 @@ def capture_borderless_screenshot(frame):
 
     for y in range(32):
         y_start = int(y * SMALL_SCALE_Y)
+        y_end = int((y + 1) * SMALL_SCALE_Y)
         for x in range(64):
             x_start = int(x * SMALL_SCALE_X)
-            # Scale without borders (BORDER_WIDTH = 0) - each pixel becomes SCALE_FACTOR x SCALE_FACTOR
+            x_end = int((x + 1) * SMALL_SCALE_X)
+            # Scale without borders - fill the entire area from start to end position
             pixel = small_region[y, x]
-            small_scaled[
-                y_start : y_start + SCALE_FACTOR, x_start : x_start + SCALE_FACTOR
-            ] = pixel
+            small_scaled[y_start:y_end, x_start:x_end] = pixel
 
     # Convert to pygame surfaces
     surface_main_scaled = pygame.surfarray.make_surface(
@@ -349,8 +349,8 @@ def capture_borderless_screenshot(frame):
     # Blit the scaled main region at (38, 38)
     screenshot_surface.blit(surface_main_scaled, (38, 38))
 
-    # Blit the scaled small region at (125, 603)
-    screenshot_surface.blit(surface_small_scaled, (125, 603))
+    # Blit the scaled small region at (125, 606)
+    screenshot_surface.blit(surface_small_scaled, (125, 606))
 
     # Ensure capture directory exists next to emulator.py
     script_dir = os.path.dirname(os.path.abspath(__file__))

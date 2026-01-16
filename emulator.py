@@ -295,6 +295,75 @@ def capture_screenshot(frame):
     pygame.image.save(surface, filepath)
 
 
+def capture_borderless_screenshot(frame):
+    """Capture and save a borderless screenshot for 128x160 widgets with device frame."""
+    global capture_base_name
+
+    if frame is None:
+        return
+
+    # Extract main region (top 128x128)
+    main_region = frame[0:128, 0:128]
+    # Extract small region (rows 128-160, columns 0-64)
+    small_region = frame[128:160, 0:64]
+
+    # Scale main region by SCALE_FACTOR (4x) without borders
+    main_scaled = np.zeros((128 * SCALE_FACTOR, 128 * SCALE_FACTOR, 3), dtype=np.uint8)
+    for y in range(128):
+        y_start = y * SCALE_FACTOR
+        for x in range(128):
+            x_start = x * SCALE_FACTOR
+            # Scale without borders (BORDER_WIDTH = 0)
+            main_scaled[
+                y_start : y_start + SCALE_FACTOR, x_start : x_start + SCALE_FACTOR
+            ] = main_region[y, x]
+
+    # Scale small region using SMALL_SCALE_X and SMALL_SCALE_Y without borders
+    # Use the same dimensions as out_frame_small for consistency
+    small_scaled = np.zeros((176, 342, 3), dtype=np.uint8)
+
+    for y in range(32):
+        y_start = int(y * SMALL_SCALE_Y)
+        for x in range(64):
+            x_start = int(x * SMALL_SCALE_X)
+            # Scale without borders (BORDER_WIDTH = 0) - each pixel becomes SCALE_FACTOR x SCALE_FACTOR
+            pixel = small_region[y, x]
+            small_scaled[
+                y_start : y_start + SCALE_FACTOR, x_start : x_start + SCALE_FACTOR
+            ] = pixel
+
+    # Convert to pygame surfaces
+    surface_main_scaled = pygame.surfarray.make_surface(
+        np.transpose(main_scaled, (1, 0, 2))
+    )
+    surface_small_scaled = pygame.surfarray.make_surface(
+        np.transpose(small_scaled, (1, 0, 2))
+    )
+
+    # Create a new surface the same size as the screen (588x800)
+    screenshot_surface = pygame.Surface((588, 800))
+
+    # Blit the PixelDarts.png background at (0, 0)
+    screenshot_surface.blit(background, (0, 0))
+
+    # Blit the scaled main region at (38, 38)
+    screenshot_surface.blit(surface_main_scaled, (38, 38))
+
+    # Blit the scaled small region at (125, 603)
+    screenshot_surface.blit(surface_small_scaled, (125, 603))
+
+    # Ensure capture directory exists next to emulator.py
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    capture_dir = os.path.join(script_dir, "capture")
+    os.makedirs(capture_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"{capture_base_name}_{timestamp}.png"
+    filepath = os.path.join(capture_dir, filename)
+
+    pygame.image.save(screenshot_surface, filepath)
+
+
 def get_button_state(keys):
     """Get current button state from keyboard input."""
     button = 0
@@ -361,9 +430,14 @@ try:
                             process.kill()
                     process = start_widget_process()
                 elif event.key == pygame.K_p:
-                    # Capture screenshot using the last rendered raw frame
-                    if last_frame is not None:
-                        capture_screenshot(last_frame)
+                    if widget_size == [128, 160]:
+                        # Capture borderless screenshot using raw frame data
+                        if last_frame is not None:
+                            capture_borderless_screenshot(last_frame)
+                    else:
+                        # Existing behavior for other sizes
+                        if last_frame is not None:
+                            capture_screenshot(last_frame)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
                 if pygame.time.get_ticks() - last_right_click < DOUBLE_CLICK_THRESHOLD:
                     # Clear all darts on double right-click

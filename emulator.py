@@ -57,6 +57,8 @@ cleanup_shared_memory(shm_pdi_name)
 shm_pdi = shared_memory.SharedMemory(
     name=shm_pdi_name, create=True, size=128 * 160 * 3 + 1
 )
+# Initialize buffer status to 1 (ready to accept frame) so first update_frame_buffer call succeeds
+shm_pdi.buf[0] = 1
 
 # Initialize shared memory for darts and buttons
 shm_pdo_name = "pdoshm"

@@ -209,3 +209,4 @@ __marimo__/
 capture/
 
 .DS_Store
+.emulator_last.json

@@ -1,4 +1,14 @@
 title: "Dartsnut Emulator"
 description: "Desktop emulator for Dartsnut widgets and games."
-theme: jekyll-theme-cayman
+remote_theme: just-the-docs/just-the-docs
 
+markdown: kramdown
+
+# Plugins (GitHub Pages supports these)
+plugins:
+  - jekyll-remote-theme
+
+# Optional: repo link in header
+aux_links:
+  "Repository":
+    - "https://github.com/Dartsnut/dartsnut_emulator"

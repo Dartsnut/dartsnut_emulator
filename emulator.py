@@ -490,7 +490,13 @@ class EmulatorApp:
     def _set_widget_menu_state(self, enabled):
         state = tk.NORMAL if enabled else tk.DISABLED
         try:
-            self._file_menu.entryconfig(2, state=state)
+            # File menu entries (by creation order):
+            # 0: "Open program…"
+            # 1: "Screenshot"
+            # 2: separator
+            # 3: "Exit"
+            # We want to toggle the "Screenshot" entry (index 1), not the separator.
+            self._file_menu.entryconfig(1, state=state)
             self._widget_menu.entryconfig(0, state=state)
         except tk.TclError:
             # macOS native menus may not support -state for menu entries

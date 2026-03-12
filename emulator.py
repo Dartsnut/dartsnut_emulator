@@ -11,6 +11,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 from PIL import Image, ImageTk
+import atexit
 
 # Constants
 SCALE_FACTOR = 4
@@ -361,12 +362,21 @@ def get_button_state_from_set(pressed_keys):
     return button
 
 
+_APP_INSTANCE = None
+
+
 class EmulatorApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Dartsnut Emulator")
         self.root.minsize(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.root.resizable(False, False)
+
+        # Platform flags
+        self._is_macos = sys.platform == "darwin"
+
+        # Ensure the Tkinter window becomes the active/focused window on launch.
+        self.root.after(100, self._raise_window)
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         bg_path = os.path.join(script_dir, "PixelDarts.png")
@@ -419,13 +429,30 @@ class EmulatorApp:
 
         self.tick()
 
+    def _raise_window(self):
+        """Bring the main window to the front and focus it."""
+        try:
+            self.root.lift()
+            self.root.focus_force()
+            # Temporarily set topmost to force focus on some platforms, then revert.
+            self.root.attributes("-topmost", True)
+            self.root.after(200, lambda: self.root.attributes("-topmost", False))
+        except Exception:
+            pass
+
     def _build_menu(self):
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
 
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="Open program…", command=self.menu_open_widget, accelerator="Ctrl+O")
+        open_accel = "Cmd+O" if self._is_macos else "Ctrl+O"
+        quit_accel = "Ctrl+Q"
+        file_menu.add_command(
+            label="Open program…",
+            command=self.menu_open_widget,
+            accelerator=open_accel,
+        )
         self.screenshot_var = tk.BooleanVar(value=False)
         self.restart_var = tk.BooleanVar(value=False)
         file_menu.add_command(
@@ -435,7 +462,11 @@ class EmulatorApp:
             accelerator="P",
         )
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.menu_exit, accelerator="Ctrl+Q")
+        file_menu.add_command(
+            label="Exit",
+            command=self.menu_exit,
+            accelerator=quit_accel,
+        )
 
         widget_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Program", menu=widget_menu)
@@ -448,8 +479,13 @@ class EmulatorApp:
         self._file_menu = file_menu
         self._widget_menu = widget_menu
 
+        # Keyboard shortcuts:
+        # - Open: Ctrl+O (all) and Cmd+O (macOS)
+        # - Exit: Ctrl+Q on all platforms (simple and predictable)
         self.root.bind("<Control-o>", lambda e: self.menu_open_widget())
         self.root.bind("<Control-q>", lambda e: self.menu_exit())
+        if self._is_macos:
+            self.root.bind("<Command-o>", lambda e: self.menu_open_widget())
 
     def _set_widget_menu_state(self, enabled):
         state = tk.NORMAL if enabled else tk.DISABLED
@@ -597,11 +633,14 @@ class EmulatorApp:
 
         def start_process():
             time.sleep(0.5)
+            env = os.environ.copy()
+            env.setdefault("SDL_VIDEODRIVER", "dummy")
             return subprocess.Popen(
                 self.command,
                 cwd=cwd_for_process,
                 stdout=sys.stdout,
                 stderr=sys.stderr,
+                env=env,
             )
 
         self.process = start_process()
@@ -642,12 +681,15 @@ class EmulatorApp:
             except subprocess.TimeoutExpired:
                 self.process.kill()
         cwd = self.current_path if os.path.isdir(self.current_path) else os.getcwd()
+        env = os.environ.copy()
+        env.setdefault("SDL_VIDEODRIVER", "dummy")
         time.sleep(0.5)
         self.process = subprocess.Popen(
             self.command,
             cwd=cwd,
             stdout=sys.stdout,
             stderr=sys.stderr,
+            env=env,
         )
 
     def menu_screenshot(self):
@@ -790,7 +832,19 @@ class EmulatorApp:
 
 
 def main():
+    global _APP_INSTANCE
     app = EmulatorApp()
+    _APP_INSTANCE = app
+
+    def _cleanup_on_exit():
+        # Ensure subprocess and shared memory are cleaned up even if the window
+        # is closed via platform-specific shortcuts like Cmd+Q on macOS.
+        try:
+            app._unload_widget()
+        except Exception:
+            pass
+
+    atexit.register(_cleanup_on_exit)
     app.run()
 
 

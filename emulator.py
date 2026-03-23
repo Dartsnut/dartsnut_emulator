@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
 import atexit
 
 # Constants
@@ -25,6 +25,7 @@ FPS = 60
 DOUBLE_CLICK_THRESHOLD = 500
 WINDOW_WIDTH = 588
 WINDOW_HEIGHT = 800
+SURFACE_BORDER_COLOR = (0, 0, 0)
 
 # Button masks
 BUTTON_A = 0x01
@@ -112,6 +113,26 @@ def scale_pixel_with_border(out_frame, frame, x, y, x_start, y_start, scale, bor
         out_frame[y_start : y_start + scale, x_start : x_start + scale] = frame[y, x]
 
 
+def scale_pixel_fill_cell(
+    out_frame, frame, x, y, x_start, y_start, x_end, y_end, border=0
+):
+    """Fill a variable-size cell for non-uniform scaled surfaces."""
+    h, w = out_frame.shape[:2]
+    x0 = max(0, min(w, x_start))
+    y0 = max(0, min(h, y_start))
+    x1 = max(x0 + 1, min(w, x_end))
+    y1 = max(y0 + 1, min(h, y_end))
+    if border > 0:
+        out_frame[y0:y1, x0:x1] = [0, 0, 0]
+        ix0 = min(x1, x0 + border)
+        iy0 = min(y1, y0 + border)
+        ix1 = max(ix0, x1 - border)
+        iy1 = max(iy0, y1 - border)
+        out_frame[iy0:iy1, ix0:ix1] = frame[y, x]
+    else:
+        out_frame[y0:y1, x0:x1] = frame[y, x]
+
+
 def render_frame_optimized(frame, widget_size, out_frame_main, out_frame_small):
     """Optimized frame rendering with reduced calculations."""
     height, width = widget_size[1], widget_size[0]
@@ -133,32 +154,36 @@ def render_frame_optimized(frame, widget_size, out_frame_main, out_frame_small):
                 )
         for y in range(128, 160):
             y_start = int((y - 128) * SMALL_SCALE_Y)
+            y_end = int((y - 127) * SMALL_SCALE_Y)
             for x in range(64):
                 x_start = int(x * SMALL_SCALE_X)
-                scale_pixel_with_border(
+                x_end = int((x + 1) * SMALL_SCALE_X)
+                scale_pixel_fill_cell(
                     out_frame_small,
                     frame,
                     x,
                     y,
                     x_start,
                     y_start,
-                    SCALE_FACTOR,
-                    BORDER_WIDTH,
+                    x_end,
+                    y_end,
                 )
     elif widget_size == [64, 32]:
         for y in range(32):
             y_start = int(y * SMALL_SCALE_Y)
+            y_end = int((y + 1) * SMALL_SCALE_Y)
             for x in range(64):
                 x_start = int(x * SMALL_SCALE_X)
-                scale_pixel_with_border(
+                x_end = int((x + 1) * SMALL_SCALE_X)
+                scale_pixel_fill_cell(
                     out_frame_small,
                     frame,
                     x,
                     y,
                     x_start,
                     y_start,
-                    SCALE_FACTOR,
-                    BORDER_WIDTH,
+                    x_end,
+                    y_end,
                 )
     else:
         for y in range(height):
@@ -189,6 +214,47 @@ def draw_capture_grid(region, x_positions, y_positions):
         if 0 <= x < w:
             mask[:, x] = True
     region[mask] = (region[mask].astype(np.float64) * 0.5).astype(np.uint8)
+
+
+def draw_pixel_grid_overlay(
+    image,
+    x,
+    y,
+    x_positions,
+    y_positions,
+    color=SURFACE_BORDER_COLOR,
+    x_max_override=None,
+    y_max_override=None,
+):
+    """Draw a strict 1px pixel-grid overlay at provided cell boundaries."""
+    draw = ImageDraw.Draw(image)
+    if not x_positions or not y_positions:
+        return
+    x_max = x_max_override if x_max_override is not None else x + max(x_positions)
+    y_max = y_max_override if y_max_override is not None else y + max(y_positions)
+    x_limit = image.width - 1
+    y_limit = image.height - 1
+    for gx in x_positions:
+        px = x + gx
+        if 0 <= px <= x_limit:
+            draw.line([(px, y), (px, min(y_max + 2, y_limit))], fill=color, width=1)
+    for gy in y_positions:
+        py = y + gy
+        if 0 <= py <= y_limit:
+            draw.line([(x, py), (min(x_max, x_limit), py)], fill=color, width=1)
+
+
+def draw_surface_outline_lines(image, x, y, width, height, color=SURFACE_BORDER_COLOR):
+    """Draw a 1px surface outline using lines only."""
+    if width <= 0 or height <= 0:
+        return
+    draw = ImageDraw.Draw(image)
+    x2 = x + width - 1
+    y2 = y + height - 1
+    draw.line([(x, y), (x2, y)], fill=color, width=1)
+    draw.line([(x, y2), (x2, y2)], fill=color, width=1)
+    draw.line([(x, y), (x, y2)], fill=color, width=1)
+    draw.line([(x2, y), (x2, y2)], fill=color, width=1)
 
 
 def get_capture_region(frame, widget_size, capture_main):
@@ -222,6 +288,15 @@ def capture_screenshot_pil(frame, widget_size, capture_main_surface, capture_bas
         draw_capture_grid(scaled, [4 * i for i in range(1, 128)], [4 * i for i in range(1, 128)])
         scaled_rotated = np.fliplr(np.rot90(scaled, k=-1))
         pil_img = Image.fromarray(np.transpose(scaled_rotated, (1, 0, 2)), mode="RGB")
+        draw_pixel_grid_overlay(
+            pil_img,
+            0,
+            0,
+            [SCALE_FACTOR * i for i in range(1, 128)],
+            [SCALE_FACTOR * i for i in range(1, 128)],
+            x_max_override=SCALE_FACTOR * 128,
+            y_max_override=SCALE_FACTOR * 128,
+        )
     elif (h, w) == (32, 64):
         scaled = np.zeros((176, 342, 3), dtype=np.uint8)
         for y in range(32):
@@ -236,9 +311,15 @@ def capture_screenshot_pil(frame, widget_size, capture_main_surface, capture_bas
         )
         scaled_rotated = np.fliplr(np.rot90(scaled, k=-1))
         pil_img = Image.fromarray(np.transpose(scaled_rotated, (1, 0, 2)), mode="RGB")
+        draw_pixel_grid_overlay(
+            pil_img,
+            0,
+            0,
+            [int(i * SMALL_SCALE_X) for i in range(1, 63)],
+            [int(i * SMALL_SCALE_Y) for i in range(1, 32)],
+        )
     else:
         pil_img = Image.fromarray(np.transpose(region, (1, 0, 2)), mode="RGB")
-
     capture_dir = os.path.join(script_dir, "capture")
     os.makedirs(capture_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -290,7 +371,22 @@ def capture_borderless_screenshot_pil(frame, capture_base_name, script_dir, back
     small_pil = Image.fromarray(np.transpose(small_rotated, (1, 0, 2)), mode="RGB")
     screenshot_img.paste(main_pil, (38, 38))
     screenshot_img.paste(small_pil, (125, 603))
-
+    draw_pixel_grid_overlay(
+        screenshot_img,
+        38,
+        38,
+        [SCALE_FACTOR * i for i in range(1, 128)],
+        [SCALE_FACTOR * i for i in range(1, 128)],
+        x_max_override=38 + SCALE_FACTOR * 128,
+        y_max_override=38 + SCALE_FACTOR * 128,
+    )
+    draw_pixel_grid_overlay(
+        screenshot_img,
+        125,
+        603,
+        [int(i * SMALL_SCALE_X) for i in range(1, 63)],
+        [int(i * SMALL_SCALE_Y) for i in range(1, 32)],
+    )
     capture_dir = os.path.join(script_dir, "capture")
     os.makedirs(capture_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -812,6 +908,22 @@ class EmulatorApp:
                 composite = self.background_pil.copy()
                 composite.paste(main_pil, (38, 38))
                 composite.paste(small_pil, (125, 603))
+                draw_pixel_grid_overlay(
+                    composite,
+                    38,
+                    38,
+                    [SCALE_FACTOR * i for i in range(1, 128)],
+                    [SCALE_FACTOR * i for i in range(1, 128)],
+                    x_max_override=38 + SCALE_FACTOR * 128,
+                    y_max_override=38 + SCALE_FACTOR * 128,
+                )
+                draw_pixel_grid_overlay(
+                    composite,
+                    125,
+                    603,
+                    [int(i * SMALL_SCALE_X) for i in range(1, 63)],
+                    [int(i * SMALL_SCALE_Y) for i in range(1, 32)],
+                )
                 self.current_frame_photo = ImageTk.PhotoImage(composite)
                 if self.current_frame_id is not None:
                     self.canvas.delete(self.current_frame_id)

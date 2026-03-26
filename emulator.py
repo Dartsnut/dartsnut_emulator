@@ -543,7 +543,7 @@ class EmulatorApp:
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
         open_accel = "Cmd+O" if self._is_macos else "Ctrl+O"
-        quit_accel = "Ctrl+Q"
+        close_program_accel = "Ctrl+Q"
         file_menu.add_command(
             label="Open program…",
             command=self.menu_open_widget,
@@ -559,9 +559,14 @@ class EmulatorApp:
         )
         file_menu.add_separator()
         file_menu.add_command(
-            label="Exit",
+            label="Close program",
+            command=self.menu_close_program,
+            accelerator=close_program_accel,
+        )
+        file_menu.add_command(
+            label="Exit emulator",
             command=self.menu_exit,
-            accelerator=quit_accel,
+            accelerator="Cmd+Q" if self._is_macos else "",
         )
 
         widget_menu = tk.Menu(menubar, tearoff=0)
@@ -577,9 +582,9 @@ class EmulatorApp:
 
         # Keyboard shortcuts:
         # - Open: Ctrl+O (all) and Cmd+O (macOS)
-        # - Exit: Ctrl+Q on all platforms (simple and predictable)
+        # - Close running program: Ctrl+Q (all platforms)
         self.root.bind("<Control-o>", lambda e: self.menu_open_widget())
-        self.root.bind("<Control-q>", lambda e: self.menu_exit())
+        self.root.bind("<Control-q>", lambda e: self.menu_close_program())
         if self._is_macos:
             self.root.bind("<Command-o>", lambda e: self.menu_open_widget())
 
@@ -813,6 +818,9 @@ class EmulatorApp:
                 self.capture_base_name,
                 script_dir,
             )
+
+    def menu_close_program(self):
+        self._unload_widget()
 
     def menu_exit(self):
         self._unload_widget()

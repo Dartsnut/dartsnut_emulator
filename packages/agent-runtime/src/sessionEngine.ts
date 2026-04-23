@@ -106,6 +106,21 @@ export class SessionEngine {
     return JSON.stringify({ ok: true, path: action.path, bytes: Buffer.byteLength(action.content) });
   }
 
+  private readPreviousContent(action: ToolAction): string | undefined {
+    if (action.tool !== "write_file") {
+      return undefined;
+    }
+    try {
+      const filePath = this.options.workspacePolicy.resolveWithinRoot(action.path);
+      if (!fs.existsSync(filePath)) {
+        return undefined;
+      }
+      return fs.readFileSync(filePath, "utf-8");
+    } catch {
+      return undefined;
+    }
+  }
+
   async runPrompt(
     prompt: string,
     onEvent: (event: AgentEvent) => void
@@ -120,6 +135,9 @@ export class SessionEngine {
     ];
 
     for (let step = 0; step < 4; step += 1) {
+      if (step > 0) {
+        onEvent({ type: "status", message: "Agent is thinking...", at: Date.now() });
+      }
       const raw = await this.options.provider.complete(messages);
       const parsed = this.tryParseEnvelope(raw);
 
@@ -134,6 +152,27 @@ export class SessionEngine {
         onEvent({ type: "final", content: finalText, at: Date.now() });
         return finalText;
       }
+
+      // Surface tool action payloads to the UI so chat can render
+      // rolling previews and final diff-style file change messages.
+      const uiActions = actions.map((action) => {
+        if (action.tool !== "write_file") {
+          return action;
+        }
+        return {
+          ...action,
+          previousContent: this.readPreviousContent(action)
+        };
+      });
+      const uiEnvelope = JSON.stringify(
+        {
+          response: parsed.response,
+          actions: uiActions
+        },
+        null,
+        2
+      );
+      onEvent({ type: "final", content: uiEnvelope, at: Date.now() });
 
       onEvent({
         type: "status",

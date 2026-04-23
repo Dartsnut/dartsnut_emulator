@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@dartsnut/agent-runtime": "0.1.0",
+    "@dartsnut/emulator-protocol": "0.1.0",
     "@dartsnut/shared-ipc": "0.1.0",
     "dotenv": "^16.5.0",
     "electron": "^35.1.4",

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentEvent, BootstrapState } from "@dartsnut/shared-ipc";
+import { EmulatorPanel } from "./EmulatorPanel";
 
 interface TimelineEntry {
   id: string;
@@ -351,7 +352,9 @@ export function App() {
           </button>
         </section>
       </section>
-      <aside className="right-blank" aria-hidden="true" />
+      <aside className="right-pane">
+        <EmulatorPanel />
+      </aside>
     </main>
   );
 }

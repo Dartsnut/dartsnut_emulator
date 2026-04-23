@@ -1,0 +1,18 @@
+{
+  "name": "dartsnut-code",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm --prefix apps/desktop run dev",
+    "build": "npm run build -w packages/shared-ipc && npm run build -w packages/agent-runtime && npm run build -w apps/desktop",
+    "test": "npm run test -w packages/agent-runtime"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  }
+}

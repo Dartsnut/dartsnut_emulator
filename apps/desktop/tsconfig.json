@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "renderer/**/*.ts",
+    "renderer/**/*.tsx",
+    "vite.config.ts"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist-electron",
+    "rootDir": ".",
+    "moduleResolution": "Node",
+    "module": "CommonJS",
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "main.ts",
+    "preload.ts"
+  ]
+}

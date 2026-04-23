@@ -1,0 +1,8 @@
+**/node_modules
+**/dist
+**/dist-electron
+**/.vite
+.env
+.electron-cache
+.cursor
+.DS_Store

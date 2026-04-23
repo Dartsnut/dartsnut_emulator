@@ -30,6 +30,7 @@ interface DiffLine {
 
 const ROLLING_PREVIEW_LINES = 8;
 const DIFF_MAX_LINES = 220;
+const DIFF_CONTEXT_LINES = 3;
 
 function getRollingPreview(content: string, progressRatio: number): {
   lines: string[];
@@ -46,10 +47,7 @@ function getRollingPreview(content: string, progressRatio: number): {
   };
 }
 
-function buildDiffLines(oldText: string, newText: string, maxLines: number): {
-  lines: DiffLine[];
-  truncated: boolean;
-} {
+function buildRawDiffLines(oldText: string, newText: string): DiffLine[] {
   const oldLines = oldText.split(/\r?\n/);
   const newLines = newText.split(/\r?\n/);
   const n = oldLines.length;
@@ -78,28 +76,83 @@ function buildDiffLines(oldText: string, newText: string, maxLines: number): {
       lines.push({ kind: "add", text: newLines[j] });
       j += 1;
     }
-    if (lines.length >= maxLines) {
-      return { lines: lines.slice(0, maxLines), truncated: true };
-    }
   }
 
-  while (i < n && lines.length < maxLines) {
+  while (i < n) {
     lines.push({ kind: "remove", text: oldLines[i] });
     i += 1;
   }
-  if (i < n) {
-    return { lines: lines.slice(0, maxLines), truncated: true };
-  }
 
-  while (j < m && lines.length < maxLines) {
+  while (j < m) {
     lines.push({ kind: "add", text: newLines[j] });
     j += 1;
   }
-  if (j < m) {
-    return { lines: lines.slice(0, maxLines), truncated: true };
+
+  return lines;
+}
+
+function trimDiffLinesAroundChanges(
+  lines: DiffLine[],
+  maxLines: number,
+  contextLines: number
+): { lines: DiffLine[]; truncated: boolean } {
+  if (lines.length <= maxLines) {
+    return { lines, truncated: false };
   }
 
-  return { lines, truncated: false };
+  const changeIdxs: number[] = [];
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    if (lines[idx].kind !== "context") {
+      changeIdxs.push(idx);
+    }
+  }
+
+  if (changeIdxs.length === 0) {
+    return {
+      lines: lines.slice(0, maxLines),
+      truncated: true
+    };
+  }
+
+  const windows: Array<{ start: number; end: number }> = changeIdxs.map((idx) => ({
+    start: Math.max(0, idx - contextLines),
+    end: Math.min(lines.length - 1, idx + contextLines)
+  }));
+
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const window of windows) {
+    const prev = merged[merged.length - 1];
+    if (!prev || window.start > prev.end + 1) {
+      merged.push({ ...window });
+    } else {
+      prev.end = Math.max(prev.end, window.end);
+    }
+  }
+
+  const out: DiffLine[] = [];
+  for (let w = 0; w < merged.length; w += 1) {
+    const window = merged[w];
+    if (w > 0 && merged[w - 1].end + 1 < window.start) {
+      out.push({ kind: "context", text: "..." });
+    }
+    for (let i = window.start; i <= window.end; i += 1) {
+      out.push(lines[i]);
+    }
+  }
+
+  if (out.length <= maxLines) {
+    return { lines: out, truncated: true };
+  }
+
+  return { lines: out.slice(0, maxLines), truncated: true };
+}
+
+function buildDiffLines(oldText: string, newText: string, maxLines: number): {
+  lines: DiffLine[];
+  truncated: boolean;
+} {
+  const raw = buildRawDiffLines(oldText, newText);
+  return trimDiffLinesAroundChanges(raw, maxLines, DIFF_CONTEXT_LINES);
 }
 
 function formatAgentMessage(text: string): FormattedAgentMessage {

@@ -19,6 +19,11 @@ export interface PromptRequest {
 
 export type AgentEvent =
   | {
+      type: "stream";
+      delta: string;
+      at: number;
+    }
+  | {
       type: "status";
       message: string;
       at: number;

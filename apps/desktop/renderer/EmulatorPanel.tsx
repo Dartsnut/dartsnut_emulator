@@ -86,8 +86,6 @@ export function EmulatorPanel() {
     if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
     if (backgroundRef.current) {
       ctx.drawImage(backgroundRef.current, 0, 0, canvas.width, canvas.height);
     }
@@ -148,8 +146,6 @@ export function EmulatorPanel() {
     if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
     const sx = scaleMultiplier;
     if (frame.width === 128 && frame.height === 160) {
       ctx.drawImage(bitmap, 0, 0, 128, 128, 38 * sx, 38 * sx, 512 * sx, 512 * sx);

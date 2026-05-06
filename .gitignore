@@ -6,3 +6,5 @@
 .electron-cache
 .cursor
 .DS_Store
+__pycache__
+.venv

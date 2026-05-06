@@ -6,7 +6,7 @@ interface TimelineEntry {
   id: string;
   role: "user" | "agent" | "status" | "error";
   text: string;
-  targetText?: string;
+  streaming?: boolean;
 }
 
 interface FormattedAgentMessage {
@@ -29,19 +29,13 @@ interface DiffLine {
   text: string;
 }
 
-const ROLLING_PREVIEW_LINES = 8;
+const STREAM_PREVIEW_LINES = 8;
 const DIFF_MAX_LINES = 220;
 const DIFF_CONTEXT_LINES = 3;
 
-function getRollingPreview(content: string, progressRatio: number): {
-  lines: string[];
-  truncated: boolean;
-} {
-  const safeRatio = Number.isFinite(progressRatio) ? Math.max(0, Math.min(1, progressRatio)) : 1;
-  const visibleChars = Math.max(1, Math.floor(content.length * safeRatio));
-  const partial = content.slice(0, visibleChars);
-  const allLines = partial.split(/\r?\n/);
-  const lines = allLines.slice(-ROLLING_PREVIEW_LINES);
+function getLatestPreviewLines(content: string): { lines: string[]; truncated: boolean } {
+  const allLines = content.split(/\r?\n/);
+  const lines = allLines.slice(-STREAM_PREVIEW_LINES);
   return {
     lines,
     truncated: allLines.length > lines.length
@@ -156,6 +150,100 @@ function buildDiffLines(oldText: string, newText: string, maxLines: number): {
   return trimDiffLinesAroundChanges(raw, maxLines, DIFF_CONTEXT_LINES);
 }
 
+function parseJsonStringValue(input: string, startQuoteIdx: number): { value: string; nextIndex: number; closed: boolean } {
+  let escaped = false;
+  let idx = startQuoteIdx + 1;
+  while (idx < input.length) {
+    const ch = input[idx];
+    if (escaped) {
+      escaped = false;
+      idx += 1;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      idx += 1;
+      continue;
+    }
+    if (ch === "\"") {
+      const raw = input.slice(startQuoteIdx, idx + 1);
+      try {
+        return { value: JSON.parse(raw) as string, nextIndex: idx + 1, closed: true };
+      } catch {
+        return { value: input.slice(startQuoteIdx + 1, idx), nextIndex: idx + 1, closed: true };
+      }
+    }
+    idx += 1;
+  }
+  const raw = `${input.slice(startQuoteIdx)}"`;
+  try {
+    return { value: JSON.parse(raw) as string, nextIndex: input.length, closed: false };
+  } catch {
+    return { value: input.slice(startQuoteIdx + 1), nextIndex: input.length, closed: false };
+  }
+}
+
+function parsePartialAgentMessage(text: string): FormattedAgentMessage {
+  const actions: ParsedAction[] = [];
+  const jsonStart = text.indexOf("{");
+  const narrative = jsonStart > 0 ? text.slice(0, jsonStart).trim() : "";
+  let response: string | null = null;
+
+  const responseKey = text.indexOf("\"response\"");
+  if (responseKey >= 0) {
+    const responseQuote = text.indexOf("\"", text.indexOf(":", responseKey));
+    if (responseQuote >= 0) {
+      response = parseJsonStringValue(text, responseQuote).value;
+    }
+  }
+
+  let scanFrom = 0;
+  while (scanFrom < text.length) {
+    const toolKey = text.indexOf("\"tool\"", scanFrom);
+    if (toolKey < 0) {
+      break;
+    }
+    const toolQuote = text.indexOf("\"", text.indexOf(":", toolKey));
+    if (toolQuote < 0) {
+      break;
+    }
+    const tool = parseJsonStringValue(text, toolQuote).value;
+    scanFrom = toolQuote + 1;
+    if (tool !== "write_file") {
+      continue;
+    }
+
+    const pathKey = text.indexOf("\"path\"", toolKey);
+    let pathValue: string | undefined;
+    if (pathKey >= 0) {
+      const pathQuote = text.indexOf("\"", text.indexOf(":", pathKey));
+      if (pathQuote >= 0) {
+        pathValue = parseJsonStringValue(text, pathQuote).value;
+      }
+    }
+
+    const contentKey = text.indexOf("\"content\"", toolKey);
+    if (contentKey < 0) {
+      continue;
+    }
+    const contentQuote = text.indexOf("\"", text.indexOf(":", contentKey));
+    if (contentQuote < 0) {
+      continue;
+    }
+    const contentValue = parseJsonStringValue(text, contentQuote).value;
+    actions.push({
+      tool: "write_file",
+      path: pathValue,
+      content: contentValue,
+      isFileWrite: true,
+      raw: ""
+    });
+    scanFrom = contentQuote + 1;
+  }
+
+  return { narrative, response, actions };
+}
+
 function formatAgentMessage(text: string): FormattedAgentMessage {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -197,12 +285,15 @@ function formatAgentMessage(text: string): FormattedAgentMessage {
     }
   }
 
-  return { narrative: text, response: null, actions: [] };
+  return parsePartialAgentMessage(text);
 }
 
 function toEntry(event: AgentEvent, seq: number): TimelineEntry {
+  if (event.type === "stream") {
+    return { id: `${event.type}-${event.at}-${seq}`, role: "agent", text: event.delta, streaming: true };
+  }
   if (event.type === "final") {
-    return { id: `${event.type}-${event.at}-${seq}`, role: "agent", text: "", targetText: event.content };
+    return { id: `${event.type}-${event.at}-${seq}`, role: "agent", text: event.content, streaming: false };
   }
   if (event.type === "error") {
     return { id: `${event.type}-${event.at}-${seq}`, role: "error", text: event.message };
@@ -218,6 +309,7 @@ export function App() {
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const pendingReplyIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
+  const activeStreamEntryIdRef = useRef<string | null>(null);
 
   const api = window.dartsnutApi;
 
@@ -231,28 +323,6 @@ export function App() {
   }
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setEntries((prev) => {
-        let changed = false;
-        const next = prev.map((entry) => {
-          if (!entry.targetText || entry.text.length >= entry.targetText.length) {
-            return entry;
-          }
-          changed = true;
-          const nextLength = Math.min(entry.targetText.length, entry.text.length + 2);
-          return {
-            ...entry,
-            text: entry.targetText.slice(0, nextLength),
-            targetText: nextLength >= entry.targetText.length ? undefined : entry.targetText
-          };
-        });
-        return changed ? next : prev;
-      });
-    }, 16);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
     if (!api) {
       setRuntimeError("Desktop bridge is unavailable. Please restart the app.");
       return;
@@ -264,6 +334,35 @@ export function App() {
     });
     const unsubscribe = api.onAgentEvent((event) => {
       clearPendingReplyIndicator();
+      if (event.type === "stream") {
+        const streamId = activeStreamEntryIdRef.current;
+        if (!streamId) {
+          const seq = eventSeqRef.current;
+          eventSeqRef.current += 1;
+          const entry = toEntry(event, seq);
+          activeStreamEntryIdRef.current = entry.id;
+          setEntries((prev) => [...prev, entry]);
+          return;
+        }
+        setEntries((prev) =>
+          prev.map((entry) =>
+            entry.id === streamId ? { ...entry, text: entry.text + event.delta, streaming: true } : entry
+          )
+        );
+        return;
+      }
+
+      if (event.type === "final" && activeStreamEntryIdRef.current) {
+        const streamId = activeStreamEntryIdRef.current;
+        activeStreamEntryIdRef.current = null;
+        setEntries((prev) =>
+          prev.map((entry) =>
+            entry.id === streamId ? { ...entry, text: event.content, streaming: false } : entry
+          )
+        );
+        return;
+      }
+
       const seq = eventSeqRef.current;
       eventSeqRef.current += 1;
       setEntries((prev) => [...prev, toEntry(event, seq)]);
@@ -333,7 +432,7 @@ export function App() {
           {entries.map((entry) => (
             <div key={entry.id} className={`entry ${entry.role}`}>
               {entry.role === "agent" ? (
-                <AgentEntryContent text={entry.text} targetText={entry.targetText} />
+                <AgentEntryContent text={entry.text} isStreaming={Boolean(entry.streaming)} />
               ) : (
                 <div className="entry-text">{entry.text}</div>
               )}
@@ -359,28 +458,19 @@ export function App() {
   );
 }
 
-function AgentEntryContent({ text, targetText }: { text: string; targetText?: string }) {
+function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   const liveFormatted = formatAgentMessage(text);
-  const sourceFormatted = targetText ? formatAgentMessage(targetText) : liveFormatted;
-  const isStreaming = Boolean(targetText);
-  const progressRatio = targetText ? text.length / Math.max(1, targetText.length) : 1;
-  const leadText = sourceFormatted.response || liveFormatted.narrative || "";
-  const fileActions = sourceFormatted.actions.filter((action) => action.isFileWrite);
+  const leadText = liveFormatted.response || liveFormatted.narrative || "";
+  const fileActions = liveFormatted.actions.filter((action) => action.isFileWrite);
 
   return (
     <div className="entry-content">
       {leadText ? <div className="entry-text">{leadText}</div> : null}
       {fileActions.map((action, idx) => (
         <div key={`${action.tool}-${action.path ?? idx}`} className="entry-action">
-          {isStreaming ? (
+          {isStreaming && typeof action.content === "string" ? (
             <div className="rolling-preview">
-              <div className="entry-action-meta">streaming preview (latest lines)</div>
-              <pre className="entry-json">
-                {getRollingPreview(action.content ?? "", progressRatio).lines.join("\n")}
-              </pre>
-              {getRollingPreview(action.content ?? "", progressRatio).truncated ? (
-                <div className="diff-truncation">older preview lines hidden</div>
-              ) : null}
+              <pre className="entry-json">{getLatestPreviewLines(action.content).lines.join("\n")}</pre>
             </div>
           ) : typeof action.content === "string" ? (
             <div className="diff-view">

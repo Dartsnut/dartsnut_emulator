@@ -315,6 +315,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     const session = buildSession();
     await session.runPrompt(req.prompt, (agentEvent: AgentEvent) => {
       events.push(agentEvent);
+      console.log("[agent-stream]", JSON.stringify(agentEvent));
       win?.webContents.send(IPCChannels.subscribeEvents, agentEvent);
     });
     if (!firstRunComplete) {

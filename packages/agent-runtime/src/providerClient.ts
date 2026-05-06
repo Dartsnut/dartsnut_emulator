@@ -8,7 +8,7 @@ interface ChatMessage {
 export class ProviderClient {
   constructor(private readonly config: ProviderConfig) {}
 
-  async complete(messages: ChatMessage[]): Promise<string> {
+  async complete(messages: ChatMessage[], onChunk?: (delta: string) => void): Promise<string> {
     const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -18,7 +18,8 @@ export class ProviderClient {
       body: JSON.stringify({
         model: this.config.model,
         messages,
-        temperature: 0.2
+        temperature: 0.2,
+        stream: Boolean(onChunk)
       })
     });
 
@@ -43,9 +44,52 @@ export class ProviderClient {
       throw new Error(`Provider request failed: ${response.status}${suffix}`);
     }
 
-    const payload = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    return payload.choices?.[0]?.message?.content?.trim() || "No response content returned.";
+    if (!onChunk) {
+      const payload = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      return payload.choices?.[0]?.message?.content?.trim() || "No response content returned.";
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("Provider streaming response body is unavailable.");
+    }
+    const decoder = new TextDecoder();
+    let pending = "";
+    let fullText = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      pending += decoder.decode(value, { stream: true });
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line.startsWith("data:")) {
+          continue;
+        }
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") {
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(payload) as {
+            choices?: Array<{ delta?: { content?: string } }>;
+          };
+          const delta = parsed.choices?.[0]?.delta?.content ?? "";
+          if (!delta) {
+            continue;
+          }
+          fullText += delta;
+          onChunk(delta);
+        } catch {
+          // Ignore malformed partial streaming frames.
+        }
+      }
+    }
+    return fullText.trim() || "No response content returned.";
   }
 }

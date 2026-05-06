@@ -11,6 +11,9 @@ export async function runInteractiveCli(session: SessionEngine): Promise<void> {
       break;
     }
     await session.runPrompt(prompt, (event) => {
+      if (event.type === "stream") {
+        output.write(event.delta);
+      }
       if (event.type === "status") {
         output.write(`[status] ${event.message}\n`);
       }

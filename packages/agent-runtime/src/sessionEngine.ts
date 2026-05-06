@@ -9,7 +9,7 @@ interface ChatMessage {
 }
 
 interface CompletionProvider {
-  complete(messages: ChatMessage[]): Promise<string>;
+  complete(messages: ChatMessage[], onChunk?: (delta: string) => void): Promise<string>;
 }
 
 type ToolAction =
@@ -138,7 +138,9 @@ export class SessionEngine {
       if (step > 0) {
         onEvent({ type: "status", message: "Agent is thinking...", at: Date.now() });
       }
-      const raw = await this.options.provider.complete(messages);
+      const raw = await this.options.provider.complete(messages, (delta) => {
+        onEvent({ type: "stream", delta, at: Date.now() });
+      });
       const parsed = this.tryParseEnvelope(raw);
 
       if (!parsed) {

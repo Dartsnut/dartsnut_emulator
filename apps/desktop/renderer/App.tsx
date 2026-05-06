@@ -34,12 +34,22 @@ const DIFF_MAX_LINES = 220;
 const DIFF_CONTEXT_LINES = 3;
 
 function getLatestPreviewLines(content: string): { lines: string[]; truncated: boolean } {
-  const allLines = content.split(/\r?\n/);
+  const normalized = content.replace(/\r/g, "");
+  const allLines = normalized.split("\n");
   const lines = allLines.slice(-STREAM_PREVIEW_LINES);
   return {
     lines,
     truncated: allLines.length > lines.length
   };
+}
+
+function decodeEscapedStreamingText(input: string): string {
+  return input
+    .replace(/\\\\/g, "\\")
+    .replace(/\\"/g, "\"")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\r/g, "");
 }
 
 function buildRawDiffLines(oldText: string, newText: string): DiffLine[] {
@@ -179,7 +189,11 @@ function parseJsonStringValue(input: string, startQuoteIdx: number): { value: st
   try {
     return { value: JSON.parse(raw) as string, nextIndex: input.length, closed: false };
   } catch {
-    return { value: input.slice(startQuoteIdx + 1), nextIndex: input.length, closed: false };
+    return {
+      value: decodeEscapedStreamingText(input.slice(startQuoteIdx + 1)),
+      nextIndex: input.length,
+      closed: false
+    };
   }
 }
 
@@ -197,48 +211,42 @@ function parsePartialAgentMessage(text: string): FormattedAgentMessage {
     }
   }
 
-  let scanFrom = 0;
-  while (scanFrom < text.length) {
-    const toolKey = text.indexOf("\"tool\"", scanFrom);
-    if (toolKey < 0) {
-      break;
-    }
+  // Keep streaming parsing conservative: only extract the first write_file
+  // action envelope to avoid false positives from partially streamed content.
+  const toolKey = text.indexOf("\"tool\"");
+  if (toolKey >= 0) {
     const toolQuote = text.indexOf("\"", text.indexOf(":", toolKey));
-    if (toolQuote < 0) {
-      break;
-    }
-    const tool = parseJsonStringValue(text, toolQuote).value;
-    scanFrom = toolQuote + 1;
-    if (tool !== "write_file") {
-      continue;
-    }
+    if (toolQuote >= 0) {
+      const tool = parseJsonStringValue(text, toolQuote).value;
+      if (tool === "write_file") {
+        const nextToolKey = text.indexOf("\"tool\"", toolQuote + 1);
+        const sectionEnd = nextToolKey >= 0 ? nextToolKey : text.length;
 
-    const pathKey = text.indexOf("\"path\"", toolKey);
-    let pathValue: string | undefined;
-    if (pathKey >= 0) {
-      const pathQuote = text.indexOf("\"", text.indexOf(":", pathKey));
-      if (pathQuote >= 0) {
-        pathValue = parseJsonStringValue(text, pathQuote).value;
+        const pathKey = text.indexOf("\"path\"", toolKey);
+        let pathValue: string | undefined;
+        if (pathKey >= 0 && pathKey < sectionEnd) {
+          const pathQuote = text.indexOf("\"", text.indexOf(":", pathKey));
+          if (pathQuote >= 0 && pathQuote < sectionEnd) {
+            pathValue = parseJsonStringValue(text, pathQuote).value;
+          }
+        }
+
+        const contentKey = text.indexOf("\"content\"", toolKey);
+        if (contentKey >= 0 && contentKey < sectionEnd) {
+          const contentQuote = text.indexOf("\"", text.indexOf(":", contentKey));
+          if (contentQuote >= 0 && contentQuote < sectionEnd) {
+            const contentValue = parseJsonStringValue(text, contentQuote).value;
+            actions.push({
+              tool: "write_file",
+              path: pathValue,
+              content: contentValue,
+              isFileWrite: true,
+              raw: ""
+            });
+          }
+        }
       }
     }
-
-    const contentKey = text.indexOf("\"content\"", toolKey);
-    if (contentKey < 0) {
-      continue;
-    }
-    const contentQuote = text.indexOf("\"", text.indexOf(":", contentKey));
-    if (contentQuote < 0) {
-      continue;
-    }
-    const contentValue = parseJsonStringValue(text, contentQuote).value;
-    actions.push({
-      tool: "write_file",
-      path: pathValue,
-      content: contentValue,
-      isFileWrite: true,
-      raw: ""
-    });
-    scanFrom = contentQuote + 1;
   }
 
   return { narrative, response, actions };

@@ -59,6 +59,15 @@ export function EmulatorPanel() {
   const lastRightClickMsRef = useRef<number>(0);
   const zoomOpenRef = useRef(false);
   const captureToastTimerRef = useRef<number | null>(null);
+  const normalizedWidgetType = state.widgetType?.toLowerCase() ?? null;
+  const showParamsPanel = normalizedWidgetType !== "game";
+  const showDartLegend = normalizedWidgetType !== "widget";
+  const runningTypeStatus =
+    state.running && normalizedWidgetType === "widget"
+      ? "Widget running (python)"
+      : state.running && normalizedWidgetType === "game"
+        ? "Game running (python)"
+        : null;
 
   useEffect(() => {
     zoomOpenRef.current = zoomOpen;
@@ -528,55 +537,62 @@ export function EmulatorPanel() {
             }
           }}
         />
-        <div className="params-panel">
-          <div className="params-panel-header">
-            <strong>Widget Params (JSON)</strong>
-          </div>
-          <textarea
-            className="params-textarea"
-            value={widgetParamsText}
-            onChange={(e) => {
-              setWidgetParamsText(e.target.value);
-              if (widgetParamsError) setWidgetParamsError(null);
-            }}
-            spellCheck={false}
-            placeholder='{"city":"tokyo"}'
-          />
-          {widgetParamsError ? <div className="params-error">{widgetParamsError}</div> : null}
-          <div className="params-actions">
-            <button type="button" disabled={!bridgeReady} onClick={() => formatParamsJsonInEditor()}>
-              Format JSON
-            </button>
-            <button type="button" disabled={!bridgeReady} onClick={() => void applyParamsAndReload()}>
-              Apply Params + Reload
-            </button>
-          </div>
-        </div>
-        <div className="dart-legend" aria-label="Dart indexes" ref={dartLegendRef}>
-          {DART_COLORS.map((color, idx) => {
-            const isSelected = idx === selectedDartIndex;
-            const isPlaced = dartCoords[idx] !== null;
-            const useLightText = idx % 4 === 0 || idx % 4 === 1;
-            return (
-              <button
-                type="button"
-                key={`dart-${idx + 1}`}
-                className={`dart-dot${useLightText ? " light-text" : ""}${isSelected ? " selected" : ""}${isPlaced ? " placed" : ""}`}
-                style={{ backgroundColor: color }}
-                title={`F${idx + 1}${isPlaced ? " • placed" : " • not placed"}${isSelected ? " • selected" : ""}`}
-                onClick={() => {
-                  currentDartIndexRef.current = idx;
-                  setSelectedDartIndex(idx);
-                }}
-              >
-                {idx + 1}
+        {showParamsPanel ? (
+          <div className="params-panel">
+            <div className="params-panel-header">
+              <strong>Widget Params (JSON)</strong>
+            </div>
+            <textarea
+              className="params-textarea"
+              value={widgetParamsText}
+              onChange={(e) => {
+                setWidgetParamsText(e.target.value);
+                if (widgetParamsError) setWidgetParamsError(null);
+              }}
+              spellCheck={false}
+              placeholder='{"city":"tokyo"}'
+            />
+            {widgetParamsError ? <div className="params-error">{widgetParamsError}</div> : null}
+            <div className="params-actions">
+              <button type="button" disabled={!bridgeReady} onClick={() => formatParamsJsonInEditor()}>
+                Format JSON
               </button>
-            );
-          })}
-        </div>
+              <button type="button" disabled={!bridgeReady} onClick={() => void applyParamsAndReload()}>
+                Apply Params + Reload
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {showDartLegend ? (
+          <div className="dart-legend" aria-label="Dart indexes" ref={dartLegendRef}>
+            {DART_COLORS.map((color, idx) => {
+              const isSelected = idx === selectedDartIndex;
+              const isPlaced = dartCoords[idx] !== null;
+              const useLightText = idx % 4 === 0 || idx % 4 === 1;
+              return (
+                <button
+                  type="button"
+                  key={`dart-${idx + 1}`}
+                  className={`dart-dot${useLightText ? " light-text" : ""}${isSelected ? " selected" : ""}${isPlaced ? " placed" : ""}`}
+                  style={{ backgroundColor: color }}
+                  title={`F${idx + 1}${isPlaced ? " • placed" : " • not placed"}${isSelected ? " • selected" : ""}`}
+                  onClick={() => {
+                    currentDartIndexRef.current = idx;
+                    setSelectedDartIndex(idx);
+                  }}
+                >
+                  {idx + 1}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
         <div className="state-line" ref={stateLineRef}>
           <span>{state.running ? "Running" : "Stopped"}</span>
-          <span>{state.status.startsWith("Screenshot captured: ") ? "Screenshot captured" : state.status}</span>
+          <span>
+            {runningTypeStatus ??
+              (state.status.startsWith("Screenshot captured: ") ? "Screenshot captured" : state.status)}
+          </span>
           <span>FPS C{captureFps} / R{renderFps}</span>
         </div>
         {captureToast ? <div className="capture-toast">{captureToast}</div> : null}

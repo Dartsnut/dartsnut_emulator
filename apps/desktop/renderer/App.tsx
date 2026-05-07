@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentEvent, BootstrapState } from "@dartsnut/shared-ipc";
+import type { AgentEvent, BootstrapState, ProjectType, WidgetSize } from "@dartsnut/shared-ipc";
 import { EmulatorPanel } from "./EmulatorPanel";
 
 interface TimelineEntry {
@@ -29,9 +29,33 @@ interface DiffLine {
   text: string;
 }
 
+type IntakeStep = "projectType" | "widgetSize" | "workspace";
+
 const STREAM_PREVIEW_LINES = 8;
 const DIFF_MAX_LINES = 220;
 const DIFF_CONTEXT_LINES = 3;
+const SUPPORTED_WIDGET_SIZES: WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
+
+function inferProjectType(input: string): ProjectType | null {
+  const hasGame = /\bgame\b/i.test(input);
+  const hasWidget = /\bwidget\b/i.test(input);
+  if (hasGame === hasWidget) {
+    return null;
+  }
+  return hasGame ? "game" : "widget";
+}
+
+function inferWidgetSize(input: string): WidgetSize | null {
+  const match = input.match(/\b(128\s*x\s*160|128\s*x\s*128|128\s*x\s*64|64\s*x\s*32)\b/i);
+  if (!match) {
+    return null;
+  }
+  const normalized = match[1].toLowerCase().replace(/\s+/g, "");
+  if (normalized === "128x160" || normalized === "128x128" || normalized === "128x64" || normalized === "64x32") {
+    return normalized;
+  }
+  return null;
+}
 
 function getLatestPreviewLines(content: string): { lines: string[]; truncated: boolean } {
   const normalized = content.replace(/\r/g, "");
@@ -315,6 +339,11 @@ export function App() {
   const [prompt, setPrompt] = useState("");
   const [sending, setSending] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+  const [intakeProjectType, setIntakeProjectType] = useState<ProjectType | null>(null);
+  const [intakeWidgetSize, setIntakeWidgetSize] = useState<WidgetSize | null>(null);
+  const [intakeWorkspacePath, setIntakeWorkspacePath] = useState<string | null>(null);
+  const [intakeStep, setIntakeStep] = useState<IntakeStep | null>(null);
   const pendingReplyIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
@@ -382,15 +411,97 @@ export function App() {
     if (!bootstrap) {
       return true;
     }
-    return !bootstrap.workspaceRoot || bootstrap.providerStatus !== "ready" || sending;
+    return bootstrap.providerStatus !== "ready" || sending;
   }, [bootstrap, sending]);
+
+  function clearIntake() {
+    setPendingPrompt(null);
+    setIntakeProjectType(null);
+    setIntakeWidgetSize(null);
+    setIntakeWorkspacePath(null);
+    setIntakeStep(null);
+  }
+
+  function postStatus(text: string) {
+    setEntries((prev) => [...prev, { id: `status-${Date.now()}`, role: "status", text }]);
+  }
+
+  function resolveNextIntakeStep(
+    projectType: ProjectType | null,
+    widgetSize: WidgetSize | null,
+    workspacePath: string | null
+  ): IntakeStep | null {
+    if (!projectType) {
+      return "projectType";
+    }
+    if (projectType === "widget" && !widgetSize) {
+      return "widgetSize";
+    }
+    if (!workspacePath) {
+      return "workspace";
+    }
+    return null;
+  }
+
+  async function submitPrompt(request: {
+    prompt: string;
+    projectType?: ProjectType;
+    widgetSize?: WidgetSize;
+    workspacePath?: string;
+    templateMode?: "game-creator" | "widget-creator";
+  }) {
+    const pendingReplyId = `agent-pending-${Date.now()}`;
+    pendingReplyIdRef.current = pendingReplyId;
+    setEntries((prev) => [...prev, { id: pendingReplyId, role: "status", text: "Agent is thinking..." }]);
+    setSending(true);
+    if (!api) {
+      clearPendingReplyIndicator();
+      setSending(false);
+      return;
+    }
+    await api.sendPrompt(request);
+    clearPendingReplyIndicator();
+    const refreshed = await api.getBootstrapState();
+    setBootstrap(refreshed);
+    setSending(false);
+  }
+
+  async function continueIntake(overrides?: {
+    projectType?: ProjectType | null;
+    widgetSize?: WidgetSize | null;
+    workspacePath?: string | null;
+  }) {
+    const promptText = pendingPrompt;
+    if (!promptText) {
+      return;
+    }
+    const projectType = overrides?.projectType ?? intakeProjectType;
+    const widgetSize = overrides?.widgetSize ?? intakeWidgetSize;
+    const workspacePath = overrides?.workspacePath ?? intakeWorkspacePath ?? bootstrap?.workspaceRoot ?? null;
+    setIntakeProjectType(projectType);
+    setIntakeWidgetSize(widgetSize);
+    setIntakeWorkspacePath(workspacePath);
+    const nextStep = resolveNextIntakeStep(projectType, widgetSize, workspacePath);
+    setIntakeStep(nextStep);
+    if (nextStep) {
+      return;
+    }
+    await submitPrompt({
+      prompt: promptText,
+      projectType: projectType ?? undefined,
+      widgetSize: widgetSize ?? undefined,
+      workspacePath: workspacePath ?? undefined,
+      templateMode: projectType === "game" ? "game-creator" : "widget-creator"
+    });
+    clearIntake();
+  }
 
   async function handlePickWorkspace() {
     if (!api) {
       return;
     }
     const updated = await api.pickWorkspace();
-    setBootstrap(updated);
+    setBootstrap(updated.state);
   }
 
   async function handleSend() {
@@ -400,24 +511,27 @@ export function App() {
     const current = prompt.trim();
     setPrompt("");
     setEntries((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", text: current }]);
-    const pendingReplyId = `agent-pending-${Date.now()}`;
-    pendingReplyIdRef.current = pendingReplyId;
-    setEntries((prev) => [
-      ...prev,
-      { id: pendingReplyId, role: "status", text: "Agent is thinking..." }
-    ]);
-    setSending(true);
-    if (!api) {
-      clearPendingReplyIndicator();
-      setSending(false);
+
+    const shouldRunIntake = !bootstrap?.workspaceRoot;
+    if (!shouldRunIntake) {
+      await submitPrompt({ prompt: current });
       return;
     }
-
-    await api.sendPrompt(current);
-    clearPendingReplyIndicator();
-    const refreshed = await api.getBootstrapState();
-    setBootstrap(refreshed);
-    setSending(false);
+    const inferredType = inferProjectType(current);
+    const inferredSize = inferredType === "widget" ? inferWidgetSize(current) : null;
+    setPendingPrompt(current);
+    setIntakeProjectType(inferredType);
+    setIntakeWidgetSize(inferredSize);
+    setIntakeWorkspacePath(null);
+    const nextStep = resolveNextIntakeStep(inferredType, inferredSize, null);
+    setIntakeStep(nextStep);
+    if (nextStep === "projectType") {
+      postStatus("Choose project type to continue: game or widget.");
+    } else if (nextStep === "widgetSize") {
+      postStatus("Choose widget size to continue.");
+    } else if (nextStep === "workspace") {
+      postStatus("Choose an empty workspace folder to continue.");
+    }
   }
 
   return (
@@ -449,6 +563,57 @@ export function App() {
         </section>
 
         <section className="composer">
+          {pendingPrompt && intakeStep ? (
+            <div className="entry status">
+              <div className="entry-text">
+                Intake required before creation.
+                {intakeStep === "projectType" ? " Select project type." : ""}
+                {intakeStep === "widgetSize" ? " Select widget size." : ""}
+                {intakeStep === "workspace" ? " Select an empty workspace folder." : ""}
+              </div>
+              {intakeStep === "projectType" ? (
+                <div className="entry-text">
+                  <button onClick={() => continueIntake({ projectType: "game", widgetSize: null })}>Game</button>
+                  <button onClick={() => continueIntake({ projectType: "widget" })}>Widget</button>
+                  <button onClick={clearIntake}>Cancel</button>
+                </div>
+              ) : null}
+              {intakeStep === "widgetSize" ? (
+                <div className="entry-text">
+                  {SUPPORTED_WIDGET_SIZES.map((size) => (
+                    <button key={size} onClick={() => continueIntake({ widgetSize: size })}>
+                      {size}
+                    </button>
+                  ))}
+                  <button onClick={clearIntake}>Cancel</button>
+                </div>
+              ) : null}
+              {intakeStep === "workspace" ? (
+                <div className="entry-text">
+                  <button
+                    onClick={async () => {
+                      const pickResult = await api.pickWorkspace({ requireEmpty: true });
+                      setBootstrap(pickResult.state);
+                      if (pickResult.accepted && pickResult.selectedPath) {
+                        await continueIntake({ workspacePath: pickResult.selectedPath });
+                        return;
+                      }
+                      if (pickResult.reason === "non_empty") {
+                        postStatus("Selected workspace is not empty. Please choose a different folder.");
+                        return;
+                      }
+                      if (pickResult.reason === "cancelled") {
+                        postStatus("Workspace selection cancelled.");
+                      }
+                    }}
+                  >
+                    Choose Empty Workspace
+                  </button>
+                  <button onClick={clearIntake}>Cancel</button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <textarea
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}

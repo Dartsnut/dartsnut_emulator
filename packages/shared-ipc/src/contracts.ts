@@ -4,7 +4,11 @@ export const IPCChannels = {
   sendPrompt: "agent:send-prompt",
   subscribeEvents: "agent:subscribe-events",
   getProviderSettings: "agent:get-provider-settings",
-  saveProviderSettings: "agent:save-provider-settings"
+  saveProviderSettings: "agent:save-provider-settings",
+  getPythonRuntimeStatus: "agent:get-python-runtime-status",
+  subscribePythonRuntimeStatus: "agent:subscribe-python-runtime-status",
+  getSelectedPythonPath: "agent:get-selected-python-path",
+  pickPythonPath: "agent:pick-python-path"
 } as const;
 
 export type ProviderStatus = "ready" | "missing_config" | "invalid";

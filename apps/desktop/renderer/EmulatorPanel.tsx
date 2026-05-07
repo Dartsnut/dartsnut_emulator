@@ -394,14 +394,6 @@ export function EmulatorPanel() {
     setDartCoords(Array.from({ length: 12 }, () => null));
   }
 
-  async function pickWidgetPath() {
-    const response = await window.dartsnutApi.pickWidgetPath();
-    const selectedPath = response?.path;
-    if (!selectedPath) return;
-    setWidgetPath(selectedPath);
-    await applyWidgetPathAndReload(selectedPath);
-  }
-
   function parseAndFormatParamsJson(rawText: string): { params: Record<string, unknown>; pretty: string } {
     const parsed = JSON.parse(rawText) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -476,15 +468,11 @@ export function EmulatorPanel() {
 
   return (
     <section className="emulator-panel">
-      <header className="emulator-panel-header">
-        <h2>Dartsnut Emulator</h2>
-        {!bridgeReady ? <div className="warning">Desktop bridge is unavailable.</div> : null}
-        <div className="emulator-controls emulator-header-controls">
-          <button disabled={!bridgeReady} onClick={() => void pickWidgetPath()}>
-            Open
-          </button>
-        </div>
-      </header>
+      {!bridgeReady ? (
+        <header className="emulator-panel-header">
+          <div className="warning">Desktop bridge is unavailable.</div>
+        </header>
+      ) : null}
       <div className="emulator-canvas" ref={emulatorCanvasRef}>
         <canvas
           ref={canvasRef}

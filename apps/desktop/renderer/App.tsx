@@ -582,7 +582,7 @@ export function App() {
 
         <section className="composer">
           {pendingPrompt && intakeStep ? (
-            <div className="entry status">
+            <div className="composer-intake entry status">
               <div className="entry-text">
                 Intake required before creation.
                 {intakeStep === "projectType" ? " Select project type." : ""}
@@ -591,24 +591,31 @@ export function App() {
               </div>
               {intakeStep === "projectType" ? (
                 <div className="entry-text">
-                  <button onClick={() => continueIntake({ projectType: "game", widgetSize: null })}>Game</button>
-                  <button onClick={() => continueIntake({ projectType: "widget" })}>Widget</button>
-                  <button onClick={clearIntake}>Cancel</button>
+                  <button type="button" onClick={() => continueIntake({ projectType: "game", widgetSize: null })}>
+                    Game
+                  </button>
+                  <button type="button" onClick={() => continueIntake({ projectType: "widget" })}>Widget</button>
+                  <button type="button" onClick={clearIntake}>
+                    Cancel
+                  </button>
                 </div>
               ) : null}
               {intakeStep === "widgetSize" ? (
                 <div className="entry-text">
                   {SUPPORTED_WIDGET_SIZES.map((size) => (
-                    <button key={size} onClick={() => continueIntake({ widgetSize: size })}>
+                    <button key={size} type="button" onClick={() => continueIntake({ widgetSize: size })}>
                       {size}
                     </button>
                   ))}
-                  <button onClick={clearIntake}>Cancel</button>
+                  <button type="button" onClick={clearIntake}>
+                    Cancel
+                  </button>
                 </div>
               ) : null}
               {intakeStep === "workspace" ? (
                 <div className="entry-text">
                   <button
+                    type="button"
                     onClick={async () => {
                       const pickResult = await api.pickWorkspace({ requireEmpty: true });
                       setBootstrap(pickResult.state);
@@ -627,19 +634,61 @@ export function App() {
                   >
                     Choose Empty Workspace
                   </button>
-                  <button onClick={clearIntake}>Cancel</button>
+                  <button type="button" onClick={clearIntake}>
+                    Cancel
+                  </button>
                 </div>
               ) : null}
             </div>
           ) : null}
-          <textarea
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            placeholder="Ask the agent to create or modify a Dartsnut app..."
-          />
-          <button disabled={chatDisabled} onClick={handleSend}>
-            {sending ? "Running..." : "Send"}
-          </button>
+
+          <div className="composer-pill">
+            <textarea
+              className="composer-pill-input"
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void handleSend();
+                }
+              }}
+              placeholder="Message..."
+              rows={1}
+              aria-label="Message"
+            />
+            <div className="composer-pill-trailing">
+              <label className="composer-pill-model-wrap">
+                <span className="composer-visually-hidden">Mode</span>
+                <select className="composer-pill-model" defaultValue="auto" aria-label="Mode">
+                  <option value="auto">Auto</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="composer-pill-send"
+                disabled={chatDisabled}
+                aria-busy={sending}
+                aria-label={sending ? "Sending" : "Send"}
+                onClick={() => void handleSend()}
+              >
+                {sending ? (
+                  <span className="composer-pill-send-busy" aria-hidden />
+                ) : (
+                  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden>
+                    <path
+                      d="M12 19V6M12 6l-4.5 4.5M12 6l4.5 4.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </div>
         </section>
       </section>
       <aside className="right-pane">

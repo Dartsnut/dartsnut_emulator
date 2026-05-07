@@ -3,3 +3,4 @@ pygame
 numpy
 pillow
 python-dotenv
+aiohttp

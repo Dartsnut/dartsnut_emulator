@@ -22,6 +22,7 @@ const DART_COLORS = Array.from({ length: 12 }, (_, idx) => {
 export function EmulatorPanel() {
   const CANVAS_BASE_WIDTH = 588;
   const CANVAS_BASE_HEIGHT = 800;
+  const SCREEN_CANVAS_GUTTER = 12;
   const bridgeReady = Boolean(window.dartsnutApi?.sendEmulatorCommand);
   const [state, setState] = useState<EmulatorStateSnapshot>(defaultState);
   const [widgetPath, setWidgetPath] = useState("");
@@ -43,9 +44,8 @@ export function EmulatorPanel() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const zoomCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const logsBodyRef = useRef<HTMLDivElement | null>(null);
-  const emulatorCanvasRef = useRef<HTMLDivElement | null>(null);
-  const dartLegendRef = useRef<HTMLDivElement | null>(null);
-  const stateLineRef = useRef<HTMLDivElement | null>(null);
+  /** Flex region that absorbs remaining height; canvas scales to this box and panel inner width */
+  const screenSlotRef = useRef<HTMLDivElement | null>(null);
   const frameWorkerRef = useRef<Worker | null>(null);
   const workerBusyRef = useRef(false);
   const pendingFrameRef = useRef<EmulatorFrame | null>(null);
@@ -60,8 +60,9 @@ export function EmulatorPanel() {
   const zoomOpenRef = useRef(false);
   const captureToastTimerRef = useRef<number | null>(null);
   const normalizedWidgetType = state.widgetType?.toLowerCase() ?? null;
-  const showParamsPanel = normalizedWidgetType !== "game";
-  const showDartLegend = normalizedWidgetType !== "widget";
+  const hasResolvedWorkspaceType = Boolean(state.widgetPath && normalizedWidgetType);
+  const showParamsPanel = hasResolvedWorkspaceType && normalizedWidgetType === "widget";
+  const showDartLegend = hasResolvedWorkspaceType && normalizedWidgetType === "game";
   const runningTypeStatus =
     state.running && normalizedWidgetType === "widget"
       ? "Widget running (python)"
@@ -297,27 +298,27 @@ export function EmulatorPanel() {
   }, [zoomOpen]);
 
   useEffect(() => {
-    const container = emulatorCanvasRef.current;
-    if (!container) return;
+    const slot = screenSlotRef.current;
+    if (!slot) return;
     const updateDisplaySize = () => {
-      const dpr = Math.max(1, window.devicePixelRatio || 1);
-      const legendH = dartLegendRef.current?.getBoundingClientRect().height ?? 0;
-      const stateH = stateLineRef.current?.getBoundingClientRect().height ?? 0;
-      const verticalGap = 20;
-      const maxW = container.clientWidth;
-      const maxH = Math.max(1, container.clientHeight - legendH - stateH - verticalGap);
-      const maxScale = Math.min(maxW / CANVAS_BASE_WIDTH, maxH / CANVAS_BASE_HEIGHT);
-      const maxDeviceScale = Math.max(1, Math.floor(maxScale * dpr));
-      const quantizedScale = maxDeviceScale / dpr;
-      const width = CANVAS_BASE_WIDTH * quantizedScale;
-      const height = CANVAS_BASE_HEIGHT * quantizedScale;
+      const slotStyles = window.getComputedStyle(slot);
+      const horizontalPadding =
+        parseFloat(slotStyles.paddingLeft || "0") + parseFloat(slotStyles.paddingRight || "0");
+      const verticalPadding =
+        parseFloat(slotStyles.paddingTop || "0") + parseFloat(slotStyles.paddingBottom || "0");
+      // Reserve a fixed inset on all sides so the canvas never touches slot edges.
+      const maxW = Math.max(1, slot.clientWidth - horizontalPadding - SCREEN_CANVAS_GUTTER * 2);
+      const maxH = Math.max(1, slot.clientHeight - verticalPadding - SCREEN_CANVAS_GUTTER * 2);
+      const scale = Math.min(maxW / CANVAS_BASE_WIDTH, maxH / CANVAS_BASE_HEIGHT);
+      const width = Math.min(maxW, CANVAS_BASE_WIDTH * scale);
+      const height = Math.min(maxH, CANVAS_BASE_HEIGHT * scale);
       setCanvasDisplaySize((prev) =>
-        Math.abs(prev.width - width) < 0.5 && Math.abs(prev.height - height) < 0.5 ? prev : { width, height },
+        Math.abs(prev.width - width) < 0.25 && Math.abs(prev.height - height) < 0.25 ? prev : { width, height },
       );
     };
     updateDisplaySize();
     const observer = new ResizeObserver(() => updateDisplaySize());
-    observer.observe(container);
+    observer.observe(slot);
     return () => observer.disconnect();
   }, []);
 
@@ -473,58 +474,60 @@ export function EmulatorPanel() {
           <div className="warning">Desktop bridge is unavailable.</div>
         </header>
       ) : null}
-      <div className="emulator-canvas" ref={emulatorCanvasRef}>
-        <canvas
-          ref={canvasRef}
-          className="screen-canvas"
-          width={CANVAS_BASE_WIDTH}
-          height={CANVAS_BASE_HEIGHT}
-          style={{ width: `${canvasDisplaySize.width}px`, height: `${canvasDisplaySize.height}px` }}
-          onContextMenu={(e) => e.preventDefault()}
-          onMouseDown={(event) => {
-            if (!bridgeReady) return;
-            const coord = toCanvasCoord(event);
-            if (!coord) return;
-            const dartCoord = toDartCoord(coord.x, coord.y);
-            if (!dartCoord) return;
-            if (event.button === 0) {
-              const index = currentDartIndexRef.current;
-              void window.dartsnutApi.sendEmulatorCommand({
-                type: "throw_dart",
-                index,
-                x: dartCoord.x,
-                y: dartCoord.y,
-              });
-              setDartCoords((prev) => {
-                const next = [...prev];
-                next[index] = { x: dartCoord.x, y: dartCoord.y };
-                return next;
-              });
-            } else if (event.button === 2) {
-              const now = Date.now();
-              if (now - lastRightClickMsRef.current < 500) {
-                void window.dartsnutApi.sendEmulatorCommand({ type: "clear_darts" });
-                setDartCoords(Array.from({ length: 12 }, () => null));
-                lastRightClickMsRef.current = now;
-                return;
-              }
-              const selectedIndex = currentDartIndexRef.current;
-              setDartCoords((prev) => {
-                const selected = prev[selectedIndex];
-                if (!selected) return prev;
+      <div className="emulator-canvas">
+        <div className="emulator-screen-slot" ref={screenSlotRef}>
+          <canvas
+            ref={canvasRef}
+            className="screen-canvas"
+            width={CANVAS_BASE_WIDTH}
+            height={CANVAS_BASE_HEIGHT}
+            style={{ width: `${canvasDisplaySize.width}px`, height: `${canvasDisplaySize.height}px` }}
+            onContextMenu={(e) => e.preventDefault()}
+            onMouseDown={(event) => {
+              if (!bridgeReady) return;
+              const coord = toCanvasCoord(event);
+              if (!coord) return;
+              const dartCoord = toDartCoord(coord.x, coord.y);
+              if (!dartCoord) return;
+              if (event.button === 0) {
+                const index = currentDartIndexRef.current;
                 void window.dartsnutApi.sendEmulatorCommand({
-                  type: "remove_dart_at",
-                  x: selected.x,
-                  y: selected.y,
+                  type: "throw_dart",
+                  index,
+                  x: dartCoord.x,
+                  y: dartCoord.y,
                 });
-                const next = [...prev];
-                next[selectedIndex] = null;
-                return next;
-              });
-              lastRightClickMsRef.current = now;
-            }
-          }}
-        />
+                setDartCoords((prev) => {
+                  const next = [...prev];
+                  next[index] = { x: dartCoord.x, y: dartCoord.y };
+                  return next;
+                });
+              } else if (event.button === 2) {
+                const now = Date.now();
+                if (now - lastRightClickMsRef.current < 500) {
+                  void window.dartsnutApi.sendEmulatorCommand({ type: "clear_darts" });
+                  setDartCoords(Array.from({ length: 12 }, () => null));
+                  lastRightClickMsRef.current = now;
+                  return;
+                }
+                const selectedIndex = currentDartIndexRef.current;
+                setDartCoords((prev) => {
+                  const selected = prev[selectedIndex];
+                  if (!selected) return prev;
+                  void window.dartsnutApi.sendEmulatorCommand({
+                    type: "remove_dart_at",
+                    x: selected.x,
+                    y: selected.y,
+                  });
+                  const next = [...prev];
+                  next[selectedIndex] = null;
+                  return next;
+                });
+                lastRightClickMsRef.current = now;
+              }
+            }}
+          />
+        </div>
         {showParamsPanel ? (
           <div className="params-panel">
             <div className="params-panel-header">
@@ -552,7 +555,7 @@ export function EmulatorPanel() {
           </div>
         ) : null}
         {showDartLegend ? (
-          <div className="dart-legend" aria-label="Dart indexes" ref={dartLegendRef}>
+          <div className="dart-legend" aria-label="Dart indexes">
             {DART_COLORS.map((color, idx) => {
               const isSelected = idx === selectedDartIndex;
               const isPlaced = dartCoords[idx] !== null;
@@ -575,7 +578,7 @@ export function EmulatorPanel() {
             })}
           </div>
         ) : null}
-        <div className="state-line" ref={stateLineRef}>
+        <div className="state-line">
           <span>{state.running ? "Running" : "Stopped"}</span>
           <span>
             {runningTypeStatus ??

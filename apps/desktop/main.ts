@@ -39,6 +39,7 @@ const creatorTemplatePaths = {
   "game-creator": "packages/agent-runtime/skills/game-creator.md",
   "widget-creator": "packages/agent-runtime/skills/widget-creator.md"
 } as const;
+const widgetFontManifestRelativePath = "assets/fonts/widgets/font_manifest.json";
 const emulatorState: EmulatorStateSnapshot = {
   widgetPath: null,
   running: false,
@@ -109,10 +110,29 @@ function buildRoutedPrompt(request: PromptRequest): string {
   }
   const templatePath = resolveCreatorTemplatePath(request.templateMode);
   const template = fs.readFileSync(templatePath, "utf-8");
+  const widgetFontManifestPath = path.join(repoRoot, widgetFontManifestRelativePath);
+  let availableWidgetFonts: string[] = [];
+  if (request.templateMode === "widget-creator" && fs.existsSync(widgetFontManifestPath)) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(widgetFontManifestPath, "utf-8")) as {
+        fonts?: Array<{ fileName?: string }>;
+      };
+      availableWidgetFonts = (manifest.fonts ?? [])
+        .map((font) => font.fileName)
+        .filter((name): name is string => typeof name === "string")
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      availableWidgetFonts = [];
+    }
+  }
   const context = {
     projectType: request.projectType,
     widgetSize: request.widgetSize,
-    workspacePath: request.workspacePath ?? workspaceRoot
+    workspacePath: request.workspacePath ?? workspaceRoot,
+    widgetFontManifestPath:
+      request.templateMode === "widget-creator" ? widgetFontManifestPath : undefined,
+    availableWidgetFonts:
+      request.templateMode === "widget-creator" ? availableWidgetFonts : undefined
   };
   return [
     template,
@@ -295,7 +315,10 @@ function buildSession(): SessionEngine {
   return new SessionEngine({
     provider: new ProviderClient(config),
     workspacePolicy: new WorkspacePolicy(workspaceRoot),
-    skillPrompt
+    skillPrompt,
+    assetRoots: {
+      widgetFonts: path.join(repoRoot, "assets", "fonts", "widgets")
+    }
   });
 }
 

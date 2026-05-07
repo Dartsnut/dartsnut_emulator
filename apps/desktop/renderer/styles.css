@@ -148,6 +148,88 @@ button.app-bar-workspace-btn:focus-visible {
   padding: 14px;
 }
 
+.settings-screen {
+  grid-template-rows: auto 1fr;
+}
+
+.settings-layout {
+  min-height: 0;
+  border: 1px solid #243047;
+  background: #10192b;
+  border-radius: 10px;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  overflow: hidden;
+}
+
+.settings-menu {
+  border-right: 1px solid #243047;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-menu-item {
+  width: 100%;
+  text-align: left;
+}
+
+.settings-menu-item-active {
+  background: #355f9a;
+}
+
+.settings-content {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.settings-field input {
+  border: 1px solid #31425d;
+  border-radius: 8px;
+  background: #0f1621;
+  color: #e4e8ef;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 10px;
+}
+
+.settings-field input:focus {
+  outline: none;
+  border-color: #4b6ea9;
+  box-shadow: 0 0 0 1px #4b6ea9;
+}
+
+.settings-muted {
+  font-size: 12px;
+  color: #9eb1cb;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.settings-notice {
+  margin: 0;
+  border: 1px solid #2f5d40;
+  background: #1d3b2a;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 12px;
+}
+
 .runtime-error {
   margin: 0;
   border: 1px solid #8a2b2b;

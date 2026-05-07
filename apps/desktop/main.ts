@@ -10,6 +10,8 @@ import {
   type PickWorkspaceResponse,
   type ProjectType,
   type PromptRequest,
+  type ProviderSettings,
+  type SaveProviderSettingsRequest,
   type WidgetSize
 } from "@dartsnut/shared-ipc";
 import {
@@ -51,6 +53,57 @@ const emulatorState: EmulatorStateSnapshot = {
 
 const proofStatePath = () => path.join(app.getPath("userData"), "first-run-proof.json");
 const emulatorStatePath = () => path.join(app.getPath("userData"), "emulator-state.json");
+const providerSettingsPath = () => path.join(app.getPath("userData"), "provider-settings.json");
+
+function normalizeProviderSettings(input?: Partial<ProviderSettings> | null): ProviderSettings {
+  return {
+    baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl.trim() : "",
+    apiKey: typeof input?.apiKey === "string" ? input.apiKey.trim() : "",
+    model: typeof input?.model === "string" ? input.model.trim() : ""
+  };
+}
+
+function readProviderSettings(): ProviderSettings {
+  const file = providerSettingsPath();
+  if (!fs.existsSync(file)) {
+    return normalizeProviderSettings();
+  }
+  try {
+    const content = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<ProviderSettings>;
+    return normalizeProviderSettings(content);
+  } catch {
+    return normalizeProviderSettings();
+  }
+}
+
+function validateProviderSettingsInput(input: SaveProviderSettingsRequest): { ok: true } | { ok: false; error: string } {
+  const normalized = normalizeProviderSettings(input);
+  if (!normalized.apiKey) {
+    return { ok: false, error: "API key is required." };
+  }
+  if (!normalized.model) {
+    return { ok: false, error: "Model is required." };
+  }
+  if (normalized.baseUrl) {
+    try {
+      new URL(normalized.baseUrl);
+    } catch {
+      return { ok: false, error: "Endpoint must be a valid URL." };
+    }
+  }
+  return { ok: true };
+}
+
+function writeProviderSettings(input: SaveProviderSettingsRequest): ProviderSettings {
+  const validation = validateProviderSettingsInput(input);
+  if (!validation.ok) {
+    throw new Error(validation.error);
+  }
+  const normalized = normalizeProviderSettings(input);
+  fs.mkdirSync(path.dirname(providerSettingsPath()), { recursive: true });
+  fs.writeFileSync(providerSettingsPath(), JSON.stringify(normalized, null, 2));
+  return normalized;
+}
 
 function readProofState() {
   const file = proofStatePath();
@@ -85,7 +138,7 @@ function writeEmulatorState() {
 }
 
 function providerStatus(): BootstrapState["providerStatus"] {
-  const validation = validateProviderConfig(loadProviderConfig());
+  const validation = validateProviderConfig(loadProviderConfig(readProviderSettings()));
   return validation.ok ? "ready" : "missing_config";
 }
 
@@ -369,7 +422,8 @@ function buildSession(): SessionEngine {
   if (!workspaceRoot) {
     throw new Error("Workspace is not selected.");
   }
-  const config = loadProviderConfig();
+  const providerSettings = readProviderSettings();
+  const config = loadProviderConfig(providerSettings);
   const validation = validateProviderConfig(config);
   if (!validation.ok) {
     throw new Error(validation.error);
@@ -427,6 +481,10 @@ app.on("before-quit", () => {
 });
 
 ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());
+ipcMain.handle(IPCChannels.getProviderSettings, () => readProviderSettings());
+ipcMain.handle(IPCChannels.saveProviderSettings, (_event: unknown, request: SaveProviderSettingsRequest) =>
+  writeProviderSettings(request)
+);
 
 ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: PickWorkspaceRequest) => {
   const result = await dialog.showOpenDialog({

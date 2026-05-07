@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { IPCChannels, type AgentEvent, type BootstrapState } from "@dartsnut/shared-ipc";
+import {
+  IPCChannels,
+  type AgentEvent,
+  type BootstrapState,
+  type PickWorkspaceRequest,
+  type PickWorkspaceResponse,
+  type PromptRequest
+} from "@dartsnut/shared-ipc";
 import {
   EMULATOR_IPC_CHANNELS,
   type EmulatorCommand,
@@ -10,9 +17,10 @@ import {
 
 const api = {
   getBootstrapState: () => ipcRenderer.invoke(IPCChannels.bootstrapState) as Promise<BootstrapState>,
-  pickWorkspace: () => ipcRenderer.invoke(IPCChannels.pickWorkspace) as Promise<BootstrapState>,
-  sendPrompt: (prompt: string) =>
-    ipcRenderer.invoke(IPCChannels.sendPrompt, { prompt }) as Promise<{
+  pickWorkspace: (request?: PickWorkspaceRequest) =>
+    ipcRenderer.invoke(IPCChannels.pickWorkspace, request) as Promise<PickWorkspaceResponse>,
+  sendPrompt: (request: PromptRequest) =>
+    ipcRenderer.invoke(IPCChannels.sendPrompt, request) as Promise<{
       ok: boolean;
       events: AgentEvent[];
     }>,

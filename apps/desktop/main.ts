@@ -6,6 +6,8 @@ import {
   IPCChannels,
   type AgentEvent,
   type BootstrapState,
+  type PickWorkspaceRequest,
+  type PickWorkspaceResponse,
   type PromptRequest
 } from "@dartsnut/shared-ipc";
 import {
@@ -33,6 +35,10 @@ const repoRoot = app.isPackaged
   : path.resolve(__dirname, "../../..");
 let pythonExec = process.env.DARTSNUT_PYTHON || "python3";
 let lastWidgetDir: string | null = null;
+const creatorTemplatePaths = {
+  "game-creator": "packages/agent-runtime/skills/game-creator.md",
+  "widget-creator": "packages/agent-runtime/skills/widget-creator.md"
+} as const;
 const emulatorState: EmulatorStateSnapshot = {
   widgetPath: null,
   running: false,
@@ -86,6 +92,37 @@ function getBootstrapState(): BootstrapState {
     providerStatus: providerStatus(),
     firstRunComplete
   };
+}
+
+function isDirectoryEmpty(directoryPath: string): boolean {
+  const entries = fs.readdirSync(directoryPath);
+  return entries.length === 0;
+}
+
+function resolveCreatorTemplatePath(templateMode: NonNullable<PromptRequest["templateMode"]>): string {
+  return path.join(repoRoot, creatorTemplatePaths[templateMode]);
+}
+
+function buildRoutedPrompt(request: PromptRequest): string {
+  if (!request.templateMode) {
+    return request.prompt;
+  }
+  const templatePath = resolveCreatorTemplatePath(request.templateMode);
+  const template = fs.readFileSync(templatePath, "utf-8");
+  const context = {
+    projectType: request.projectType,
+    widgetSize: request.widgetSize,
+    workspacePath: request.workspacePath ?? workspaceRoot
+  };
+  return [
+    template,
+    "",
+    "Creation context:",
+    JSON.stringify(context, null, 2),
+    "",
+    "User request:",
+    request.prompt
+  ].join("\n");
 }
 
 function resolveSkillBundlePath(): string {
@@ -283,37 +320,56 @@ app.on("before-quit", () => {
 
 ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());
 
-ipcMain.handle(IPCChannels.pickWorkspace, async () => {
+ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: PickWorkspaceRequest) => {
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory", "createDirectory"]
   });
-  if (!result.canceled && result.filePaths[0]) {
-    workspaceRoot = result.filePaths[0];
-    // Attempt to launch emulator immediately from the selected workspace.
-    // If it's not a widget folder, the bridge will emit a clear failure status.
-    if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
-      startPythonBridge();
-    }
-    if (bridgeProcess?.stdin && !bridgeProcess.stdin.destroyed) {
-      const selectedPath = workspaceRoot;
-      bridgeProcess.stdin.write(
-        `${JSON.stringify({ command: { type: "set_path", path: selectedPath } satisfies EmulatorCommand })}\n`,
-      );
-      bridgeProcess.stdin.write(
-        `${JSON.stringify({ command: { type: "reload_widget" } satisfies EmulatorCommand })}\n`,
-      );
-      lastWidgetDir = selectedPath;
-      writeEmulatorState();
-    }
+  if (result.canceled || !result.filePaths[0]) {
+    return {
+      state: getBootstrapState(),
+      selectedPath: null,
+      accepted: false,
+      reason: "cancelled"
+    } satisfies PickWorkspaceResponse;
   }
-  return getBootstrapState();
+  const selectedPath = result.filePaths[0];
+  if (request?.requireEmpty && !isDirectoryEmpty(selectedPath)) {
+    return {
+      state: getBootstrapState(),
+      selectedPath,
+      accepted: false,
+      reason: "non_empty"
+    } satisfies PickWorkspaceResponse;
+  }
+  workspaceRoot = selectedPath;
+  // Attempt to launch emulator immediately from the selected workspace.
+  // If it's not a widget folder, the bridge will emit a clear failure status.
+  if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
+    startPythonBridge();
+  }
+  if (bridgeProcess?.stdin && !bridgeProcess.stdin.destroyed) {
+    bridgeProcess.stdin.write(
+      `${JSON.stringify({ command: { type: "set_path", path: selectedPath } satisfies EmulatorCommand })}\n`,
+    );
+    bridgeProcess.stdin.write(
+      `${JSON.stringify({ command: { type: "reload_widget" } satisfies EmulatorCommand })}\n`,
+    );
+    lastWidgetDir = selectedPath;
+    writeEmulatorState();
+  }
+  return {
+    state: getBootstrapState(),
+    selectedPath,
+    accepted: true
+  } satisfies PickWorkspaceResponse;
 });
 
 ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest) => {
   const events: AgentEvent[] = [];
   try {
     const session = buildSession();
-    await session.runPrompt(req.prompt, (agentEvent: AgentEvent) => {
+    const prompt = buildRoutedPrompt(req);
+    await session.runPrompt(prompt, (agentEvent: AgentEvent) => {
       events.push(agentEvent);
       console.log("[agent-stream]", JSON.stringify(agentEvent));
       win?.webContents.send(IPCChannels.subscribeEvents, agentEvent);

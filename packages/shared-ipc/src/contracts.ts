@@ -15,6 +15,25 @@ export interface BootstrapState {
 
 export interface PromptRequest {
   prompt: string;
+  projectType?: ProjectType;
+  widgetSize?: WidgetSize;
+  workspacePath?: string;
+  templateMode?: "game-creator" | "widget-creator";
+}
+
+export type ProjectType = "game" | "widget";
+
+export type WidgetSize = "128x160" | "128x128" | "128x64" | "64x32";
+
+export interface PickWorkspaceRequest {
+  requireEmpty?: boolean;
+}
+
+export interface PickWorkspaceResponse {
+  state: BootstrapState;
+  selectedPath: string | null;
+  accepted: boolean;
+  reason?: "cancelled" | "non_empty";
 }
 
 export type AgentEvent =

@@ -29,7 +29,7 @@ type ToolAction =
 
 interface AgentActionEnvelope {
   response?: string;
-  actions?: ToolAction[];
+  actions?: unknown[];
 }
 
 export interface SessionEngineOptions {
@@ -40,6 +40,51 @@ export interface SessionEngineOptions {
 
 export class SessionEngine {
   constructor(private readonly options: SessionEngineOptions) {}
+
+  private normalizeAction(rawAction: unknown): ToolAction {
+    if (!rawAction || typeof rawAction !== "object") {
+      throw new Error("Invalid tool action payload.");
+    }
+    const action = rawAction as {
+      tool?: unknown;
+      path?: unknown;
+      content?: unknown;
+      text?: unknown;
+    };
+    const tool = typeof action.tool === "string" ? action.tool : "";
+    if (tool === "list_files") {
+      return {
+        tool: "list_files",
+        path: typeof action.path === "string" ? action.path : undefined
+      };
+    }
+    if (tool === "read_file") {
+      if (typeof action.path !== "string" || !action.path) {
+        throw new Error("read_file action requires a string path.");
+      }
+      return { tool: "read_file", path: action.path };
+    }
+    if (tool === "write_file" || tool === "create_file") {
+      if (typeof action.path !== "string" || !action.path) {
+        throw new Error(`${tool} action requires a string path.`);
+      }
+      const contentValue =
+        typeof action.content === "string"
+          ? action.content
+          : typeof action.text === "string"
+            ? action.text
+            : undefined;
+      if (typeof contentValue !== "string") {
+        throw new Error(`${tool} action requires string content.`);
+      }
+      return {
+        tool: "write_file",
+        path: action.path,
+        content: contentValue
+      };
+    }
+    throw new Error(`Unsupported tool action: ${tool || "unknown"}`);
+  }
 
   private buildToolPrompt(): string {
     return [
@@ -148,7 +193,7 @@ export class SessionEngine {
         return raw;
       }
 
-      const actions = parsed.actions ?? [];
+      const actions = (parsed.actions ?? []).map((action) => this.normalizeAction(action));
       if (actions.length === 0) {
         const finalText = parsed.response ?? "Done.";
         onEvent({ type: "final", content: finalText, at: Date.now() });

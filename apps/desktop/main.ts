@@ -8,7 +8,9 @@ import {
   type BootstrapState,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
-  type PromptRequest
+  type ProjectType,
+  type PromptRequest,
+  type WidgetSize
 } from "@dartsnut/shared-ipc";
 import {
   loadProviderConfig,
@@ -104,15 +106,79 @@ function resolveCreatorTemplatePath(templateMode: NonNullable<PromptRequest["tem
   return path.join(repoRoot, creatorTemplatePaths[templateMode]);
 }
 
+const SUPPORTED_WIDGET_SIZES = ["128x160", "128x128", "128x64", "64x32"] as const satisfies readonly WidgetSize[];
+
+function parseConfWidgetSize(size: unknown): WidgetSize | undefined {
+  if (!Array.isArray(size) || size.length !== 2) {
+    return undefined;
+  }
+  const w = Number(size[0]);
+  const h = Number(size[1]);
+  if (!Number.isFinite(w) || !Number.isFinite(h)) {
+    return undefined;
+  }
+  const key = `${w}x${h}` as WidgetSize;
+  return SUPPORTED_WIDGET_SIZES.includes(key as (typeof SUPPORTED_WIDGET_SIZES)[number]) ? key : undefined;
+}
+
+function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
+  templateMode: NonNullable<PromptRequest["templateMode"]>;
+  projectType: ProjectType;
+  widgetSize?: WidgetSize;
+} | null {
+  const confPath = path.join(absoluteWorkspacePath, "conf.json");
+  if (!fs.existsSync(confPath)) {
+    return null;
+  }
+  try {
+    const conf = JSON.parse(fs.readFileSync(confPath, "utf-8")) as {
+      type?: string;
+      size?: unknown;
+    };
+    if (conf.type === "widget") {
+      return {
+        templateMode: "widget-creator",
+        projectType: "widget",
+        widgetSize: parseConfWidgetSize(conf.size)
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function buildRoutedPrompt(request: PromptRequest): string {
-  if (!request.templateMode) {
+  const effectiveWorkspacePath =
+    typeof request.workspacePath === "string" && request.workspacePath
+      ? request.workspacePath
+      : workspaceRoot;
+
+  let templateMode = request.templateMode;
+  let projectType = request.projectType;
+  let widgetSize = request.widgetSize;
+
+  if (
+    (!templateMode || !projectType || !widgetSize) &&
+    effectiveWorkspacePath &&
+    fs.existsSync(effectiveWorkspacePath)
+  ) {
+    const hints = readWorkspaceCreatorHints(effectiveWorkspacePath);
+    if (hints) {
+      templateMode = templateMode ?? hints.templateMode;
+      projectType = projectType ?? hints.projectType;
+      widgetSize = widgetSize ?? hints.widgetSize;
+    }
+  }
+
+  if (!templateMode) {
     return request.prompt;
   }
-  const templatePath = resolveCreatorTemplatePath(request.templateMode);
+  const templatePath = resolveCreatorTemplatePath(templateMode);
   const template = fs.readFileSync(templatePath, "utf-8");
   const widgetFontManifestPath = path.join(repoRoot, widgetFontManifestRelativePath);
   let availableWidgetFonts: string[] = [];
-  if (request.templateMode === "widget-creator" && fs.existsSync(widgetFontManifestPath)) {
+  if (templateMode === "widget-creator" && fs.existsSync(widgetFontManifestPath)) {
     try {
       const manifest = JSON.parse(fs.readFileSync(widgetFontManifestPath, "utf-8")) as {
         fonts?: Array<{ fileName?: string }>;
@@ -126,13 +192,11 @@ function buildRoutedPrompt(request: PromptRequest): string {
     }
   }
   const context = {
-    projectType: request.projectType,
-    widgetSize: request.widgetSize,
-    workspacePath: request.workspacePath ?? workspaceRoot,
-    widgetFontManifestPath:
-      request.templateMode === "widget-creator" ? widgetFontManifestPath : undefined,
-    availableWidgetFonts:
-      request.templateMode === "widget-creator" ? availableWidgetFonts : undefined
+    projectType,
+    widgetSize,
+    workspacePath: effectiveWorkspacePath ?? workspaceRoot,
+    widgetFontManifestPath: templateMode === "widget-creator" ? widgetFontManifestPath : undefined,
+    availableWidgetFonts: templateMode === "widget-creator" ? availableWidgetFonts : undefined
   };
   return [
     template,

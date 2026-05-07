@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentEvent, BootstrapState, ProjectType, WidgetSize } from "@dartsnut/shared-ipc";
+import type {
+  AgentEvent,
+  BootstrapState,
+  ProjectType,
+  PromptRequest,
+  WidgetSize
+} from "@dartsnut/shared-ipc";
 import { EmulatorPanel } from "./EmulatorPanel";
 
 interface TimelineEntry {
@@ -344,6 +350,12 @@ export function App() {
   const [intakeWidgetSize, setIntakeWidgetSize] = useState<WidgetSize | null>(null);
   const [intakeWorkspacePath, setIntakeWorkspacePath] = useState<string | null>(null);
   const [intakeStep, setIntakeStep] = useState<IntakeStep | null>(null);
+  /** Preserves widget/game creator routing for follow-up prompts (intake only runs once). */
+  const [sessionTemplateMode, setSessionTemplateMode] = useState<
+    "game-creator" | "widget-creator" | null
+  >(null);
+  const [sessionWidgetSize, setSessionWidgetSize] = useState<WidgetSize | null>(null);
+  const [sessionProjectType, setSessionProjectType] = useState<ProjectType | null>(null);
   const pendingReplyIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
@@ -443,13 +455,7 @@ export function App() {
     return null;
   }
 
-  async function submitPrompt(request: {
-    prompt: string;
-    projectType?: ProjectType;
-    widgetSize?: WidgetSize;
-    workspacePath?: string;
-    templateMode?: "game-creator" | "widget-creator";
-  }) {
+  async function submitPrompt(request: PromptRequest) {
     const pendingReplyId = `agent-pending-${Date.now()}`;
     pendingReplyIdRef.current = pendingReplyId;
     setEntries((prev) => [...prev, { id: pendingReplyId, role: "status", text: "Agent is thinking..." }]);
@@ -486,12 +492,16 @@ export function App() {
     if (nextStep) {
       return;
     }
+    const templateMode = projectType === "game" ? "game-creator" : "widget-creator";
+    setSessionTemplateMode(templateMode);
+    setSessionProjectType(projectType ?? null);
+    setSessionWidgetSize(widgetSize ?? null);
     await submitPrompt({
       prompt: promptText,
       projectType: projectType ?? undefined,
       widgetSize: widgetSize ?? undefined,
       workspacePath: workspacePath ?? undefined,
-      templateMode: projectType === "game" ? "game-creator" : "widget-creator"
+      templateMode
     });
     clearIntake();
   }
@@ -502,6 +512,9 @@ export function App() {
     }
     const updated = await api.pickWorkspace();
     setBootstrap(updated.state);
+    setSessionTemplateMode(null);
+    setSessionWidgetSize(null);
+    setSessionProjectType(null);
   }
 
   async function handleSend() {
@@ -514,7 +527,13 @@ export function App() {
 
     const shouldRunIntake = !bootstrap?.workspaceRoot;
     if (!shouldRunIntake) {
-      await submitPrompt({ prompt: current });
+      await submitPrompt({
+        prompt: current,
+        workspacePath: bootstrap.workspaceRoot ?? undefined,
+        templateMode: sessionTemplateMode ?? undefined,
+        widgetSize: sessionWidgetSize ?? undefined,
+        projectType: sessionProjectType ?? undefined
+      });
       return;
     }
     const inferredType = inferProjectType(current);

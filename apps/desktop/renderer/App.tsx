@@ -44,6 +44,8 @@ const STREAM_PREVIEW_LINES = 8;
 const DIFF_MAX_LINES = 220;
 const DIFF_CONTEXT_LINES = 4;
 const SUPPORTED_WIDGET_SIZES: WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
+const GREETING_TEXT =
+  "Hi! I can help you create or modify Dartsnut widgets and games. Pick a workspace folder and tell me what you want to build.";
 
 function inferProjectType(input: string): ProjectType | null {
   const hasGame = /\bgame\b/i.test(input);
@@ -325,6 +327,12 @@ function formatAgentMessage(text: string): FormattedAgentMessage {
   return parsePartialAgentMessage(text);
 }
 
+function workspaceFolderBasename(workspaceRoot: string): string {
+  const normalized = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  const segments = normalized.split("/").filter(Boolean);
+  return segments.length > 0 ? segments[segments.length - 1]! : workspaceRoot;
+}
+
 function toEntry(event: AgentEvent, seq: number): TimelineEntry {
   if (event.type === "stream") {
     return { id: `${event.type}-${event.at}-${seq}`, role: "agent", text: event.delta, streaming: true };
@@ -340,7 +348,9 @@ function toEntry(event: AgentEvent, seq: number): TimelineEntry {
 
 export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
-  const [entries, setEntries] = useState<TimelineEntry[]>([]);
+  const [entries, setEntries] = useState<TimelineEntry[]>([
+    { id: "greeting-initial", role: "agent", text: GREETING_TEXT, streaming: false }
+  ]);
   const [prompt, setPrompt] = useState("");
   const [sending, setSending] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
@@ -555,18 +565,38 @@ export function App() {
   return (
     <main className="app-shell">
       <section className="left-rail">
-        <header className="app-header">
-          <h1>Dartsnut Agent</h1>
-          <p>Embedded coding assistant for pygame + pydartsnut applications.</p>
-        </header>
-
-        <section className="setup">
-          {runtimeError ? <div className="runtime-error">{runtimeError}</div> : null}
-          <button onClick={handlePickWorkspace}>Choose Workspace Folder</button>
-          <div>Workspace: {bootstrap?.workspaceRoot ?? "Not selected"}</div>
-          <div>Provider: {bootstrap?.providerStatus ?? "loading"}</div>
-          <div>First-run proof: {bootstrap?.firstRunComplete ? "complete" : "pending"}</div>
-        </section>
+        <div className="app-top">
+          <header className="app-bar" role="banner">
+            <h1
+              className="app-bar-title"
+              title={bootstrap?.workspaceRoot ?? "Embedded assistant for pygame + pydartsnut"}
+            >
+              {bootstrap?.workspaceRoot
+                ? workspaceFolderBasename(bootstrap.workspaceRoot)
+                : "Dartsnut Agent"}
+            </h1>
+            <button
+              type="button"
+              className="app-bar-workspace-btn"
+              onClick={() => void handlePickWorkspace()}
+              aria-label="Choose workspace folder"
+              title="Choose workspace folder"
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden>
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
+                />
+                <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
+              </svg>
+            </button>
+          </header>
+          <div className="app-meta">{runtimeError ? <div className="runtime-error">{runtimeError}</div> : null}</div>
+        </div>
 
         <section className="timeline">
           {entries.map((entry) => (

@@ -29,13 +29,91 @@ body {
 .left-rail {
   height: 100%;
   min-height: 0;
-  padding: 20px;
+  padding: 16px 20px 20px;
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto 1fr auto;
   gap: 14px;
   border-right: 1px solid #1f2937;
   background: linear-gradient(180deg, #0f1624 0%, #0c1220 100%);
   overflow: hidden;
+}
+
+.app-top {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.app-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.app-bar-title {
+  flex: 1;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+  color: #f0f4fc;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.app-bar-workspace-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid #354a63;
+  background: rgba(255, 255, 255, 0.06);
+  color: #c8d9f0;
+  cursor: pointer;
+}
+
+button.app-bar-workspace-btn:hover:enabled {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: #466486;
+}
+
+button.app-bar-workspace-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #0f1624, 0 0 0 4px #4b6ea9;
+}
+
+.app-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.app-meta-row {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #9eb1cb;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.app-meta-sep {
+  opacity: 0.55;
+  user-select: none;
 }
 
 .right-pane {
@@ -47,27 +125,6 @@ body {
   overflow: hidden;
 }
 
-.app-header {
-  border: 1px solid #27344e;
-  background: #111a2d;
-  border-radius: 10px;
-  padding: 14px;
-}
-
-.app-header h1 {
-  margin: 0;
-  font-size: 19px;
-  letter-spacing: 0.2px;
-}
-
-.app-header p {
-  margin: 6px 0 0;
-  color: #9eb1cb;
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.setup,
 .timeline {
   border: 1px solid #243047;
   background: #10192b;
@@ -92,11 +149,12 @@ body {
 }
 
 .runtime-error {
-  margin-bottom: 12px;
+  margin: 0;
   border: 1px solid #8a2b2b;
   background: #4e2626;
   border-radius: 8px;
   padding: 8px;
+  font-size: 12px;
 }
 
 .timeline {
@@ -725,24 +783,39 @@ button:disabled {
 
 .emulator-canvas {
   flex: 1;
-  margin: 12px;
-  margin-bottom: 0;
-  border-radius: 10px;
+  min-height: 0;
+  margin: 0;
+  border-radius: 0;
   position: relative;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   justify-content: flex-start;
-  gap: 10px;
-  padding: 10px;
+  gap: 0;
+  padding: 0;
   color: #95a4bd;
   overflow: hidden;
 }
 
+.emulator-screen-slot {
+  flex: 1 1 0%;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* Matches EmulatorPanel buffer (588×800); sizing is set in JS — aspect-ratio avoids skew if one axis is clamped */
 .screen-canvas {
+  display: block;
+  aspect-ratio: 588 / 800;
   width: auto;
   max-width: 100%;
-  max-height: min(800px, calc(100vh - 360px));
   height: auto;
   border: none;
   background: transparent;
@@ -750,9 +823,12 @@ button:disabled {
 }
 
 .params-panel {
-  width: min(360px, 100%);
-  margin-top: 4px;
-  padding: 10px;
+  flex-shrink: 0;
+  align-self: stretch;
+  box-sizing: border-box;
+  width: auto;
+  margin: 0 14px;
+  padding: 12px 16px;
   border: 1px solid #2f405b;
   border-radius: 8px;
   background: #121b29;
@@ -798,10 +874,14 @@ button:disabled {
 }
 
 .dart-legend {
+  flex-shrink: 0;
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
-  width: min(360px, 100%);
+  width: 100%;
+  padding: 0 8px 8px;
+  justify-items: center;
 }
 
 .dart-dot {
@@ -835,7 +915,11 @@ button:disabled {
 }
 
 .state-line {
-  margin-top: 8px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 8px 8px;
+  margin: 0;
   display: flex;
   flex-direction: row;
   gap: 10px;

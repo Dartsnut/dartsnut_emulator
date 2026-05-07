@@ -1,0 +1,703 @@
+{
+  "sourceRoot": "/Users/howlingpan/dev/dartsnut/dartsnut_widgets",
+  "outputRoot": "/Users/howlingpan/dev/dartsnut/dartsnut_code/assets/fonts/widgets",
+  "totalSourceFiles": 131,
+  "totalUniqueFiles": 33,
+  "fonts": [
+    {
+      "sha256": "5b53926ebb76d20ba94e47af4091f4a0e588ad7739df2908a487d1286f2dce66",
+      "fileName": "10x20-5b53926e.pil",
+      "fontType": "pil",
+      "sourcePath": "daystoxmas/10x20.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 20,
+        "maxGlyphHeight": 20
+      },
+      "sourcePaths": [
+        "daystoxmas/10x20.pil",
+        "fonts/10x20.pil",
+        "phaseofmoon_128_128/10x20.pil"
+      ],
+      "sourceNames": [
+        "10x20.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "acda388bfbbc61f32dbc46f396df2b8f2ab410a4a1198e8347a93b65a9c44037",
+      "fileName": "10x20-acda388b.pbm",
+      "fontType": "pbm",
+      "sourcePath": "daystoxmas/10x20.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "daystoxmas/10x20.pbm",
+        "fonts/10x20.pbm",
+        "phaseofmoon_128_128/10x20.pbm"
+      ],
+      "sourceNames": [
+        "10x20.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "781edee21d72b01c69f2f6692a6204bfea01079f483fca1c51ed6bf150574a9c",
+      "fileName": "5x8-781edee2.pbm",
+      "fontType": "pbm",
+      "sourcePath": "fonts/5x8.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "fonts/5x8.pbm",
+        "formula1/5x8.pbm",
+        "formula1_128_128/5x8.pbm",
+        "nflscores/5x8.pbm",
+        "nhlscores/5x8.pbm",
+        "sunrisesunset/5x8.pbm",
+        "sunrisesunset_128_128/5x8.pbm"
+      ],
+      "sourceNames": [
+        "5x8.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "9dc73567a76328cf8ac79d0ab8e4d0e9d4e84b1a8b597aae3d889e822330223c",
+      "fileName": "5x8-9dc73567.pil",
+      "fontType": "pil",
+      "sourcePath": "fonts/5x8.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 10,
+        "maxGlyphHeight": 8
+      },
+      "sourcePaths": [
+        "fonts/5x8.pil",
+        "formula1/5x8.pil",
+        "formula1_128_128/5x8.pil",
+        "nflscores/5x8.pil",
+        "nhlscores/5x8.pil",
+        "sunrisesunset/5x8.pil",
+        "sunrisesunset_128_128/5x8.pil"
+      ],
+      "sourceNames": [
+        "5x8.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "12fcec9581ab4f73c3da63ebfae0d12fb928ca0dace29726e1769e8d1fb34819",
+      "fileName": "6x10-12fcec95.pil",
+      "fontType": "pil",
+      "sourcePath": "dateprogress_128_128/6x10.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 12,
+        "maxGlyphHeight": 10
+      },
+      "sourcePaths": [
+        "dateprogress_128_128/6x10.pil",
+        "fonts/6x10.pil",
+        "formula1/6x10.pil",
+        "formula1_128_128/6x10.pil",
+        "tetris/6x10.pil"
+      ],
+      "sourceNames": [
+        "6x10.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "e4f41a9ec8ea440bf74e02896b103d150c9e0f13f3e827fd1d82a7e8fd6eb3c2",
+      "fileName": "6x10-e4f41a9e.pbm",
+      "fontType": "pbm",
+      "sourcePath": "dateprogress_128_128/6x10.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "dateprogress_128_128/6x10.pbm",
+        "fonts/6x10.pbm",
+        "formula1/6x10.pbm",
+        "formula1_128_128/6x10.pbm",
+        "tetris/6x10.pbm"
+      ],
+      "sourceNames": [
+        "6x10.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "00d3654a17598dc5cf3badba86f8bce5de48e84df161ae585ee859802f4ab98a",
+      "fileName": "6x10-rounded-00d3654a.pbm",
+      "fontType": "pbm",
+      "sourcePath": "fonts/6x10-rounded.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "fonts/6x10-rounded.pbm",
+        "pixeljoint_128_128/6x10-rounded.pbm"
+      ],
+      "sourceNames": [
+        "6x10-rounded.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "0972fa8d78b790b78b7c0c3e7e96229778c5e610dc87bb0f78f2dcc0e5c122b7",
+      "fileName": "6x10-rounded-0972fa8d.pil",
+      "fontType": "pil",
+      "sourcePath": "fonts/6x10-rounded.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 12,
+        "maxGlyphHeight": 10
+      },
+      "sourcePaths": [
+        "fonts/6x10-rounded.pil",
+        "pixeljoint_128_128/6x10-rounded.pil"
+      ],
+      "sourceNames": [
+        "6x10-rounded.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "9a3bd1705761712d077ffc6057f03f31f13fa2bc70abbef5019ee604bcc6091a",
+      "fileName": "6x13-9a3bd170.pbm",
+      "fontType": "pbm",
+      "sourcePath": "cryptotracker/6x13.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "cryptotracker/6x13.pbm",
+        "cryptotracker_128_128/6x13.pbm",
+        "fonts/6x13.pbm",
+        "phaseofmoon_128_128/6x13.pbm",
+        "tetris/6x13.pbm"
+      ],
+      "sourceNames": [
+        "6x13.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "e111fb7f3a20d9febffb070a67abcc5398cf794a9326647889b6abf66cebd184",
+      "fileName": "6x13-e111fb7f.pil",
+      "fontType": "pil",
+      "sourcePath": "cryptotracker/6x13.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 12,
+        "maxGlyphHeight": 13
+      },
+      "sourcePaths": [
+        "cryptotracker/6x13.pil",
+        "cryptotracker_128_128/6x13.pil",
+        "fonts/6x13.pil",
+        "phaseofmoon_128_128/6x13.pil",
+        "tetris/6x13.pil"
+      ],
+      "sourceNames": [
+        "6x13.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "541a345d25e198101dfa6019a657039ffc6b45eac61a08dff16a5b7a860781e1",
+      "fileName": "big_digits-541a345d.pil",
+      "fontType": "pil",
+      "sourcePath": "digitalclock/big_digits.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 24,
+        "maxGlyphHeight": 102
+      },
+      "sourcePaths": [
+        "digitalclock/big_digits.pil",
+        "font_generator/big_digits.pil"
+      ],
+      "sourceNames": [
+        "big_digits.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "ec3a002b4452daed04f7f1c77dc8d05bbff432970aee13e483e8d0542ce057dd",
+      "fileName": "big_digits-ec3a002b.pbm",
+      "fontType": "pbm",
+      "sourcePath": "digitalclock/big_digits.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "digitalclock/big_digits.pbm",
+        "font_generator/big_digits.pbm"
+      ],
+      "sourceNames": [
+        "big_digits.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "47f548b68d3b46ad1da2bee019433aaf2f1537ff85cdbb51215fc628e6759a46",
+      "fileName": "CG-pixel-3x5-mono-47f548b6.pil",
+      "fontType": "pil",
+      "sourcePath": "daystoxmas/CG-pixel-3x5-mono.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 8,
+        "maxGlyphHeight": 5
+      },
+      "sourcePaths": [
+        "daystoxmas/CG-pixel-3x5-mono.pil",
+        "eplscores/CG-pixel-3x5-mono.pil",
+        "eplscores_128_128/CG-pixel-3x5-mono.pil",
+        "fonts/CG-pixel-3x5-mono.pil",
+        "formula1/CG-pixel-3x5-mono.pil",
+        "mlbscores/CG-pixel-3x5-mono.pil",
+        "mlbscores_128_128/CG-pixel-3x5-mono.pil",
+        "nbascores/CG-pixel-3x5-mono.pil",
+        "nbascores_128_128/CG-pixel-3x5-mono.pil",
+        "nflscores_128_128/CG-pixel-3x5-mono.pil",
+        "nhlscores_128_128/CG-pixel-3x5-mono.pil"
+      ],
+      "sourceNames": [
+        "CG-pixel-3x5-mono.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "52195ad4a779f843dd0cc934f9f8c7f47fd50dfbabcd06424b032fce7bcf41e9",
+      "fileName": "CG-pixel-3x5-mono-52195ad4.pbm",
+      "fontType": "pbm",
+      "sourcePath": "daystoxmas/CG-pixel-3x5-mono.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "daystoxmas/CG-pixel-3x5-mono.pbm",
+        "eplscores/CG-pixel-3x5-mono.pbm",
+        "eplscores_128_128/CG-pixel-3x5-mono.pbm",
+        "fonts/CG-pixel-3x5-mono.pbm",
+        "formula1/CG-pixel-3x5-mono.pbm",
+        "mlbscores/CG-pixel-3x5-mono.pbm",
+        "mlbscores_128_128/CG-pixel-3x5-mono.pbm",
+        "nbascores/CG-pixel-3x5-mono.pbm",
+        "nbascores_128_128/CG-pixel-3x5-mono.pbm",
+        "nflscores_128_128/CG-pixel-3x5-mono.pbm",
+        "nhlscores_128_128/CG-pixel-3x5-mono.pbm"
+      ],
+      "sourceNames": [
+        "CG-pixel-3x5-mono.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "9b5764d400b73e2747fa81010658eec0529b570e75ddaf8efc63905a21c41f1d",
+      "fileName": "CG-pixel-4x5-mono-9b5764d4.pbm",
+      "fontType": "pbm",
+      "sourcePath": "daystoxmas/CG-pixel-4x5-mono.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "daystoxmas/CG-pixel-4x5-mono.pbm",
+        "fonts/CG-pixel-4x5-mono.pbm"
+      ],
+      "sourceNames": [
+        "CG-pixel-4x5-mono.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "a52f88efccc6875268fafb6869f20006650bcf23cb71c5c009ecd579ba2d18a0",
+      "fileName": "CG-pixel-4x5-mono-a52f88ef.pil",
+      "fontType": "pil",
+      "sourcePath": "daystoxmas/CG-pixel-4x5-mono.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 10,
+        "maxGlyphHeight": 5
+      },
+      "sourcePaths": [
+        "daystoxmas/CG-pixel-4x5-mono.pil",
+        "fonts/CG-pixel-4x5-mono.pil"
+      ],
+      "sourceNames": [
+        "CG-pixel-4x5-mono.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "3e7d6a00058decffd6c6d4dac960dab2348a46bd80d82b779e3064f9f2e9778d",
+      "fileName": "colon-3e7d6a00.pil",
+      "fontType": "pil",
+      "sourcePath": "digitalclock/colon.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 0,
+        "maxGlyphHeight": 102
+      },
+      "sourcePaths": [
+        "digitalclock/colon.pil",
+        "font_generator/colon.pil"
+      ],
+      "sourceNames": [
+        "colon.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "bfc95043f6d60938ed9efe695d3535f549b9bd2bcc75093cffb1a029367fd599",
+      "fileName": "colon-bfc95043.pbm",
+      "fontType": "pbm",
+      "sourcePath": "digitalclock/colon.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "digitalclock/colon.pbm",
+        "font_generator/colon.pbm"
+      ],
+      "sourceNames": [
+        "colon.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "0dadad8863708b9c2ab5dfa7908442d2431bc275d88e157b0c76f95ed8995aeb",
+      "fileName": "dartsnut-6X10-0dadad88.pbm",
+      "fontType": "pbm",
+      "sourcePath": "font_generator/dartsnut-6X10.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "font_generator/dartsnut-6X10.pbm"
+      ],
+      "sourceNames": [
+        "dartsnut-6X10.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "53dbf5a165d0254d49e4416a8761f80a392b7c43b24a54af6e96a1db21138ee3",
+      "fileName": "dartsnut-6X10-53dbf5a1.pil",
+      "fontType": "pil",
+      "sourcePath": "font_generator/dartsnut-6X10.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 6,
+        "maxGlyphHeight": 10
+      },
+      "sourcePaths": [
+        "font_generator/dartsnut-6X10.pil"
+      ],
+      "sourceNames": [
+        "dartsnut-6X10.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "1ee4a99b530119a538193941a6268f8d2d60aaf0a7b20fa648528937c8ad72d9",
+      "fileName": "dartsnut-6X8-1ee4a99b.pil",
+      "fontType": "pil",
+      "sourcePath": "font_generator/dartsnut-6X8.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 6,
+        "maxGlyphHeight": 8
+      },
+      "sourcePaths": [
+        "font_generator/dartsnut-6X8.pil"
+      ],
+      "sourceNames": [
+        "dartsnut-6X8.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "26da032edee5d51f1757a7a2d8d1b533cd63614d047be0a4719c470c7dbc5910",
+      "fileName": "dartsnut-6X8-26da032e.pbm",
+      "fontType": "pbm",
+      "sourcePath": "font_generator/dartsnut-6X8.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "font_generator/dartsnut-6X8.pbm"
+      ],
+      "sourceNames": [
+        "dartsnut-6X8.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "3dc3dcebdf376e9b22e9c0ce58d5ced887dfbc25887e379fc0627ae799d4b4c7",
+      "fileName": "date_digits-3dc3dceb.pbm",
+      "fontType": "pbm",
+      "sourcePath": "digitalclock/date_digits.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "digitalclock/date_digits.pbm",
+        "font_generator/date_digits.pbm"
+      ],
+      "sourceNames": [
+        "date_digits.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "e3253e99f5de6d1b5a4c193aad32192a418740fee5a7339e20dde688ec8a563a",
+      "fileName": "date_digits-e3253e99.pil",
+      "fontType": "pil",
+      "sourcePath": "digitalclock/date_digits.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 10,
+        "maxGlyphHeight": 26
+      },
+      "sourcePaths": [
+        "digitalclock/date_digits.pil",
+        "font_generator/date_digits.pil"
+      ],
+      "sourceNames": [
+        "date_digits.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "0d12b47b29278920248bc432710c2b06c42fd059f7830b9798058ff2c4f1155c",
+      "fileName": "Dina_r400-6-0d12b47b.pil",
+      "fontType": "pil",
+      "sourcePath": "eplscores/Dina_r400-6.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 12,
+        "maxGlyphHeight": 10
+      },
+      "sourcePaths": [
+        "eplscores/Dina_r400-6.pil",
+        "eplscores_128_128/Dina_r400-6.pil",
+        "fonts/Dina_r400-6.pil",
+        "mlbscores/Dina_r400-6.pil",
+        "mlbscores_128_128/Dina_r400-6.pil",
+        "nbascores/Dina_r400-6.pil",
+        "nbascores_128_128/Dina_r400-6.pil",
+        "nflscores_128_128/Dina_r400-6.pil",
+        "nhlscores_128_128/Dina_r400-6.pil"
+      ],
+      "sourceNames": [
+        "Dina_r400-6.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "81c257a3bf31af56de3ba9b857725c025c56586e0374a36e7f0192228e29acd3",
+      "fileName": "Dina_r400-6-81c257a3.pbm",
+      "fontType": "pbm",
+      "sourcePath": "eplscores/Dina_r400-6.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "eplscores/Dina_r400-6.pbm",
+        "eplscores_128_128/Dina_r400-6.pbm",
+        "fonts/Dina_r400-6.pbm",
+        "mlbscores/Dina_r400-6.pbm",
+        "mlbscores_128_128/Dina_r400-6.pbm",
+        "nbascores/Dina_r400-6.pbm",
+        "nbascores_128_128/Dina_r400-6.pbm",
+        "nflscores_128_128/Dina_r400-6.pbm",
+        "nhlscores_128_128/Dina_r400-6.pbm"
+      ],
+      "sourceNames": [
+        "Dina_r400-6.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "82ea6f657f060b5483fb567c13937eb2ae6237df839c4f77b2a6984c774f1384",
+      "fileName": "helvetica-compressed-82ea6f65.otf",
+      "fontType": "otf",
+      "sourcePath": "forex_monitor_128_128/helvetica-compressed.otf",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "forex_monitor_128_128/helvetica-compressed.otf"
+      ],
+      "sourceNames": [
+        "helvetica-compressed.otf"
+      ],
+      "bitmapPair": null
+    },
+    {
+      "sha256": "9bb422e0ccd2c703c11c80a4df13e012981740d5ddfef7bdbb89e53ce19027f6",
+      "fileName": "PICO-8-9bb422e0.ttf",
+      "fontType": "ttf",
+      "sourcePath": "chessstream/PICO-8.ttf",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "chessstream/PICO-8.ttf",
+        "pet/PICO-8.ttf"
+      ],
+      "sourceNames": [
+        "PICO-8.ttf"
+      ],
+      "bitmapPair": null
+    },
+    {
+      "sha256": "13187d9b4746c442e0b0050809038fc78a23607c812baf612c07246e1ecbb8de",
+      "fileName": "tahomabd-13187d9b.ttf",
+      "fontType": "ttf",
+      "sourcePath": "simple_tiktok_video_info_128_128/tahomabd.ttf",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "simple_tiktok_video_info_128_128/tahomabd.ttf",
+        "simple_youtube_info_64_32/tahomabd.ttf"
+      ],
+      "sourceNames": [
+        "tahomabd.ttf"
+      ],
+      "bitmapPair": null
+    },
+    {
+      "sha256": "245226713ccfe6e4d2dadf2d01ef653409728afe5a0db659f1629105961acfc1",
+      "fileName": "tb-8-24522671.pil",
+      "fontType": "pil",
+      "sourcePath": "eplscores/tb-8.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 10,
+        "maxGlyphHeight": 8
+      },
+      "sourcePaths": [
+        "eplscores/tb-8.pil",
+        "eplscores_128_128/tb-8.pil",
+        "fonts/tb-8.pil",
+        "mlbscores/tb-8.pil",
+        "nbascores/tb-8.pil",
+        "nbascores_128_128/tb-8.pil"
+      ],
+      "sourceNames": [
+        "tb-8.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "ea550bf2d775a9b4a519b15964606abfba046d0aac6ec9632416cde4a90519fc",
+      "fileName": "tb-8-ea550bf2.pbm",
+      "fontType": "pbm",
+      "sourcePath": "eplscores/tb-8.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "eplscores/tb-8.pbm",
+        "eplscores_128_128/tb-8.pbm",
+        "fonts/tb-8.pbm",
+        "mlbscores/tb-8.pbm",
+        "nbascores/tb-8.pbm",
+        "nbascores_128_128/tb-8.pbm"
+      ],
+      "sourceNames": [
+        "tb-8.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "a71ea4f5c41d9bae0686f55e1e7834b84f6f4a7f69c6fd951862288304cd54fb",
+      "fileName": "tom-thumb-a71ea4f5.pil",
+      "fontType": "pil",
+      "sourcePath": "dateprogress/tom-thumb.pil",
+      "pilMetrics": {
+        "maxGlyphWidth": 8,
+        "maxGlyphHeight": 6
+      },
+      "sourcePaths": [
+        "dateprogress/tom-thumb.pil",
+        "dateprogress_128_128/tom-thumb.pil",
+        "fonts/tom-thumb.pil",
+        "phaseofmoon/tom-thumb.pil",
+        "phaseofmoon_128_128/tom-thumb.pil"
+      ],
+      "sourceNames": [
+        "tom-thumb.pil"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    },
+    {
+      "sha256": "d85bebe47df567a70e0c3292b8bc45ab52990de79d4078094627072b37920ea4",
+      "fileName": "tom-thumb-d85bebe4.pbm",
+      "fontType": "pbm",
+      "sourcePath": "dateprogress/tom-thumb.pbm",
+      "pilMetrics": null,
+      "sourcePaths": [
+        "dateprogress/tom-thumb.pbm",
+        "dateprogress_128_128/tom-thumb.pbm",
+        "fonts/tom-thumb.pbm",
+        "phaseofmoon/tom-thumb.pbm",
+        "phaseofmoon_128_128/tom-thumb.pbm"
+      ],
+      "sourceNames": [
+        "tom-thumb.pbm"
+      ],
+      "bitmapPair": {
+        "hasPil": false,
+        "hasPbm": false
+      }
+    }
+  ]
+}

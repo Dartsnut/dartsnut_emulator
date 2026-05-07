@@ -3,7 +3,9 @@ import type {
   BootstrapState,
   PickWorkspaceRequest,
   PickWorkspaceResponse,
-  PromptRequest
+  PromptRequest,
+  ProviderSettings,
+  SaveProviderSettingsRequest
 } from "@dartsnut/shared-ipc";
 import type {
   EmulatorCommand,
@@ -18,6 +20,8 @@ declare global {
       getBootstrapState: () => Promise<BootstrapState>;
       pickWorkspace: (request?: PickWorkspaceRequest) => Promise<PickWorkspaceResponse>;
       sendPrompt: (request: PromptRequest) => Promise<{ ok: boolean; events: AgentEvent[] }>;
+      getProviderSettings: () => Promise<ProviderSettings>;
+      saveProviderSettings: (request: SaveProviderSettingsRequest) => Promise<ProviderSettings>;
       onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
       sendEmulatorCommand: (command: EmulatorCommand) => Promise<{ ok: boolean }>;
       pickWidgetPath: () => Promise<{ path: string | null }>;
@@ -30,4 +34,4 @@ declare global {
   }
 }
 
-export {};
+export { };

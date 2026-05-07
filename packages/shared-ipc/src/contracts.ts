@@ -2,7 +2,9 @@ export const IPCChannels = {
   bootstrapState: "agent:bootstrap-state",
   pickWorkspace: "agent:pick-workspace",
   sendPrompt: "agent:send-prompt",
-  subscribeEvents: "agent:subscribe-events"
+  subscribeEvents: "agent:subscribe-events",
+  getProviderSettings: "agent:get-provider-settings",
+  saveProviderSettings: "agent:save-provider-settings"
 } as const;
 
 export type ProviderStatus = "ready" | "missing_config" | "invalid";
@@ -36,24 +38,36 @@ export interface PickWorkspaceResponse {
   reason?: "cancelled" | "non_empty";
 }
 
+export interface ProviderSettings {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+export interface SaveProviderSettingsRequest {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
 export type AgentEvent =
   | {
-      type: "stream";
-      delta: string;
-      at: number;
-    }
+    type: "stream";
+    delta: string;
+    at: number;
+  }
   | {
-      type: "status";
-      message: string;
-      at: number;
-    }
+    type: "status";
+    message: string;
+    at: number;
+  }
   | {
-      type: "error";
-      message: string;
-      at: number;
-    }
+    type: "error";
+    message: string;
+    at: number;
+  }
   | {
-      type: "final";
-      content: string;
-      at: number;
-    };
+    type: "final";
+    content: string;
+    at: number;
+  };

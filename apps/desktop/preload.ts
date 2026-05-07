@@ -5,7 +5,9 @@ import {
   type BootstrapState,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
-  type PromptRequest
+  type PromptRequest,
+  type ProviderSettings,
+  type SaveProviderSettingsRequest
 } from "@dartsnut/shared-ipc";
 import {
   EMULATOR_IPC_CHANNELS,
@@ -24,6 +26,10 @@ const api = {
       ok: boolean;
       events: AgentEvent[];
     }>,
+  getProviderSettings: () =>
+    ipcRenderer.invoke(IPCChannels.getProviderSettings) as Promise<ProviderSettings>,
+  saveProviderSettings: (request: SaveProviderSettingsRequest) =>
+    ipcRenderer.invoke(IPCChannels.saveProviderSettings, request) as Promise<ProviderSettings>,
   onAgentEvent: (listener: (event: AgentEvent) => void) => {
     const handler = (_: unknown, event: AgentEvent) => listener(event);
     ipcRenderer.on(IPCChannels.subscribeEvents, handler);

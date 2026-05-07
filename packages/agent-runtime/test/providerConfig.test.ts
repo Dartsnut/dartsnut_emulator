@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { findEnvFile, validateProviderConfig } from "../src/providerConfig";
+import { findEnvFile, resolveProviderConfig, validateProviderConfig } from "../src/providerConfig";
 
 describe("validateProviderConfig", () => {
   it("fails when config fields are missing", () => {
@@ -50,5 +50,45 @@ describe("findEnvFile", () => {
     fs.writeFileSync(path.join(root, ".env"), "OPENAI_API_KEY=parent");
 
     expect(findEnvFile(child)).toBe(path.join(root, ".env"));
+  });
+});
+
+describe("resolveProviderConfig", () => {
+  const originalBaseUrl = process.env.OPENAI_BASE_URL;
+  const originalApiKey = process.env.OPENAI_API_KEY;
+  const originalModel = process.env.OPENAI_MODEL;
+
+  afterEach(() => {
+    process.env.OPENAI_BASE_URL = originalBaseUrl;
+    process.env.OPENAI_API_KEY = originalApiKey;
+    process.env.OPENAI_MODEL = originalModel;
+  });
+
+  it("uses env values when override fields are missing", () => {
+    process.env.OPENAI_BASE_URL = "https://env.example.com/v1";
+    process.env.OPENAI_API_KEY = "env-key";
+    process.env.OPENAI_MODEL = "env-model";
+    const resolved = resolveProviderConfig({ model: "custom-model" });
+    expect(resolved).toEqual({
+      baseUrl: "https://env.example.com/v1",
+      apiKey: "env-key",
+      model: "custom-model"
+    });
+  });
+
+  it("uses override values when provided", () => {
+    process.env.OPENAI_BASE_URL = "https://env.example.com/v1";
+    process.env.OPENAI_API_KEY = "env-key";
+    process.env.OPENAI_MODEL = "env-model";
+    const resolved = resolveProviderConfig({
+      baseUrl: "https://user.example.com/v1",
+      apiKey: "user-key",
+      model: "user-model"
+    });
+    expect(resolved).toEqual({
+      baseUrl: "https://user.example.com/v1",
+      apiKey: "user-key",
+      model: "user-model"
+    });
   });
 });

@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import type {
   AgentEvent,
   BootstrapState,
+  ProviderSettings,
   ProjectType,
   PromptRequest,
   WidgetSize
@@ -39,6 +40,7 @@ interface DiffLine {
 }
 
 type IntakeStep = "projectType" | "widgetSize" | "workspace";
+type AppScreen = "main" | "settings";
 
 const STREAM_PREVIEW_LINES = 8;
 const DIFF_MAX_LINES = 220;
@@ -46,6 +48,25 @@ const DIFF_CONTEXT_LINES = 4;
 const SUPPORTED_WIDGET_SIZES: WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
 const GREETING_TEXT =
   "Hi! I can help you create or modify Dartsnut widgets and games. Pick a workspace folder and tell me what you want to build.";
+
+function isSettingsShortcut(event: KeyboardEvent): boolean {
+  if (event.key !== ",") {
+    return false;
+  }
+  const isMac = navigator.platform.toLowerCase().includes("mac");
+  return isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+}
+
+function maskApiKey(value: string): string {
+  if (!value) {
+    return "";
+  }
+  if (value.length <= 4) {
+    return "*".repeat(value.length);
+  }
+  const suffix = value.slice(-4);
+  return `${"*".repeat(Math.max(4, value.length - 4))}${suffix}`;
+}
 
 function inferProjectType(input: string): ProjectType | null {
   const hasGame = /\bgame\b/i.test(input);
@@ -354,6 +375,7 @@ export function App() {
   const [prompt, setPrompt] = useState("");
   const [sending, setSending] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [screen, setScreen] = useState<AppScreen>("main");
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [intakeProjectType, setIntakeProjectType] = useState<ProjectType | null>(null);
   const [intakeWidgetSize, setIntakeWidgetSize] = useState<WidgetSize | null>(null);
@@ -368,6 +390,14 @@ export function App() {
   const pendingReplyIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
+  const [providerSettings, setProviderSettings] = useState<ProviderSettings>({
+    baseUrl: "",
+    apiKey: "",
+    model: ""
+  });
+  const [providerSettingsError, setProviderSettingsError] = useState<string | null>(null);
+  const [providerSettingsNotice, setProviderSettingsNotice] = useState<string | null>(null);
+  const [savingProviderSettings, setSavingProviderSettings] = useState(false);
 
   const api = window.dartsnutApi;
 
@@ -389,6 +419,10 @@ export function App() {
     api.getBootstrapState().then(setBootstrap).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Failed to load bootstrap state.";
       setRuntimeError(message);
+    });
+    api.getProviderSettings().then(setProviderSettings).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Failed to load provider settings.";
+      setProviderSettingsError(message);
     });
     const unsubscribe = api.onAgentEvent((event) => {
       clearPendingReplyIndicator();
@@ -526,6 +560,59 @@ export function App() {
     setSessionProjectType(null);
   }
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (isSettingsShortcut(event)) {
+        event.preventDefault();
+        setScreen("settings");
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  async function handleSaveProviderSettings() {
+    if (!api) {
+      setProviderSettingsError("Desktop bridge is unavailable.");
+      return;
+    }
+    setProviderSettingsError(null);
+    setProviderSettingsNotice(null);
+    if (!providerSettings.apiKey.trim()) {
+      setProviderSettingsError("API key is required.");
+      return;
+    }
+    if (!providerSettings.model.trim()) {
+      setProviderSettingsError("Model is required.");
+      return;
+    }
+    if (providerSettings.baseUrl.trim()) {
+      try {
+        new URL(providerSettings.baseUrl.trim());
+      } catch {
+        setProviderSettingsError("Endpoint must be a valid URL.");
+        return;
+      }
+    }
+    setSavingProviderSettings(true);
+    try {
+      const saved = await api.saveProviderSettings({
+        baseUrl: providerSettings.baseUrl,
+        apiKey: providerSettings.apiKey,
+        model: providerSettings.model
+      });
+      setProviderSettings(saved);
+      setProviderSettingsNotice("Settings saved. New LLM calls will use these values.");
+      const refreshed = await api.getBootstrapState();
+      setBootstrap(refreshed);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save provider settings.";
+      setProviderSettingsError(message);
+    } finally {
+      setSavingProviderSettings(false);
+    }
+  }
+
   async function handleSend() {
     if (!prompt.trim() || chatDisabled) {
       return;
@@ -564,163 +651,238 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <section className="left-rail">
-        <div className="app-top">
-          <header className="app-bar" role="banner">
-            <h1
-              className="app-bar-title"
-              title={bootstrap?.workspaceRoot ?? "Embedded assistant for pygame + pydartsnut"}
-            >
-              {bootstrap?.workspaceRoot
-                ? workspaceFolderBasename(bootstrap.workspaceRoot)
-                : "Dartsnut Agent"}
-            </h1>
-            <button
-              type="button"
-              className="app-bar-workspace-btn"
-              onClick={() => void handlePickWorkspace()}
-              aria-label="Choose workspace folder"
-              title="Choose workspace folder"
-            >
-              <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden>
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
-                />
-                <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
-              </svg>
-            </button>
-          </header>
-          <div className="app-meta">{runtimeError ? <div className="runtime-error">{runtimeError}</div> : null}</div>
-        </div>
-
-        <section className="timeline">
-          {entries.map((entry) => (
-            <div key={entry.id} className={`entry ${entry.role}`}>
-              {entry.role === "agent" ? (
-                <AgentEntryContent text={entry.text} isStreaming={Boolean(entry.streaming)} />
-              ) : (
-                <div className="entry-text">{entry.text}</div>
-              )}
-            </div>
-          ))}
-        </section>
-
-        <section className="composer">
-          {pendingPrompt && intakeStep ? (
-            <div className="composer-intake entry status">
-              <div className="entry-text">
-                Intake required before creation.
-                {intakeStep === "projectType" ? " Select project type." : ""}
-                {intakeStep === "widgetSize" ? " Select widget size." : ""}
-                {intakeStep === "workspace" ? " Select an empty workspace folder." : ""}
-              </div>
-              {intakeStep === "projectType" ? (
-                <div className="entry-text">
-                  <button type="button" onClick={() => continueIntake({ projectType: "game", widgetSize: null })}>
-                    Game
-                  </button>
-                  <button type="button" onClick={() => continueIntake({ projectType: "widget" })}>Widget</button>
-                  <button type="button" onClick={clearIntake}>
-                    Cancel
-                  </button>
-                </div>
-              ) : null}
-              {intakeStep === "widgetSize" ? (
-                <div className="entry-text">
-                  {SUPPORTED_WIDGET_SIZES.map((size) => (
-                    <button key={size} type="button" onClick={() => continueIntake({ widgetSize: size })}>
-                      {size}
-                    </button>
-                  ))}
-                  <button type="button" onClick={clearIntake}>
-                    Cancel
-                  </button>
-                </div>
-              ) : null}
-              {intakeStep === "workspace" ? (
-                <div className="entry-text">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const pickResult = await api.pickWorkspace({ requireEmpty: true });
-                      setBootstrap(pickResult.state);
-                      if (pickResult.accepted && pickResult.selectedPath) {
-                        await continueIntake({ workspacePath: pickResult.selectedPath });
-                        return;
-                      }
-                      if (pickResult.reason === "non_empty") {
-                        postStatus("Selected workspace is not empty. Please choose a different folder.");
-                        return;
-                      }
-                      if (pickResult.reason === "cancelled") {
-                        postStatus("Workspace selection cancelled.");
-                      }
-                    }}
-                  >
-                    Choose Empty Workspace
-                  </button>
-                  <button type="button" onClick={clearIntake}>
-                    Cancel
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          <div className="composer-pill">
-            <textarea
-              className="composer-pill-input"
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void handleSend();
-                }
-              }}
-              placeholder="Message..."
-              rows={1}
-              aria-label="Message"
-            />
-            <div className="composer-pill-trailing">
-              <label className="composer-pill-model-wrap">
-                <span className="composer-visually-hidden">Mode</span>
-                <select className="composer-pill-model" defaultValue="auto" aria-label="Mode">
-                  <option value="auto">Auto</option>
-                </select>
-              </label>
+      {screen === "main" ? (
+        <section className="left-rail">
+          <div className="app-top">
+            <header className="app-bar" role="banner">
+              <h1
+                className="app-bar-title"
+                title={bootstrap?.workspaceRoot ?? "Embedded assistant for pygame + pydartsnut"}
+              >
+                {bootstrap?.workspaceRoot
+                  ? workspaceFolderBasename(bootstrap.workspaceRoot)
+                  : "Dartsnut Agent"}
+              </h1>
               <button
                 type="button"
-                className="composer-pill-send"
-                disabled={chatDisabled}
-                aria-busy={sending}
-                aria-label={sending ? "Sending" : "Send"}
-                onClick={() => void handleSend()}
+                className="app-bar-workspace-btn"
+                onClick={() => void handlePickWorkspace()}
+                aria-label="Choose workspace folder"
+                title="Choose workspace folder"
               >
-                {sending ? (
-                  <span className="composer-pill-send-busy" aria-hidden />
-                ) : (
-                  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden>
-                    <path
-                      d="M12 19V6M12 6l-4.5 4.5M12 6l4.5 4.5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                )}
+                <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden>
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
+                  />
+                  <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
+                </svg>
               </button>
+            </header>
+            <div className="app-meta">{runtimeError ? <div className="runtime-error">{runtimeError}</div> : null}</div>
+          </div>
+
+          <section className="timeline">
+            {entries.map((entry) => (
+              <div key={entry.id} className={`entry ${entry.role}`}>
+                {entry.role === "agent" ? (
+                  <AgentEntryContent text={entry.text} isStreaming={Boolean(entry.streaming)} />
+                ) : (
+                  <div className="entry-text">{entry.text}</div>
+                )}
+              </div>
+            ))}
+          </section>
+
+          <section className="composer">
+            {pendingPrompt && intakeStep ? (
+              <div className="composer-intake entry status">
+                <div className="entry-text">
+                  Intake required before creation.
+                  {intakeStep === "projectType" ? " Select project type." : ""}
+                  {intakeStep === "widgetSize" ? " Select widget size." : ""}
+                  {intakeStep === "workspace" ? " Select an empty workspace folder." : ""}
+                </div>
+                {intakeStep === "projectType" ? (
+                  <div className="entry-text">
+                    <button type="button" onClick={() => continueIntake({ projectType: "game", widgetSize: null })}>
+                      Game
+                    </button>
+                    <button type="button" onClick={() => continueIntake({ projectType: "widget" })}>Widget</button>
+                    <button type="button" onClick={clearIntake}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : null}
+                {intakeStep === "widgetSize" ? (
+                  <div className="entry-text">
+                    {SUPPORTED_WIDGET_SIZES.map((size) => (
+                      <button key={size} type="button" onClick={() => continueIntake({ widgetSize: size })}>
+                        {size}
+                      </button>
+                    ))}
+                    <button type="button" onClick={clearIntake}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : null}
+                {intakeStep === "workspace" ? (
+                  <div className="entry-text">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const pickResult = await api.pickWorkspace({ requireEmpty: true });
+                        setBootstrap(pickResult.state);
+                        if (pickResult.accepted && pickResult.selectedPath) {
+                          await continueIntake({ workspacePath: pickResult.selectedPath });
+                          return;
+                        }
+                        if (pickResult.reason === "non_empty") {
+                          postStatus("Selected workspace is not empty. Please choose a different folder.");
+                          return;
+                        }
+                        if (pickResult.reason === "cancelled") {
+                          postStatus("Workspace selection cancelled.");
+                        }
+                      }}
+                    >
+                      Choose Empty Workspace
+                    </button>
+                    <button type="button" onClick={clearIntake}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="composer-pill">
+              <textarea
+                className="composer-pill-input"
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void handleSend();
+                  }
+                }}
+                placeholder="Message..."
+                rows={1}
+                aria-label="Message"
+              />
+              <div className="composer-pill-trailing">
+                <label className="composer-pill-model-wrap">
+                  <span className="composer-visually-hidden">Mode</span>
+                  <select className="composer-pill-model" defaultValue="auto" aria-label="Mode">
+                    <option value="auto">Auto</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="composer-pill-send"
+                  disabled={chatDisabled}
+                  aria-busy={sending}
+                  aria-label={sending ? "Sending" : "Send"}
+                  onClick={() => void handleSend()}
+                >
+                  {sending ? (
+                    <span className="composer-pill-send-busy" aria-hidden />
+                  ) : (
+                    <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden>
+                      <path
+                        d="M12 19V6M12 6l-4.5 4.5M12 6l4.5 4.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
+          </section>
+        </section>
+      ) : (
+        <section className="left-rail settings-screen">
+          <div className="app-top">
+            <header className="app-bar" role="banner">
+              <h1 className="app-bar-title">Settings</h1>
+              <button
+                type="button"
+                className="app-bar-workspace-btn"
+                onClick={() => {
+                  setScreen("main");
+                  setProviderSettingsError(null);
+                  setProviderSettingsNotice(null);
+                }}
+                aria-label="Back to main view"
+                title="Back to main view"
+              >
+                Back
+              </button>
+            </header>
+            <div className="app-meta">
+              {providerSettingsError ? <div className="runtime-error">{providerSettingsError}</div> : null}
+              {providerSettingsNotice ? <div className="settings-notice">{providerSettingsNotice}</div> : null}
             </div>
           </div>
+          <section className="settings-layout">
+            <nav className="settings-menu" aria-label="Settings menu">
+              <button type="button" className="settings-menu-item settings-menu-item-active">
+                OpenAI key configure
+              </button>
+            </nav>
+            <div className="settings-content">
+              <label className="settings-field">
+                <span>API endpoint</span>
+                <input
+                  type="url"
+                  value={providerSettings.baseUrl}
+                  onChange={(event) =>
+                    setProviderSettings((prev) => ({ ...prev, baseUrl: event.target.value }))
+                  }
+                  placeholder="https://api.openai.com/v1"
+                />
+              </label>
+              <label className="settings-field">
+                <span>API key</span>
+                <input
+                  type="password"
+                  value={providerSettings.apiKey}
+                  onChange={(event) =>
+                    setProviderSettings((prev) => ({ ...prev, apiKey: event.target.value }))
+                  }
+                  placeholder="sk-..."
+                />
+              </label>
+              <div className="settings-muted">Stored key preview: {maskApiKey(providerSettings.apiKey) || "(empty)"}</div>
+              <label className="settings-field">
+                <span>Model</span>
+                <input
+                  type="text"
+                  value={providerSettings.model}
+                  onChange={(event) =>
+                    setProviderSettings((prev) => ({ ...prev, model: event.target.value }))
+                  }
+                  placeholder="gpt-4.1-mini"
+                />
+              </label>
+              <div className="settings-actions">
+                <button type="button" onClick={() => void handleSaveProviderSettings()} disabled={savingProviderSettings}>
+                  {savingProviderSettings ? "Saving..." : "Save"}
+                </button>
+              </div>
+            </div>
+          </section>
         </section>
-      </section>
+      )}
       <aside className="right-pane">
         <EmulatorPanel />
       </aside>

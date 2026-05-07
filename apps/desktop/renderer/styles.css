@@ -144,37 +144,195 @@ body {
   word-break: break-word;
 }
 
-.rolling-preview,
-.diff-view {
+.rolling-preview {
   display: grid;
   gap: 6px;
 }
 
-.diff-json {
-  max-height: 320px;
+.entry-action--final-diff {
+  border: none;
+  background: transparent;
+  padding: 0;
 }
 
-.diff-line {
+.final-diff-card {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #2f4a38;
+  background: #0d1117;
+}
+
+.final-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 14px;
+  background: #252526;
+  border-bottom: 1px solid #3c3c3c;
+}
+
+.final-diff-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.final-diff-hash {
+  color: #6e7681;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.final-diff-filename {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: #c8c9cc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.final-diff-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.final-diff-stat--add {
+  color: #3fb950;
+  font-weight: 600;
+}
+
+.final-diff-stat--remove {
+  color: #f85149;
+  font-weight: 600;
+}
+
+.final-diff-body {
+  margin: 0;
+  padding: 0;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.final-diff-line {
   display: grid;
-  grid-template-columns: 14px 1fr;
-  gap: 6px;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 2px 12px 2px 0;
 }
 
-.diff-prefix {
+.final-diff-line--add {
+  background: rgba(63, 185, 80, 0.12);
+  border-left: 3px solid #3fb950;
+}
+
+.final-diff-line--remove {
+  background: rgba(248, 81, 73, 0.12);
+  border-left: 3px solid #f85149;
+}
+
+.final-diff-line--context {
+  background: rgba(230, 237, 247, 0.04);
+  border-left: 3px solid #484f58;
+}
+
+.final-diff-prefix {
+  text-align: center;
   opacity: 0.95;
+  user-select: none;
+  padding-top: 1px;
 }
 
-.diff-line.add {
-  color: #b5f6cf;
+.final-diff-line--add .final-diff-prefix {
+  color: #3fb950;
 }
 
-.diff-line.remove {
-  color: #ffc6cf;
+.final-diff-line--remove .final-diff-prefix {
+  color: #f85149;
 }
 
-.diff-line.context {
-  color: #dbe8ff;
-  opacity: 0.85;
+.final-diff-line--context .final-diff-prefix {
+  color: #8b949e;
+}
+
+.final-diff-code {
+  display: block;
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  background: transparent;
+  color: #e6edf7;
+}
+
+.final-diff-body .hljs-comment {
+  color: #7a9e8e;
+}
+
+.final-diff-body .hljs-keyword,
+.final-diff-body .hljs-selector-tag {
+  color: #569cd6;
+}
+
+.final-diff-body .hljs-selector-class,
+.final-diff-body .hljs-selector-id,
+.final-diff-body .hljs-template-variable {
+  color: #d7ba7d;
+}
+
+.final-diff-body .hljs-attribute,
+.final-diff-body .hljs-variable,
+.final-diff-body .hljs-title,
+.final-diff-body .hljs-section {
+  color: #9cdcfe;
+}
+
+.final-diff-body .hljs-string,
+.final-diff-body .hljs-meta-string {
+  color: #ce9178;
+}
+
+.final-diff-body .hljs-number,
+.final-diff-body .hljs-literal {
+  color: #b5cea8;
+}
+
+.final-diff-body .hljs-built_in,
+.final-diff-body .hljs-type {
+  color: #c586c0;
+}
+
+.final-diff-body .hljs-function .hljs-keyword {
+  color: #dcdcaa;
+}
+
+.final-diff-chevron {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 6px 0 8px;
+  background: rgba(63, 185, 80, 0.06);
+  color: rgba(139, 148, 158, 0.65);
+}
+
+.final-diff-chevron::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid currentColor;
 }
 
 .diff-truncation {
@@ -185,28 +343,132 @@ body {
 .entry.user {
   background: #1f3d74;
   border-color: #3765b7;
-  align-self: flex-end;
+  align-self: flex-start;
 }
 
 .entry.agent {
-  background: #18354a;
-  border-color: #2f6d93;
-  align-self: flex-start;
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
 }
 
 .entry.status {
   background: #2f2748;
   border-color: #58477f;
-  align-self: center;
+  align-self: flex-start;
   border-radius: 999px;
   padding: 6px 12px;
   font-size: 12px;
 }
 
+/* Runtime status lines in the chat timeline (e.g. thinking, executing tools) — no bubble */
+.timeline .entry.status {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 4px 0;
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
+  color: #9eb1cb;
+}
+
 .entry.error {
   background: #5a2228;
   border-color: #8f3a44;
-  align-self: center;
+  align-self: flex-start;
+}
+
+.agent-markdown {
+  font-size: 13px;
+  line-height: 1.45;
+  color: #e6edf7;
+  word-break: break-word;
+}
+
+.agent-markdown p {
+  margin: 0 0 0.65em;
+}
+
+.agent-markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.agent-markdown ul,
+.agent-markdown ol {
+  margin: 0 0 0.65em;
+  padding-left: 1.35em;
+}
+
+.agent-markdown li {
+  margin: 0.2em 0;
+}
+
+.agent-markdown strong {
+  font-weight: 600;
+}
+
+.agent-markdown a {
+  color: #7ab8ff;
+  text-decoration: none;
+}
+
+.agent-markdown a:hover {
+  text-decoration: underline;
+}
+
+.agent-markdown code {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(230, 237, 247, 0.12);
+  color: #dbe8ff;
+}
+
+.agent-markdown pre {
+  margin: 0.5em 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #0a1220;
+  border: 1px solid #293853;
+  overflow: auto;
+  max-height: 280px;
+}
+
+.agent-markdown pre code {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+  display: block;
+  white-space: pre;
+}
+
+.agent-markdown blockquote {
+  margin: 0.5em 0;
+  padding-left: 12px;
+  border-left: 3px solid #3765b7;
+  color: #9eb1cb;
+}
+
+.agent-markdown table {
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 0.5em 0;
+}
+
+.agent-markdown th,
+.agent-markdown td {
+  border: 1px solid #2a3549;
+  padding: 6px 10px;
+}
+
+.agent-markdown th {
+  background: #111a2d;
 }
 
 textarea {

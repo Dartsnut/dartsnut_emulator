@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type {
   AgentEvent,
   BootstrapState,
@@ -7,6 +9,7 @@ import type {
   WidgetSize
 } from "@dartsnut/shared-ipc";
 import { EmulatorPanel } from "./EmulatorPanel";
+import { highlightDiffLine, languageFromPath } from "./highlightDiffLine";
 
 interface TimelineEntry {
   id: string;
@@ -39,7 +42,7 @@ type IntakeStep = "projectType" | "widgetSize" | "workspace";
 
 const STREAM_PREVIEW_LINES = 8;
 const DIFF_MAX_LINES = 220;
-const DIFF_CONTEXT_LINES = 3;
+const DIFF_CONTEXT_LINES = 4;
 const SUPPORTED_WIDGET_SIZES: WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
 
 function inferProjectType(input: string): ProjectType | null {
@@ -131,10 +134,6 @@ function trimDiffLinesAroundChanges(
   maxLines: number,
   contextLines: number
 ): { lines: DiffLine[]; truncated: boolean } {
-  if (lines.length <= maxLines) {
-    return { lines, truncated: false };
-  }
-
   const changeIdxs: number[] = [];
   for (let idx = 0; idx < lines.length; idx += 1) {
     if (lines[idx].kind !== "context") {
@@ -143,10 +142,8 @@ function trimDiffLinesAroundChanges(
   }
 
   if (changeIdxs.length === 0) {
-    return {
-      lines: lines.slice(0, maxLines),
-      truncated: true
-    };
+    const capped = lines.slice(0, Math.min(lines.length, maxLines));
+    return { lines: capped, truncated: lines.length > maxLines };
   }
 
   const windows: Array<{ start: number; end: number }> = changeIdxs.map((idx) => ({
@@ -164,22 +161,24 @@ function trimDiffLinesAroundChanges(
     }
   }
 
+  const firstWindow = merged[0]!;
+  const hadMoreHunks = merged.length > 1;
+
   const out: DiffLine[] = [];
-  for (let w = 0; w < merged.length; w += 1) {
-    const window = merged[w];
-    if (w > 0 && merged[w - 1].end + 1 < window.start) {
-      out.push({ kind: "context", text: "..." });
-    }
-    for (let i = window.start; i <= window.end; i += 1) {
-      out.push(lines[i]);
-    }
+  for (let i = firstWindow.start; i <= firstWindow.end; i += 1) {
+    out.push(lines[i]);
   }
 
-  if (out.length <= maxLines) {
-    return { lines: out, truncated: true };
+  if (hadMoreHunks) {
+    out.push({ kind: "context", text: "..." });
   }
 
-  return { lines: out.slice(0, maxLines), truncated: true };
+  let truncated = hadMoreHunks;
+  if (out.length > maxLines) {
+    return { lines: out.slice(0, maxLines), truncated: true };
+  }
+
+  return { lines: out, truncated };
 }
 
 function buildDiffLines(oldText: string, newText: string, maxLines: number): {
@@ -650,6 +649,14 @@ export function App() {
   );
 }
 
+function AgentMarkdownBody({ source }: { source: string }) {
+  return (
+    <div className="agent-markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{source}</ReactMarkdown>
+    </div>
+  );
+}
+
 function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   const liveFormatted = formatAgentMessage(text);
   const leadText = liveFormatted.response || liveFormatted.narrative || "";
@@ -657,52 +664,85 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
 
   return (
     <div className="entry-content">
-      {leadText ? <div className="entry-text">{leadText}</div> : null}
+      {leadText ? <AgentMarkdownBody source={leadText} /> : null}
       {fileActions.map((action, idx) => (
-        <div key={`${action.tool}-${action.path ?? idx}`} className="entry-action">
+        <div
+          key={`${action.tool}-${action.path ?? idx}`}
+          className={`entry-action${
+            !isStreaming && typeof action.content === "string" ? " entry-action--final-diff" : ""
+          }`}
+        >
           {isStreaming && typeof action.content === "string" ? (
             <div className="rolling-preview">
               <pre className="entry-json">{getLatestPreviewLines(action.content).lines.join("\n")}</pre>
             </div>
           ) : typeof action.content === "string" ? (
-            <div className="diff-view">
-              <div className="entry-action-meta">final diff</div>
+            <>
               {(() => {
                 const diff = buildDiffLines(
                   action.previousContent ?? "",
                   action.content ?? "",
                   DIFF_MAX_LINES
                 );
+                const addCount = diff.lines.filter((l) => l.kind === "add").length;
+                const removeCount = diff.lines.filter((l) => l.kind === "remove").length;
+                const pathParts = action.path?.replace(/\\/g, "/").split("/");
+                const fileLabel =
+                  pathParts && pathParts.length > 0 ? pathParts[pathParts.length - 1]! : "file";
+                const lang = languageFromPath(action.path);
                 return (
                   <>
-                    <pre className="entry-json diff-json">
-                      {diff.lines.map((line, lineIdx) => (
-                        <div key={`${line.kind}-${lineIdx}`} className={`diff-line ${line.kind}`}>
-                          <span className="diff-prefix">
-                            {line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}
-                          </span>
-                          <span>{line.text}</span>
-                        </div>
-                      ))}
-                    </pre>
+                    <div className="final-diff-card">
+                      <header className="final-diff-header">
+                        <span className="final-diff-title">
+                          <span className="final-diff-hash">#</span>
+                          <span className="final-diff-filename">{fileLabel}</span>
+                        </span>
+                        <span className="final-diff-stats">
+                          {addCount > 0 ? (
+                            <span className="final-diff-stat final-diff-stat--add">+{addCount}</span>
+                          ) : null}
+                          {removeCount > 0 ? (
+                            <span className="final-diff-stat final-diff-stat--remove">-{removeCount}</span>
+                          ) : null}
+                        </span>
+                      </header>
+                      <div className="final-diff-body">
+                        {diff.lines.map((line, lineIdx) => (
+                          <div
+                            key={`${line.kind}-${lineIdx}`}
+                            className={`final-diff-line final-diff-line--${line.kind}`}
+                          >
+                            <span className="final-diff-prefix">
+                              {line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}
+                            </span>
+                            <code
+                              className="final-diff-code"
+                              dangerouslySetInnerHTML={{
+                                __html: highlightDiffLine(line.text, lang)
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <div className="final-diff-chevron" aria-hidden />
+                    </div>
                     {!action.previousContent ? (
                       <div className="diff-truncation">previous file snapshot unavailable</div>
                     ) : null}
                     {diff.truncated ? (
-                      <div className="diff-truncation">diff truncated to the latest visible lines</div>
+                      <div className="diff-truncation">Additional changes not shown.</div>
                     ) : null}
                   </>
                 );
               })()}
-            </div>
+            </>
           ) : (
             <div className="entry-text">No file content provided.</div>
           )}
         </div>
       ))}
-      {!leadText && fileActions.length === 0 ? (
-        <div className="entry-text">{text}</div>
-      ) : null}
+      {!leadText && fileActions.length === 0 ? <AgentMarkdownBody source={text} /> : null}
     </div>
   );
 }

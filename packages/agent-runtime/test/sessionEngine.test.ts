@@ -39,6 +39,30 @@ class FinalOnlyProvider {
   }
 }
 
+class CreateFileAliasProvider {
+  private call = 0;
+
+  async complete(): Promise<string> {
+    this.call += 1;
+    if (this.call === 1) {
+      return JSON.stringify({
+        response: "Creating file with alias.",
+        actions: [
+          {
+            tool: "create_file",
+            path: "alias.txt",
+            text: "alias content"
+          }
+        ]
+      });
+    }
+    return JSON.stringify({
+      response: "Created alias.txt successfully.",
+      actions: []
+    });
+  }
+}
+
 describe("SessionEngine tool loop", () => {
   it("executes write_file actions and returns final response", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
@@ -73,5 +97,22 @@ describe("SessionEngine tool loop", () => {
     expect(response).toContain("Done without tool actions.");
     expect(statusEvents).toHaveLength(0);
     expect(events.some((event) => event.type === "final")).toBe(true);
+  });
+
+  it("supports create_file alias actions with text payload", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const events: AgentEvent[] = [];
+    const engine = new SessionEngine({
+      provider: new CreateFileAliasProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant."
+    });
+
+    const response = await engine.runPrompt("create file", (event) => events.push(event));
+    const fileContent = fs.readFileSync(path.join(tempRoot, "alias.txt"), "utf-8");
+
+    expect(response).toContain("Created alias.txt");
+    expect(fileContent).toBe("alias content");
+    expect(events.some((event) => event.type === "status")).toBe(true);
   });
 });

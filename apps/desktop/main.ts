@@ -138,6 +138,27 @@ function resolveSkillBundlePath(): string {
   return existingPath;
 }
 
+function getEmulatorWorkspaceRoot(): string {
+  return workspaceRoot ?? repoRoot;
+}
+
+function toRelativeFromEmulatorWorkspaceRoot(absolutePath: string): string {
+  const baseRoot = getEmulatorWorkspaceRoot();
+  const relative = path.relative(baseRoot, absolutePath);
+  if (!relative || relative === ".") {
+    return absolutePath;
+  }
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return absolutePath;
+  }
+  return relative;
+}
+
+function isWithinDirectory(rootPath: string, targetPath: string): boolean {
+  const relative = path.relative(path.resolve(rootPath), path.resolve(targetPath));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function emitEmulatorState() {
   win?.webContents.send(EMULATOR_IPC_CHANNELS.emulatorState, emulatorState);
 }
@@ -391,12 +412,18 @@ ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorCommand, async (_event, command: Em
     startPythonBridge();
   }
   if (bridgeProcess?.stdin && !bridgeProcess.stdin.destroyed) {
-    bridgeProcess.stdin.write(`${JSON.stringify({ command })}\n`);
+    let commandToSend = command;
     if (command.type === "set_path") {
-      const selectedPath = path.isAbsolute(command.path) ? command.path : path.join(repoRoot, command.path);
+      const baseRoot = getEmulatorWorkspaceRoot();
+      let selectedPath = path.isAbsolute(command.path) ? command.path : path.join(baseRoot, command.path);
+      if (workspaceRoot && !isWithinDirectory(workspaceRoot, selectedPath)) {
+        selectedPath = workspaceRoot;
+      }
+      commandToSend = { type: "set_path", path: selectedPath };
       lastWidgetDir = selectedPath;
       writeEmulatorState();
     }
+    bridgeProcess.stdin.write(`${JSON.stringify({ command: commandToSend })}\n`);
   } else {
     emulatorState.status = "Bridge unavailable";
     emitEmulatorState();
@@ -405,10 +432,11 @@ ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorCommand, async (_event, command: Em
 });
 
 ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorPickPath, async () => {
+  const baseRoot = getEmulatorWorkspaceRoot();
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory"],
     title: "Select widget directory",
-    defaultPath: lastWidgetDir ?? repoRoot,
+    defaultPath: lastWidgetDir ?? baseRoot,
   });
   if (result.canceled || result.filePaths.length === 0) {
     return { path: null };
@@ -416,16 +444,14 @@ ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorPickPath, async () => {
   const selected = result.filePaths[0];
   lastWidgetDir = selected;
   writeEmulatorState();
-  const relative = path.relative(repoRoot, selected);
-  return { path: relative || selected };
+  return { path: toRelativeFromEmulatorWorkspaceRoot(selected) };
 });
 
 ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorGetLastPath, async () => {
   if (!lastWidgetDir) {
     return { path: null };
   }
-  const relative = path.relative(repoRoot, lastWidgetDir);
-  return { path: relative || lastWidgetDir };
+  return { path: toRelativeFromEmulatorWorkspaceRoot(lastWidgetDir) };
 });
 
 ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorGetBackground, async () => {

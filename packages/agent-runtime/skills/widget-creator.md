@@ -6,8 +6,12 @@ The runtime expects `<widget_dir>/conf.json` and `<widget_dir>/main.py` to exist
 Follow this process:
 1. Read the creation context JSON and user request.
 2. Respect the required widget size exactly as provided.
-3. Build a pygame + pydartsnut widget project in the selected workspace.
+3. Build or **iterate on** a Pillow-rendered `pydartsnut` widget in the selected workspace (widgets push PIL frames to the emulator — **do not** use `pygame` in widget code).
 4. Generate runnable files with a clear entrypoint and minimal setup steps.
+
+Follow-up requests (small tweaks, layout, fonts, colors):
+- Treat these as **edits to the existing widget** (read `main.py` / `conf.json` first).
+- Do **not** narrate the task as building a new standalone app or rescaffold the widget unless the user asked to start over.
 
 Required outputs:
 - `conf.json` (mandatory)

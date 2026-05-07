@@ -9,7 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dartsnut/shared-ipc": "0.1.0",
+    "@dartsnut/shared-ipc": "workspace:*",
     "dotenv": "^16.5.0"
   },
   "devDependencies": {

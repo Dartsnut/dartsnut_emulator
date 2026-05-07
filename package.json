@@ -7,9 +7,10 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm --prefix apps/desktop run dev",
-    "build": "npm run build -w packages/shared-ipc && npm run build -w packages/emulator-protocol && npm run build -w packages/agent-runtime && npm run build -w apps/desktop",
-    "test": "npm run test -w packages/agent-runtime",
+    "dev": "pnpm --dir apps/desktop run dev",
+    "build": "pnpm --dir packages/shared-ipc run build && pnpm --dir packages/emulator-protocol run build && pnpm --dir packages/agent-runtime run build && pnpm --dir apps/desktop run build",
+    "package": "pnpm --dir packages/shared-ipc run build && pnpm --dir packages/emulator-protocol run build && pnpm --dir packages/agent-runtime run build && pnpm --dir apps/desktop run package",
+    "test": "pnpm --dir packages/agent-runtime run test",
     "setup:python": "node scripts/setup_python_env.mjs"
   },
   "devDependencies": {

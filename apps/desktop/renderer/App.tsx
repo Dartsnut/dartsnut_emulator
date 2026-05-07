@@ -375,6 +375,7 @@ export function App() {
   const [prompt, setPrompt] = useState("");
   const [sending, setSending] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [pythonRuntimeStatus, setPythonRuntimeStatus] = useState<string | null>(null);
   const [screen, setScreen] = useState<AppScreen>("main");
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [intakeProjectType, setIntakeProjectType] = useState<ProjectType | null>(null);
@@ -395,6 +396,7 @@ export function App() {
     apiKey: "",
     model: ""
   });
+  const [selectedPythonPath, setSelectedPythonPath] = useState<string | null>(null);
   const [providerSettingsError, setProviderSettingsError] = useState<string | null>(null);
   const [providerSettingsNotice, setProviderSettingsNotice] = useState<string | null>(null);
   const [savingProviderSettings, setSavingProviderSettings] = useState(false);
@@ -423,6 +425,12 @@ export function App() {
     api.getProviderSettings().then(setProviderSettings).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Failed to load provider settings.";
       setProviderSettingsError(message);
+    });
+    api.getSelectedPythonPath().then(setSelectedPythonPath).catch(() => {
+      setSelectedPythonPath(null);
+    });
+    api.getPythonRuntimeStatus().then(setPythonRuntimeStatus).catch(() => {
+      setPythonRuntimeStatus(null);
     });
     const unsubscribe = api.onAgentEvent((event) => {
       clearPendingReplyIndicator();
@@ -459,7 +467,13 @@ export function App() {
       eventSeqRef.current += 1;
       setEntries((prev) => [...prev, toEntry(event, seq)]);
     });
-    return unsubscribe;
+    const unsubscribePythonRuntime = api.onPythonRuntimeStatus((status) => {
+      setPythonRuntimeStatus(status);
+    });
+    return () => {
+      unsubscribe();
+      unsubscribePythonRuntime();
+    };
   }, [api]);
 
   const chatDisabled = useMemo(() => {
@@ -613,6 +627,28 @@ export function App() {
     }
   }
 
+  async function handlePickPythonPath() {
+    if (!api) {
+      return;
+    }
+    setProviderSettingsError(null);
+    setProviderSettingsNotice(null);
+    try {
+      const result = await api.pickPythonPath();
+      if (!result.accepted) {
+        if (result.error && result.error !== "cancelled") {
+          setProviderSettingsError(result.error);
+        }
+        return;
+      }
+      setSelectedPythonPath(result.selectedPath);
+      setProviderSettingsNotice("Python executable updated.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to set Python executable.";
+      setProviderSettingsError(message);
+    }
+  }
+
   async function handleSend() {
     if (!prompt.trim() || chatDisabled) {
       return;
@@ -683,7 +719,10 @@ export function App() {
                 </svg>
               </button>
             </header>
-            <div className="app-meta">{runtimeError ? <div className="runtime-error">{runtimeError}</div> : null}</div>
+            <div className="app-meta">
+              {runtimeError ? <div className="runtime-error">{runtimeError}</div> : null}
+              {pythonRuntimeStatus ? <div className="runtime-status">{pythonRuntimeStatus}</div> : null}
+            </div>
           </div>
 
           <section className="timeline">
@@ -878,6 +917,15 @@ export function App() {
                 <button type="button" onClick={() => void handleSaveProviderSettings()} disabled={savingProviderSettings}>
                   {savingProviderSettings ? "Saving..." : "Save"}
                 </button>
+              </div>
+              <div className="settings-field">
+                <span>Python executable</span>
+                <div className="settings-muted">{selectedPythonPath ?? "(auto detect)"}</div>
+                <div className="settings-actions">
+                  <button type="button" onClick={() => void handlePickPythonPath()}>
+                    Choose Python
+                  </button>
+                </div>
               </div>
             </div>
           </section>

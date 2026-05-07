@@ -38,6 +38,7 @@ const repoRoot = app.isPackaged
   ? process.resourcesPath
   : path.resolve(__dirname, "../../..");
 let pythonExec = process.env.DARTSNUT_PYTHON || "python3";
+let pythonRuntimeStatus: string | null = null;
 let lastWidgetDir: string | null = null;
 const creatorTemplatePaths = {
   "game-creator": "packages/agent-runtime/skills/game-creator.md",
@@ -54,6 +55,7 @@ const emulatorState: EmulatorStateSnapshot = {
 const proofStatePath = () => path.join(app.getPath("userData"), "first-run-proof.json");
 const emulatorStatePath = () => path.join(app.getPath("userData"), "emulator-state.json");
 const providerSettingsPath = () => path.join(app.getPath("userData"), "provider-settings.json");
+const pythonSettingsPath = () => path.join(app.getPath("userData"), "python-settings.json");
 
 function normalizeProviderSettings(input?: Partial<ProviderSettings> | null): ProviderSettings {
   return {
@@ -102,6 +104,26 @@ function writeProviderSettings(input: SaveProviderSettingsRequest): ProviderSett
   const normalized = normalizeProviderSettings(input);
   fs.mkdirSync(path.dirname(providerSettingsPath()), { recursive: true });
   fs.writeFileSync(providerSettingsPath(), JSON.stringify(normalized, null, 2));
+  return normalized;
+}
+
+function readSelectedPythonPath(): string | null {
+  const file = pythonSettingsPath();
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+  try {
+    const content = JSON.parse(fs.readFileSync(file, "utf-8")) as { pythonPath?: string };
+    return typeof content.pythonPath === "string" && content.pythonPath.trim() ? content.pythonPath.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSelectedPythonPath(pythonPath: string): string {
+  const normalized = pythonPath.trim();
+  fs.mkdirSync(path.dirname(pythonSettingsPath()), { recursive: true });
+  fs.writeFileSync(pythonSettingsPath(), JSON.stringify({ pythonPath: normalized }, null, 2));
   return normalized;
 }
 
@@ -308,6 +330,15 @@ function emitEmulatorLog(entry: EmulatorLogEntry) {
   win?.webContents.send(EMULATOR_IPC_CHANNELS.emulatorLog, entry);
 }
 
+function emitPythonRuntimeStatus() {
+  win?.webContents.send(IPCChannels.subscribePythonRuntimeStatus, pythonRuntimeStatus);
+}
+
+function setPythonRuntimeStatus(status: string | null) {
+  pythonRuntimeStatus = status;
+  emitPythonRuntimeStatus();
+}
+
 function canRunEmulatorDeps(executable: string): boolean {
   const probe = spawnSync(executable, ["-c", "import pydartsnut, pygame, PIL; print('ok')"], {
     cwd: repoRoot,
@@ -317,18 +348,162 @@ function canRunEmulatorDeps(executable: string): boolean {
   return probe.status === 0;
 }
 
-function resolvePythonExecutable(): string {
+function runCommandOkAsync(command: string, args: string[], cwd: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: "ignore",
+    });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+  });
+}
+
+function isPythonVersionSupportedAsync(executable: string): Promise<boolean> {
+  return runCommandOkAsync(
+    executable,
+    ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
+    repoRoot,
+  );
+}
+
+function isPythonVersionSupportedSync(executable: string): boolean {
+  const result = spawnSync(
+    executable,
+    ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
+    {
+      cwd: repoRoot,
+      stdio: "pipe",
+    },
+  );
+  return result.status === 0;
+}
+
+function pythonCandidates(): string[] {
+  return [
+    "python3.12",
+    "python3.11",
+    "python3.10",
+    "python3",
+    "python",
+    "/opt/homebrew/bin/python3.12",
+    "/opt/homebrew/bin/python3.11",
+    "/opt/homebrew/bin/python3.10",
+    "/opt/homebrew/bin/python3",
+    "/usr/local/bin/python3.12",
+    "/usr/local/bin/python3.11",
+    "/usr/local/bin/python3.10",
+    "/usr/local/bin/python3",
+    "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
+    "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
+    "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3",
+    path.join(app.getPath("home"), ".pyenv", "shims", "python3.12"),
+    path.join(app.getPath("home"), ".pyenv", "shims", "python3.11"),
+    path.join(app.getPath("home"), ".pyenv", "shims", "python3.10"),
+    path.join(app.getPath("home"), ".pyenv", "shims", "python3"),
+    path.join(app.getPath("home"), ".pyenv", "shims", "python"),
+    path.join(app.getPath("home"), ".asdf", "shims", "python3.12"),
+    path.join(app.getPath("home"), ".asdf", "shims", "python3.11"),
+    path.join(app.getPath("home"), ".asdf", "shims", "python3.10"),
+    path.join(app.getPath("home"), ".asdf", "shims", "python3"),
+    path.join(app.getPath("home"), ".asdf", "shims", "python")
+  ];
+}
+
+async function canRunEmulatorDepsAsync(executable: string): Promise<boolean> {
+  return runCommandOkAsync(executable, ["-c", "import pydartsnut, pygame, PIL; print('ok')"], repoRoot);
+}
+
+async function ensurePackagedPythonRuntime(preferredPython?: string | null): Promise<string | null> {
+  if (!app.isPackaged) {
+    return null;
+  }
+  const runtimeDir = path.join(app.getPath("userData"), "python-runtime");
+  const runtimePython = path.join(runtimeDir, "bin", "python");
+  if ((await isPythonVersionSupportedAsync(runtimePython)) && (await canRunEmulatorDepsAsync(runtimePython))) {
+    return runtimePython;
+  }
+
+  const pythonBootstrapCandidates = preferredPython
+    ? [preferredPython, ...pythonCandidates()]
+    : pythonCandidates();
+  let bootstrapPython: string | null = null;
+  for (const candidate of pythonBootstrapCandidates) {
+    if (
+      (await runCommandOkAsync(candidate, ["--version"], repoRoot)) &&
+      (await isPythonVersionSupportedAsync(candidate))
+    ) {
+      bootstrapPython = candidate;
+      break;
+    }
+  }
+  if (!bootstrapPython) {
+    setPythonRuntimeStatus("Python runtime setup failed: Python 3.10+ is required.");
+    return null;
+  }
+
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  setPythonRuntimeStatus("Setting up Python runtime (first run). This can take a minute...");
+
+  if (!(await runCommandOkAsync(bootstrapPython, ["-m", "venv", runtimeDir], repoRoot))) {
+    setPythonRuntimeStatus("Python runtime setup failed while creating virtual environment.");
+    return null;
+  }
+  if (
+    !(await runCommandOkAsync(
+      runtimePython,
+      ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
+      repoRoot,
+    ))
+  ) {
+    setPythonRuntimeStatus("Python runtime setup failed while upgrading pip.");
+    return null;
+  }
+  const requirementsPath = path.join(repoRoot, "requirements.txt");
+  if (!fs.existsSync(requirementsPath)) {
+    setPythonRuntimeStatus("Python runtime setup failed: requirements.txt is missing.");
+    return null;
+  }
+  if (!(await runCommandOkAsync(runtimePython, ["-m", "pip", "install", "-r", requirementsPath], repoRoot))) {
+    setPythonRuntimeStatus("Python runtime setup failed while installing dependencies.");
+    return null;
+  }
+  if (!(await canRunEmulatorDepsAsync(runtimePython))) {
+    setPythonRuntimeStatus("Python runtime setup failed: dependency check did not pass.");
+    return null;
+  }
+  setPythonRuntimeStatus(null);
+  return runtimePython;
+}
+
+async function resolvePythonExecutable(): Promise<string> {
   if (process.env.DARTSNUT_PYTHON) {
     return process.env.DARTSNUT_PYTHON;
   }
+  const selectedPythonPath = readSelectedPythonPath();
+  if (
+    selectedPythonPath &&
+    canRunEmulatorDeps(selectedPythonPath) &&
+    isPythonVersionSupportedSync(selectedPythonPath)
+  ) {
+    return selectedPythonPath;
+  }
+  const packagedRuntimePython = await ensurePackagedPythonRuntime(selectedPythonPath);
+  if (packagedRuntimePython) {
+    return packagedRuntimePython;
+  }
   const bundledVenvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const candidates = [bundledVenvPython, "python3", "python"];
+  const bundledVenvPython312 = path.join(repoRoot, ".venv", "bin", "python3.12");
+  const candidates = [bundledVenvPython, bundledVenvPython312, ...pythonCandidates()];
   for (const candidate of candidates) {
-    if (canRunEmulatorDeps(candidate)) {
+    if (
+      canRunEmulatorDeps(candidate) &&
+      isPythonVersionSupportedSync(candidate)
+    ) {
       return candidate;
     }
   }
-  emulatorState.status = "Missing Python emulator deps (pydartsnut/pygame/Pillow). Run: npm run setup:python";
+  emulatorState.status = "Missing Python 3.10+ or emulator deps (pydartsnut/pygame/Pillow). Run: pnpm setup:python";
   emitEmulatorState();
   return "python3";
 }
@@ -465,9 +640,9 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  pythonExec = resolvePythonExecutable();
-  startPythonBridge();
   await createWindow();
+  pythonExec = await resolvePythonExecutable();
+  startPythonBridge();
 });
 
 app.on("window-all-closed", () => {
@@ -482,9 +657,44 @@ app.on("before-quit", () => {
 
 ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());
 ipcMain.handle(IPCChannels.getProviderSettings, () => readProviderSettings());
+ipcMain.handle(IPCChannels.getPythonRuntimeStatus, () => pythonRuntimeStatus);
+ipcMain.handle(IPCChannels.getSelectedPythonPath, () => readSelectedPythonPath());
 ipcMain.handle(IPCChannels.saveProviderSettings, (_event: unknown, request: SaveProviderSettingsRequest) =>
   writeProviderSettings(request)
 );
+ipcMain.handle(IPCChannels.pickPythonPath, async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    title: "Select Python executable",
+    defaultPath: readSelectedPythonPath() ?? app.getPath("home")
+  });
+  if (result.canceled || !result.filePaths[0]) {
+    return {
+      accepted: false,
+      selectedPath: null,
+      error: "cancelled"
+    };
+  }
+  const selectedPath = result.filePaths[0];
+  if (!isPythonVersionSupportedSync(selectedPath)) {
+    return {
+      accepted: false,
+      selectedPath,
+      error: "Python 3.10+ is required."
+    };
+  }
+  const persistedPath = writeSelectedPythonPath(selectedPath);
+  pythonExec = await resolvePythonExecutable();
+  if (bridgeProcess) {
+    bridgeProcess.kill();
+  } else {
+    startPythonBridge();
+  }
+  return {
+    accepted: true,
+    selectedPath: persistedPath
+  };
+});
 
 ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: PickWorkspaceRequest) => {
   const result = await dialog.showOpenDialog({

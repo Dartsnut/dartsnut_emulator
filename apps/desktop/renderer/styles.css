@@ -239,6 +239,16 @@ button.app-bar-workspace-btn:focus-visible {
   font-size: 12px;
 }
 
+.runtime-status {
+  margin: 0;
+  border: 1px solid #2e4d77;
+  background: #1a2d47;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 12px;
+  color: #cfe2ff;
+}
+
 .timeline {
   min-height: 0;
   overflow: auto;

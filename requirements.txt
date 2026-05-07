@@ -1,5 +1,6 @@
 pydartsnut
 pygame
+Pillow
 numpy
 pillow
 python-dotenv

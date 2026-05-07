@@ -1,21 +1,21 @@
 {
-  "name": "desktop",
+  "name": "dartsnut-chat",
   "version": "0.1.0",
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently --kill-others --success first -n renderer,tsc,electron \"npm run dev:renderer\" \"npm run dev:electron:tsc\" \"npm run dev:electron:run\"",
+    "dev": "concurrently --kill-others --success first -n renderer,tsc,electron \"pnpm run dev:renderer\" \"pnpm run dev:electron:tsc\" \"pnpm run dev:electron:run\"",
     "dev:renderer": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "dev:electron:tsc": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
     "dev:electron:run": "wait-on tcp:5173 file:dist-electron/main.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js",
-    "build": "tsc -p tsconfig.electron.json && vite build"
+    "build": "pnpm --dir ../../packages/shared-ipc run build && pnpm --dir ../../packages/emulator-protocol run build && pnpm --dir ../../packages/agent-runtime run build && tsc -p tsconfig.electron.json && vite build",
+    "package": "pnpm run build && pnpm exec electron-builder --mac --arm64 --publish never"
   },
   "dependencies": {
-    "@dartsnut/agent-runtime": "0.1.0",
-    "@dartsnut/emulator-protocol": "0.1.0",
-    "@dartsnut/shared-ipc": "0.1.0",
+    "@dartsnut/agent-runtime": "workspace:*",
+    "@dartsnut/emulator-protocol": "workspace:*",
+    "@dartsnut/shared-ipc": "workspace:*",
     "dotenv": "^16.5.0",
-    "electron": "^35.1.4",
     "highlight.js": "^11.11.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
@@ -28,8 +28,50 @@
     "@vitejs/plugin-react": "^4.4.1",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
+    "electron": "35.1.4",
+    "electron-builder": "^26.0.12",
     "nodemon": "^3.1.10",
     "vite": "^6.3.5",
     "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.dartsnut.chat",
+    "productName": "DartsnutChat",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../services/emulator-core",
+        "to": "services/emulator-core"
+      },
+      {
+        "from": "../../assets",
+        "to": "assets"
+      },
+      {
+        "from": "../../packages/agent-runtime/skills",
+        "to": "packages/agent-runtime/skills"
+      },
+      {
+        "from": "../../PixelDarts.png",
+        "to": "PixelDarts.png"
+      },
+      {
+        "from": "../../requirements.txt",
+        "to": "requirements.txt"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    }
   }
 }

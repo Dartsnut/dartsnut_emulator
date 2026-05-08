@@ -130,6 +130,31 @@ class CopyAssetProvider {
   }
 }
 
+class ReplaceInFileProvider {
+  private call = 0;
+
+  async complete(): Promise<string> {
+    this.call += 1;
+    if (this.call === 1) {
+      return JSON.stringify({
+        response: "Updating greeting with replace action.",
+        actions: [
+          {
+            tool: "replace_in_file",
+            path: "hello.txt",
+            find: "hello dartsnut",
+            replace: "hello faster dartsnut"
+          }
+        ]
+      });
+    }
+    return JSON.stringify({
+      response: "Updated greeting.",
+      actions: []
+    });
+  }
+}
+
 describe("SessionEngine tool loop", () => {
   it("executes write_file actions and returns final response", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
@@ -237,5 +262,23 @@ describe("SessionEngine tool loop", () => {
     expect(Buffer.compare(copied, Buffer.from([0x01, 0x02, 0x03]))).toBe(0);
     expect(fs.existsSync(path.join(tempRoot, "fonts", "font-deadbeef.pil"))).toBe(false);
     expect(fs.existsSync(path.join(tempRoot, "fonts", "font-cafebabe.pil"))).toBe(false);
+  });
+
+  it("applies targeted replace_in_file actions for existing files", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    fs.writeFileSync(path.join(tempRoot, "hello.txt"), "hello dartsnut", "utf-8");
+    const events: AgentEvent[] = [];
+    const engine = new SessionEngine({
+      provider: new ReplaceInFileProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant."
+    });
+
+    const response = await engine.runPrompt("edit existing file", (event) => events.push(event));
+    const fileContent = fs.readFileSync(path.join(tempRoot, "hello.txt"), "utf-8");
+
+    expect(response).toContain("Updated greeting.");
+    expect(fileContent).toBe("hello faster dartsnut");
+    expect(events.some((event) => event.type === "status")).toBe(true);
   });
 });

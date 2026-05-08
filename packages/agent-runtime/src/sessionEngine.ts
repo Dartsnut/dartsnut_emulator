@@ -27,6 +27,12 @@ type ToolAction =
       content: string;
     }
   | {
+      tool: "replace_in_file";
+      path: string;
+      find: string;
+      replace: string;
+    }
+  | {
       tool: "copy_asset_file";
       source: string;
       path: string;
@@ -58,6 +64,8 @@ export class SessionEngine {
       path?: unknown;
       content?: unknown;
       text?: unknown;
+      find?: unknown;
+      replace?: unknown;
       source?: unknown;
     };
     const tool = typeof action.tool === "string" ? action.tool : "";
@@ -105,6 +113,23 @@ export class SessionEngine {
         path: action.path
       };
     }
+    if (tool === "replace_in_file") {
+      if (typeof action.path !== "string" || !action.path) {
+        throw new Error("replace_in_file action requires a string path.");
+      }
+      if (typeof action.find !== "string" || action.find.length === 0) {
+        throw new Error("replace_in_file action requires a non-empty string find.");
+      }
+      if (typeof action.replace !== "string") {
+        throw new Error("replace_in_file action requires a string replace.");
+      }
+      return {
+        tool: "replace_in_file",
+        path: action.path,
+        find: action.find,
+        replace: action.replace
+      };
+    }
     throw new Error(`Unsupported tool action: ${tool || "unknown"}`);
   }
 
@@ -116,13 +141,17 @@ export class SessionEngine {
       "- {\"tool\":\"list_files\",\"path\":\".\"}",
       "- {\"tool\":\"read_file\",\"path\":\"relative/path.txt\"}",
       "- {\"tool\":\"write_file\",\"path\":\"relative/path.txt\",\"content\":\"...\"}",
+      "- {\"tool\":\"replace_in_file\",\"path\":\"relative/path.txt\",\"find\":\"old text\",\"replace\":\"new text\"}",
       "- {\"tool\":\"copy_asset_file\",\"source\":\"font.pil\",\"path\":\"fonts/font.pil\"}",
       "Rules:",
       "1) Use relative paths only.",
       "2) Request tool actions when needed; after results, return final response with empty actions.",
-      "3) Use copy_asset_file for binary assets (fonts/images) instead of read_file/write_file.",
-      "4) copy_asset_file strips a trailing -<8 hex> hash before the file extension on both source lookup and destination filenames (e.g. big_digits-ab12cd34.pil -> big_digits.pil).",
-      "5) Do not wrap JSON in markdown fences."
+      "3) For existing files, prefer replace_in_file over write_file to keep payloads small and fast.",
+      "4) Use write_file only for creating a new file or fully rewriting content when replace_in_file cannot express the change.",
+      "5) Use copy_asset_file for binary assets (fonts/images) instead of read_file/write_file.",
+      "6) copy_asset_file strips a trailing -<8 hex> hash before the file extension on both source lookup and destination filenames (e.g. big_digits-ab12cd34.pil -> big_digits.pil).",
+      "7) Keep response concise (one short sentence) and never include full file contents in response text.",
+      "8) Do not wrap JSON in markdown fences."
     ].join("\n");
   }
 
@@ -337,6 +366,21 @@ export class SessionEngine {
       fs.writeFileSync(filePath, action.content, "utf-8");
       return JSON.stringify({ ok: true, path: action.path, bytes: Buffer.byteLength(action.content) });
     }
+    if (action.tool === "replace_in_file") {
+      const filePath = this.options.workspacePolicy.resolveWithinRoot(action.path);
+      const original = fs.readFileSync(filePath, "utf-8");
+      if (!original.includes(action.find)) {
+        throw new Error(`replace_in_file could not find target text in ${action.path}`);
+      }
+      const updated = original.replace(action.find, action.replace);
+      fs.writeFileSync(filePath, updated, "utf-8");
+      return JSON.stringify({
+        ok: true,
+        path: action.path,
+        replaced: true,
+        bytes: Buffer.byteLength(updated)
+      });
+    }
     const fontsRoot = this.options.assetRoots?.widgetFonts;
     if (!fontsRoot) {
       throw new Error("copy_asset_file is unavailable because widget font assets root is not configured.");
@@ -410,7 +454,23 @@ export class SessionEngine {
     if (action.tool === "write_file") {
       return `Ran write file ${action.path}`;
     }
+    if (action.tool === "replace_in_file") {
+      return `Ran replace in file ${action.path}`;
+    }
     return `Ran copy asset ${action.source} -> ${action.path}`;
+  }
+
+  private shouldUseRawResponseForWriteActions(responseText: string): boolean {
+    if (!responseText.trim()) {
+      return false;
+    }
+    if (responseText.length > 280) {
+      return false;
+    }
+    if (responseText.includes("```")) {
+      return false;
+    }
+    return true;
   }
 
   async runPrompt(
@@ -466,11 +526,15 @@ export class SessionEngine {
           previousContent: this.readPreviousContent(action)
         };
       });
+      const hasWriteActions = actions.some((action) => action.tool === "write_file");
+      const uiResponse =
+        hasWriteActions && !this.shouldUseRawResponseForWriteActions(merged.responseText)
+          ? `Applying ${actions.filter((action) => action.tool === "write_file").length} file update(s).`
+          : merged.responseText ||
+            (merged.rawActions.length > 0 ? "Executing requested tool actions." : undefined);
       const uiEnvelope = JSON.stringify(
         {
-          response:
-            merged.responseText ||
-            (merged.rawActions.length > 0 ? "Executing requested tool actions." : undefined),
+          response: uiResponse,
           actions: uiActions
         },
         null,

@@ -26,13 +26,13 @@ interface FormattedAgentMessage {
 }
 
 interface ParsedAction {
-    tool: string;
-    path?: string;
-    content?: string;
+  tool: string;
+  path?: string;
+  content?: string;
   contentClosed?: boolean;
   previousContent?: string;
   isFileWrite: boolean;
-    raw: string;
+  raw: string;
 }
 
 interface DiffLine {
@@ -335,6 +335,42 @@ function parsePartialAgentMessage(text: string): FormattedAgentMessage {
       }
     }
 
+    if (parsedTool.value === "replace_in_file") {
+      const pathKey = text.indexOf("\"path\"", toolKey);
+      let pathValue: string | undefined;
+      if (pathKey >= 0 && pathKey < sectionEnd) {
+        const pathQuote = text.indexOf("\"", text.indexOf(":", pathKey));
+        if (pathQuote >= 0 && pathQuote < sectionEnd) {
+          pathValue = parseJsonStringValue(text, pathQuote).value;
+        }
+      }
+
+      const findKey = text.indexOf("\"find\"", toolKey);
+      const replaceKey = text.indexOf("\"replace\"", toolKey);
+      if (findKey >= 0 && findKey < sectionEnd && replaceKey >= 0 && replaceKey < sectionEnd) {
+        const findQuote = text.indexOf("\"", text.indexOf(":", findKey));
+        const replaceQuote = text.indexOf("\"", text.indexOf(":", replaceKey));
+        if (
+          findQuote >= 0 &&
+          findQuote < sectionEnd &&
+          replaceQuote >= 0 &&
+          replaceQuote < sectionEnd
+        ) {
+          const parsedFind = parseJsonStringValue(text, findQuote);
+          const parsedReplace = parseJsonStringValue(text, replaceQuote);
+          actions.push({
+            tool: "replace_in_file",
+            path: pathValue,
+            content: parsedReplace.value,
+            contentClosed: parsedReplace.closed,
+            previousContent: parsedFind.value,
+            isFileWrite: true,
+            raw: ""
+          });
+        }
+      }
+    }
+
     scanFrom = parsedTool.nextIndex;
   }
 
@@ -369,11 +405,25 @@ function formatAgentMessage(text: string): FormattedAgentMessage {
           ? parsed.actions.map((action) => ({
               tool: action.tool ?? "unknown",
               path: action.path,
-              content: action.content,
+              content:
+                typeof action.content === "string"
+                  ? action.content
+                  : action.tool === "replace_in_file" && typeof (action as { replace?: unknown }).replace === "string"
+                    ? ((action as { replace: string }).replace ?? "")
+                    : undefined,
               contentClosed: true,
               previousContent:
-                action.previousContent ?? action.originalContent ?? action.beforeContent,
-              isFileWrite: action.tool === "write_file" && typeof action.content === "string",
+                action.previousContent ??
+                action.originalContent ??
+                action.beforeContent ??
+                (action.tool === "replace_in_file" && typeof (action as { find?: unknown }).find === "string"
+                  ? ((action as { find: string }).find ?? "")
+                  : undefined),
+              isFileWrite:
+                (action.tool === "write_file" && typeof action.content === "string") ||
+                (action.tool === "replace_in_file" &&
+                  typeof (action as { find?: unknown }).find === "string" &&
+                  typeof (action as { replace?: unknown }).replace === "string"),
               raw: JSON.stringify(action, null, 2)
             }))
           : []

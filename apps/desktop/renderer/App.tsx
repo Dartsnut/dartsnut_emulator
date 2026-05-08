@@ -100,6 +100,22 @@ function getLatestPreviewLines(content: string): { lines: string[]; truncated: b
   };
 }
 
+function getStreamingPreviewDiffLines(action: ParsedAction): { lines: DiffLine[]; truncated: boolean } {
+  if (typeof action.content !== "string") {
+    return { lines: [], truncated: false };
+  }
+  if (typeof action.previousContent === "string") {
+    const diff = buildDiffLines(action.previousContent, action.content, STREAM_PREVIEW_LINES * 4);
+    const lines = diff.lines.slice(-STREAM_PREVIEW_LINES);
+    return { lines, truncated: diff.truncated || diff.lines.length > lines.length };
+  }
+  const preview = getLatestPreviewLines(action.content);
+  return {
+    lines: preview.lines.map((text) => ({ kind: "add", text })),
+    truncated: preview.truncated
+  };
+}
+
 function decodeEscapedStreamingText(input: string): string {
   return input
     .replace(/\\\\/g, "\\")
@@ -289,6 +305,18 @@ function parsePartialAgentMessage(text: string): FormattedAgentMessage {
       }
 
       const contentKey = text.indexOf("\"content\"", toolKey);
+      let previousContentValue: string | undefined;
+      const previousContentKeys = ["\"previousContent\"", "\"originalContent\"", "\"beforeContent\""];
+      for (const key of previousContentKeys) {
+        const previousKey = text.indexOf(key, toolKey);
+        if (previousKey >= 0 && previousKey < sectionEnd) {
+          const previousQuote = text.indexOf("\"", text.indexOf(":", previousKey));
+          if (previousQuote >= 0 && previousQuote < sectionEnd) {
+            previousContentValue = parseJsonStringValue(text, previousQuote).value;
+            break;
+          }
+        }
+      }
       if (contentKey >= 0 && contentKey < sectionEnd) {
         const contentQuote = text.indexOf("\"", text.indexOf(":", contentKey));
         if (contentQuote >= 0 && contentQuote < sectionEnd) {
@@ -298,6 +326,7 @@ function parsePartialAgentMessage(text: string): FormattedAgentMessage {
             path: pathValue,
             content: parsedContent.value,
             contentClosed: parsedContent.closed,
+            previousContent: previousContentValue,
             isFileWrite: true,
             raw: ""
           });
@@ -971,7 +1000,11 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
         >
           {isStreaming && typeof action.content === "string" && action.contentClosed !== true ? (
             <div className="rolling-preview">
-              <pre className="entry-json">{getLatestPreviewLines(action.content).lines.join("\n")}</pre>
+              <pre className="entry-json">
+                {getStreamingPreviewDiffLines(action)
+                  .lines.map((line) => `${line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}${line.text}`)
+                  .join("\n")}
+              </pre>
             </div>
           ) : typeof action.content === "string" ? (
             <>

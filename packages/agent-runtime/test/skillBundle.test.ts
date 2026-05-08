@@ -19,4 +19,12 @@ describe("loadSkillBundle", () => {
     expect(content).toContain("widget creator template");
     expect(content).toContain("widget size");
   });
+
+  it("loads the dartsnut pydartsnut runtime skill", () => {
+    const templatePath = path.resolve(__dirname, "../skills/dartsnut-skill.md");
+    const content = loadSkillBundle(templatePath);
+    expect(content).toContain("pydartsnut");
+    expect(content).toContain("update_frame_buffer");
+    expect(content).toContain("Strict scope");
+  });
 });

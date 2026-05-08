@@ -29,6 +29,7 @@ interface ParsedAction {
     tool: string;
     path?: string;
     content?: string;
+  contentClosed?: boolean;
   previousContent?: string;
   isFileWrite: boolean;
     raw: string;
@@ -263,42 +264,48 @@ function parsePartialAgentMessage(text: string): FormattedAgentMessage {
     }
   }
 
-  // Keep streaming parsing conservative: only extract the first write_file
-  // action envelope to avoid false positives from partially streamed content.
-  const toolKey = text.indexOf("\"tool\"");
-  if (toolKey >= 0) {
+  let scanFrom = 0;
+  while (scanFrom < text.length) {
+    const toolKey = text.indexOf("\"tool\"", scanFrom);
+    if (toolKey < 0) {
+      break;
+    }
     const toolQuote = text.indexOf("\"", text.indexOf(":", toolKey));
-    if (toolQuote >= 0) {
-      const tool = parseJsonStringValue(text, toolQuote).value;
-      if (tool === "write_file") {
-        const nextToolKey = text.indexOf("\"tool\"", toolQuote + 1);
-        const sectionEnd = nextToolKey >= 0 ? nextToolKey : text.length;
+    if (toolQuote < 0) {
+      break;
+    }
+    const parsedTool = parseJsonStringValue(text, toolQuote);
+    const nextToolKey = text.indexOf("\"tool\"", parsedTool.nextIndex);
+    const sectionEnd = nextToolKey >= 0 ? nextToolKey : text.length;
 
-        const pathKey = text.indexOf("\"path\"", toolKey);
-        let pathValue: string | undefined;
-        if (pathKey >= 0 && pathKey < sectionEnd) {
-          const pathQuote = text.indexOf("\"", text.indexOf(":", pathKey));
-          if (pathQuote >= 0 && pathQuote < sectionEnd) {
-            pathValue = parseJsonStringValue(text, pathQuote).value;
-          }
+    if (parsedTool.value === "write_file") {
+      const pathKey = text.indexOf("\"path\"", toolKey);
+      let pathValue: string | undefined;
+      if (pathKey >= 0 && pathKey < sectionEnd) {
+        const pathQuote = text.indexOf("\"", text.indexOf(":", pathKey));
+        if (pathQuote >= 0 && pathQuote < sectionEnd) {
+          pathValue = parseJsonStringValue(text, pathQuote).value;
         }
+      }
 
-        const contentKey = text.indexOf("\"content\"", toolKey);
-        if (contentKey >= 0 && contentKey < sectionEnd) {
-          const contentQuote = text.indexOf("\"", text.indexOf(":", contentKey));
-          if (contentQuote >= 0 && contentQuote < sectionEnd) {
-            const contentValue = parseJsonStringValue(text, contentQuote).value;
-            actions.push({
-              tool: "write_file",
-              path: pathValue,
-              content: contentValue,
-              isFileWrite: true,
-              raw: ""
-            });
-          }
+      const contentKey = text.indexOf("\"content\"", toolKey);
+      if (contentKey >= 0 && contentKey < sectionEnd) {
+        const contentQuote = text.indexOf("\"", text.indexOf(":", contentKey));
+        if (contentQuote >= 0 && contentQuote < sectionEnd) {
+          const parsedContent = parseJsonStringValue(text, contentQuote);
+          actions.push({
+            tool: "write_file",
+            path: pathValue,
+            content: parsedContent.value,
+            contentClosed: parsedContent.closed,
+            isFileWrite: true,
+            raw: ""
+          });
         }
       }
     }
+
+    scanFrom = parsedTool.nextIndex;
   }
 
   return { narrative, response, actions };
@@ -333,6 +340,7 @@ function formatAgentMessage(text: string): FormattedAgentMessage {
               tool: action.tool ?? "unknown",
               path: action.path,
               content: action.content,
+              contentClosed: true,
               previousContent:
                 action.previousContent ?? action.originalContent ?? action.beforeContent,
               isFileWrite: action.tool === "write_file" && typeof action.content === "string",
@@ -961,7 +969,7 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
             !isStreaming && typeof action.content === "string" ? " entry-action--final-diff" : ""
           }`}
         >
-          {isStreaming && typeof action.content === "string" ? (
+          {isStreaming && typeof action.content === "string" && action.contentClosed !== true ? (
             <div className="rolling-preview">
               <pre className="entry-json">{getLatestPreviewLines(action.content).lines.join("\n")}</pre>
             </div>

@@ -3,14 +3,19 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
   AgentEvent,
+  AssetManifest,
   BootstrapState,
+  ManifestSnapshot,
   ProviderSettings,
   ProjectType,
   PromptRequest,
   WidgetSize
 } from "@dartsnut/shared-ipc";
+import { AssetManagerPanel } from "./AssetManagerPanel";
 import { EmulatorPanel } from "./EmulatorPanel";
 import { highlightDiffLine, languageFromPath } from "./highlightDiffLine";
+
+type RightPaneTab = "emulator" | "assets";
 
 interface TimelineEntry {
   id: string;
@@ -504,6 +509,9 @@ export function App() {
   const [providerSettingsError, setProviderSettingsError] = useState<string | null>(null);
   const [providerSettingsNotice, setProviderSettingsNotice] = useState<string | null>(null);
   const [savingProviderSettings, setSavingProviderSettings] = useState(false);
+  const [assetManifest, setAssetManifest] = useState<AssetManifest | null>(null);
+  const [pendingChangeSlotIds, setPendingChangeSlotIds] = useState<string[]>([]);
+  const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>("emulator");
 
   const api = window.dartsnutApi;
 
@@ -637,6 +645,47 @@ export function App() {
       unsubscribePythonRuntime();
     };
   }, [api]);
+
+  useEffect(() => {
+    if (!api?.assets) {
+      setAssetManifest(null);
+      setPendingChangeSlotIds([]);
+      return;
+    }
+    const workspacePath = bootstrap?.workspaceRoot ?? null;
+    if (!workspacePath) {
+      setAssetManifest(null);
+      setPendingChangeSlotIds([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const snapshot = await api.assets.getManifest(workspacePath);
+      if (cancelled || snapshot.workspacePath !== workspacePath) {
+        return;
+      }
+      setAssetManifest(snapshot.manifest);
+      setPendingChangeSlotIds(snapshot.pendingChangeSlotIds);
+    })();
+    const unsubscribe = api.assets.onManifest((snapshot: ManifestSnapshot) => {
+      if (snapshot.workspacePath !== workspacePath) {
+        return;
+      }
+      setAssetManifest(snapshot.manifest);
+      setPendingChangeSlotIds(snapshot.pendingChangeSlotIds);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [api, bootstrap?.workspaceRoot]);
+
+  // Reset to Emulator tab when manifest disappears (workspace switch with no manifest).
+  useEffect(() => {
+    if (!assetManifest && rightPaneTab !== "emulator") {
+      setRightPaneTab("emulator");
+    }
+  }, [assetManifest, rightPaneTab]);
 
   const chatDisabled = useMemo(() => {
     if (!bootstrap) {
@@ -1164,7 +1213,50 @@ export function App() {
         </section>
       )}
       <aside className="right-pane">
-        <EmulatorPanel />
+        {assetManifest ? (
+          <div className="right-pane-tabs" role="tablist" aria-label="Right pane view">
+            <button
+              type="button"
+              className={`right-pane-tab${rightPaneTab === "emulator" ? " right-pane-tab--active" : ""}`}
+              role="tab"
+              aria-selected={rightPaneTab === "emulator"}
+              onClick={() => setRightPaneTab("emulator")}
+            >
+              Emulator
+            </button>
+            <button
+              type="button"
+              className={`right-pane-tab${rightPaneTab === "assets" ? " right-pane-tab--active" : ""}`}
+              role="tab"
+              aria-selected={rightPaneTab === "assets"}
+              onClick={() => setRightPaneTab("assets")}
+            >
+              Assets
+              {pendingChangeSlotIds.length > 0 ? (
+                <span className="right-pane-tab-badge" aria-label={`${pendingChangeSlotIds.length} pending`}>
+                  {pendingChangeSlotIds.length}
+                </span>
+              ) : null}
+            </button>
+          </div>
+        ) : null}
+        <div className={`right-pane-body${assetManifest ? " right-pane-body--tabbed" : ""}`}>
+          <div
+            className="right-pane-section"
+            hidden={Boolean(assetManifest) && rightPaneTab !== "emulator"}
+          >
+            <EmulatorPanel />
+          </div>
+          {assetManifest && bootstrap?.workspaceRoot ? (
+            <div className="right-pane-section" hidden={rightPaneTab !== "assets"}>
+              <AssetManagerPanel
+                workspacePath={bootstrap.workspaceRoot}
+                manifest={assetManifest}
+                pendingChangeSlotIds={pendingChangeSlotIds}
+              />
+            </div>
+          ) : null}
+        </div>
       </aside>
     </main>
   );

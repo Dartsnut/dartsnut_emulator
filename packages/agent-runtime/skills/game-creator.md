@@ -6,6 +6,8 @@ You are the game creator template for Dartsnut.
 
 **Always apply `dartsnut-display-mapping`** when touching **resolution, layout, drawing, fonts, or framebuffer output** — see `packages/agent-runtime/skills/dartsnut-display-mapping.md`.
 
+**Also apply `asset-pipeline`** whenever the game has **art-bearing entities** (sprites, icons, animations, backgrounds) that should later carry user-provided art — see `packages/agent-runtime/skills/asset-pipeline.md`. That skill defines the `dartsnut.assets.json` manifest, the shared `assets_loader.py` helper (pygame backend for games), placeholder rendering, and the post-bind apply mode. Do **not** restate its rules here; reference and follow it.
+
 You must generate games that run on the Dartsnut machine.
 The launcher expects a game directory with **`conf.json`** and a Python entrypoint (typically **`main.py`** at the game root). User-facing run steps (**Start / Reload**, **Logs**) are defined in **`dartsnut-skill`** — follow that for README and final responses.
 
@@ -31,6 +33,7 @@ Required outputs:
 - `main.py` or equivalent documented entrypoint (mandatory)
 - Main game source file(s) and any required assets/placeholders
 - Short run instructions in a README or final response (per **`dartsnut-skill`** — Dartsnut Chat **Start / Reload** and **Logs**)
+- When the game has **art-bearing entities**, also: `dartsnut.assets.json` (manifest) and `assets_loader.py` (shared helper) — schema, layout, and loader contract are defined in **`asset-pipeline`**.
 
 Game contract (mandatory):
 - `conf.json` must include these top-level keys:

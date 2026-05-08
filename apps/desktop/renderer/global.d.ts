@@ -1,11 +1,20 @@
 import type {
   AgentEvent,
+  ApplyAssetsRequest,
+  ApplyAssetsResponse,
+  BindSlotRequest,
+  BindSlotResponse,
   BootstrapState,
+  ManifestSnapshot,
   PickWorkspaceRequest,
   PickWorkspaceResponse,
   PromptRequest,
   ProviderSettings,
-  SaveProviderSettingsRequest
+  ReadPreviewRequest,
+  ReadPreviewResponse,
+  SaveProviderSettingsRequest,
+  UnbindSlotRequest,
+  UnbindSlotResponse
 } from "@dartsnut/shared-ipc";
 import type {
   EmulatorCommand,
@@ -34,6 +43,15 @@ declare global {
       onEmulatorState: (listener: (state: EmulatorStateSnapshot) => void) => () => void;
       onEmulatorFrame: (listener: (frame: EmulatorFrame) => void) => () => void;
       onEmulatorLog: (listener: (entry: EmulatorLogEntry) => void) => () => void;
+      assets: {
+        getManifest: (workspacePath: string) => Promise<ManifestSnapshot>;
+        onManifest: (listener: (snapshot: ManifestSnapshot) => void) => () => void;
+        bindSlot: (request: BindSlotRequest) => Promise<BindSlotResponse>;
+        unbindSlot: (request: UnbindSlotRequest) => Promise<UnbindSlotResponse>;
+        applyAssets: (request: ApplyAssetsRequest) => Promise<ApplyAssetsResponse>;
+        readPreview: (request: ReadPreviewRequest) => Promise<ReadPreviewResponse>;
+        getPathForFile: (file: File) => string;
+      };
     };
   }
 }

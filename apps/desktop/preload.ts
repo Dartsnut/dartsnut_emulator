@@ -1,13 +1,22 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   IPCChannels,
   type AgentEvent,
+  type ApplyAssetsRequest,
+  type ApplyAssetsResponse,
+  type BindSlotRequest,
+  type BindSlotResponse,
   type BootstrapState,
+  type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
   type PromptRequest,
   type ProviderSettings,
-  type SaveProviderSettingsRequest
+  type ReadPreviewRequest,
+  type ReadPreviewResponse,
+  type SaveProviderSettingsRequest,
+  type UnbindSlotRequest,
+  type UnbindSlotResponse
 } from "@dartsnut/shared-ipc";
 import {
   EMULATOR_IPC_CHANNELS,
@@ -70,6 +79,29 @@ const api = {
     ipcRenderer.on(EMULATOR_IPC_CHANNELS.emulatorLog, handler);
     return () => ipcRenderer.removeListener(EMULATOR_IPC_CHANNELS.emulatorLog, handler);
   },
+  assets: {
+    getManifest: (workspacePath: string) =>
+      ipcRenderer.invoke(IPCChannels.assetsGetManifest, workspacePath) as Promise<ManifestSnapshot>,
+    onManifest: (listener: (snapshot: ManifestSnapshot) => void) => {
+      const handler = (_: unknown, snapshot: ManifestSnapshot) => listener(snapshot);
+      ipcRenderer.on(IPCChannels.assetsSubscribeManifest, handler);
+      return () => ipcRenderer.removeListener(IPCChannels.assetsSubscribeManifest, handler);
+    },
+    bindSlot: (request: BindSlotRequest) =>
+      ipcRenderer.invoke(IPCChannels.assetsBindSlot, request) as Promise<BindSlotResponse>,
+    unbindSlot: (request: UnbindSlotRequest) =>
+      ipcRenderer.invoke(IPCChannels.assetsUnbindSlot, request) as Promise<UnbindSlotResponse>,
+    applyAssets: (request: ApplyAssetsRequest) =>
+      ipcRenderer.invoke(IPCChannels.assetsApplyAssets, request) as Promise<ApplyAssetsResponse>,
+    readPreview: (request: ReadPreviewRequest) =>
+      ipcRenderer.invoke(IPCChannels.assetsReadPreview, request) as Promise<ReadPreviewResponse>,
+    /**
+     * Resolve a renderer-side `File` (from a file input or drop event) to its
+     * absolute filesystem path. `File.path` was removed in Electron 32+, so we
+     * route through `webUtils.getPathForFile` exposed via the bridge.
+     */
+    getPathForFile: (file: File) => webUtils.getPathForFile(file)
+  }
 };
 
 contextBridge.exposeInMainWorld("dartsnutApi", api);

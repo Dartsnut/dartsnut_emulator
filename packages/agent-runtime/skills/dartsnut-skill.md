@@ -10,7 +10,7 @@ If the user asks for anything else—generic Python, non-Dartsnut apps, pygame d
 
 Apply this whenever Python code must integrate with the **Dartsnut machine** through the **`pydartsnut`** package (dart/button input, display output, lifecycle). Development often exercises the same contract via an **emulator** or desktop host — that is still **machine integration**, not a separate “emulator-only” API.
 
-The **game-creator** and **widget-creator** templates add type-specific rules (`conf.json`, rendering stack); this file is the single place for **`Dartsnut` usage, loops, and frame-buffer I/O**.
+The **game-creator** and **widget-creator** templates add type-specific rules (`conf.json`, rendering stack); this file is the single place for **`Dartsnut` usage, loops, and frame-buffer I/O**. For **art-bearing entities** (sprites, icons, animations, backgrounds), see **`asset-pipeline`** (`packages/agent-runtime/skills/asset-pipeline.md`) — it owns the `dartsnut.assets.json` manifest, the shared `assets_loader.py` helper, placeholder rendering, and the post-bind apply mode for both games and widgets.
 
 ## Run / preview in Dartsnut Chat (desktop)
 

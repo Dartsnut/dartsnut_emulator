@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
@@ -35,6 +35,14 @@ interface ParsedAction {
   raw: string;
 }
 
+/** write_file with no prior snapshot — treat as new file (diff is empty → content). */
+function isNewFileWrite(action: ParsedAction): boolean {
+  return (
+    action.tool === "write_file" &&
+    (action.previousContent === undefined || action.previousContent === "")
+  );
+}
+
 interface DiffLine {
   kind: "add" | "remove" | "context";
   text: string;
@@ -48,6 +56,10 @@ const DIFF_MAX_LINES = 220;
 const DIFF_CONTEXT_LINES = 4;
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
 const SUPPORTED_WIDGET_SIZES: WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
+/** Keep in sync with `.composer-pill-input { max-height }` in styles.css */
+const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
+/** Content taller than one line — switch composer shell from pill to rounded card */
+const COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX = 52;
 const GREETING_TEXT =
   "Hi! I can help you create or modify Dartsnut widgets and games. Pick a workspace folder and tell me what you want to build.";
 
@@ -481,6 +493,8 @@ export function App() {
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
   const timelineRef = useRef<HTMLElement | null>(null);
+  const composerPillRef = useRef<HTMLDivElement | null>(null);
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>({
     baseUrl: "",
     apiKey: "",
@@ -514,11 +528,39 @@ export function App() {
     timeline.scrollTop = timeline.scrollHeight;
   }
 
+  function syncComposerPromptHeight() {
+    const el = promptInputRef.current;
+    const pill = composerPillRef.current;
+    if (!el || !pill) {
+      return;
+    }
+    el.style.height = "auto";
+    const scrollH = el.scrollHeight;
+    const capped = Math.min(scrollH, COMPOSER_PROMPT_MAX_HEIGHT_PX);
+    el.style.height = `${capped}px`;
+    el.style.overflowY = scrollH > COMPOSER_PROMPT_MAX_HEIGHT_PX ? "auto" : "hidden";
+    pill.classList.toggle("composer-pill--expanded", scrollH > COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX);
+  }
+
+  useLayoutEffect(() => {
+    syncComposerPromptHeight();
+  }, [prompt]);
+
+  useEffect(() => {
+    const onResize = () => {
+      syncComposerPromptHeight();
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+
   useEffect(() => {
     scrollTimelineToBottom();
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!autoScrollEnabled) {
       return;
     }
@@ -546,6 +588,13 @@ export function App() {
       setPythonRuntimeStatus(null);
     });
     const unsubscribe = api.onAgentEvent((event) => {
+      if (import.meta.env.DEV) {
+        if (event.type === "stream") {
+          console.debug("[agent-stream]", { type: "stream", deltaChars: event.delta.length, at: event.at });
+        } else {
+          console.debug("[agent-stream]", event);
+        }
+      }
       clearPendingReplyIndicator();
       if (event.type === "stream") {
         const streamId = activeStreamEntryIdRef.current;
@@ -635,11 +684,14 @@ export function App() {
       setSending(false);
       return;
     }
-    await api.sendPrompt(request);
-    clearPendingReplyIndicator();
-    const refreshed = await api.getBootstrapState();
-    setBootstrap(refreshed);
-    setSending(false);
+    try {
+      await api.sendPrompt(request);
+      const refreshed = await api.getBootstrapState();
+      setBootstrap(refreshed);
+    } finally {
+      clearPendingReplyIndicator();
+      setSending(false);
+    }
   }
 
   async function continueIntake(overrides?: {
@@ -867,40 +919,68 @@ export function App() {
 
           <section className="composer">
             {pendingPrompt && intakeStep ? (
-              <div className="composer-intake entry status">
-                <div className="entry-text">
-                  Intake required before creation.
+              <div className="composer-intake" role="region" aria-label="Creation intake">
+                <p className="composer-intake-prompt" id="composer-intake-prompt">
+                  <span className="composer-intake-prompt-lead">Intake required before creation.</span>
                   {intakeStep === "projectType" ? " Select project type." : ""}
                   {intakeStep === "widgetSize" ? " Select widget size." : ""}
                   {intakeStep === "workspace" ? " Select an empty workspace folder." : ""}
-                </div>
+                </p>
                 {intakeStep === "projectType" ? (
-                  <div className="entry-text">
-                    <button type="button" onClick={() => continueIntake({ projectType: "game", widgetSize: null })}>
+                  <div
+                    className="composer-intake-chips"
+                    role="group"
+                    aria-labelledby="composer-intake-prompt"
+                  >
+                    <button
+                      type="button"
+                      className="composer-intake-chip"
+                      onClick={() => continueIntake({ projectType: "game", widgetSize: null })}
+                    >
                       Game
                     </button>
-                    <button type="button" onClick={() => continueIntake({ projectType: "widget" })}>Widget</button>
-                    <button type="button" onClick={clearIntake}>
+                    <button
+                      type="button"
+                      className="composer-intake-chip"
+                      onClick={() => continueIntake({ projectType: "widget" })}
+                    >
+                      Widget
+                    </button>
+                    <button type="button" className="composer-intake-chip composer-intake-chip--quiet" onClick={clearIntake}>
                       Cancel
                     </button>
                   </div>
                 ) : null}
                 {intakeStep === "widgetSize" ? (
-                  <div className="entry-text">
+                  <div
+                    className="composer-intake-chips"
+                    role="group"
+                    aria-labelledby="composer-intake-prompt"
+                  >
                     {SUPPORTED_WIDGET_SIZES.map((size) => (
-                      <button key={size} type="button" onClick={() => continueIntake({ widgetSize: size })}>
+                      <button
+                        key={size}
+                        type="button"
+                        className="composer-intake-chip"
+                        onClick={() => continueIntake({ widgetSize: size })}
+                      >
                         {size}
                       </button>
                     ))}
-                    <button type="button" onClick={clearIntake}>
+                    <button type="button" className="composer-intake-chip composer-intake-chip--quiet" onClick={clearIntake}>
                       Cancel
                     </button>
                   </div>
                 ) : null}
                 {intakeStep === "workspace" ? (
-                  <div className="entry-text">
+                  <div
+                    className="composer-intake-chips composer-intake-chips--stack"
+                    role="group"
+                    aria-labelledby="composer-intake-prompt"
+                  >
                     <button
                       type="button"
+                      className="composer-intake-chip composer-intake-chip--primary"
                       onClick={async () => {
                         const pickResult = await api.pickWorkspace({ requireEmpty: true });
                         setBootstrap(pickResult.state);
@@ -919,7 +999,7 @@ export function App() {
                     >
                       Choose Empty Workspace
                     </button>
-                    <button type="button" onClick={clearIntake}>
+                    <button type="button" className="composer-intake-chip composer-intake-chip--quiet" onClick={clearIntake}>
                       Cancel
                     </button>
                   </div>
@@ -927,8 +1007,9 @@ export function App() {
               </div>
             ) : null}
 
-            <div className="composer-pill">
+            <div className="composer-pill" ref={composerPillRef}>
               <textarea
+                ref={promptInputRef}
                 className="composer-pill-input"
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
@@ -1140,7 +1221,9 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
                 const lang = languageFromPath(action.path);
                 return (
                   <>
-                    <div className="final-diff-card">
+                    <div
+                      className={`final-diff-card${isNewFileWrite(action) ? " final-diff-card--new-file" : ""}`}
+                    >
                       <header className="final-diff-header">
                         <span className="final-diff-title">
                           <span className="final-diff-hash">#</span>
@@ -1175,9 +1258,6 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
                       </div>
                       <div className="final-diff-chevron" aria-hidden />
                     </div>
-                    {!action.previousContent ? (
-                      <div className="diff-truncation">previous file snapshot unavailable</div>
-                    ) : null}
                     {diff.truncated ? (
                       <div className="diff-truncation">Additional changes not shown.</div>
                     ) : null}

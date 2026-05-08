@@ -14,29 +14,29 @@ interface CompletionProvider {
 
 type ToolAction =
   | {
-      tool: "list_files";
-      path?: string;
-    }
+    tool: "list_files";
+    path?: string;
+  }
   | {
-      tool: "read_file";
-      path: string;
-    }
+    tool: "read_file";
+    path: string;
+  }
   | {
-      tool: "write_file";
-      path: string;
-      content: string;
-    }
+    tool: "write_file";
+    path: string;
+    content: string;
+  }
   | {
-      tool: "replace_in_file";
-      path: string;
-      find: string;
-      replace: string;
-    }
+    tool: "replace_in_file";
+    path: string;
+    find: string;
+    replace: string;
+  }
   | {
-      tool: "copy_asset_file";
-      source: string;
-      path: string;
-    };
+    tool: "copy_asset_file";
+    source: string;
+    path: string;
+  };
 
 interface AgentActionEnvelope {
   response?: string;
@@ -53,7 +53,7 @@ export interface SessionEngineOptions {
 }
 
 export class SessionEngine {
-  constructor(private readonly options: SessionEngineOptions) {}
+  constructor(private readonly options: SessionEngineOptions) { }
 
   private normalizeAction(rawAction: unknown): ToolAction {
     if (!rawAction || typeof rawAction !== "object") {
@@ -460,19 +460,6 @@ export class SessionEngine {
     return `Ran copy asset ${action.source} -> ${action.path}`;
   }
 
-  private shouldUseRawResponseForWriteActions(responseText: string): boolean {
-    if (!responseText.trim()) {
-      return false;
-    }
-    if (responseText.length > 280) {
-      return false;
-    }
-    if (responseText.includes("```")) {
-      return false;
-    }
-    return true;
-  }
-
   async runPrompt(
     prompt: string,
     onEvent: (event: AgentEvent) => void
@@ -527,11 +514,16 @@ export class SessionEngine {
         };
       });
       const hasWriteActions = actions.some((action) => action.tool === "write_file");
-      const uiResponse =
-        hasWriteActions && !this.shouldUseRawResponseForWriteActions(merged.responseText)
-          ? `Applying ${actions.filter((action) => action.tool === "write_file").length} file update(s).`
-          : merged.responseText ||
-            (merged.rawActions.length > 0 ? "Executing requested tool actions." : undefined);
+      const trimmedResponse = merged.responseText.trim();
+      let uiResponse: string | undefined;
+      if (trimmedResponse.length > 0) {
+        // Keep the assistant narrative even when file payloads are large (do not replace with a stub).
+        uiResponse = merged.responseText;
+      } else if (hasWriteActions) {
+        uiResponse = `Applying ${actions.filter((action) => action.tool === "write_file").length} file update(s).`;
+      } else if (merged.rawActions.length > 0) {
+        uiResponse = "Executing requested tool actions.";
+      }
       const uiEnvelope = JSON.stringify(
         {
           response: uiResponse,

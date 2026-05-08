@@ -22,10 +22,7 @@ const api = {
   pickWorkspace: (request?: PickWorkspaceRequest) =>
     ipcRenderer.invoke(IPCChannels.pickWorkspace, request) as Promise<PickWorkspaceResponse>,
   sendPrompt: (request: PromptRequest) =>
-    ipcRenderer.invoke(IPCChannels.sendPrompt, request) as Promise<{
-      ok: boolean;
-      events: AgentEvent[];
-    }>,
+    ipcRenderer.invoke(IPCChannels.sendPrompt, request) as Promise<{ ok: boolean }>,
   getProviderSettings: () =>
     ipcRenderer.invoke(IPCChannels.getProviderSettings) as Promise<ProviderSettings>,
   getPythonRuntimeStatus: () =>

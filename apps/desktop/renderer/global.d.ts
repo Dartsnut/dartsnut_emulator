@@ -19,7 +19,7 @@ declare global {
     dartsnutApi: {
       getBootstrapState: () => Promise<BootstrapState>;
       pickWorkspace: (request?: PickWorkspaceRequest) => Promise<PickWorkspaceResponse>;
-      sendPrompt: (request: PromptRequest) => Promise<{ ok: boolean; events: AgentEvent[] }>;
+      sendPrompt: (request: PromptRequest) => Promise<{ ok: boolean }>;
       getProviderSettings: () => Promise<ProviderSettings>;
       getPythonRuntimeStatus: () => Promise<string | null>;
       getSelectedPythonPath: () => Promise<string | null>;

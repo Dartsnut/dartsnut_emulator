@@ -139,10 +139,101 @@ button.app-bar-workspace-btn:focus-visible {
 }
 
 .composer-intake {
-  border: 1px solid #243047;
-  background: #10192b;
-  border-radius: 10px;
-  padding: 14px;
+  align-self: stretch;
+  max-width: 100%;
+  border: 1px solid rgba(88, 71, 127, 0.45);
+  background: linear-gradient(165deg, rgba(39, 32, 62, 0.75) 0%, rgba(14, 22, 38, 0.98) 55%);
+  border-radius: 14px;
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+}
+
+.composer-intake-prompt {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #c8d4e6;
+}
+
+.composer-intake-prompt-lead {
+  display: inline;
+  font-weight: 600;
+  color: #eef3fb;
+}
+
+.composer-intake-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-intake-chips--stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.composer-intake-chips--stack .composer-intake-chip {
+  justify-content: center;
+  width: 100%;
+}
+
+.composer-intake-chip {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #eef3fb;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.composer-intake-chip:hover:enabled {
+  background: rgba(255, 255, 255, 0.11);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+.composer-intake-chip:focus-visible {
+  outline: none;
+  border-color: #6b8fd4;
+  box-shadow: 0 0 0 2px rgba(107, 143, 212, 0.35);
+}
+
+.composer-intake-chip--primary {
+  border-color: rgba(107, 143, 212, 0.55);
+  background: rgba(47, 103, 232, 0.22);
+}
+
+.composer-intake-chip--primary:hover:enabled {
+  background: rgba(47, 103, 232, 0.32);
+  border-color: rgba(130, 164, 232, 0.65);
+}
+
+.composer-intake-chip--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: #8fa6bf;
+  font-weight: 400;
+}
+
+.composer-intake-chip--quiet:hover:enabled {
+  background: rgba(255, 255, 255, 0.06);
+  color: #c8d4e6;
 }
 
 .settings-screen {
@@ -288,7 +379,7 @@ button.app-bar-workspace-btn:focus-visible {
 
 .composer-pill {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
   min-height: 38px;
   padding: 4px 8px 4px 10px;
@@ -296,6 +387,15 @@ button.app-bar-workspace-btn:focus-visible {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: #2f2f32;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition:
+    border-radius 0.18s ease,
+    padding 0.18s ease;
+}
+
+.composer-pill--expanded {
+  align-items: flex-end;
+  border-radius: 18px;
+  padding: 8px 10px 10px 12px;
 }
 
 .composer-pill-input {
@@ -315,6 +415,7 @@ button.app-bar-workspace-btn:focus-visible {
   font-size: 13px;
   line-height: 1.35;
   box-shadow: none;
+  overflow-y: hidden;
 }
 
 .composer-pill-input::placeholder {
@@ -531,6 +632,11 @@ button.app-bar-workspace-btn:focus-visible {
   overflow: hidden;
   border: 1px solid #2f4a38;
   background: #0d1117;
+}
+
+/* New file (no prior snapshot): drop the outer stroke so the panel matches the chat surface */
+.final-diff-card--new-file {
+  border: none;
 }
 
 .final-diff-header {

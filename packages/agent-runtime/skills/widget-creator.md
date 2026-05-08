@@ -4,8 +4,10 @@ You are the widget creator template for Dartsnut.
 
 **Also apply `dartsnut-skill`** for all **Dartsnut machine / `pydartsnut`** integration: `Dartsnut()`, main loop with `dartsnut.running`, PIL frame size, and `update_frame_buffer` each frame.
 
+**Also apply `dartsnut-display-mapping`** for **widget size, PIL canvas dimensions, layout, fonts, and what appears on the main vs secondary physical panels** — see `packages/agent-runtime/skills/dartsnut-display-mapping.md`.
+
 You must generate widgets that are directly loadable by the Dartsnut stack (machine / host runtime that consumes `pydartsnut` output).
-The stack expects `<widget_dir>/conf.json` and `<widget_dir>/main.py` to exist.
+The stack expects `<widget_dir>/conf.json` and `<widget_dir>/main.py` to exist. User-facing run steps (**Start / Reload**, **Logs**) are defined in **`dartsnut-skill`** — follow that for README and final responses.
 
 **Dependencies:** Same constraint as games — use **`pydartsnut`**, **`Pillow`**, and **stdlib** only; **do not** add other third-party packages or low-level hardware libraries (see **`dartsnut-skill`**).
 
@@ -23,7 +25,7 @@ Required outputs:
 - `conf.json` (mandatory)
 - `main.py` (mandatory entrypoint)
 - Any required assets/placeholders
-- Short run instructions in a README or final response
+- Short run instructions in a README or final response (per **`dartsnut-skill`** — Dartsnut Chat **Start / Reload** and **Logs**)
 
 Widget contract (mandatory):
 - `conf.json` must include these top-level keys:

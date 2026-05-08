@@ -284,17 +284,27 @@ function buildRoutedPrompt(request: PromptRequest): string {
   ].join("\n");
 }
 
-function resolveSkillBundlePath(): string {
+function resolveAgentRuntimeSkillsDir(): string {
   const candidates = [
-    path.resolve(process.cwd(), "packages/agent-runtime/skills/dartsnut-skill.md"),
-    path.resolve(process.cwd(), "../packages/agent-runtime/skills/dartsnut-skill.md"),
-    path.resolve(__dirname, "../../../packages/agent-runtime/skills/dartsnut-skill.md")
+    path.resolve(process.cwd(), "packages/agent-runtime/skills"),
+    path.resolve(process.cwd(), "../packages/agent-runtime/skills"),
+    path.resolve(__dirname, "../../../packages/agent-runtime/skills")
   ];
-  const existingPath = candidates.find((candidate) => fs.existsSync(candidate));
-  if (!existingPath) {
-    throw new Error(`Skill bundle is missing at ${candidates[0]}`);
+  const existing = candidates.find((dir) => fs.existsSync(path.join(dir, "dartsnut-skill.md")));
+  if (!existing) {
+    throw new Error(`Skill directory not found (expected dartsnut-skill.md); tried: ${candidates.join(", ")}`);
   }
-  return existingPath;
+  return existing;
+}
+
+function resolveSkillBundlePrompt(): string {
+  const skillsDir = resolveAgentRuntimeSkillsDir();
+  const corePath = path.join(skillsDir, "dartsnut-skill.md");
+  const displayPath = path.join(skillsDir, "dartsnut-display-mapping.md");
+  if (!fs.existsSync(displayPath)) {
+    throw new Error(`Skill bundle is missing at ${displayPath}`);
+  }
+  return [loadSkillBundle(corePath), loadSkillBundle(displayPath)].join("\n\n---\n\n");
 }
 
 function getEmulatorWorkspaceRoot(): string {
@@ -318,20 +328,27 @@ function isWithinDirectory(rootPath: string, targetPath: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function sendToRenderer(channel: string, ...args: unknown[]) {
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+  win.webContents.send(channel, ...(args as [unknown, ...unknown[]]));
+}
+
 function emitEmulatorState() {
-  win?.webContents.send(EMULATOR_IPC_CHANNELS.emulatorState, emulatorState);
+  sendToRenderer(EMULATOR_IPC_CHANNELS.emulatorState, emulatorState);
 }
 
 function emitEmulatorFrame(frame: EmulatorFrame) {
-  win?.webContents.send(EMULATOR_IPC_CHANNELS.emulatorFrame, frame);
+  sendToRenderer(EMULATOR_IPC_CHANNELS.emulatorFrame, frame);
 }
 
 function emitEmulatorLog(entry: EmulatorLogEntry) {
-  win?.webContents.send(EMULATOR_IPC_CHANNELS.emulatorLog, entry);
+  sendToRenderer(EMULATOR_IPC_CHANNELS.emulatorLog, entry);
 }
 
 function emitPythonRuntimeStatus() {
-  win?.webContents.send(IPCChannels.subscribePythonRuntimeStatus, pythonRuntimeStatus);
+  sendToRenderer(IPCChannels.subscribePythonRuntimeStatus, pythonRuntimeStatus);
 }
 
 function setPythonRuntimeStatus(status: string | null) {
@@ -603,8 +620,7 @@ function buildSession(): SessionEngine {
   if (!validation.ok) {
     throw new Error(validation.error);
   }
-  const skillPath = resolveSkillBundlePath();
-  const skillPrompt = loadSkillBundle(skillPath);
+  const skillPrompt = resolveSkillBundlePrompt();
   return new SessionEngine({
     provider: new ProviderClient(config),
     workspacePolicy: new WorkspacePolicy(workspaceRoot),
@@ -636,6 +652,9 @@ async function createWindow() {
   } else {
     await win.loadFile(path.join(__dirname, "../dist/index.html"));
   }
+  win.on("closed", () => {
+    win = null;
+  });
   emitEmulatorState();
 }
 
@@ -741,24 +760,27 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
 });
 
 ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest) => {
-  const events: AgentEvent[] = [];
   try {
     const session = buildSession();
     const prompt = buildRoutedPrompt(req);
+    console.log("[agent] runPrompt start", { promptChars: prompt.length });
     await session.runPrompt(prompt, (agentEvent: AgentEvent) => {
-      events.push(agentEvent);
       console.log("[agent-stream]", JSON.stringify(agentEvent));
-      win?.webContents.send(IPCChannels.subscribeEvents, agentEvent);
+      sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
     });
     if (!firstRunComplete) {
       writeProofState(true);
     }
-    return { ok: true, events };
+    // Do not return streamed events here: the renderer already receives them via
+    // subscribeEvents. Returning a huge array serializes on the IPC reply and can
+    // stall the UI long after generation finishes.
+    return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown prompt error";
     const event: AgentEvent = { type: "error", message, at: Date.now() };
-    win?.webContents.send(IPCChannels.subscribeEvents, event);
-    return { ok: false, events: [event] };
+    console.error("[agent-stream]", JSON.stringify(event));
+    sendToRenderer(IPCChannels.subscribeEvents, event);
+    return { ok: false };
   }
 });
 

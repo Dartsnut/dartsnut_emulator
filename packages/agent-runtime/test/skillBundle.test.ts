@@ -27,4 +27,12 @@ describe("loadSkillBundle", () => {
     expect(content).toContain("update_frame_buffer");
     expect(content).toContain("Strict scope");
   });
+
+  it("loads the dartsnut display mapping skill", () => {
+    const templatePath = path.resolve(__dirname, "../skills/dartsnut-display-mapping.md");
+    const content = loadSkillBundle(templatePath);
+    expect(content).toContain("dartsnut-display-mapping");
+    expect(content).toContain("128×160");
+    expect(content).toContain("framebuffer merges");
+  });
 });

@@ -5,10 +5,15 @@ interface ChatMessage {
   content: string;
 }
 
+/** Default cap so a hung provider does not leave the UI stuck forever. */
+const DEFAULT_CHAT_COMPLETION_TIMEOUT_MS = 180_000;
+
 export class ProviderClient {
-  constructor(private readonly config: ProviderConfig) {}
+  constructor(private readonly config: ProviderConfig) { }
 
   async complete(messages: ChatMessage[], onChunk?: (delta: string) => void): Promise<string> {
+    const timeoutMs = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS) || DEFAULT_CHAT_COMPLETION_TIMEOUT_MS;
+    const signal = AbortSignal.timeout(timeoutMs);
     const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -20,7 +25,15 @@ export class ProviderClient {
         messages,
         temperature: 0.2,
         stream: Boolean(onChunk)
-      })
+      }),
+      signal
+    }).catch((error: unknown) => {
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw new Error(
+          `Provider request timed out after ${timeoutMs}ms. Check OPENAI_BASE_URL, network, and model availability.`
+        );
+      }
+      throw error;
     });
 
     if (!response.ok) {

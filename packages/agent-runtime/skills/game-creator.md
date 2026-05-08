@@ -4,8 +4,10 @@ You are the game creator template for Dartsnut.
 
 **Always apply `dartsnut-skill`.** Every game uses **`pygame`** for rendering and **`pydartsnut.Dartsnut`** for Dartsnut machine I/O (loop, **event-based** inputs, frame-buffer). Do **not** produce pygame-only games without `pydartsnut`.
 
+**Always apply `dartsnut-display-mapping`** when touching **resolution, layout, drawing, fonts, or framebuffer output** — see `packages/agent-runtime/skills/dartsnut-display-mapping.md`.
+
 You must generate games that run on the Dartsnut machine.
-The launcher expects a game directory with **`conf.json`** and a Python entrypoint (typically **`main.py`** at the game root).
+The launcher expects a game directory with **`conf.json`** and a Python entrypoint (typically **`main.py`** at the game root). User-facing run steps (**Start / Reload**, **Logs**) are defined in **`dartsnut-skill`** — follow that for README and final responses.
 
 ## Dependencies and environment
 
@@ -28,7 +30,7 @@ Required outputs:
 - `conf.json` (mandatory)
 - `main.py` or equivalent documented entrypoint (mandatory)
 - Main game source file(s) and any required assets/placeholders
-- Short run instructions in a README or final response
+- Short run instructions in a README or final response (per **`dartsnut-skill`** — Dartsnut Chat **Start / Reload** and **Logs**)
 
 Game contract (mandatory):
 - `conf.json` must include these top-level keys:
@@ -69,7 +71,7 @@ By default, root the game at the **workspace / game directory**:
 - **`assets/`** — images/sprites (may start empty; optional small `README.md` inside describing use).
 - **`sounds/`** or **`sound/`** — BGM/SFX placeholders (optional README).
 - Optional **`game/`** package for modular code: `state.py`, `render.py` / `ui.py`, `board.py`, etc.
-- **`README.md`** — how to run (e.g. `python main.py` from game root).
+- **`README.md`** — how to preview in app (**Start / Reload**, **Logs**) — wording in **`dartsnut-skill`**
 - Optional **`requirements.txt`** / **`pyproject.toml`** listing **only** libraries the code actually uses (`pygame`, `pydartsnut`, optional `pillow`) — **never** add unrelated third-party packages.
 
 Within pygame code, separate **`handle_events` → `update` → `draw`** (or equivalent). When rendering text with `font.render(...)`, use **`antialias=False`** for crisp text and lower overhead on device.

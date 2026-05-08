@@ -12,6 +12,16 @@ Apply this whenever Python code must integrate with the **Dartsnut machine** thr
 
 The **game-creator** and **widget-creator** templates add type-specific rules (`conf.json`, rendering stack); this file is the single place for **`Dartsnut` usage, loops, and frame-buffer I/O**.
 
+## Run / preview in Dartsnut Chat (desktop)
+
+Users run games and widgets from **this Electron app (Dartsnut Chat)**, not from a terminal by default.
+
+Whenever you write **run instructions** (README, final reply, or any **Run** section):
+
+1. Tell the user to press **Start / Reload** in the emulator pane after the workspace folder is selected — that loads and runs the project.
+2. Tell them they can open **Logs** (same pane) to view bridge/runtime output and debug issues.
+3. **Do not** tell users to `cd` into the folder or run `python main.py` as the primary steps unless they explicitly asked for command-line-only instructions.
+
 ## Dependencies (hardware boundary)
 
 Game and widget code **must not** import or call low-level device stacks directly (Bluetooth, DBus, GPIO, raw input), for example: `bluezero`, `dbus-python`, `pybluez`, `RPi.GPIO`, `evdev`, and similar. **All** hardware access goes through **`pydartsnut.Dartsnut`**.
@@ -34,10 +44,7 @@ Games must **not** introduce **new** third-party pip packages beyond what the Da
 - Push a frame **every iteration** of the main loop when integrated with the machine.
 - **Widgets**: pass a Pillow `Image` whose size matches `conf.json` / creation context `[width, height]`.
 - **Games**: render to a pygame `Surface`, then convert for the engine (see snippet below). Orientation matches existing games: transpose the raw array from `pygame.surfarray.array3d(screen)`.
-
-### Display layout convention (games)
-
-- Resolution is typically **`[128, 160]`** (`width` × `height`). Many existing games treat the surface as a **128×128** primary play area plus a **64×32** region (status/UI); follow this split when it fits the design, unless the user or creation context specifies otherwise.
+- **Physical layout, framebuffer merges, dart-hit zones, clipping, fonts:** apply **`dartsnut-display-mapping`** (`packages/agent-runtime/skills/dartsnut-display-mapping.md`). In **Dartsnut Chat**, that skill is **bundled after this file** in the agent system prompt — treat it as mandatory whenever display or rendering is involved.
 
 ## Widget path (Pillow — no pygame)
 

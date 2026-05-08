@@ -397,6 +397,22 @@ export class SessionEngine {
     }
   }
 
+  private describeStatusAction(action: ToolAction): string {
+    if (action.tool === "list_files") {
+      if (typeof action.path === "string" && action.path.length > 0) {
+        return `Ran list files in ${action.path}`;
+      }
+      return "Ran list files";
+    }
+    if (action.tool === "read_file") {
+      return `Ran read file ${action.path}`;
+    }
+    if (action.tool === "write_file") {
+      return `Ran write file ${action.path}`;
+    }
+    return `Ran copy asset ${action.source} -> ${action.path}`;
+  }
+
   async runPrompt(
     prompt: string,
     onEvent: (event: AgentEvent) => void
@@ -462,11 +478,13 @@ export class SessionEngine {
       );
       onEvent({ type: "final", content: uiEnvelope, at: Date.now() });
 
-      onEvent({
-        type: "status",
-        message: `Executing ${actions.length} tool action(s)...`,
-        at: Date.now()
-      });
+      for (const action of actions) {
+        onEvent({
+          type: "status",
+          message: this.describeStatusAction(action),
+          at: Date.now()
+        });
+      }
 
       const toolResults = actions.map((action) => {
         try {

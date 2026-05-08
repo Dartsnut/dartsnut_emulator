@@ -459,6 +459,15 @@ button.app-bar-workspace-btn:focus-visible {
   gap: 6px;
 }
 
+.rolling-preview .entry-json {
+  background: #0c0f14;
+  border: 1px solid #2d3139;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  overflow-x: hidden;
+  word-break: break-word;
+}
+
 .entry-action--final-diff {
   border: none;
   background: transparent;

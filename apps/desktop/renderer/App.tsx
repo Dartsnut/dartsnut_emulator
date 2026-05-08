@@ -46,6 +46,7 @@ type AppScreen = "main" | "settings";
 const STREAM_PREVIEW_LINES = 8;
 const DIFF_MAX_LINES = 220;
 const DIFF_CONTEXT_LINES = 4;
+const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
 const SUPPORTED_WIDGET_SIZES: WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
 const GREETING_TEXT =
   "Hi! I can help you create or modify Dartsnut widgets and games. Pick a workspace folder and tell me what you want to build.";
@@ -425,9 +426,11 @@ export function App() {
   >(null);
   const [sessionWidgetSize, setSessionWidgetSize] = useState<WidgetSize | null>(null);
   const [sessionProjectType, setSessionProjectType] = useState<ProjectType | null>(null);
+  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const pendingReplyIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
+  const timelineRef = useRef<HTMLElement | null>(null);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>({
     baseUrl: "",
     apiKey: "",
@@ -448,6 +451,29 @@ export function App() {
     setEntries((prev) => prev.filter((entry) => entry.id !== pendingId));
     pendingReplyIdRef.current = null;
   }
+
+  function isTimelineNearBottom(element: HTMLElement): boolean {
+    return element.scrollHeight - element.scrollTop - element.clientHeight <= AUTO_SCROLL_BOTTOM_THRESHOLD;
+  }
+
+  function scrollTimelineToBottom() {
+    const timeline = timelineRef.current;
+    if (!timeline) {
+      return;
+    }
+    timeline.scrollTop = timeline.scrollHeight;
+  }
+
+  useEffect(() => {
+    scrollTimelineToBottom();
+  }, []);
+
+  useEffect(() => {
+    if (!autoScrollEnabled) {
+      return;
+    }
+    scrollTimelineToBottom();
+  }, [entries, autoScrollEnabled]);
 
   useEffect(() => {
     if (!api) {
@@ -762,7 +788,22 @@ export function App() {
             </div>
           </div>
 
-          <section className="timeline">
+          <section
+            className={`timeline${autoScrollEnabled ? " timeline--autoscroll" : ""}`}
+            ref={timelineRef}
+            onScroll={(event) => {
+              const atBottom = isTimelineNearBottom(event.currentTarget);
+              if (atBottom) {
+                if (!autoScrollEnabled) {
+                  setAutoScrollEnabled(true);
+                }
+                return;
+              }
+              if (autoScrollEnabled) {
+                setAutoScrollEnabled(false);
+              }
+            }}
+          >
             {entries.map((entry) => (
               <div key={entry.id} className={`entry ${entry.role}`}>
                 {entry.role === "agent" ? (
@@ -858,6 +899,29 @@ export function App() {
                     <option value="auto">Auto</option>
                   </select>
                 </label>
+                {!autoScrollEnabled ? (
+                  <button
+                    type="button"
+                    className="composer-pill-scroll"
+                    aria-label="Scroll to bottom and enable auto-scroll"
+                    title="Scroll to bottom and enable auto-scroll"
+                    onClick={() => {
+                      scrollTimelineToBottom();
+                      setAutoScrollEnabled(true);
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                      <path
+                        d="M12 5v14M12 19l-5-5M12 19l5-5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.1"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="composer-pill-send"
@@ -996,6 +1060,10 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
           key={`${action.tool}-${action.path ?? idx}`}
           className={`entry-action${
             !isStreaming && typeof action.content === "string" ? " entry-action--final-diff" : ""
+          }${
+            isStreaming && typeof action.content === "string" && action.contentClosed !== true
+              ? " entry-action--rolling-preview"
+              : ""
           }`}
         >
           {isStreaming && typeof action.content === "string" && action.contentClosed !== true ? (

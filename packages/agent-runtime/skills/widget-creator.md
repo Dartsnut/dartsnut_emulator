@@ -6,6 +6,8 @@ You are the widget creator template for Dartsnut.
 
 **Also apply `dartsnut-display-mapping`** for **widget size, PIL canvas dimensions, layout, fonts, and what appears on the main vs secondary physical panels** — see `packages/agent-runtime/skills/dartsnut-display-mapping.md`.
 
+**Also apply `asset-pipeline`** whenever the widget has **art-bearing entities** (icons, illustrations, animated decorations, full-canvas backgrounds) that should later carry user-provided art — see `packages/agent-runtime/skills/asset-pipeline.md`. That skill defines the `dartsnut.assets.json` manifest, the shared `assets_loader.py` helper (Pillow backend for widgets — **never** import `pygame`), placeholder rendering, and the post-bind apply mode. Do **not** restate its rules here; reference and follow it.
+
 You must generate widgets that are directly loadable by the Dartsnut stack (machine / host runtime that consumes `pydartsnut` output).
 The stack expects `<widget_dir>/conf.json` and `<widget_dir>/main.py` to exist. User-facing run steps (**Start / Reload**, **Logs**) are defined in **`dartsnut-skill`** — follow that for README and final responses.
 
@@ -26,6 +28,7 @@ Required outputs:
 - `main.py` (mandatory entrypoint)
 - Any required assets/placeholders
 - Short run instructions in a README or final response (per **`dartsnut-skill`** — Dartsnut Chat **Start / Reload** and **Logs**)
+- When the widget has **art-bearing entities**, also: `dartsnut.assets.json` (manifest) and `assets_loader.py` (shared Pillow helper) — schema, layout, and loader contract are defined in **`asset-pipeline`**.
 
 Widget contract (mandatory):
 - `conf.json` must include these top-level keys:

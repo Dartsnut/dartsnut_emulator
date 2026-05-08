@@ -5,13 +5,22 @@ import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import {
   IPCChannels,
   type AgentEvent,
+  type ApplyAssetsRequest,
+  type ApplyAssetsResponse,
+  type BindSlotRequest,
+  type BindSlotResponse,
   type BootstrapState,
+  type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
   type ProjectType,
   type PromptRequest,
   type ProviderSettings,
+  type ReadPreviewRequest,
+  type ReadPreviewResponse,
   type SaveProviderSettingsRequest,
+  type UnbindSlotRequest,
+  type UnbindSlotResponse,
   type WidgetSize
 } from "@dartsnut/shared-ipc";
 import {
@@ -20,7 +29,7 @@ import {
   ProviderClient,
   SessionEngine,
   WorkspacePolicy,
-  loadSkillBundle
+  bundleForTemplateMode
 } from "@dartsnut/agent-runtime";
 import {
   EMULATOR_IPC_CHANNELS,
@@ -29,6 +38,7 @@ import {
   type EmulatorLogEntry,
   type EmulatorStateSnapshot,
 } from "@dartsnut/emulator-protocol";
+import { AssetManager } from "./assetManager";
 
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
@@ -44,6 +54,14 @@ const creatorTemplatePaths = {
   "game-creator": "packages/agent-runtime/skills/game-creator.md",
   "widget-creator": "packages/agent-runtime/skills/widget-creator.md"
 } as const;
+const assetPreprocessScriptRelativePath = "scripts/asset_preprocess.py";
+const assetManager = new AssetManager({
+  pythonExec: () => pythonExec,
+  scriptPath: path.join(repoRoot, assetPreprocessScriptRelativePath),
+  onSnapshot: (snapshot: ManifestSnapshot) => {
+    sendToRenderer(IPCChannels.assetsSubscribeManifest, snapshot);
+  }
+});
 const widgetFontManifestRelativePath = "assets/fonts/widgets/font_manifest.json";
 const emulatorState: EmulatorStateSnapshot = {
   widgetPath: null,
@@ -177,7 +195,9 @@ function isDirectoryEmpty(directoryPath: string): boolean {
   return entries.length === 0;
 }
 
-function resolveCreatorTemplatePath(templateMode: NonNullable<PromptRequest["templateMode"]>): string {
+type CreatorTemplateMode = keyof typeof creatorTemplatePaths;
+
+function resolveCreatorTemplatePath(templateMode: CreatorTemplateMode): string {
   return path.join(repoRoot, creatorTemplatePaths[templateMode]);
 }
 
@@ -197,7 +217,7 @@ function parseConfWidgetSize(size: unknown): WidgetSize | undefined {
 }
 
 function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
-  templateMode: NonNullable<PromptRequest["templateMode"]>;
+  templateMode: CreatorTemplateMode;
   projectType: ProjectType;
   widgetSize?: WidgetSize;
 } | null {
@@ -223,13 +243,40 @@ function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
   return null;
 }
 
+function buildAssetApplierPrompt(request: PromptRequest): string {
+  const apply = request.assetApply ?? { slotIds: [], projectType: "game" };
+  const slotIds = Array.isArray(apply.slotIds) ? apply.slotIds : [];
+  const workspacePath = request.workspacePath ?? workspaceRoot ?? "";
+  const directives = [
+    "You are running in **asset-applier** mode (see `asset-pipeline` skill, Apply mode section).",
+    `Project type: ${apply.projectType}.`,
+    `Workspace path: ${workspacePath}.`,
+    `Slot ids that just changed: ${slotIds.length > 0 ? slotIds.join(", ") : "(none)"}.`,
+    "",
+    "Allowed actions: read `dartsnut.assets.json`, ensure `assets_loader.py` matches the backend snippet for the project type, and switch placeholder draws to `slot.draw(...)` only for the named slot ids.",
+    "Do not scaffold, rename, or restructure files. Do not change layout, fonts, gameplay, or any code unrelated to the named slot ids.",
+    "If the loader is already up-to-date and named slot ids already render through `slot.draw(...)`, return an empty `actions` array and a one-sentence response."
+  ].join("\n");
+  const userPrompt = request.prompt && request.prompt.trim().length > 0
+    ? request.prompt
+    : "Apply the bound assets for the slot ids above by ensuring the loader and call sites are correct.";
+  return [directives, "", "User request:", userPrompt].join("\n");
+}
+
 function buildRoutedPrompt(request: PromptRequest): string {
+  if (request.templateMode === "asset-applier") {
+    return buildAssetApplierPrompt(request);
+  }
+
   const effectiveWorkspacePath =
     typeof request.workspacePath === "string" && request.workspacePath
       ? request.workspacePath
       : workspaceRoot;
 
-  let templateMode = request.templateMode;
+  let templateMode: CreatorTemplateMode | undefined =
+    request.templateMode === "game-creator" || request.templateMode === "widget-creator"
+      ? request.templateMode
+      : undefined;
   let projectType = request.projectType;
   let widgetSize = request.widgetSize;
 
@@ -297,14 +344,8 @@ function resolveAgentRuntimeSkillsDir(): string {
   return existing;
 }
 
-function resolveSkillBundlePrompt(): string {
-  const skillsDir = resolveAgentRuntimeSkillsDir();
-  const corePath = path.join(skillsDir, "dartsnut-skill.md");
-  const displayPath = path.join(skillsDir, "dartsnut-display-mapping.md");
-  if (!fs.existsSync(displayPath)) {
-    throw new Error(`Skill bundle is missing at ${displayPath}`);
-  }
-  return [loadSkillBundle(corePath), loadSkillBundle(displayPath)].join("\n\n---\n\n");
+function resolveSkillBundlePrompt(templateMode?: PromptRequest["templateMode"]): string {
+  return bundleForTemplateMode(resolveAgentRuntimeSkillsDir(), templateMode ?? null);
 }
 
 function getEmulatorWorkspaceRoot(): string {
@@ -610,7 +651,7 @@ function startPythonBridge() {
   });
 }
 
-function buildSession(): SessionEngine {
+function buildSession(templateMode?: PromptRequest["templateMode"]): SessionEngine {
   if (!workspaceRoot) {
     throw new Error("Workspace is not selected.");
   }
@@ -620,7 +661,7 @@ function buildSession(): SessionEngine {
   if (!validation.ok) {
     throw new Error(validation.error);
   }
-  const skillPrompt = resolveSkillBundlePrompt();
+  const skillPrompt = resolveSkillBundlePrompt(templateMode);
   return new SessionEngine({
     provider: new ProviderClient(config),
     workspacePolicy: new WorkspacePolicy(workspaceRoot),
@@ -672,6 +713,7 @@ app.on("before-quit", () => {
   if (bridgeProcess) {
     bridgeProcess.kill();
   }
+  assetManager.stop();
 });
 
 ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());
@@ -752,6 +794,7 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
     lastWidgetDir = selectedPath;
     writeEmulatorState();
   }
+  assetManager.watch(selectedPath);
   return {
     state: getBootstrapState(),
     selectedPath,
@@ -759,9 +802,114 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
   } satisfies PickWorkspaceResponse;
 });
 
+ipcMain.handle(
+  IPCChannels.assetsGetManifest,
+  async (_event: unknown, workspacePath: string): Promise<ManifestSnapshot> => {
+    return assetManager.getSnapshot(workspacePath);
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.assetsBindSlot,
+  async (_event: unknown, request: BindSlotRequest): Promise<BindSlotResponse> => {
+    return assetManager.bindSlot(request);
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.assetsUnbindSlot,
+  async (_event: unknown, request: UnbindSlotRequest): Promise<UnbindSlotResponse> => {
+    return assetManager.unbindSlot(request);
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.assetsReadPreview,
+  async (_event: unknown, request: ReadPreviewRequest): Promise<ReadPreviewResponse> => {
+    if (!request.workspacePath || !request.framePath) {
+      return { ok: false, message: "workspacePath and framePath are required" };
+    }
+    const normalizedRel = request.framePath.replace(/\\/g, "/");
+    if (path.isAbsolute(normalizedRel) || normalizedRel.includes("..")) {
+      return { ok: false, message: "framePath must be a workspace-relative path" };
+    }
+    const absolute = path.resolve(request.workspacePath, normalizedRel);
+    if (!isWithinDirectory(request.workspacePath, absolute)) {
+      return { ok: false, message: "framePath escapes the workspace" };
+    }
+    if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) {
+      return { ok: false, message: "frame file does not exist" };
+    }
+    try {
+      const bytes = fs.readFileSync(absolute);
+      const ext = path.extname(absolute).toLowerCase();
+      const mime = ext === ".gif" ? "image/gif" : "image/png";
+      return { ok: true, dataUrl: `data:${mime};base64,${bytes.toString("base64")}` };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "failed to read frame";
+      return { ok: false, message };
+    }
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.assetsApplyAssets,
+  async (_event: unknown, request: ApplyAssetsRequest): Promise<ApplyAssetsResponse> => {
+    const targetWorkspace = request.workspacePath || workspaceRoot;
+    if (!targetWorkspace || !fs.existsSync(targetWorkspace)) {
+      return { ok: false, reason: "missing_workspace" };
+    }
+    const requestedSlots = Array.isArray(request.slotIds) && request.slotIds.length > 0
+      ? request.slotIds
+      : assetManager.getPendingSlots(targetWorkspace);
+    if (requestedSlots.length === 0) {
+      return { ok: false, reason: "no_pending_changes" };
+    }
+    const confPath = path.join(targetWorkspace, "conf.json");
+    if (!fs.existsSync(confPath)) {
+      return { ok: false, reason: "missing_conf", message: `no conf.json at ${targetWorkspace}` };
+    }
+    let projectType: ProjectType;
+    try {
+      const conf = JSON.parse(fs.readFileSync(confPath, "utf-8")) as { type?: string };
+      projectType = conf.type === "widget" ? "widget" : "game";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "failed to parse conf.json";
+      return { ok: false, reason: "missing_conf", message };
+    }
+    try {
+      const session = buildSession("asset-applier");
+      const prompt = buildRoutedPrompt({
+        prompt: "",
+        templateMode: "asset-applier",
+        workspacePath: targetWorkspace,
+        assetApply: { slotIds: requestedSlots, projectType }
+      });
+      console.log("[agent] runPrompt asset-applier", {
+        slotIds: requestedSlots,
+        projectType,
+        promptChars: prompt.length
+      });
+      await session.runPrompt(prompt, (agentEvent: AgentEvent) => {
+        console.log("[agent-stream]", JSON.stringify(agentEvent));
+        sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
+      });
+      assetManager.clearPending(targetWorkspace, requestedSlots);
+      // Re-emit a snapshot so the UI clears the pending badge.
+      sendToRenderer(IPCChannels.assetsSubscribeManifest, assetManager.getSnapshot(targetWorkspace));
+      return { ok: true, appliedSlotIds: requestedSlots };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "asset-applier run failed";
+      const event: AgentEvent = { type: "error", message, at: Date.now() };
+      sendToRenderer(IPCChannels.subscribeEvents, event);
+      return { ok: false, reason: "unknown", message };
+    }
+  }
+);
+
 ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest) => {
   try {
-    const session = buildSession();
+    const session = buildSession(req.templateMode);
     const prompt = buildRoutedPrompt(req);
     console.log("[agent] runPrompt start", { promptChars: prompt.length });
     await session.runPrompt(prompt, (agentEvent: AgentEvent) => {

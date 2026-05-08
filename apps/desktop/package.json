@@ -60,6 +60,10 @@
         "to": "packages/agent-runtime/skills"
       },
       {
+        "from": "../../scripts/asset_preprocess.py",
+        "to": "scripts/asset_preprocess.py"
+      },
+      {
         "from": "../../PixelDarts.png",
         "to": "PixelDarts.png"
       },

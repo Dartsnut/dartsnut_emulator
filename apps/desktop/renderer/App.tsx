@@ -691,7 +691,7 @@ export function App() {
     if (!bootstrap) {
       return true;
     }
-    return bootstrap.providerStatus !== "ready" || sending;
+    return sending;
   }, [bootstrap, sending]);
 
   function clearIntake() {
@@ -865,6 +865,11 @@ export function App() {
 
   async function handleSend() {
     if (!prompt.trim() || chatDisabled) {
+      return;
+    }
+    if (bootstrap?.providerStatus !== "ready") {
+      postStatus("Provider settings are incomplete. Open Settings and save API key + model, then send again.");
+      setScreen("settings");
       return;
     }
     const current = prompt.trim();

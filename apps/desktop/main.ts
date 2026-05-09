@@ -378,6 +378,42 @@ function sendToRenderer(channel: string, ...args: unknown[]) {
   win.webContents.send(channel, ...(args as [unknown, ...unknown[]]));
 }
 
+function sendBridgeCommandSafe(command: EmulatorCommand): void {
+  if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
+    startPythonBridge();
+  }
+  if (bridgeProcess?.stdin && !bridgeProcess.stdin.destroyed) {
+    bridgeProcess.stdin.write(`${JSON.stringify({ command })}\n`);
+  } else {
+    emulatorState.status = "Bridge unavailable";
+    emulatorState.running = false;
+    emitEmulatorState();
+  }
+}
+
+/** Mirror Python `stop_widget` idle snapshot if stdout lags. */
+function applyIdleEmulatorMainState(): void {
+  emulatorState.widgetPath = null;
+  emulatorState.widgetId = null;
+  emulatorState.widgetType = null;
+  emulatorState.running = false;
+  emulatorState.lastError = undefined;
+  emulatorState.status = "Idle";
+}
+
+function performSessionCleanup(options: { clearWorkspace: boolean }): void {
+  sendBridgeCommandSafe({ type: "stop_widget" });
+  applyIdleEmulatorMainState();
+  if (options.clearWorkspace) {
+    workspaceRoot = null;
+    assetManager.stop();
+    lastWidgetDir = null;
+    writeEmulatorState();
+  }
+  sendToRenderer(IPCChannels.sessionReset);
+  emitEmulatorState();
+}
+
 function emitEmulatorState() {
   sendToRenderer(EMULATOR_IPC_CHANNELS.emulatorState, emulatorState);
 }
@@ -787,6 +823,11 @@ ipcMain.handle(IPCChannels.pickPythonPath, async () => {
   };
 });
 
+ipcMain.handle(IPCChannels.startNewProject, () => {
+  performSessionCleanup({ clearWorkspace: true });
+  return getBootstrapState();
+});
+
 ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: PickWorkspaceRequest) => {
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory", "createDirectory"]
@@ -808,6 +849,7 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
       reason: "non_empty"
     } satisfies PickWorkspaceResponse;
   }
+  performSessionCleanup({ clearWorkspace: false });
   workspaceRoot = selectedPath;
   // Attempt to launch emulator immediately from the selected workspace.
   // If it's not a widget folder, the bridge will emit a clear failure status.

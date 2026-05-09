@@ -206,6 +206,18 @@ class EmulatorCore:
                     raise ValueError("set_params requires object params")
                 self.current_params = params
                 self.state.status = "Params updated"
+            elif action == "stop_widget":
+                self.stop_widget_process()
+                self.current_path = None
+                self.current_params = {}
+                self.config = None
+                self.data_store_path = None
+                self.state.widgetPath = None
+                self.state.widgetId = None
+                self.state.widgetType = None
+                self.state.running = False
+                self.state.lastError = None
+                self.state.status = "Idle"
             elif action == "reload_widget":
                 self.state.lastError = None
                 self.start_widget_process_for_current()

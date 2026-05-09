@@ -10,6 +10,8 @@ interface AssetManagerPanelProps {
   workspacePath: string;
   manifest: AssetManifest | null;
   pendingChangeSlotIds: string[];
+  /** Call before invoking apply-assets agent so streamed events are accepted after session reset. */
+  onAllowAgentIngress?: () => void;
 }
 
 interface InFlightState {
@@ -63,7 +65,8 @@ function formatKindLabel(kind: AssetSlot["kind"]): string {
 export function AssetManagerPanel({
   workspacePath,
   manifest,
-  pendingChangeSlotIds
+  pendingChangeSlotIds,
+  onAllowAgentIngress
 }: AssetManagerPanelProps) {
   const api = window.dartsnutApi;
   const [inFlight, setInFlight] = useState<InFlightState>({ slotId: null, applying: false });
@@ -159,6 +162,7 @@ export function AssetManagerPanel({
     if (!api?.assets || !workspacePath || !hasPendingChanges) {
       return;
     }
+    onAllowAgentIngress?.();
     setInFlight((prev) => ({ ...prev, applying: true }));
     try {
       const result = await api.assets.applyAssets({ workspacePath });

@@ -28,6 +28,7 @@ import {
 
 const api = {
   getBootstrapState: () => ipcRenderer.invoke(IPCChannels.bootstrapState) as Promise<BootstrapState>,
+  startNewProject: () => ipcRenderer.invoke(IPCChannels.startNewProject) as Promise<BootstrapState>,
   pickWorkspace: (request?: PickWorkspaceRequest) =>
     ipcRenderer.invoke(IPCChannels.pickWorkspace, request) as Promise<PickWorkspaceResponse>,
   sendPrompt: (request: PromptRequest) =>
@@ -50,6 +51,11 @@ const api = {
     const handler = (_: unknown, event: AgentEvent) => listener(event);
     ipcRenderer.on(IPCChannels.subscribeEvents, handler);
     return () => ipcRenderer.removeListener(IPCChannels.subscribeEvents, handler);
+  },
+  onSessionReset: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on(IPCChannels.sessionReset, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.sessionReset, handler);
   },
   onPythonRuntimeStatus: (listener: (status: string | null) => void) => {
     const handler = (_: unknown, status: string | null) => listener(status);

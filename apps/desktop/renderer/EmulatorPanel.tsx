@@ -273,6 +273,12 @@ export function EmulatorPanel() {
   }, [logsPaused]);
 
   useEffect(() => {
+    return window.dartsnutApi.onSessionReset(() => {
+      setEmulatorLogs([]);
+    });
+  }, []);
+
+  useEffect(() => {
     if (!zoomOpen) return;
     const latest = latestFrameMetaRef.current;
     if (latest) {

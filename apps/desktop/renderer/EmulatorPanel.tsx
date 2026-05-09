@@ -94,6 +94,16 @@ export function EmulatorPanel() {
     }
   }
 
+  /** Clear last frame and pending work so the preview does not show a stale capture after stop. */
+  function wipePreviewCanvas() {
+    pendingFrameRef.current = null;
+    latestFrameMetaRef.current = null;
+    workerBusyRef.current = false;
+    setDartCoords(Array.from({ length: 12 }, () => null));
+    drawBackgroundOnly(canvasRef.current);
+    drawBackgroundOnly(zoomCanvasRef.current);
+  }
+
   function getGridOverlay(frameWidth: number, frameHeight: number, scaleMultiplier: number) {
     const key = `${frameWidth}x${frameHeight}@${scaleMultiplier}`;
     const cached = gridOverlayCacheRef.current.get(key);
@@ -226,6 +236,9 @@ export function EmulatorPanel() {
 
     const stopState = window.dartsnutApi.onEmulatorState((nextState) => {
       setState(nextState);
+      if (!nextState.running && nextState.widgetPath == null) {
+        wipePreviewCanvas();
+      }
       if (typeof nextState.status === "string" && nextState.status.startsWith("Screenshot captured: ")) {
         setCaptureToast(nextState.status);
         if (captureToastTimerRef.current !== null) {
@@ -275,6 +288,7 @@ export function EmulatorPanel() {
   useEffect(() => {
     return window.dartsnutApi.onSessionReset(() => {
       setEmulatorLogs([]);
+      wipePreviewCanvas();
     });
   }, []);
 

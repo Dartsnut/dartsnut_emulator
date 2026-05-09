@@ -4,6 +4,25 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Dartsnut Agent</title>
+    <script>
+      (function () {
+        var key = "dartsnut-theme";
+        try {
+          var stored = localStorage.getItem(key);
+          if (stored === "dart" || stored === "light") {
+            document.documentElement.dataset.theme = stored;
+            return;
+          }
+        } catch (e) {}
+        try {
+          if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+            document.documentElement.dataset.theme = "light";
+            return;
+          }
+        } catch (e) {}
+        document.documentElement.dataset.theme = "dart";
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

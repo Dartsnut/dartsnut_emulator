@@ -17,8 +17,20 @@ export const IPCChannels = {
   assetsBindSlot: "assets:bind-slot",
   assetsUnbindSlot: "assets:unbind-slot",
   assetsApplyAssets: "assets:apply-assets",
-  assetsReadPreview: "assets:read-preview"
+  assetsReadPreview: "assets:read-preview",
+  /** Renderer invokes for initial sync; main may push updates via `windowChromeInsetsChanged`. */
+  windowChromeInsets: "shell:window-chrome-insets",
+  /** Main → renderer: safe-area around OS window controls (logical px). */
+  windowChromeInsetsChanged: "shell:window-chrome-insets-changed"
 } as const;
+
+/** Padding (logical px) that MUST stay clear of traffic lights / caption overlay. */
+export interface WindowChromeInsets {
+  top: number;
+  left: number;
+  right: number;
+  bottom: number;
+}
 
 export type ProviderStatus = "ready" | "missing_config" | "invalid";
 

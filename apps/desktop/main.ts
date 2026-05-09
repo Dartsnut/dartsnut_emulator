@@ -21,7 +21,8 @@ import {
   type SaveProviderSettingsRequest,
   type UnbindSlotRequest,
   type UnbindSlotResponse,
-  type WidgetSize
+  type WidgetSize,
+  type WindowChromeInsets
 } from "@dartsnut/shared-ipc";
 import {
   loadProviderConfig,
@@ -376,6 +377,88 @@ function sendToRenderer(channel: string, ...args: unknown[]) {
     return;
   }
   win.webContents.send(channel, ...(args as [unknown, ...unknown[]]));
+}
+
+/** Logical px; must match `titleBarOverlay.height` on Windows when overlay is enabled. */
+const WINDOWS_TITLE_BAR_OVERLAY_HEIGHT = 32;
+
+function computeWindowChromeInsets(window: BrowserWindow): WindowChromeInsets {
+  if (window.isDestroyed()) {
+    return { top: 0, left: 0, right: 0, bottom: 0 };
+  }
+  if (window.isFullScreen() || window.isSimpleFullScreen()) {
+    return { top: 0, left: 0, right: 0, bottom: 0 };
+  }
+  /* macOS: title-bar row height (traffic lights + comfortable padding for web chrome). */
+  if (process.platform === "darwin") {
+    return { top: 32, left: 0, right: 0, bottom: 0 };
+  }
+  if (process.platform === "win32") {
+    return { top: WINDOWS_TITLE_BAR_OVERLAY_HEIGHT, left: 0, right: 0, bottom: 0 };
+  }
+  return { top: 0, left: 0, right: 0, bottom: 0 };
+}
+
+function emitWindowChromeInsets(): void {
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+  sendToRenderer(IPCChannels.windowChromeInsetsChanged, computeWindowChromeInsets(win));
+}
+
+/** Last key from `webContents.insertCSS` — remove before re-inserting on resize/fullscreen. */
+let chromeInsetInsertedCssKey: string | undefined;
+
+/**
+ * Shell padding + drag/no-drag via `insertCSS` (Chromium-level).
+ * Drag model: `#root` is draggable; `.left-rail` / `.right-pane` are no-drag so UI works; `.app-bar` is drag again.
+ * On macOS, `html,body { overflow: visible }` — `overflow:hidden` ancestors break `-webkit-app-region: drag`.
+ */
+async function pushWindowChromeInsetAuthorStyle(): Promise<void> {
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+  const i = computeWindowChromeInsets(win);
+  const top = Math.max(0, Math.round(i.top));
+  const left = Math.max(0, Math.round(i.left));
+  const right = Math.max(0, Math.round(i.right));
+  const bottom = Math.max(0, Math.round(i.bottom));
+
+  const isDarwin = process.platform === "darwin";
+
+  let css =
+    `body .app-shell{padding-top:0!important;padding-right:${right}px!important;padding-bottom:${bottom}px!important;padding-left:${left}px!important;overflow:visible!important}` +
+    `:root{--window-control-inset-top:${top}px!important}` +
+    `body .app-shell .left-rail{overflow:visible!important}` +
+    `#root{overflow:visible!important}`;
+
+  if (isDarwin) {
+    css += `html,body{overflow:visible!important}`;
+  }
+
+  /* Window drag: `.window-chrome-drag-strip` only (renderer). Avoid padding-top here — row 1 height uses the CSS var above. */
+
+  if (chromeInsetInsertedCssKey) {
+    try {
+      await win.webContents.removeInsertedCSS(chromeInsetInsertedCssKey);
+    } catch {
+      /* stale key after navigation */
+    }
+    chromeInsetInsertedCssKey = undefined;
+  }
+
+  chromeInsetInsertedCssKey = await win.webContents.insertCSS(css, { cssOrigin: "author" });
+}
+
+function emitChromeInsetsAndPushStyles(): void {
+  void pushWindowChromeInsetAuthorStyle()
+    .then(() => {
+      emitWindowChromeInsets();
+    })
+    .catch((err: unknown) => {
+      console.error("[dartsnut] window chrome insertCSS failed:", err);
+      emitWindowChromeInsets();
+    });
 }
 
 function sendBridgeCommandSafe(command: EmulatorCommand): void {
@@ -746,7 +829,17 @@ async function createWindow() {
     height: 980,
     minWidth: 1320,
     minHeight: 860,
-    backgroundColor: "#0f141b",
+    backgroundColor: "#121212",
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
+    ...(process.platform === "win32"
+      ? {
+          titleBarOverlay: {
+            color: "#121212",
+            symbolColor: "#e0e0e0",
+            height: WINDOWS_TITLE_BAR_OVERLAY_HEIGHT
+          }
+        }
+      : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -760,7 +853,18 @@ async function createWindow() {
     await win.loadFile(path.join(__dirname, "../dist/index.html"));
   }
   win.on("closed", () => {
+    chromeInsetInsertedCssKey = undefined;
     win = null;
+  });
+  win.on("resize", emitChromeInsetsAndPushStyles);
+  win.on("maximize", emitChromeInsetsAndPushStyles);
+  win.on("unmaximize", emitChromeInsetsAndPushStyles);
+  win.on("enter-full-screen", emitChromeInsetsAndPushStyles);
+  win.on("leave-full-screen", emitChromeInsetsAndPushStyles);
+  win.webContents.on("did-finish-load", () => {
+    emitChromeInsetsAndPushStyles();
+    setTimeout(emitChromeInsetsAndPushStyles, 50);
+    setTimeout(emitChromeInsetsAndPushStyles, 300);
   });
   emitEmulatorState();
 }
@@ -782,6 +886,12 @@ app.on("before-quit", () => {
   assetManager.stop();
 });
 
+ipcMain.handle(IPCChannels.windowChromeInsets, (): WindowChromeInsets => {
+  if (!win || win.isDestroyed()) {
+    return { top: 0, left: 0, right: 0, bottom: 0 };
+  }
+  return computeWindowChromeInsets(win);
+});
 ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());
 ipcMain.handle(IPCChannels.getProviderSettings, () => readProviderSettings());
 ipcMain.handle(IPCChannels.getPythonRuntimeStatus, () => pythonRuntimeStatus);

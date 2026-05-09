@@ -22,7 +22,6 @@ const DART_COLORS = Array.from({ length: 12 }, (_, idx) => {
 export function EmulatorPanel() {
   const CANVAS_BASE_WIDTH = 588;
   const CANVAS_BASE_HEIGHT = 800;
-  const SCREEN_CANVAS_GUTTER = 12;
   const bridgeReady = Boolean(window.dartsnutApi?.sendEmulatorCommand);
   const [state, setState] = useState<EmulatorStateSnapshot>(defaultState);
   const [widgetPath, setWidgetPath] = useState("");
@@ -37,15 +36,9 @@ export function EmulatorPanel() {
   const [logsPaused, setLogsPaused] = useState(false);
   const [emulatorLogs, setEmulatorLogs] = useState<UiEmulatorLogEntry[]>([]);
   const [captureToast, setCaptureToast] = useState<string | null>(null);
-  const [canvasDisplaySize, setCanvasDisplaySize] = useState({
-    width: CANVAS_BASE_WIDTH,
-    height: CANVAS_BASE_HEIGHT,
-  });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const zoomCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const logsBodyRef = useRef<HTMLDivElement | null>(null);
-  /** Flex region that absorbs remaining height; canvas scales to this box and panel inner width */
-  const screenSlotRef = useRef<HTMLDivElement | null>(null);
   const frameWorkerRef = useRef<Worker | null>(null);
   const workerBusyRef = useRef(false);
   const pendingFrameRef = useRef<EmulatorFrame | null>(null);
@@ -302,31 +295,6 @@ export function EmulatorPanel() {
   }, [zoomOpen]);
 
   useEffect(() => {
-    const slot = screenSlotRef.current;
-    if (!slot) return;
-    const updateDisplaySize = () => {
-      const slotStyles = window.getComputedStyle(slot);
-      const horizontalPadding =
-        parseFloat(slotStyles.paddingLeft || "0") + parseFloat(slotStyles.paddingRight || "0");
-      const verticalPadding =
-        parseFloat(slotStyles.paddingTop || "0") + parseFloat(slotStyles.paddingBottom || "0");
-      // Reserve a fixed inset on all sides so the canvas never touches slot edges.
-      const maxW = Math.max(1, slot.clientWidth - horizontalPadding - SCREEN_CANVAS_GUTTER * 2);
-      const maxH = Math.max(1, slot.clientHeight - verticalPadding - SCREEN_CANVAS_GUTTER * 2);
-      const scale = Math.min(maxW / CANVAS_BASE_WIDTH, maxH / CANVAS_BASE_HEIGHT);
-      const width = Math.min(maxW, CANVAS_BASE_WIDTH * scale);
-      const height = Math.min(maxH, CANVAS_BASE_HEIGHT * scale);
-      setCanvasDisplaySize((prev) =>
-        Math.abs(prev.width - width) < 0.25 && Math.abs(prev.height - height) < 0.25 ? prev : { width, height },
-      );
-    };
-    updateDisplaySize();
-    const observer = new ResizeObserver(() => updateDisplaySize());
-    observer.observe(slot);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
@@ -479,13 +447,12 @@ export function EmulatorPanel() {
         </header>
       ) : null}
       <div className="emulator-canvas">
-        <div className="emulator-screen-slot" ref={screenSlotRef}>
+        <div className="emulator-screen-slot">
           <canvas
             ref={canvasRef}
             className="screen-canvas"
             width={CANVAS_BASE_WIDTH}
             height={CANVAS_BASE_HEIGHT}
-            style={{ width: `${canvasDisplaySize.width}px`, height: `${canvasDisplaySize.height}px` }}
             onContextMenu={(e) => e.preventDefault()}
             onMouseDown={(event) => {
               if (!bridgeReady) return;

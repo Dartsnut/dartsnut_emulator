@@ -162,6 +162,8 @@ export function EmulatorPanel() {
       ctx.drawImage(bitmap, 0, 128, 64, 32, 123 * sx, 601 * sx, 342 * sx, 176 * sx);
     } else if (frame.width === 64 && frame.height === 32) {
       ctx.drawImage(bitmap, 0, 0, 64, 32, 123 * sx, 601 * sx, 342 * sx, 176 * sx);
+    } else if (frame.width === 128 && frame.height === 128) {
+      ctx.drawImage(bitmap, 0, 0, 128, 128, 38 * sx, 38 * sx, 512 * sx, 512 * sx);
     } else {
       ctx.drawImage(bitmap, 0, 0, frame.width, frame.height, 38 * sx, 38 * sx, 512 * sx, 512 * sx);
     }
@@ -294,6 +296,8 @@ export function EmulatorPanel() {
           }
         }
       }
+    } else {
+      drawBackgroundOnly(zoomCanvasRef.current);
     }
   }, [zoomOpen]);
 

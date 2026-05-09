@@ -500,56 +500,135 @@ export function EmulatorPanel() {
       ) : null}
       <div className="emulator-canvas">
         <div className="emulator-screen-slot">
-          <canvas
-            ref={canvasRef}
-            className="screen-canvas"
-            width={CANVAS_BASE_WIDTH}
-            height={CANVAS_BASE_HEIGHT}
-            onContextMenu={(e) => e.preventDefault()}
-            onMouseDown={(event) => {
-              if (!bridgeReady) return;
-              const coord = toCanvasCoord(event);
-              if (!coord) return;
-              const dartCoord = toDartCoord(coord.x, coord.y);
-              if (!dartCoord) return;
-              if (event.button === 0) {
-                const index = currentDartIndexRef.current;
-                void window.dartsnutApi.sendEmulatorCommand({
-                  type: "throw_dart",
-                  index,
-                  x: dartCoord.x,
-                  y: dartCoord.y,
-                });
-                setDartCoords((prev) => {
-                  const next = [...prev];
-                  next[index] = { x: dartCoord.x, y: dartCoord.y };
-                  return next;
-                });
-              } else if (event.button === 2) {
-                const now = Date.now();
-                if (now - lastRightClickMsRef.current < 500) {
-                  void window.dartsnutApi.sendEmulatorCommand({ type: "clear_darts" });
-                  setDartCoords(Array.from({ length: 12 }, () => null));
-                  lastRightClickMsRef.current = now;
-                  return;
-                }
-                const selectedIndex = currentDartIndexRef.current;
-                setDartCoords((prev) => {
-                  const selected = prev[selectedIndex];
-                  if (!selected) return prev;
+          <div className="emulator-screen-frame">
+            <canvas
+              ref={canvasRef}
+              className="screen-canvas"
+              width={CANVAS_BASE_WIDTH}
+              height={CANVAS_BASE_HEIGHT}
+              onContextMenu={(e) => e.preventDefault()}
+              onMouseDown={(event) => {
+                if (!bridgeReady) return;
+                const coord = toCanvasCoord(event);
+                if (!coord) return;
+                const dartCoord = toDartCoord(coord.x, coord.y);
+                if (!dartCoord) return;
+                if (event.button === 0) {
+                  const index = currentDartIndexRef.current;
                   void window.dartsnutApi.sendEmulatorCommand({
-                    type: "remove_dart_at",
-                    x: selected.x,
-                    y: selected.y,
+                    type: "throw_dart",
+                    index,
+                    x: dartCoord.x,
+                    y: dartCoord.y,
                   });
-                  const next = [...prev];
-                  next[selectedIndex] = null;
-                  return next;
-                });
-                lastRightClickMsRef.current = now;
-              }
-            }}
-          />
+                  setDartCoords((prev) => {
+                    const next = [...prev];
+                    next[index] = { x: dartCoord.x, y: dartCoord.y };
+                    return next;
+                  });
+                } else if (event.button === 2) {
+                  const now = Date.now();
+                  if (now - lastRightClickMsRef.current < 500) {
+                    void window.dartsnutApi.sendEmulatorCommand({ type: "clear_darts" });
+                    setDartCoords(Array.from({ length: 12 }, () => null));
+                    lastRightClickMsRef.current = now;
+                    return;
+                  }
+                  const selectedIndex = currentDartIndexRef.current;
+                  setDartCoords((prev) => {
+                    const selected = prev[selectedIndex];
+                    if (!selected) return prev;
+                    void window.dartsnutApi.sendEmulatorCommand({
+                      type: "remove_dart_at",
+                      x: selected.x,
+                      y: selected.y,
+                    });
+                    const next = [...prev];
+                    next[selectedIndex] = null;
+                    return next;
+                  });
+                  lastRightClickMsRef.current = now;
+                }
+              }}
+            />
+            <div className="state-line">
+              <span>{state.running ? "Running" : "Stopped"}</span>
+              <span>
+                {runningTypeStatus ??
+                  (state.status.startsWith("Screenshot captured: ") ? "Screenshot captured" : state.status)}
+              </span>
+              <span>FPS C{captureFps} / R{renderFps}</span>
+            </div>
+          </div>
+          <div className="emulator-toolbar emulator-controls" role="toolbar" aria-label="Emulator actions">
+            <button
+              type="button"
+              disabled={!bridgeReady || !widgetPath.trim()}
+              onClick={() => void applyWidgetPathAndReload(widgetPath)}
+              aria-label="Start or reload"
+              title="Start / Reload"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36M20.49 15a9 9 0 01-14.85 3.36"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              disabled={!bridgeReady}
+              onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "capture_screenshot" })}
+              aria-label="Capture screenshot"
+              title="Capture screenshot"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"
+                />
+                <circle cx="12" cy="13" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
+              </svg>
+            </button>
+            <button type="button" onClick={() => setZoomOpen(true)} aria-label="Zoom 2x" title="Zoom 2x">
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <circle cx="11" cy="11" r="8" fill="none" stroke="currentColor" strokeWidth="2" />
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M21 21l-4.35-4.35M11 8v6M8 11h6"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => setLogsOpen((prev) => !prev)}
+              aria-label={logsOpen ? "Hide Python logs" : "Show Python logs"}
+              title={logsOpen ? "Hide logs" : "Logs"}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"
+                />
+              </svg>
+            </button>
+          </div>
         </div>
         {showParamsPanel ? (
           <div className="params-panel">
@@ -601,29 +680,8 @@ export function EmulatorPanel() {
             })}
           </div>
         ) : null}
-        <div className="state-line">
-          <span>{state.running ? "Running" : "Stopped"}</span>
-          <span>
-            {runningTypeStatus ??
-              (state.status.startsWith("Screenshot captured: ") ? "Screenshot captured" : state.status)}
-          </span>
-          <span>FPS C{captureFps} / R{renderFps}</span>
-        </div>
+        <div className="emulator-deploy-placeholder">deploy to machine coming soon..</div>
         {captureToast ? <div className="capture-toast">{captureToast}</div> : null}
-      </div>
-      <div className="emulator-toolbar emulator-controls">
-        <button disabled={!bridgeReady || !widgetPath.trim()} onClick={() => void applyWidgetPathAndReload(widgetPath)}>
-          Start / Reload
-        </button>
-        <button disabled={!bridgeReady} onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "capture_screenshot" })}>
-          Capture
-        </button>
-        <button type="button" onClick={() => setZoomOpen(true)}>
-          Zoom 2x
-        </button>
-        <button type="button" onClick={() => setLogsOpen((prev) => !prev)}>
-          {logsOpen ? "Hide Logs" : "Logs"}
-        </button>
       </div>
       {zoomOpen ? (
         <div className="zoom-popover-backdrop" onClick={() => setZoomOpen(false)} role="presentation">

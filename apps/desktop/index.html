@@ -9,7 +9,14 @@
         var key = "dartsnut-theme";
         try {
           var stored = localStorage.getItem(key);
-          if (stored === "dart" || stored === "light") {
+          if (stored === "dart") {
+            try {
+              localStorage.setItem(key, "dark");
+            } catch (e2) {}
+            document.documentElement.dataset.theme = "dark";
+            return;
+          }
+          if (stored === "dark" || stored === "light") {
             document.documentElement.dataset.theme = stored;
             return;
           }
@@ -20,7 +27,7 @@
             return;
           }
         } catch (e) {}
-        document.documentElement.dataset.theme = "dart";
+        document.documentElement.dataset.theme = "dark";
       })();
     </script>
   </head>

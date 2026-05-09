@@ -1,4 +1,4 @@
-/* Semantic tokens: dart defaults on :root; light overrides on [data-theme="light"] */
+/* Semantic tokens: dark defaults on :root; light overrides on [data-theme="light"] */
 
 :root {
   color-scheme: dark;

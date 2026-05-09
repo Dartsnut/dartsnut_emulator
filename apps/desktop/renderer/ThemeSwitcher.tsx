@@ -18,7 +18,7 @@ export function ThemeSwitcher({ value, onChange, id, className }: ThemeSwitcherP
         onChange={(event) => onChange(event.target.value as ThemeId)}
         aria-label="Appearance"
       >
-        <option value="dart">Dart</option>
+        <option value="dark">Dark</option>
         <option value="light">Light</option>
       </select>
     </label>
@@ -31,17 +31,17 @@ interface ThemeSwitcherIconProps {
   id?: string;
 }
 
-/** Icon-only control for the window chrome band — cycles Dart ↔ Light. */
+/** Icon-only control for the window chrome band — cycles Dark ↔ Light. */
 export function ThemeSwitcherIcon({ value, onChange, id }: ThemeSwitcherIconProps) {
-  const label = value === "light" ? "Light theme (click for Dart)" : "Dart theme (click for Light)";
+  const label = value === "light" ? "Light theme (click for Dark)" : "Dark theme (click for Light)";
   return (
     <button
       type="button"
       id={id}
       className="theme-switcher-icon-btn"
       aria-label={label}
-      title={value === "light" ? "Switch to Dart theme" : "Switch to Light theme"}
-      onClick={() => onChange(value === "dart" ? "light" : "dart")}
+      title={value === "light" ? "Switch to Dark theme" : "Switch to Light theme"}
+      onClick={() => onChange(value === "dark" ? "light" : "dark")}
     >
       {value === "light" ? <SunIcon /> : <MoonIcon />}
     </button>

@@ -1,20 +1,37 @@
 /** Must match inline script in apps/desktop/index.html */
 export const THEME_STORAGE_KEY = "dartsnut-theme";
 
-export type ThemeId = "dart" | "light";
+export type ThemeId = "dark" | "light";
 
-const VALID: Record<string, true> = { dart: true, light: true };
+const VALID: Record<string, true> = { dark: true, light: true };
+
+/** Legacy stored value before the theme id was renamed from `dart` to `dark`. */
+const LEGACY_DARK_THEME_ID = "dart";
+
+function normalizeLegacyThemeInStorage(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    if (window.localStorage.getItem(THEME_STORAGE_KEY) === LEGACY_DARK_THEME_ID) {
+      window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 export function isThemeId(value: string): value is ThemeId {
   return VALID[value] === true;
 }
 
-/** No stored value: light OS → light theme, else dart */
+/** No stored value: light OS → light theme, else dark */
 export function resolveThemeFromEnvironment(): ThemeId {
   if (typeof window === "undefined") {
-    return "dart";
+    return "dark";
   }
   try {
+    normalizeLegacyThemeInStorage();
     const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
     if (raw && isThemeId(raw)) {
       return raw;
@@ -31,7 +48,7 @@ export function resolveThemeFromEnvironment(): ThemeId {
       /* ignore */
     }
   }
-  return "dart";
+  return "dark";
 }
 
 export function getStoredTheme(): ThemeId | null {
@@ -39,6 +56,7 @@ export function getStoredTheme(): ThemeId | null {
     return null;
   }
   try {
+    normalizeLegacyThemeInStorage();
     const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
     return raw && isThemeId(raw) ? raw : null;
   } catch {

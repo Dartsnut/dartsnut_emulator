@@ -16,7 +16,8 @@ import {
   type ReadPreviewResponse,
   type SaveProviderSettingsRequest,
   type UnbindSlotRequest,
-  type UnbindSlotResponse
+  type UnbindSlotResponse,
+  type WindowChromeInsets
 } from "@dartsnut/shared-ipc";
 import {
   EMULATOR_IPC_CHANNELS,
@@ -28,6 +29,8 @@ import {
 
 const api = {
   getBootstrapState: () => ipcRenderer.invoke(IPCChannels.bootstrapState) as Promise<BootstrapState>,
+  getWindowChromeInsets: () =>
+    ipcRenderer.invoke(IPCChannels.windowChromeInsets) as Promise<WindowChromeInsets>,
   startNewProject: () => ipcRenderer.invoke(IPCChannels.startNewProject) as Promise<BootstrapState>,
   pickWorkspace: (request?: PickWorkspaceRequest) =>
     ipcRenderer.invoke(IPCChannels.pickWorkspace, request) as Promise<PickWorkspaceResponse>,
@@ -51,6 +54,11 @@ const api = {
     const handler = (_: unknown, event: AgentEvent) => listener(event);
     ipcRenderer.on(IPCChannels.subscribeEvents, handler);
     return () => ipcRenderer.removeListener(IPCChannels.subscribeEvents, handler);
+  },
+  onWindowChromeInsets: (listener: (insets: WindowChromeInsets) => void) => {
+    const handler = (_: unknown, insets: WindowChromeInsets) => listener(insets);
+    ipcRenderer.on(IPCChannels.windowChromeInsetsChanged, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.windowChromeInsetsChanged, handler);
   },
   onSessionReset: (listener: () => void) => {
     const handler = () => listener();

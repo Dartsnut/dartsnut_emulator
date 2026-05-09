@@ -14,6 +14,9 @@ import type {
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { EmulatorPanel } from "./EmulatorPanel";
 import { highlightDiffLine, languageFromPath } from "./highlightDiffLine";
+import { ThemeSwitcherIcon } from "./ThemeSwitcher";
+import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
+import { useWindowChromeInsets } from "./useWindowChromeInsets";
 
 type RightPaneTab = "emulator" | "assets";
 
@@ -473,6 +476,18 @@ function toEntry(event: AgentEvent, seq: number): TimelineEntry {
 }
 
 export function App() {
+  useWindowChromeInsets();
+
+  useLayoutEffect(() => {
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+    const platform = /Macintosh|Mac OS X/i.test(ua)
+      ? "darwin"
+      : /Windows/i.test(ua)
+        ? "win32"
+        : "linux";
+    document.documentElement.dataset.platform = platform;
+  }, []);
+
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
   const [entries, setEntries] = useState<TimelineEntry[]>([
     { id: "greeting-initial", role: "agent", text: GREETING_TEXT, streaming: false }
@@ -514,8 +529,17 @@ export function App() {
   const [assetManifest, setAssetManifest] = useState<AssetManifest | null>(null);
   const [pendingChangeSlotIds, setPendingChangeSlotIds] = useState<string[]>([]);
   const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>("emulator");
+  const [theme, setTheme] = useState<ThemeId>(() => resolveThemeFromEnvironment());
 
   const api = window.dartsnutApi;
+
+  useLayoutEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
+  function handleThemeChange(next: ThemeId) {
+    setTheme(next);
+  }
 
   function clearPendingReplyIndicator() {
     const pendingId = pendingReplyIdRef.current;
@@ -950,63 +974,115 @@ export function App() {
 
   return (
     <main className="app-shell">
-      {screen === "main" ? (
-        <section className="left-rail">
-          <div className="app-top">
-            <header className="app-bar" role="banner">
-              <div className="app-bar-brand">
-                <div className="app-bar-logo" aria-hidden>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" opacity="0.35" />
-                    <circle cx="12" cy="12" r="5.5" stroke="currentColor" strokeWidth="1.5" opacity="0.55" />
-                    <circle cx="12" cy="12" r="2.25" fill="currentColor" />
-                  </svg>
-                </div>
-                <h1
-                  className="app-bar-title"
-                  title={
-                    bootstrap?.workspaceRoot ??
-                    "Embedded assistant for pygame + pydartsnut"
-                  }
-                >
+      <header className="window-chrome-band" role="banner">
+        {screen === "main" ? (
+          <>
+            <div className="window-chrome-band__leading">
+              <h1
+                className="window-chrome-band__title"
+                title={
+                  bootstrap?.workspaceRoot ??
+                  "Embedded assistant for pygame + pydartsnut"
+                }
+              >
+                <span className="window-chrome-band__title-text">
                   {bootstrap?.workspaceRoot
                     ? workspaceFolderBasename(bootstrap.workspaceRoot)
                     : "Dartsnut Agent"}
-                </h1>
-              </div>
-              <div className="app-bar-actions" role="toolbar" aria-label="Project actions">
-                <button
-                  type="button"
-                  className="app-bar-new-project-btn"
-                  onClick={() => void handleStartNewProject()}
-                  disabled={sending}
-                  aria-label="Start new project"
-                  title="Start new project"
-                >
-                  New project
-                </button>
-                <button
-                  type="button"
-                  className="app-bar-workspace-btn"
-                  onClick={() => void handlePickWorkspace()}
-                  disabled={sending}
-                  aria-label="Choose workspace folder"
-                  title="Choose workspace folder"
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden>
-                    <path
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
-                    />
-                    <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
-                  </svg>
-                </button>
-              </div>
-            </header>
+                </span>
+              </h1>
+              <button
+                type="button"
+                className="chrome-icon-btn"
+                onClick={() => void handleStartNewProject()}
+                disabled={sending}
+                aria-label="Start new project"
+                title="Start new project"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"
+                  />
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M14 2v6h6M12 11v6M9 14h6"
+                  />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="chrome-icon-btn"
+                onClick={() => void handlePickWorkspace()}
+                disabled={sending}
+                aria-label="Choose workspace folder"
+                title="Choose workspace folder"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
+                  />
+                  <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
+                </svg>
+              </button>
+            </div>
+            <div className="window-chrome-band__drag-spacer" aria-hidden />
+            <div className="window-chrome-band__trailing">
+              <ThemeSwitcherIcon id="main-theme-icon" value={theme} onChange={handleThemeChange} />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="window-chrome-band__leading">
+              <button
+                type="button"
+                className="chrome-icon-btn"
+                onClick={() => {
+                  setScreen("main");
+                  setProviderSettingsError(null);
+                  setProviderSettingsNotice(null);
+                }}
+                aria-label="Back to main view"
+                title="Back to main view"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M15 18l-6-6 6-6"
+                  />
+                </svg>
+              </button>
+              <h1 className="window-chrome-band__title window-chrome-band__title--settings">
+                <span className="window-chrome-band__title-text">Settings</span>
+              </h1>
+            </div>
+            <div className="window-chrome-band__drag-spacer" aria-hidden />
+            <div className="window-chrome-band__trailing">
+              <ThemeSwitcherIcon id="settings-theme-icon" value={theme} onChange={handleThemeChange} />
+            </div>
+          </>
+        )}
+      </header>
+      {screen === "main" ? (
+        <section className="left-rail">
+          <div className="app-top">
             <div className="app-meta">
               {runtimeError ? <div className="runtime-error">{runtimeError}</div> : null}
               {pythonRuntimeStatus ? <div className="runtime-status">{pythonRuntimeStatus}</div> : null}
@@ -1200,22 +1276,6 @@ export function App() {
       ) : (
         <section className="left-rail settings-screen">
           <div className="app-top">
-            <header className="app-bar" role="banner">
-              <h1 className="app-bar-title">Settings</h1>
-              <button
-                type="button"
-                className="app-bar-workspace-btn"
-                onClick={() => {
-                  setScreen("main");
-                  setProviderSettingsError(null);
-                  setProviderSettingsNotice(null);
-                }}
-                aria-label="Back to main view"
-                title="Back to main view"
-              >
-                Back
-              </button>
-            </header>
             <div className="app-meta">
               {providerSettingsError ? <div className="runtime-error">{providerSettingsError}</div> : null}
               {providerSettingsNotice ? <div className="settings-notice">{providerSettingsNotice}</div> : null}

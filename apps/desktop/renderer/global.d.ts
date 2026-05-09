@@ -14,7 +14,8 @@ import type {
   ReadPreviewResponse,
   SaveProviderSettingsRequest,
   UnbindSlotRequest,
-  UnbindSlotResponse
+  UnbindSlotResponse,
+  WindowChromeInsets
 } from "@dartsnut/shared-ipc";
 import type {
   EmulatorCommand,
@@ -27,6 +28,7 @@ declare global {
   interface Window {
     dartsnutApi: {
       getBootstrapState: () => Promise<BootstrapState>;
+      getWindowChromeInsets: () => Promise<WindowChromeInsets>;
       startNewProject: () => Promise<BootstrapState>;
       pickWorkspace: (request?: PickWorkspaceRequest) => Promise<PickWorkspaceResponse>;
       sendPrompt: (request: PromptRequest) => Promise<{ ok: boolean }>;
@@ -36,6 +38,7 @@ declare global {
       pickPythonPath: () => Promise<{ accepted: boolean; selectedPath: string | null; error?: string }>;
       saveProviderSettings: (request: SaveProviderSettingsRequest) => Promise<ProviderSettings>;
       onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
+      onWindowChromeInsets: (listener: (insets: WindowChromeInsets) => void) => () => void;
       onSessionReset: (listener: () => void) => () => void;
       onPythonRuntimeStatus: (listener: (status: string | null) => void) => () => void;
       sendEmulatorCommand: (command: EmulatorCommand) => Promise<{ ok: boolean }>;

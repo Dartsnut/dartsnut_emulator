@@ -94,6 +94,44 @@ button.app-bar-workspace-btn:focus-visible {
   box-shadow: 0 0 0 2px #0f1624, 0 0 0 4px #4b6ea9;
 }
 
+.app-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+button.app-bar-new-project-btn {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0 14px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: #93a7c4;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+button.app-bar-new-project-btn:hover:enabled {
+  color: #c8d9f0;
+  border-color: #466486;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+button.app-bar-new-project-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #0f1624, 0 0 0 4px #4b6ea9;
+}
+
+button.app-bar-new-project-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .app-meta {
   display: flex;
   flex-direction: column;

@@ -27,6 +27,7 @@ declare global {
   interface Window {
     dartsnutApi: {
       getBootstrapState: () => Promise<BootstrapState>;
+      startNewProject: () => Promise<BootstrapState>;
       pickWorkspace: (request?: PickWorkspaceRequest) => Promise<PickWorkspaceResponse>;
       sendPrompt: (request: PromptRequest) => Promise<{ ok: boolean }>;
       getProviderSettings: () => Promise<ProviderSettings>;
@@ -35,6 +36,7 @@ declare global {
       pickPythonPath: () => Promise<{ accepted: boolean; selectedPath: string | null; error?: string }>;
       saveProviderSettings: (request: SaveProviderSettingsRequest) => Promise<ProviderSettings>;
       onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
+      onSessionReset: (listener: () => void) => () => void;
       onPythonRuntimeStatus: (listener: (status: string | null) => void) => () => void;
       sendEmulatorCommand: (command: EmulatorCommand) => Promise<{ ok: boolean }>;
       pickWidgetPath: () => Promise<{ path: string | null }>;

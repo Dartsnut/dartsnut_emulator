@@ -497,6 +497,8 @@ export function App() {
   const pendingReplyIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
+  /** After session reset / new project, discard agent stream events until the next user send. */
+  const discardAgentEventsRef = useRef(false);
   const timelineRef = useRef<HTMLElement | null>(null);
   const composerPillRef = useRef<HTMLDivElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -596,6 +598,9 @@ export function App() {
       setPythonRuntimeStatus(null);
     });
     const unsubscribe = api.onAgentEvent((event) => {
+      if (discardAgentEventsRef.current) {
+        return;
+      }
       if (import.meta.env.DEV) {
         if (event.type === "stream") {
           console.debug("[agent-stream]", { type: "stream", deltaChars: event.delta.length, at: event.at });
@@ -702,6 +707,26 @@ export function App() {
     setIntakeStep(null);
   }
 
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+    return api.onSessionReset(() => {
+      discardAgentEventsRef.current = true;
+      activeStreamEntryIdRef.current = null;
+      pendingReplyIdRef.current = null;
+      eventSeqRef.current = 0;
+      clearIntake();
+      setSessionTemplateMode(null);
+      setSessionWidgetSize(null);
+      setSessionProjectType(null);
+      setPrompt("");
+      setPendingPrompt(null);
+      setRuntimeError(null);
+      setEntries([{ id: `greeting-${Date.now()}`, role: "agent", text: GREETING_TEXT, streaming: false }]);
+    });
+  }, [api]);
+
   function postStatus(text: string) {
     setEntries((prev) => [...prev, { id: `status-${Date.now()}`, role: "status", text }]);
   }
@@ -724,6 +749,7 @@ export function App() {
   }
 
   async function submitPrompt(request: PromptRequest) {
+    discardAgentEventsRef.current = false;
     const pendingReplyId = `agent-pending-${Date.now()}`;
     pendingReplyIdRef.current = pendingReplyId;
     setEntries((prev) => [...prev, { id: pendingReplyId, role: "status", text: "Agent is thinking..." }]);
@@ -778,14 +804,31 @@ export function App() {
   }
 
   async function handlePickWorkspace() {
-    if (!api) {
+    if (!api || sending) {
       return;
     }
     const updated = await api.pickWorkspace();
     setBootstrap(updated.state);
-    setSessionTemplateMode(null);
-    setSessionWidgetSize(null);
-    setSessionProjectType(null);
+  }
+
+  async function handleStartNewProject() {
+    if (!api || sending) {
+      return;
+    }
+    const confirmed = window.confirm(
+      "Start a new project?\n\n" +
+        "This will leave the current workspace unset, stop the emulator, clear emulator logs, and clear this chat.",
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      const refreshed = await api.startNewProject();
+      setBootstrap(refreshed);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Could not start a new project.";
+      setRuntimeError(message);
+    }
   }
 
   useEffect(() => {
@@ -918,25 +961,38 @@ export function App() {
                   ? workspaceFolderBasename(bootstrap.workspaceRoot)
                   : "Dartsnut Agent"}
               </h1>
-              <button
-                type="button"
-                className="app-bar-workspace-btn"
-                onClick={() => void handlePickWorkspace()}
-                aria-label="Choose workspace folder"
-                title="Choose workspace folder"
-              >
-                <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden>
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
-                  />
-                  <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
-                </svg>
-              </button>
+              <div className="app-bar-actions">
+                <button
+                  type="button"
+                  className="app-bar-new-project-btn"
+                  onClick={() => void handleStartNewProject()}
+                  disabled={sending}
+                  aria-label="Start new project"
+                  title="Start new project"
+                >
+                  New project
+                </button>
+                <button
+                  type="button"
+                  className="app-bar-workspace-btn"
+                  onClick={() => void handlePickWorkspace()}
+                  disabled={sending}
+                  aria-label="Choose workspace folder"
+                  title="Choose workspace folder"
+                >
+                  <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden>
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
+                    />
+                    <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
+                  </svg>
+                </button>
+              </div>
             </header>
             <div className="app-meta">
               {runtimeError ? <div className="runtime-error">{runtimeError}</div> : null}
@@ -1258,6 +1314,9 @@ export function App() {
                 workspacePath={bootstrap.workspaceRoot}
                 manifest={assetManifest}
                 pendingChangeSlotIds={pendingChangeSlotIds}
+                onAllowAgentIngress={() => {
+                  discardAgentEventsRef.current = false;
+                }}
               />
             </div>
           ) : null}

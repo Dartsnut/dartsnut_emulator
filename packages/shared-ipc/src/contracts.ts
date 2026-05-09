@@ -1,6 +1,9 @@
 export const IPCChannels = {
   bootstrapState: "agent:bootstrap-state",
   pickWorkspace: "agent:pick-workspace",
+  startNewProject: "agent:start-new-project",
+  /** Main → renderer: clear chat/logs/session UI (bootstrap comes from invoke return values). */
+  sessionReset: "agent:session-reset",
   sendPrompt: "agent:send-prompt",
   subscribeEvents: "agent:subscribe-events",
   getProviderSettings: "agent:get-provider-settings",

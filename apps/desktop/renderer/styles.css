@@ -750,55 +750,6 @@ button.app-bar-new-project-btn:disabled {
   gap: 8px;
 }
 
-.composer-visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.composer-pill-model-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-.composer-pill-model-wrap::after {
-  content: "";
-  position: absolute;
-  right: 2px;
-  top: 50%;
-  width: 0;
-  height: 0;
-  margin-top: -2px;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid rgba(200, 210, 230, 0.55);
-  pointer-events: none;
-}
-
-.composer-pill-model {
-  appearance: none;
-  margin: 0;
-  padding: 3px 20px 3px 2px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: rgba(200, 210, 230, 0.85);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.composer-pill-model:focus {
-  outline: none;
-}
-
 .composer-pill-send {
   flex-shrink: 0;
   width: 30px;

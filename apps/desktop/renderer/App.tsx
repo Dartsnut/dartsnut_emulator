@@ -954,15 +954,27 @@ export function App() {
         <section className="left-rail">
           <div className="app-top">
             <header className="app-bar" role="banner">
-              <h1
-                className="app-bar-title"
-                title={bootstrap?.workspaceRoot ?? "Embedded assistant for pygame + pydartsnut"}
-              >
-                {bootstrap?.workspaceRoot
-                  ? workspaceFolderBasename(bootstrap.workspaceRoot)
-                  : "Dartsnut Agent"}
-              </h1>
-              <div className="app-bar-actions">
+              <div className="app-bar-brand">
+                <div className="app-bar-logo" aria-hidden>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" opacity="0.35" />
+                    <circle cx="12" cy="12" r="5.5" stroke="currentColor" strokeWidth="1.5" opacity="0.55" />
+                    <circle cx="12" cy="12" r="2.25" fill="currentColor" />
+                  </svg>
+                </div>
+                <h1
+                  className="app-bar-title"
+                  title={
+                    bootstrap?.workspaceRoot ??
+                    "Embedded assistant for pygame + pydartsnut"
+                  }
+                >
+                  {bootstrap?.workspaceRoot
+                    ? workspaceFolderBasename(bootstrap.workspaceRoot)
+                    : "Dartsnut Agent"}
+                </h1>
+              </div>
+              <div className="app-bar-actions" role="toolbar" aria-label="Project actions">
                 <button
                   type="button"
                   className="app-bar-new-project-btn"
@@ -981,7 +993,7 @@ export function App() {
                   aria-label="Choose workspace folder"
                   title="Choose workspace folder"
                 >
-                  <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden>
+                  <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden>
                     <path
                       fill="none"
                       stroke="currentColor"

@@ -27,9 +27,11 @@ body {
 }
 
 .left-rail {
+  --rail-pad-x: 20px;
+  --rail-pad-top: 16px;
   height: 100%;
   min-height: 0;
-  padding: 16px 20px 20px;
+  padding: var(--rail-pad-top) var(--rail-pad-x) 20px;
   display: grid;
   grid-template-rows: auto 1fr auto;
   gap: 14px;
@@ -48,20 +50,58 @@ body {
 .app-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   min-height: 44px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  /* Bleed into rail top padding so the highlight reaches the window content edge */
+  margin-top: calc(-1 * var(--rail-pad-top));
+  margin-left: calc(-1 * var(--rail-pad-x));
+  margin-right: calc(-1 * var(--rail-pad-x));
+  padding-top: var(--rail-pad-top);
+  padding-bottom: 14px;
+  padding-left: var(--rail-pad-x);
+  padding-right: var(--rail-pad-x);
+  border-bottom: 1px solid transparent;
+  background: linear-gradient(
+    180deg,
+    rgba(118, 158, 224, 0.14) 0%,
+    rgba(255, 255, 255, 0.035) 42%,
+    rgba(255, 255, 255, 0.06) 100%
+  );
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.app-bar-brand {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.app-bar-logo {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #e8eef9;
+  background: linear-gradient(145deg, rgba(107, 143, 212, 0.22) 0%, rgba(39, 32, 62, 0.85) 100%);
+  border: 1px solid rgba(107, 143, 212, 0.28);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 4px 14px rgba(0, 0, 0, 0.25);
 }
 
 .app-bar-title {
   flex: 1;
   margin: 0;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1.25;
-  color: #f0f4fc;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: #fafbff;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -75,23 +115,24 @@ button.app-bar-workspace-btn {
   justify-content: center;
   margin: 0;
   padding: 0;
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  border: 1px solid #354a63;
-  background: rgba(255, 255, 255, 0.06);
-  color: #c8d9f0;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+  color: #b8c9e4;
   cursor: pointer;
 }
 
 button.app-bar-workspace-btn:hover:enabled {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: #466486;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(107, 143, 212, 0.45);
+  color: #e8eef9;
 }
 
 button.app-bar-workspace-btn:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px #0f1624, 0 0 0 4px #4b6ea9;
+  box-shadow: 0 0 0 2px #0f1624, 0 0 0 4px rgba(107, 143, 212, 0.55);
 }
 
 .app-bar-actions {
@@ -104,12 +145,12 @@ button.app-bar-workspace-btn:focus-visible {
 button.app-bar-new-project-btn {
   flex-shrink: 0;
   margin: 0;
-  padding: 0 14px;
+  padding: 0 13px;
   height: 36px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: transparent;
-  color: #93a7c4;
+  color: #a8bcda;
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
@@ -117,14 +158,14 @@ button.app-bar-new-project-btn {
 }
 
 button.app-bar-new-project-btn:hover:enabled {
-  color: #c8d9f0;
-  border-color: #466486;
-  background: rgba(255, 255, 255, 0.05);
+  color: #e8eef9;
+  border-color: rgba(107, 143, 212, 0.45);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 button.app-bar-new-project-btn:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px #0f1624, 0 0 0 4px #4b6ea9;
+  box-shadow: 0 0 0 2px #0f1624, 0 0 0 4px rgba(107, 143, 212, 0.55);
 }
 
 button.app-bar-new-project-btn:disabled {

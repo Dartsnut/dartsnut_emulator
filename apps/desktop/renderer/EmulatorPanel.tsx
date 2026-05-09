@@ -83,7 +83,36 @@ export function EmulatorPanel() {
     };
   }, []);
 
-  function drawBackgroundOnly(canvas: HTMLCanvasElement | null) {
+  /** Pixels match `drawFrameToCanvas` placement so the LCD area is black after reset. */
+  function fillEmulatorScreenBlack(
+    ctx: CanvasRenderingContext2D,
+    frame: { width: number; height: number } | null,
+    scaleMultiplier: number,
+  ) {
+    const sx = scaleMultiplier;
+    ctx.fillStyle = "#000000";
+    if (!frame) {
+      ctx.fillRect(38 * sx, 38 * sx, 512 * sx, 512 * sx);
+      ctx.fillRect(123 * sx, 601 * sx, 342 * sx, 176 * sx);
+      return;
+    }
+    if (frame.width === 128 && frame.height === 160) {
+      ctx.fillRect(38 * sx, 38 * sx, 512 * sx, 512 * sx);
+      ctx.fillRect(123 * sx, 601 * sx, 342 * sx, 176 * sx);
+    } else if (frame.width === 64 && frame.height === 32) {
+      ctx.fillRect(123 * sx, 601 * sx, 342 * sx, 176 * sx);
+    } else if (frame.width === 128 && frame.height === 128) {
+      ctx.fillRect(38 * sx, 38 * sx, 512 * sx, 512 * sx);
+    } else {
+      ctx.fillRect(38 * sx, 38 * sx, 512 * sx, 512 * sx);
+    }
+  }
+
+  function drawBackgroundOnly(
+    canvas: HTMLCanvasElement | null,
+    frameMeta: { width: number; height: number } | null = null,
+    scaleMultiplier = 1,
+  ) {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -92,16 +121,18 @@ export function EmulatorPanel() {
     if (backgroundRef.current) {
       ctx.drawImage(backgroundRef.current, 0, 0, canvas.width, canvas.height);
     }
+    fillEmulatorScreenBlack(ctx, frameMeta, scaleMultiplier);
   }
 
   /** Clear last frame and pending work so the preview does not show a stale capture after stop. */
   function wipePreviewCanvas() {
+    const meta = latestFrameMetaRef.current;
     pendingFrameRef.current = null;
     latestFrameMetaRef.current = null;
     workerBusyRef.current = false;
     setDartCoords(Array.from({ length: 12 }, () => null));
-    drawBackgroundOnly(canvasRef.current);
-    drawBackgroundOnly(zoomCanvasRef.current);
+    drawBackgroundOnly(canvasRef.current, meta, 1);
+    drawBackgroundOnly(zoomCanvasRef.current, meta, 2);
   }
 
   function getGridOverlay(frameWidth: number, frameHeight: number, scaleMultiplier: number) {
@@ -224,13 +255,14 @@ export function EmulatorPanel() {
         img.src = bg.url;
         img.onload = () => {
           backgroundRef.current = img;
-          drawBackgroundOnly(canvasRef.current);
+          const meta = latestFrameMetaRef.current;
+          drawBackgroundOnly(canvasRef.current, meta, 1);
           if (zoomOpenRef.current) {
-            drawBackgroundOnly(zoomCanvasRef.current);
+            drawBackgroundOnly(zoomCanvasRef.current, meta, 2);
           }
         };
       } else {
-        drawBackgroundOnly(canvasRef.current);
+        drawBackgroundOnly(canvasRef.current, latestFrameMetaRef.current, 1);
       }
     })();
 
@@ -310,7 +342,7 @@ export function EmulatorPanel() {
         }
       }
     } else {
-      drawBackgroundOnly(zoomCanvasRef.current);
+      drawBackgroundOnly(zoomCanvasRef.current, null, 2);
     }
   }, [zoomOpen]);
 

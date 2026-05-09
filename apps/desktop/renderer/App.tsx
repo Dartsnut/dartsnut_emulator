@@ -817,6 +817,7 @@ export function App() {
     }
     const confirmed = window.confirm(
       "Start a new project?\n\n" +
+        "Your game files on disk stay saved.\n\n" +
         "This will leave the current workspace unset, stop the emulator, clear emulator logs, and clear this chat.",
     );
     if (!confirmed) {

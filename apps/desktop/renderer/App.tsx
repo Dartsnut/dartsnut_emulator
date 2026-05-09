@@ -1135,12 +1135,6 @@ export function App() {
                 aria-label="Message"
               />
               <div className="composer-pill-trailing">
-                <label className="composer-pill-model-wrap">
-                  <span className="composer-visually-hidden">Mode</span>
-                  <select className="composer-pill-model" defaultValue="auto" aria-label="Mode">
-                    <option value="auto">Auto</option>
-                  </select>
-                </label>
                 {!autoScrollEnabled ? (
                   <button
                     type="button"

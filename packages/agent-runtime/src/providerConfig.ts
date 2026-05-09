@@ -14,12 +14,19 @@ export interface ProviderConfigOverrides {
   model?: string;
 }
 
+const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+type ProcessWithResourcesPath = NodeJS.Process & { resourcesPath?: string };
+
 export function findEnvFile(cwd: string = process.cwd()): string | undefined {
   const candidates = [
     path.join(cwd, ".env"),
     path.join(cwd, "..", ".env"),
     path.join(cwd, "..", "..", ".env")
   ];
+  const resourcesPath = (process as ProcessWithResourcesPath).resourcesPath;
+  if (typeof resourcesPath === "string" && resourcesPath.trim()) {
+    candidates.unshift(path.join(resourcesPath, ".env"));
+  }
   return candidates.find((candidate) => fs.existsSync(candidate));
 }
 
@@ -33,7 +40,7 @@ function loadEnvFromDisk() {
 
 export function resolveProviderConfig(overrides?: ProviderConfigOverrides): ProviderConfig {
   const baseConfig: ProviderConfig = {
-    baseUrl: process.env.OPENAI_BASE_URL ?? "",
+    baseUrl: process.env.OPENAI_BASE_URL ?? DEFAULT_OPENAI_BASE_URL,
     apiKey: process.env.OPENAI_API_KEY ?? "",
     model: process.env.OPENAI_MODEL ?? "mimo-v2.5-pro"
   };
@@ -53,9 +60,6 @@ export function validateProviderConfig(config: ProviderConfig): {
   ok: boolean;
   error?: string;
 } {
-  if (!config.baseUrl) {
-    return { ok: false, error: "OPENAI_BASE_URL is not set." };
-  }
   if (!config.apiKey) {
     return { ok: false, error: "OPENAI_API_KEY is not set." };
   }

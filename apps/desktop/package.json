@@ -70,6 +70,10 @@
       {
         "from": "../../requirements.txt",
         "to": "requirements.txt"
+      },
+      {
+        "from": "../../.env",
+        "to": ".env"
       }
     ],
     "mac": {

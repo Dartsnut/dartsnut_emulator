@@ -332,7 +332,9 @@ function buildRoutedPrompt(request: PromptRequest): string {
 }
 
 function resolveAgentRuntimeSkillsDir(): string {
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   const candidates = [
+    ...(resourcesPath ? [path.join(resourcesPath, "packages", "agent-runtime", "skills")] : []),
     path.resolve(process.cwd(), "packages/agent-runtime/skills"),
     path.resolve(process.cwd(), "../packages/agent-runtime/skills"),
     path.resolve(__dirname, "../../../packages/agent-runtime/skills")
@@ -438,6 +440,23 @@ function isPythonVersionSupportedSync(executable: string): boolean {
 }
 
 function pythonCandidates(): string[] {
+  const home = app.getPath("home");
+  const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  const windowsVersions = ["312", "311", "310"];
+  const windowsPythonCandidates = [
+    ...windowsVersions.flatMap((version) => [
+      path.join(localAppData, "Programs", "Python", `Python${version}`, "python.exe"),
+      `C:\\Python${version}\\python.exe`,
+      path.join(programFiles, "Python", `Python${version}`, "python.exe"),
+      path.join(programFilesX86, "Python", `Python${version}`, "python.exe")
+    ]),
+    path.join(localAppData, "Microsoft", "WindowsApps", "python.exe"),
+    path.join(home, "scoop", "shims", "python.exe"),
+    path.join(home, ".pyenv", "pyenv-win", "shims", "python.exe")
+  ];
+
   return [
     "python3.12",
     "python3.11",
@@ -455,17 +474,25 @@ function pythonCandidates(): string[] {
     "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
     "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
     "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3",
-    path.join(app.getPath("home"), ".pyenv", "shims", "python3.12"),
-    path.join(app.getPath("home"), ".pyenv", "shims", "python3.11"),
-    path.join(app.getPath("home"), ".pyenv", "shims", "python3.10"),
-    path.join(app.getPath("home"), ".pyenv", "shims", "python3"),
-    path.join(app.getPath("home"), ".pyenv", "shims", "python"),
-    path.join(app.getPath("home"), ".asdf", "shims", "python3.12"),
-    path.join(app.getPath("home"), ".asdf", "shims", "python3.11"),
-    path.join(app.getPath("home"), ".asdf", "shims", "python3.10"),
-    path.join(app.getPath("home"), ".asdf", "shims", "python3"),
-    path.join(app.getPath("home"), ".asdf", "shims", "python")
+    path.join(home, ".pyenv", "shims", "python3.12"),
+    path.join(home, ".pyenv", "shims", "python3.11"),
+    path.join(home, ".pyenv", "shims", "python3.10"),
+    path.join(home, ".pyenv", "shims", "python3"),
+    path.join(home, ".pyenv", "shims", "python"),
+    path.join(home, ".asdf", "shims", "python3.12"),
+    path.join(home, ".asdf", "shims", "python3.11"),
+    path.join(home, ".asdf", "shims", "python3.10"),
+    path.join(home, ".asdf", "shims", "python3"),
+    path.join(home, ".asdf", "shims", "python"),
+    ...windowsPythonCandidates
   ];
+}
+
+function venvPythonPath(venvDir: string): string {
+  if (process.platform === "win32") {
+    return path.join(venvDir, "Scripts", "python.exe");
+  }
+  return path.join(venvDir, "bin", "python");
 }
 
 async function canRunEmulatorDepsAsync(executable: string): Promise<boolean> {
@@ -477,7 +504,7 @@ async function ensurePackagedPythonRuntime(preferredPython?: string | null): Pro
     return null;
   }
   const runtimeDir = path.join(app.getPath("userData"), "python-runtime");
-  const runtimePython = path.join(runtimeDir, "bin", "python");
+  const runtimePython = venvPythonPath(runtimeDir);
   if ((await isPythonVersionSupportedAsync(runtimePython)) && (await canRunEmulatorDepsAsync(runtimePython))) {
     return runtimePython;
   }
@@ -550,8 +577,11 @@ async function resolvePythonExecutable(): Promise<string> {
   if (packagedRuntimePython) {
     return packagedRuntimePython;
   }
-  const bundledVenvPython = path.join(repoRoot, ".venv", "bin", "python");
-  const bundledVenvPython312 = path.join(repoRoot, ".venv", "bin", "python3.12");
+  const bundledVenvPython = venvPythonPath(path.join(repoRoot, ".venv"));
+  const bundledVenvPython312 =
+    process.platform === "win32"
+      ? path.join(repoRoot, ".venv", "Scripts", "python3.12.exe")
+      : path.join(repoRoot, ".venv", "bin", "python3.12");
   const candidates = [bundledVenvPython, bundledVenvPython312, ...pythonCandidates()];
   for (const candidate of candidates) {
     if (

@@ -1029,6 +1029,39 @@ button.app-bar-new-project-btn:disabled {
   background: var(--color-entry-action-bg);
 }
 
+.entry-tool-plans {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.entry-tool-plan {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-entry-border);
+  background: var(--color-entry-action-bg);
+}
+
+.entry-tool-plan-name {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  color: var(--color-entry-action-title);
+}
+
+.entry-tool-plan-path {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  color: var(--color-entry-action-meta);
+  word-break: break-all;
+}
+
+.entry-tool-plan-path--muted {
+  opacity: 0.55;
+}
+
 .entry-action-title {
   font-size: 12px;
   font-weight: 600;

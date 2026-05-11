@@ -21,6 +21,7 @@ import {
   type DeployConnectResponse,
   type DeployEligibility,
   type DeployActionResponse,
+  type DeployLaunchRequest,
   type WindowChromeInsets
 } from "@dartsnut/shared-ipc";
 import {
@@ -101,8 +102,10 @@ const api = {
     ipcRenderer.invoke(IPCChannels.deployGetEligibility) as Promise<DeployEligibility>,
   deployConnect: (request: DeployConnectRequest) =>
     ipcRenderer.invoke(IPCChannels.deployConnect, request) as Promise<DeployConnectResponse>,
-  deployRun: () => ipcRenderer.invoke(IPCChannels.deployRun) as Promise<DeployActionResponse>,
-  deployReload: () => ipcRenderer.invoke(IPCChannels.deployReload) as Promise<DeployActionResponse>,
+  deployRun: (request?: DeployLaunchRequest) =>
+    ipcRenderer.invoke(IPCChannels.deployRun, request) as Promise<DeployActionResponse>,
+  deployReload: (request?: DeployLaunchRequest) =>
+    ipcRenderer.invoke(IPCChannels.deployReload, request) as Promise<DeployActionResponse>,
   deployStop: () => ipcRenderer.invoke(IPCChannels.deployStop) as Promise<DeployActionResponse>,
   onDeployLog: (listener: (line: string) => void) => {
     const handler = (_: unknown, line: string) => listener(line);

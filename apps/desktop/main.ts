@@ -14,6 +14,7 @@ import {
   type DeployConnectRequest,
   type DeployConnectResponse,
   type DeployEligibility,
+  type DeployLaunchRequest,
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
@@ -86,7 +87,7 @@ function getDeployMachineSession(): DeployMachineSession {
 
 async function disconnectDeployMachine(): Promise<void> {
   if (deployMachineSession) {
-    await deployMachineSession.disconnect().catch(() => {});
+    await deployMachineSession.disconnect().catch(() => { });
     deployMachineSession = null;
   }
 }
@@ -876,12 +877,12 @@ async function createWindow() {
     ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
     ...(process.platform === "win32"
       ? {
-          titleBarOverlay: {
-            color: "#121212",
-            symbolColor: "#e0e0e0",
-            height: WINDOWS_TITLE_BAR_OVERLAY_HEIGHT
-          }
+        titleBarOverlay: {
+          color: "#121212",
+          symbolColor: "#e0e0e0",
+          height: WINDOWS_TITLE_BAR_OVERLAY_HEIGHT
         }
+      }
       : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -940,6 +941,20 @@ ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());
 
 ipcMain.handle(IPCChannels.deployGetEligibility, (): DeployEligibility => readDeployEligibilityFromWorkspace());
 
+function parseDeployWidgetParamsJson(raw: string | undefined): Record<string, unknown> {
+  const text = (raw ?? "").trim() || "{}";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Widget params must be valid JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Widget params must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
 ipcMain.handle(
   IPCChannels.deployConnect,
   async (_event: unknown, request: DeployConnectRequest): Promise<DeployConnectResponse> => {
@@ -955,56 +970,80 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle(IPCChannels.deployRun, async (): Promise<DeployActionResponse> => {
-  const elig = readDeployEligibilityFromWorkspace();
-  if (!elig.ok) {
-    return { ok: false, error: `Workspace not deployable (${elig.reason}).` };
-  }
-  if (!workspaceRoot) {
-    return { ok: false, error: "No workspace open." };
-  }
-  try {
-    const session = getDeployMachineSession();
-    if (!session.connected) {
-      throw new Error("SSH not connected. Enter the device IP and click Connect.");
+ipcMain.handle(
+  IPCChannels.deployRun,
+  async (_event: unknown, request?: DeployLaunchRequest): Promise<DeployActionResponse> => {
+    const elig = readDeployEligibilityFromWorkspace();
+    if (!elig.ok) {
+      return { ok: false, error: `Workspace not deployable (${elig.reason}).` };
     }
-    emitDeployLog("[deploy] Run — sync, stop service, start debug Python…");
-    await session.syncWorkspace(workspaceRoot, elig.appId);
-    await session.stopSystemdService();
-    await session.killDebugPython();
-    session.stopLogTail();
-    await session.startDebugPython(elig.appId);
-    session.startLogTail();
-    return { ok: true };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    emitDeployLog(`[deploy] Run failed: ${message}`);
-    return { ok: false, error: message };
-  }
-});
+    if (!workspaceRoot) {
+      return { ok: false, error: "No workspace open." };
+    }
+    let widgetParams: Record<string, unknown> | undefined;
+    if (elig.projectType === "widget") {
+      try {
+        widgetParams = parseDeployWidgetParamsJson(request?.widgetParamsJson);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false, error: message };
+      }
+    }
+    try {
+      const session = getDeployMachineSession();
+      if (!session.connected) {
+        throw new Error("SSH not connected. Enter the device IP and click Connect.");
+      }
+      emitDeployLog("[deploy] Run — sync, stop service, start debug Python…");
+      await session.syncWorkspace(workspaceRoot, elig.appId);
+      await session.stopSystemdService();
+      await session.killDebugPython();
+      session.stopLogTail();
+      await session.startDebugPython(elig.appId, { projectType: elig.projectType, widgetParams });
+      session.startLogTail();
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      emitDeployLog(`[deploy] Run failed: ${message}`);
+      return { ok: false, error: message };
+    }
+  },
+);
 
-ipcMain.handle(IPCChannels.deployReload, async (): Promise<DeployActionResponse> => {
-  const elig = readDeployEligibilityFromWorkspace();
-  if (!elig.ok) {
-    return { ok: false, error: `Workspace not deployable (${elig.reason}).` };
-  }
-  try {
-    const session = getDeployMachineSession();
-    if (!session.connected) {
-      throw new Error("SSH not connected.");
+ipcMain.handle(
+  IPCChannels.deployReload,
+  async (_event: unknown, request?: DeployLaunchRequest): Promise<DeployActionResponse> => {
+    const elig = readDeployEligibilityFromWorkspace();
+    if (!elig.ok) {
+      return { ok: false, error: `Workspace not deployable (${elig.reason}).` };
     }
-    emitDeployLog("[deploy] Reload — restart debug Python…");
-    await session.killDebugPython();
-    session.stopLogTail();
-    await session.startDebugPython(elig.appId);
-    session.startLogTail();
-    return { ok: true };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    emitDeployLog(`[deploy] Reload failed: ${message}`);
-    return { ok: false, error: message };
-  }
-});
+    let widgetParams: Record<string, unknown> | undefined;
+    if (elig.projectType === "widget") {
+      try {
+        widgetParams = parseDeployWidgetParamsJson(request?.widgetParamsJson);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false, error: message };
+      }
+    }
+    try {
+      const session = getDeployMachineSession();
+      if (!session.connected) {
+        throw new Error("SSH not connected.");
+      }
+      emitDeployLog("[deploy] Reload — restart debug Python…");
+      await session.killDebugPython();
+      session.stopLogTail();
+      await session.startDebugPython(elig.appId, { projectType: elig.projectType, widgetParams });
+      session.startLogTail();
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      emitDeployLog(`[deploy] Reload failed: ${message}`);
+      return { ok: false, error: message };
+    }
+  },
+);
 
 ipcMain.handle(IPCChannels.deployStop, async (): Promise<DeployActionResponse> => {
   const elig = readDeployEligibilityFromWorkspace();

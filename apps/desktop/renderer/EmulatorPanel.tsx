@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type Dispatch, type MouseEvent, type SetStateAction } from "react";
 import type { EmulatorFrame, EmulatorLogEntry, EmulatorStateSnapshot } from "@dartsnut/emulator-protocol";
 import { cn } from "./cn";
+import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
+import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
 type DartCoord = { x: number; y: number } | null;
 type UiEmulatorLogEntry = EmulatorLogEntry & { id: string };
@@ -25,14 +27,24 @@ const emuToolbarBtn =
 
 const emuToolbarIconBtn = cn(emuToolbarBtn, "size-7 p-0");
 
-export function EmulatorPanel() {
+export type EmulatorPanelProps = {
+  widgetParamsText: string;
+  setWidgetParamsText: Dispatch<SetStateAction<string>>;
+  widgetParamsError: string | null;
+  setWidgetParamsError: Dispatch<SetStateAction<string | null>>;
+};
+
+export function EmulatorPanel({
+  widgetParamsText,
+  setWidgetParamsText,
+  widgetParamsError,
+  setWidgetParamsError,
+}: EmulatorPanelProps) {
   const CANVAS_BASE_WIDTH = 588;
   const CANVAS_BASE_HEIGHT = 800;
   const bridgeReady = Boolean(window.dartsnutApi?.sendEmulatorCommand);
   const [state, setState] = useState<EmulatorStateSnapshot>(defaultState);
   const [widgetPath, setWidgetPath] = useState("");
-  const [widgetParamsText, setWidgetParamsText] = useState("{}");
-  const [widgetParamsError, setWidgetParamsError] = useState<string | null>(null);
   const [selectedDartIndex, setSelectedDartIndex] = useState(0);
   const [dartCoords, setDartCoords] = useState<DartCoord[]>(Array.from({ length: 12 }, () => null));
   const [captureFps, setCaptureFps] = useState(0);
@@ -421,48 +433,20 @@ export function EmulatorPanel() {
     setDartCoords(Array.from({ length: 12 }, () => null));
   }
 
-  function parseAndFormatParamsJson(rawText: string): { params: Record<string, unknown>; pretty: string } {
-    const parsed = JSON.parse(rawText) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("Params must be a JSON object.");
-    }
-    return {
-      params: parsed as Record<string, unknown>,
-      pretty: JSON.stringify(parsed, null, 2),
-    };
-  }
-
   function formatParamsJsonInEditor() {
-    try {
-      const { pretty } = parseAndFormatParamsJson(widgetParamsText);
-      setWidgetParamsText(pretty);
-      setWidgetParamsError(null);
-    } catch (error) {
-      setWidgetParamsError(error instanceof Error ? error.message : "Invalid JSON.");
-    }
+    formatWidgetParamsJson(widgetParamsText, setWidgetParamsText, setWidgetParamsError);
   }
 
   async function applyParamsAndReload() {
-    if (!widgetPath.trim()) {
-      setWidgetParamsError("Select a widget folder first.");
-      return;
-    }
-    let params: Record<string, unknown>;
-    let pretty: string;
-    try {
-      const parsed = parseAndFormatParamsJson(widgetParamsText);
-      params = parsed.params;
-      pretty = parsed.pretty;
-    } catch (error) {
-      setWidgetParamsError(error instanceof Error ? error.message : "Invalid JSON.");
-      return;
-    }
-    setWidgetParamsText(pretty);
-    setWidgetParamsError(null);
-    setEmulatorLogs([]);
-    await window.dartsnutApi.sendEmulatorCommand({ type: "set_params", params });
-    await window.dartsnutApi.sendEmulatorCommand({ type: "reload_widget" });
-    setDartCoords(Array.from({ length: 12 }, () => null));
+    await applyWidgetParamsAndReload({
+      widgetParamsText,
+      setWidgetParamsText,
+      setWidgetParamsError,
+      onAfterApply: () => {
+        setEmulatorLogs([]);
+        setDartCoords(Array.from({ length: 12 }, () => null));
+      },
+    });
   }
 
   function toCanvasCoord(event: MouseEvent<HTMLCanvasElement>) {
@@ -643,33 +627,16 @@ export function EmulatorPanel() {
           </div>
         </div>
         {showParamsPanel ? (
-          <div className="mx-3.5 mb-0 mt-0 box-border flex w-auto shrink-0 flex-col gap-2 self-stretch rounded-lg border border-[var(--color-params-border)] bg-[var(--color-params-bg)] px-4 py-3">
-            <div className="text-xs text-[var(--color-params-header)]">
-              <strong>Widget Params (JSON)</strong>
-            </div>
-            <textarea
-              className="box-border max-h-[200px] min-h-[100px] w-full resize-y rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 font-mono text-xs leading-snug text-[var(--color-input-text)] [font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)]"
-              value={widgetParamsText}
-              onChange={(e) => {
-                setWidgetParamsText(e.target.value);
-                if (widgetParamsError) setWidgetParamsError(null);
-              }}
-              spellCheck={false}
-              placeholder='{"city":"tokyo"}'
+          <div className="mx-3.5 mb-0 mt-0">
+            <WidgetParamsEditor
+              bridgeReady={bridgeReady}
+              widgetParamsText={widgetParamsText}
+              setWidgetParamsText={setWidgetParamsText}
+              widgetParamsError={widgetParamsError}
+              setWidgetParamsError={setWidgetParamsError}
+              onFormat={formatParamsJsonInEditor}
+              onApplyReload={applyParamsAndReload}
             />
-            {widgetParamsError ? (
-              <div className="rounded-md border border-[var(--color-params-error-border)] bg-[var(--color-params-error-bg)] px-2 py-1.5 text-xs text-[var(--color-params-error-text)]">
-                {widgetParamsError}
-              </div>
-            ) : null}
-            <div className="flex flex-wrap justify-end gap-2">
-              <button type="button" className={emuToolbarBtn} disabled={!bridgeReady} onClick={() => formatParamsJsonInEditor()}>
-                Format JSON
-              </button>
-              <button type="button" className={emuToolbarBtn} disabled={!bridgeReady} onClick={() => void applyParamsAndReload()}>
-                Apply Params + Reload
-              </button>
-            </div>
           </div>
         ) : null}
         {showDartLegend ? (

@@ -19,6 +19,7 @@ import type {
   DeployConnectResponse,
   DeployEligibility,
   DeployActionResponse,
+  DeployLaunchRequest,
   WindowChromeInsets
 } from "@dartsnut/shared-ipc";
 import type {
@@ -54,8 +55,8 @@ declare global {
       onEmulatorLog: (listener: (entry: EmulatorLogEntry) => void) => () => void;
       deployGetEligibility: () => Promise<DeployEligibility>;
       deployConnect: (request: DeployConnectRequest) => Promise<DeployConnectResponse>;
-      deployRun: () => Promise<DeployActionResponse>;
-      deployReload: () => Promise<DeployActionResponse>;
+      deployRun: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
+      deployReload: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
       deployStop: () => Promise<DeployActionResponse>;
       onDeployLog: (listener: (line: string) => void) => () => void;
       assets: {

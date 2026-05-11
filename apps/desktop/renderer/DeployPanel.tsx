@@ -1,11 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { DeployConnectResponse } from "@dartsnut/shared-ipc";
 import { cn } from "./cn";
+import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
+import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
 const toolbarBtn =
   "box-border inline-flex shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] px-3 py-2 text-sm font-medium text-[var(--color-emulator-toolbar-label)] enabled:hover:bg-[var(--color-emulator-toolbar-bg-hover)] disabled:cursor-not-allowed disabled:opacity-45";
 
-export function DeployPanel() {
+export type DeployPanelProps = {
+  showWidgetParams: boolean;
+  widgetParamsText: string;
+  setWidgetParamsText: Dispatch<SetStateAction<string>>;
+  widgetParamsError: string | null;
+  setWidgetParamsError: Dispatch<SetStateAction<string | null>>;
+};
+
+export function DeployPanel({
+  showWidgetParams,
+  widgetParamsText,
+  setWidgetParamsText,
+  widgetParamsError,
+  setWidgetParamsError,
+}: DeployPanelProps) {
   const api = window.dartsnutApi;
   const [host, setHost] = useState("");
   const [deviceName, setDeviceName] = useState<string | null>(null);
@@ -14,6 +30,8 @@ export function DeployPanel() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
   const logRef = useRef<HTMLPreElement | null>(null);
+
+  const bridgeReady = Boolean(api?.sendEmulatorCommand);
 
   useEffect(() => {
     if (!api?.onDeployLog) {
@@ -62,12 +80,43 @@ export function DeployPanel() {
     setLastError(null);
     setBusyAction(action);
     try {
+      const launch = showWidgetParams ? { widgetParamsJson: widgetParamsText } : undefined;
       const result =
         action === "run"
-          ? await api.deployRun()
+          ? await api.deployRun(launch)
           : action === "reload"
-            ? await api.deployReload()
+            ? await api.deployReload(launch)
             : await api.deployStop();
+      if (!result.ok) {
+        setLastError(result.error);
+      }
+    } catch (e) {
+      setLastError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function handleFormatWidgetParams() {
+    formatWidgetParamsJson(widgetParamsText, setWidgetParamsText, setWidgetParamsError);
+  }
+
+  async function handleApplyWidgetParams() {
+    const normalized = await applyWidgetParamsAndReload({
+      widgetParamsText,
+      setWidgetParamsText,
+      setWidgetParamsError,
+    });
+    if (normalized === undefined) {
+      return;
+    }
+    if (!connected || !showWidgetParams) {
+      return;
+    }
+    setLastError(null);
+    setBusyAction("reload");
+    try {
+      const result = await api.deployReload({ widgetParamsJson: normalized });
       if (!result.ok) {
         setLastError(result.error);
       }
@@ -88,14 +137,6 @@ export function DeployPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
-      <div className="shrink-0">
-        <p className="text-xs leading-snug text-[var(--color-text-subtle)]">
-          Dev SSH user <code className="rounded bg-[var(--color-surface-muted)] px-1">rpi:rpi</code>, remote{" "}
-          <code className="rounded bg-[var(--color-surface-muted)] px-1">~/dartsnut_rpi</code>. Widget subprocess CLI is documented in{" "}
-          <code className="rounded bg-[var(--color-surface-muted)] px-1">apps/desktop/DEPLOY_TO_MACHINE.md</code>.
-        </p>
-      </div>
-
       <label className="flex shrink-0 flex-col gap-1 text-[13px]">
         <span className="text-[var(--color-text-subtle)]">Device IP or hostname</span>
         <input
@@ -150,6 +191,18 @@ export function DeployPanel() {
         <div className="shrink-0 rounded-lg border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-[13px] text-[var(--color-error-text)]">
           {lastError}
         </div>
+      ) : null}
+
+      {showWidgetParams ? (
+        <WidgetParamsEditor
+          bridgeReady={bridgeReady}
+          widgetParamsText={widgetParamsText}
+          setWidgetParamsText={setWidgetParamsText}
+          widgetParamsError={widgetParamsError}
+          setWidgetParamsError={setWidgetParamsError}
+          onFormat={handleFormatWidgetParams}
+          onApplyReload={handleApplyWidgetParams}
+        />
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col gap-1">

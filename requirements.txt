@@ -1,7 +1,6 @@
 pydartsnut
-pygame
+pygame-ce
 Pillow
 numpy
-pillow
 python-dotenv
 aiohttp

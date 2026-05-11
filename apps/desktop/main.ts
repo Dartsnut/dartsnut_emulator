@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import readline from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import {
@@ -57,6 +58,8 @@ const repoRoot = app.isPackaged
   : path.resolve(__dirname, "../../..");
 let pythonExec = process.env.DARTSNUT_PYTHON || "python3";
 let pythonRuntimeStatus: string | null = null;
+
+const PYTHON_SETUP_LOG_PREFIX = "[python-setup]";
 let lastWidgetDir: string | null = null;
 const creatorTemplatePaths = {
   "game-creator": "packages/agent-runtime/skills/game-creator.md",
@@ -582,6 +585,43 @@ function runCommandOkAsync(command: string, args: string[], cwd: string): Promis
   });
 }
 
+function emitPythonSetupLog(source: "stdout" | "stderr", phase: string, line: string): void {
+  const trimmed = line.trimEnd();
+  if (!trimmed.trim()) {
+    return;
+  }
+  emitEmulatorLog({
+    source,
+    text: `${PYTHON_SETUP_LOG_PREFIX} [${phase}] ${trimmed}`,
+    timestampMs: Date.now(),
+  });
+}
+
+function runPackagedPythonSetupCommandAsync(
+  command: string,
+  args: string[],
+  cwd: string,
+  phase: string,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const attach = (stream: NodeJS.ReadableStream | null | undefined, source: "stdout" | "stderr") => {
+      if (!stream) {
+        return;
+      }
+      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      rl.on("line", (line) => emitPythonSetupLog(source, phase, line));
+    };
+    attach(child.stdout, "stdout");
+    attach(child.stderr, "stderr");
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+  });
+}
+
 function isPythonVersionSupportedAsync(executable: string): Promise<boolean> {
   return runCommandOkAsync(
     executable,
@@ -692,16 +732,18 @@ async function ensurePackagedPythonRuntime(preferredPython?: string | null): Pro
 
   fs.mkdirSync(runtimeDir, { recursive: true });
   setPythonRuntimeStatus("Setting up Python runtime (first run). This can take a minute...");
+  emitPythonSetupLog("stdout", "bootstrap", `Using interpreter: ${bootstrapPython}`);
 
-  if (!(await runCommandOkAsync(bootstrapPython, ["-m", "venv", runtimeDir], repoRoot))) {
+  if (!(await runPackagedPythonSetupCommandAsync(bootstrapPython, ["-m", "venv", runtimeDir], repoRoot, "venv"))) {
     setPythonRuntimeStatus("Python runtime setup failed while creating virtual environment.");
     return null;
   }
   if (
-    !(await runCommandOkAsync(
+    !(await runPackagedPythonSetupCommandAsync(
       runtimePython,
       ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
       repoRoot,
+      "pip-upgrade",
     ))
   ) {
     setPythonRuntimeStatus("Python runtime setup failed while upgrading pip.");
@@ -712,7 +754,14 @@ async function ensurePackagedPythonRuntime(preferredPython?: string | null): Pro
     setPythonRuntimeStatus("Python runtime setup failed: requirements.txt is missing.");
     return null;
   }
-  if (!(await runCommandOkAsync(runtimePython, ["-m", "pip", "install", "-r", requirementsPath], repoRoot))) {
+  if (
+    !(await runPackagedPythonSetupCommandAsync(
+      runtimePython,
+      ["-m", "pip", "install", "-r", requirementsPath],
+      repoRoot,
+      "pip-install",
+    ))
+  ) {
     setPythonRuntimeStatus("Python runtime setup failed while installing dependencies.");
     return null;
   }
@@ -754,7 +803,7 @@ async function resolvePythonExecutable(): Promise<string> {
       return candidate;
     }
   }
-  emulatorState.status = "Missing Python 3.10+ or emulator deps (pydartsnut/pygame/Pillow). Run: pnpm setup:python";
+  emulatorState.status = "Missing Python 3.10+ or emulator deps (pydartsnut/pygame-ce/Pillow). Run: pnpm setup:python";
   emitEmulatorState();
   return "python3";
 }

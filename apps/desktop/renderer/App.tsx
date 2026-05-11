@@ -765,11 +765,25 @@ export function App() {
     });
     const unsubscribePythonRuntime = api.onPythonRuntimeStatus((status) => {
       setPythonRuntimeStatus(status);
+      if (status) {
+        console.info("[python-runtime]", status);
+      }
+    });
+    const unsubscribePythonSetupLog = api.onEmulatorLog((entry) => {
+      if (!entry.text.startsWith("[python-setup]")) {
+        return;
+      }
+      if (entry.source === "stderr") {
+        console.warn(entry.text);
+      } else {
+        console.info(entry.text);
+      }
     });
     return () => {
       cancelStreamCoalesce();
       unsubscribe();
       unsubscribePythonRuntime();
+      unsubscribePythonSetupLog();
     };
   }, [api]);
 

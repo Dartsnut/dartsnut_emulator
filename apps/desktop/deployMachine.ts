@@ -265,6 +265,56 @@ export class DeployMachineSession {
     this.emitLog("[deploy] Started dartsnut_python.service");
   }
 
+  async restartSystemdService(): Promise<void> {
+    const { stderr, code } = await this.execRemoteShell(
+      `bash -lc 'echo ${SSH_PASSWORD} | sudo -S systemctl restart dartsnut_python.service'`,
+    );
+    if (code !== 0) {
+      throw new Error(stderr.trim() || `systemctl restart failed (exit ${code})`);
+    }
+    this.emitLog("[deploy] Restarted dartsnut_python.service");
+  }
+
+  /**
+   * After reconnecting from a dropped SSH session, bring **`dartsnut_python.service`** back if it was left
+   * stopped — without restarting when already **active** (avoids bouncing production during normal connects).
+   */
+  async restartDartsnutPythonServiceIfInactive(): Promise<void> {
+    if (!this.client) {
+      throw new Error("Not connected.");
+    }
+    const { code } = await this.execRemoteShell(
+      `bash -lc 'echo ${SSH_PASSWORD} | sudo -S systemctl is-active dartsnut_python.service'`,
+    );
+    if (code === 0) {
+      return;
+    }
+    this.emitLog("[deploy] dartsnut_python.service not active — restarting…");
+    await this.restartSystemdService();
+  }
+
+  /**
+   * Kill any process whose command line matches **`~/dartsnut_rpi/apps/<any id>/main.py`** (debug widget/game
+   * runs), not only the current workspace id — including orphaned runs not tracked by {@link REMOTE_PID}.
+   */
+  async killAppMainPyProcesses(): Promise<void> {
+    if (!this.client) {
+      throw new Error("Not connected.");
+    }
+    const script = [
+      "set -eo pipefail",
+      "PASS=" + JSON.stringify(SSH_PASSWORD),
+      // procps `pkill -f` uses regex; `[^/]+` matches a single apps/<id>/ segment.
+      'echo "$PASS" | sudo -S pkill -f \'dartsnut_rpi/apps/[^/]+/main\\.py\' 2>/dev/null || true',
+      `rm -f ${REMOTE_PID}`,
+    ].join("\n");
+    const { stderr, code } = await execBashScriptStdin(this.client, script);
+    if (code !== 0) {
+      throw new Error(stderr.trim() || `kill apps/*/main.py failed (exit ${code})`);
+    }
+    this.emitLog("[deploy] Cleared processes matching apps/*/main.py");
+  }
+
   async killDebugPython(): Promise<void> {
     await this.execRemoteShell(
       `bash -lc 'if [ -f ${REMOTE_PID} ]; then echo ${SSH_PASSWORD} | sudo -S kill "$(cat ${REMOTE_PID})" 2>/dev/null || true; rm -f ${REMOTE_PID}; fi'`,

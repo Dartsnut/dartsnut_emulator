@@ -961,7 +961,15 @@ ipcMain.handle(
     try {
       const session = getDeployMachineSession();
       const { deviceName } = await session.connect(request.host.trim());
-      return { ok: true, deviceName };
+      try {
+        emitDeployLog("[deploy] Stopping any ~/dartsnut_rpi/apps/*/main.py still running on device…");
+        await session.killAppMainPyProcesses();
+        await session.restartDartsnutPythonServiceIfInactive();
+        return { ok: true, deviceName };
+      } catch (cleanupError) {
+        await disconnectDeployMachine();
+        throw cleanupError;
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       emitDeployLog(`[deploy] Connect failed: ${message}`);
@@ -969,6 +977,26 @@ ipcMain.handle(
     }
   },
 );
+
+ipcMain.handle(IPCChannels.deployDisconnect, async (): Promise<DeployActionResponse> => {
+  try {
+    const session = getDeployMachineSession();
+    if (!session.connected) {
+      return { ok: false, error: "SSH not connected." };
+    }
+    emitDeployLog("[deploy] Disconnect — stop log tail, kill debug Python, restart dartsnut_python.service…");
+    session.stopLogTail();
+    await session.killDebugPython();
+    await session.killAppMainPyProcesses();
+    await session.restartSystemdService();
+    await disconnectDeployMachine();
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    emitDeployLog(`[deploy] Disconnect failed: ${message}`);
+    return { ok: false, error: message };
+  }
+});
 
 ipcMain.handle(
   IPCChannels.deployRun,

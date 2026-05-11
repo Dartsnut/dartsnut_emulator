@@ -10,6 +10,10 @@ import {
   type BindSlotRequest,
   type BindSlotResponse,
   type BootstrapState,
+  type DeployActionResponse,
+  type DeployConnectRequest,
+  type DeployConnectResponse,
+  type DeployEligibility,
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
@@ -21,6 +25,7 @@ import {
   type SaveProviderSettingsRequest,
   type UnbindSlotRequest,
   type UnbindSlotResponse,
+  validateDeployWorkspaceConf,
   type WidgetSize,
   type WindowChromeInsets
 } from "@dartsnut/shared-ipc";
@@ -40,6 +45,7 @@ import {
   type EmulatorStateSnapshot,
 } from "@dartsnut/emulator-protocol";
 import { AssetManager } from "./assetManager";
+import { DeployMachineSession } from "./deployMachine";
 
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
@@ -64,6 +70,42 @@ const assetManager = new AssetManager({
   }
 });
 const widgetFontManifestRelativePath = "assets/fonts/widgets/font_manifest.json";
+
+let deployMachineSession: DeployMachineSession | null = null;
+
+function emitDeployLog(line: string): void {
+  sendToRenderer(IPCChannels.deployLog, line);
+}
+
+function getDeployMachineSession(): DeployMachineSession {
+  if (!deployMachineSession) {
+    deployMachineSession = new DeployMachineSession(emitDeployLog);
+  }
+  return deployMachineSession;
+}
+
+async function disconnectDeployMachine(): Promise<void> {
+  if (deployMachineSession) {
+    await deployMachineSession.disconnect().catch(() => {});
+    deployMachineSession = null;
+  }
+}
+
+function readDeployEligibilityFromWorkspace(): DeployEligibility {
+  if (!workspaceRoot) {
+    return { ok: false, reason: "no_workspace" };
+  }
+  const confPath = path.join(workspaceRoot, "conf.json");
+  if (!fs.existsSync(confPath)) {
+    return { ok: false, reason: "missing_conf" };
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(confPath, "utf-8"));
+    return validateDeployWorkspaceConf(raw);
+  } catch {
+    return { ok: false, reason: "invalid_conf" };
+  }
+}
 const emulatorState: EmulatorStateSnapshot = {
   widgetPath: null,
   running: false,
@@ -487,6 +529,7 @@ function applyIdleEmulatorMainState(): void {
 function performSessionCleanup(options: { clearWorkspace: boolean }): void {
   sendBridgeCommandSafe({ type: "stop_widget" });
   applyIdleEmulatorMainState();
+  void disconnectDeployMachine();
   if (options.clearWorkspace) {
     workspaceRoot = null;
     assetManager.stop();
@@ -884,6 +927,7 @@ app.on("before-quit", () => {
     bridgeProcess.kill();
   }
   assetManager.stop();
+  void disconnectDeployMachine();
 });
 
 ipcMain.handle(IPCChannels.windowChromeInsets, (): WindowChromeInsets => {
@@ -893,6 +937,97 @@ ipcMain.handle(IPCChannels.windowChromeInsets, (): WindowChromeInsets => {
   return computeWindowChromeInsets(win);
 });
 ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());
+
+ipcMain.handle(IPCChannels.deployGetEligibility, (): DeployEligibility => readDeployEligibilityFromWorkspace());
+
+ipcMain.handle(
+  IPCChannels.deployConnect,
+  async (_event: unknown, request: DeployConnectRequest): Promise<DeployConnectResponse> => {
+    try {
+      const session = getDeployMachineSession();
+      const { deviceName } = await session.connect(request.host.trim());
+      return { ok: true, deviceName };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      emitDeployLog(`[deploy] Connect failed: ${message}`);
+      return { ok: false, error: message };
+    }
+  },
+);
+
+ipcMain.handle(IPCChannels.deployRun, async (): Promise<DeployActionResponse> => {
+  const elig = readDeployEligibilityFromWorkspace();
+  if (!elig.ok) {
+    return { ok: false, error: `Workspace not deployable (${elig.reason}).` };
+  }
+  if (!workspaceRoot) {
+    return { ok: false, error: "No workspace open." };
+  }
+  try {
+    const session = getDeployMachineSession();
+    if (!session.connected) {
+      throw new Error("SSH not connected. Enter the device IP and click Connect.");
+    }
+    emitDeployLog("[deploy] Run — sync, stop service, start debug Python…");
+    await session.syncWorkspace(workspaceRoot, elig.appId);
+    await session.stopSystemdService();
+    await session.killDebugPython();
+    session.stopLogTail();
+    await session.startDebugPython(elig.appId);
+    session.startLogTail();
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    emitDeployLog(`[deploy] Run failed: ${message}`);
+    return { ok: false, error: message };
+  }
+});
+
+ipcMain.handle(IPCChannels.deployReload, async (): Promise<DeployActionResponse> => {
+  const elig = readDeployEligibilityFromWorkspace();
+  if (!elig.ok) {
+    return { ok: false, error: `Workspace not deployable (${elig.reason}).` };
+  }
+  try {
+    const session = getDeployMachineSession();
+    if (!session.connected) {
+      throw new Error("SSH not connected.");
+    }
+    emitDeployLog("[deploy] Reload — restart debug Python…");
+    await session.killDebugPython();
+    session.stopLogTail();
+    await session.startDebugPython(elig.appId);
+    session.startLogTail();
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    emitDeployLog(`[deploy] Reload failed: ${message}`);
+    return { ok: false, error: message };
+  }
+});
+
+ipcMain.handle(IPCChannels.deployStop, async (): Promise<DeployActionResponse> => {
+  const elig = readDeployEligibilityFromWorkspace();
+  if (!elig.ok) {
+    return { ok: false, error: `Workspace not deployable (${elig.reason}).` };
+  }
+  try {
+    const session = getDeployMachineSession();
+    if (!session.connected) {
+      throw new Error("SSH not connected.");
+    }
+    emitDeployLog("[deploy] Stop — remove app folder, restore dartsnut_python.service…");
+    session.stopLogTail();
+    await session.killDebugPython();
+    await session.removeRemoteAppFolder(elig.appId);
+    await session.startSystemdService();
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    emitDeployLog(`[deploy] Stop failed: ${message}`);
+    return { ok: false, error: message };
+  }
+});
 ipcMain.handle(IPCChannels.getProviderSettings, () => readProviderSettings());
 ipcMain.handle(IPCChannels.getPythonRuntimeStatus, () => pythonRuntimeStatus);
 ipcMain.handle(IPCChannels.getSelectedPythonPath, () => readSelectedPythonPath());

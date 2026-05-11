@@ -21,7 +21,14 @@ export const IPCChannels = {
   /** Renderer invokes for initial sync; main may push updates via `windowChromeInsetsChanged`. */
   windowChromeInsets: "shell:window-chrome-insets",
   /** Main → renderer: safe-area around OS window controls (logical px). */
-  windowChromeInsetsChanged: "shell:window-chrome-insets-changed"
+  windowChromeInsetsChanged: "shell:window-chrome-insets-changed",
+  deployGetEligibility: "deploy:get-eligibility",
+  deployConnect: "deploy:connect",
+  deployRun: "deploy:run",
+  deployReload: "deploy:reload",
+  deployStop: "deploy:stop",
+  /** Main → renderer: remote debug log line or status message. */
+  deployLog: "deploy:log"
 } as const;
 
 /** Padding (logical px) that MUST stay clear of traffic lights / caption overlay. */
@@ -203,3 +210,42 @@ export interface ReadPreviewRequest {
 export type ReadPreviewResponse =
   | { ok: true; dataUrl: string }
   | { ok: false; message: string };
+
+/** Result of parsing workspace root `conf.json` for deploy-to-machine eligibility. */
+export type DeployEligibility =
+  | { ok: true; appId: string; projectType: ProjectType }
+  | { ok: false; reason: string };
+
+export interface DeployConnectRequest {
+  host: string;
+}
+
+export type DeployConnectResponse =
+  | { ok: true; deviceName: string | null }
+  | { ok: false; error: string };
+
+export type DeployActionResponse = { ok: true } | { ok: false; error: string };
+
+/**
+ * Validates workspace `conf.json` content for the debug deploy module.
+ * Requires parseable JSON object with non-empty `id` and `type` of widget or game.
+ */
+export function validateDeployWorkspaceConf(raw: unknown): DeployEligibility {
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, reason: "invalid_conf" };
+  }
+  const c = raw as Record<string, unknown>;
+  const id = c.id;
+  const type = c.type;
+  if (typeof id !== "string" || !id.trim()) {
+    return { ok: false, reason: "missing_id" };
+  }
+  const trimmedId = id.trim();
+  if (!/^[a-zA-Z0-9_-]+$/.test(trimmedId)) {
+    return { ok: false, reason: "invalid_id" };
+  }
+  if (type !== "widget" && type !== "game") {
+    return { ok: false, reason: "invalid_type" };
+  }
+  return { ok: true, appId: trimmedId, projectType: type };
+}

@@ -5,6 +5,7 @@ import type {
   AgentEvent,
   AssetManifest,
   BootstrapState,
+  DeployEligibility,
   ManifestSnapshot,
   ProviderSettings,
   ProjectType,
@@ -13,13 +14,14 @@ import type {
 } from "@dartsnut/shared-ipc";
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { cn } from "./cn";
+import { DeployPanel } from "./DeployPanel";
 import { EmulatorPanel } from "./EmulatorPanel";
 import { highlightDiffLine, languageFromPath } from "./highlightDiffLine";
 import { ThemeSwitcherIcon } from "./ThemeSwitcher";
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
 
-type RightPaneTab = "emulator" | "assets";
+type RightPaneTab = "emulator" | "assets" | "deploy";
 
 interface TimelineEntry {
   id: string;
@@ -568,6 +570,10 @@ export function App() {
   const [assetManifest, setAssetManifest] = useState<AssetManifest | null>(null);
   const [pendingChangeSlotIds, setPendingChangeSlotIds] = useState<string[]>([]);
   const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>("emulator");
+  const [deployEligibility, setDeployEligibility] = useState<DeployEligibility>({
+    ok: false,
+    reason: "no_workspace"
+  });
   const [theme, setTheme] = useState<ThemeId>(() => resolveThemeFromEnvironment());
 
   const api = window.dartsnutApi;
@@ -799,12 +805,33 @@ export function App() {
     };
   }, [api, bootstrap?.workspaceRoot]);
 
-  // Reset to Emulator tab when manifest disappears (workspace switch with no manifest).
   useEffect(() => {
-    if (!assetManifest && rightPaneTab !== "emulator") {
+    if (!api || !bootstrap?.workspaceRoot) {
+      setDeployEligibility({ ok: false, reason: "no_workspace" });
+      return;
+    }
+    let cancelled = false;
+    void api.deployGetEligibility().then((result) => {
+      if (!cancelled) {
+        setDeployEligibility(result);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, bootstrap?.workspaceRoot]);
+
+  const deployEligible = deployEligibility.ok;
+
+  // Reset to Emulator tab when the active tab is no longer available.
+  useEffect(() => {
+    if (!assetManifest && rightPaneTab === "assets") {
       setRightPaneTab("emulator");
     }
-  }, [assetManifest, rightPaneTab]);
+    if (!deployEligible && rightPaneTab === "deploy") {
+      setRightPaneTab("emulator");
+    }
+  }, [assetManifest, deployEligible, rightPaneTab]);
 
   const chatDisabled = useMemo(() => {
     if (!bootstrap) {
@@ -1525,7 +1552,7 @@ export function App() {
           "max-[1100px]:hidden"
         )}
       >
-        {assetManifest ? (
+        {assetManifest || deployEligible ? (
           <div className="flex gap-1.5 border-b border-edge px-4 pb-0 pt-2.5" role="tablist" aria-label="Right pane view">
             <button
               type="button"
@@ -1540,38 +1567,64 @@ export function App() {
             >
               Emulator
             </button>
-            <button
-              type="button"
-              className={cn(
-                "-mb-px inline-flex cursor-pointer items-center gap-2 rounded-t-lg border border-transparent border-b-0 px-3.5 pb-2.5 pt-2 text-[13px] font-medium tracking-wide text-[var(--color-text-subtle)] [font:inherit] hover:text-[var(--color-slot-action-text)]",
-                rightPaneTab === "assets" &&
-                  "border-edge bg-[var(--color-surface-elevated)] text-[var(--color-tab-active-text)]"
-              )}
-              role="tab"
-              aria-selected={rightPaneTab === "assets"}
-              onClick={() => setRightPaneTab("assets")}
-            >
-              Assets
-              {pendingChangeSlotIds.length > 0 ? (
-                <span
-                  className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-accent-purple)] px-1.5 text-[11px] font-semibold text-white"
-                  aria-label={`${pendingChangeSlotIds.length} pending`}
-                >
-                  {pendingChangeSlotIds.length}
-                </span>
-              ) : null}
-            </button>
+            {deployEligible ? (
+              <button
+                type="button"
+                className={cn(
+                  "-mb-px inline-flex cursor-pointer items-center gap-2 rounded-t-lg border border-transparent border-b-0 px-3.5 pb-2.5 pt-2 text-[13px] font-medium tracking-wide text-[var(--color-text-subtle)] [font:inherit] hover:text-[var(--color-slot-action-text)]",
+                  rightPaneTab === "deploy" &&
+                    "border-edge bg-[var(--color-surface-elevated)] text-[var(--color-tab-active-text)]"
+                )}
+                role="tab"
+                aria-selected={rightPaneTab === "deploy"}
+                onClick={() => setRightPaneTab("deploy")}
+              >
+                Deploy
+              </button>
+            ) : null}
+            {assetManifest ? (
+              <button
+                type="button"
+                className={cn(
+                  "-mb-px inline-flex cursor-pointer items-center gap-2 rounded-t-lg border border-transparent border-b-0 px-3.5 pb-2.5 pt-2 text-[13px] font-medium tracking-wide text-[var(--color-text-subtle)] [font:inherit] hover:text-[var(--color-slot-action-text)]",
+                  rightPaneTab === "assets" &&
+                    "border-edge bg-[var(--color-surface-elevated)] text-[var(--color-tab-active-text)]"
+                )}
+                role="tab"
+                aria-selected={rightPaneTab === "assets"}
+                onClick={() => setRightPaneTab("assets")}
+              >
+                Assets
+                {pendingChangeSlotIds.length > 0 ? (
+                  <span
+                    className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-accent-purple)] px-1.5 text-[11px] font-semibold text-white"
+                    aria-label={`${pendingChangeSlotIds.length} pending`}
+                  >
+                    {pendingChangeSlotIds.length}
+                  </span>
+                ) : null}
+              </button>
+            ) : null}
           </div>
         ) : null}
         <div className="flex min-h-0 flex-1 flex-col">
           <div
-            className="flex min-h-0 flex-1 flex-col"
-            hidden={Boolean(assetManifest) && rightPaneTab !== "emulator"}
+            className={cn(
+              "flex min-h-0 flex-1 flex-col",
+              (Boolean(assetManifest) || deployEligible) && rightPaneTab !== "emulator" && "hidden"
+            )}
           >
             <EmulatorPanel />
           </div>
+          {deployEligible ? (
+            <div
+              className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "deploy" && "hidden")}
+            >
+              <DeployPanel />
+            </div>
+          ) : null}
           {assetManifest && bootstrap?.workspaceRoot ? (
-            <div className="flex min-h-0 flex-1 flex-col" hidden={rightPaneTab !== "assets"}>
+            <div className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "assets" && "hidden")}>
               <AssetManagerPanel
                 workspacePath={bootstrap.workspaceRoot}
                 manifest={assetManifest}

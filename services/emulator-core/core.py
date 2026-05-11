@@ -1,9 +1,10 @@
 import base64
 import json
 import os
-import select
+import queue
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -47,7 +48,10 @@ class EmulatorCore:
         self.shm_pdi: shared_memory.SharedMemory | None = None
         self.shm_pdo: shared_memory.SharedMemory | None = None
         self._widget_output_tail = ""
+        self._widget_stream_tail = ""
         self._pending_widget_logs: list[dict[str, Any]] = []
+        self._widget_log_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._log_reader_threads: list[threading.Thread] = []
         self._last_frame_bytes: bytes | None = None
         self._last_frame_w = 128
         self._last_frame_h = 160
@@ -94,36 +98,14 @@ class EmulatorCore:
 
     def snapshot(self) -> dict[str, Any]:
         if self.widget_process is not None and self.widget_process.poll() is not None:
-            stderr_output = ""
-            stdout_output = ""
-            try:
-                if self.widget_process.stdout is not None:
-                    stdout_output = self.widget_process.stdout.read() or ""
-                if self.widget_process.stderr is not None:
-                    stderr_output = self.widget_process.stderr.read() or ""
-            except Exception:
-                stderr_output = ""
+            self._stop_widget_log_readers(join_timeout=5.0)
+            if self._widget_stream_tail.strip():
+                self._widget_output_tail = self._widget_stream_tail[-2000:]
+                self.state.lastError = self._widget_output_tail
+            self._widget_stream_tail = ""
             self.widget_process = None
             self.state.running = False
             self.state.status = "Widget exited"
-            for source, output in (("stderr", stderr_output), ("stdout", stdout_output)):
-                if not output:
-                    continue
-                for raw_line in output.splitlines():
-                    text = raw_line.rstrip("\r\n")
-                    if not text:
-                        continue
-                    self._pending_widget_logs.append(
-                        {
-                            "source": source,
-                            "text": text,
-                            "timestampMs": int(time.time() * 1000),
-                        }
-                    )
-            combined = "\n".join(part for part in [stderr_output.strip(), stdout_output.strip()] if part)
-            if combined:
-                self._widget_output_tail = combined[-2000:]
-                self.state.lastError = self._widget_output_tail
         return asdict(self.state)
 
     def load_widget_config(self, path: str, params: dict[str, Any] | None = None) -> None:
@@ -152,6 +134,11 @@ class EmulatorCore:
                 self.widget_process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 self.widget_process.kill()
+                try:
+                    self.widget_process.wait(timeout=2)
+                except Exception:
+                    pass
+        self._stop_widget_log_readers()
         self.widget_process = None
         self.state.running = False
         self.state.status = "Widget stopped"
@@ -179,6 +166,7 @@ class EmulatorCore:
         child_env.setdefault("SDL_VIDEODRIVER", "dummy")
         child_env.setdefault("SDL_AUDIODRIVER", "dummy")
         child_env.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+        child_env.setdefault("PYTHONUNBUFFERED", "1")
 
         self.widget_process = subprocess.Popen(
             command,
@@ -191,6 +179,50 @@ class EmulatorCore:
         self.state.running = True
         self.state.status = f"Widget running ({os.path.basename(sys.executable)})"
         self.state.lastError = None
+        self._widget_stream_tail = ""
+        self._start_widget_log_readers()
+
+    def _pump_widget_stream(self, stream: Any, source: str) -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                if not line:
+                    break
+                text = line.rstrip("\r\n")
+                if not text:
+                    continue
+                self._widget_log_queue.put(
+                    {
+                        "source": source,
+                        "text": text,
+                        "timestampMs": int(time.time() * 1000),
+                    }
+                )
+                self._widget_stream_tail = (self._widget_stream_tail + "\n" + source + ": " + text)[-4000:]
+        except Exception:
+            pass
+
+    def _start_widget_log_readers(self) -> None:
+        self._stop_widget_log_readers(join_timeout=0.5)
+        self._widget_log_queue = queue.Queue()
+        proc = self.widget_process
+        if proc is None:
+            return
+        threads: list[threading.Thread] = []
+        if proc.stdout is not None:
+            t = threading.Thread(target=self._pump_widget_stream, args=(proc.stdout, "stdout"), daemon=True)
+            t.start()
+            threads.append(t)
+        if proc.stderr is not None:
+            t = threading.Thread(target=self._pump_widget_stream, args=(proc.stderr, "stderr"), daemon=True)
+            t.start()
+            threads.append(t)
+        self._log_reader_threads = threads
+
+    def _stop_widget_log_readers(self, join_timeout: float = 2.0) -> None:
+        for t in self._log_reader_threads:
+            if t.is_alive():
+                t.join(timeout=join_timeout)
+        self._log_reader_threads = []
 
     def apply_command(self, command: dict[str, Any]) -> dict[str, Any]:
         action = command.get("type")
@@ -379,39 +411,15 @@ class EmulatorCore:
         }
 
     def poll_widget_logs(self) -> list[dict[str, Any]]:
-        if self._pending_widget_logs:
-            pending = self._pending_widget_logs
-            self._pending_widget_logs = []
-            return pending
-        if self.widget_process is None:
-            return []
-        streams: list[tuple[str, Any]] = []
-        if self.widget_process.stdout is not None:
-            streams.append(("stdout", self.widget_process.stdout))
-        if self.widget_process.stderr is not None:
-            streams.append(("stderr", self.widget_process.stderr))
-        if not streams:
-            return []
-        ready, _, _ = select.select([stream for _, stream in streams], [], [], 0)
-        if not ready:
-            return []
         result: list[dict[str, Any]] = []
-        for source, stream in streams:
-            if stream not in ready:
-                continue
-            line = stream.readline()
-            if not line:
-                continue
-            text = line.rstrip("\r\n")
-            if not text:
-                continue
-            result.append(
-                {
-                    "source": source,
-                    "text": text,
-                    "timestampMs": int(time.time() * 1000),
-                }
-            )
+        if self._pending_widget_logs:
+            result.extend(self._pending_widget_logs)
+            self._pending_widget_logs = []
+        while True:
+            try:
+                result.append(self._widget_log_queue.get_nowait())
+            except queue.Empty:
+                break
         return result
 
     def shutdown(self) -> None:

@@ -46,7 +46,17 @@ function runTarCreate(workspaceRoot: string, outFile: string): Promise<void> {
       ],
       { stdio: "ignore", env },
     );
-    child.on("error", reject);
+    child.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") {
+        reject(
+          new Error(
+            "Could not run `tar` on PATH (needed to bundle the workspace). On Windows, use Windows 10+ (built-in tar.exe) or Git for Windows; on macOS/Linux, install GNU or BSD tar.",
+          ),
+        );
+        return;
+      }
+      reject(err);
+    });
     child.on("close", (code) => {
       if (code === 0) {
         resolve();

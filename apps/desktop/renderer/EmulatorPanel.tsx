@@ -62,12 +62,8 @@ export function EmulatorPanel() {
   const hasResolvedWorkspaceType = Boolean(state.widgetPath && normalizedWidgetType);
   const showParamsPanel = hasResolvedWorkspaceType && normalizedWidgetType === "widget";
   const showDartLegend = hasResolvedWorkspaceType && normalizedWidgetType === "game";
-  const runningTypeStatus =
-    state.running && normalizedWidgetType === "widget"
-      ? "Widget running (python)"
-      : state.running && normalizedWidgetType === "game"
-        ? "Game running (python)"
-        : null;
+  const projectKindLabel =
+    normalizedWidgetType === "widget" ? "Widget" : normalizedWidgetType === "game" ? "Game" : "Unknown";
 
   useEffect(() => {
     zoomOpenRef.current = zoomOpen;
@@ -559,10 +555,7 @@ export function EmulatorPanel() {
             />
             <div className="box-border m-0 flex w-full max-w-[294px] shrink-0 flex-row items-center justify-center gap-2.5 self-stretch px-2 pb-2 pt-1.5 text-center text-xs text-[var(--color-state-line)]">
               <span>{state.running ? "Running" : "Stopped"}</span>
-              <span>
-                {runningTypeStatus ??
-                  (state.status.startsWith("Screenshot captured: ") ? "Screenshot captured" : state.status)}
-              </span>
+              <span>{projectKindLabel}</span>
               <span>FPS C{captureFps} / R{renderFps}</span>
             </div>
           </div>
@@ -711,9 +704,6 @@ export function EmulatorPanel() {
             })}
           </div>
         ) : null}
-        <div className="box-border m-0 flex min-h-[52px] w-full shrink-0 items-center justify-center border-t border-[var(--color-emulator-border)] px-3 pb-[18px] pt-4 text-center text-xs text-[var(--color-state-line)]">
-          deploy to machine coming soon..
-        </div>
         {captureToast ? (
           <div className="absolute bottom-4 left-1/2 z-10 max-w-[calc(100%-24px)] -translate-x-1/2 rounded-lg border border-[var(--color-toast-border)] bg-[var(--color-toast-backdrop)] px-3 py-2 text-xs text-[var(--color-toast-text)]">
             {captureToast}

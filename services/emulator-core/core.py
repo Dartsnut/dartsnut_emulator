@@ -123,7 +123,7 @@ class EmulatorCore:
         self.state.widgetId = widget_id or None
         self.state.widgetType = str(self.config.get("type", "game"))
         self.capture_base_name = sanitize_name(str(self.config.get("name", "capture")))
-        self.state.status = f"Loaded config: {path}"
+        self.state.status = ""
 
     def stop_widget_process(self) -> None:
         if self.widget_process is None:
@@ -177,7 +177,7 @@ class EmulatorCore:
             env=child_env,
         )
         self.state.running = True
-        self.state.status = f"Widget running ({os.path.basename(sys.executable)})"
+        self.state.status = ""
         self.state.lastError = None
         self._widget_stream_tail = ""
         self._start_widget_log_readers()

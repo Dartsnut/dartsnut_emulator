@@ -17,6 +17,10 @@ import {
   type SaveProviderSettingsRequest,
   type UnbindSlotRequest,
   type UnbindSlotResponse,
+  type DeployConnectRequest,
+  type DeployConnectResponse,
+  type DeployEligibility,
+  type DeployActionResponse,
   type WindowChromeInsets
 } from "@dartsnut/shared-ipc";
 import {
@@ -92,6 +96,18 @@ const api = {
     const handler = (_: unknown, payload: EmulatorLogEntry) => listener(payload);
     ipcRenderer.on(EMULATOR_IPC_CHANNELS.emulatorLog, handler);
     return () => ipcRenderer.removeListener(EMULATOR_IPC_CHANNELS.emulatorLog, handler);
+  },
+  deployGetEligibility: () =>
+    ipcRenderer.invoke(IPCChannels.deployGetEligibility) as Promise<DeployEligibility>,
+  deployConnect: (request: DeployConnectRequest) =>
+    ipcRenderer.invoke(IPCChannels.deployConnect, request) as Promise<DeployConnectResponse>,
+  deployRun: () => ipcRenderer.invoke(IPCChannels.deployRun) as Promise<DeployActionResponse>,
+  deployReload: () => ipcRenderer.invoke(IPCChannels.deployReload) as Promise<DeployActionResponse>,
+  deployStop: () => ipcRenderer.invoke(IPCChannels.deployStop) as Promise<DeployActionResponse>,
+  onDeployLog: (listener: (line: string) => void) => {
+    const handler = (_: unknown, line: string) => listener(line);
+    ipcRenderer.on(IPCChannels.deployLog, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.deployLog, handler);
   },
   assets: {
     getManifest: (workspacePath: string) =>

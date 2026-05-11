@@ -15,6 +15,10 @@ import type {
   SaveProviderSettingsRequest,
   UnbindSlotRequest,
   UnbindSlotResponse,
+  DeployConnectRequest,
+  DeployConnectResponse,
+  DeployEligibility,
+  DeployActionResponse,
   WindowChromeInsets
 } from "@dartsnut/shared-ipc";
 import type {
@@ -48,6 +52,12 @@ declare global {
       onEmulatorState: (listener: (state: EmulatorStateSnapshot) => void) => () => void;
       onEmulatorFrame: (listener: (frame: EmulatorFrame) => void) => () => void;
       onEmulatorLog: (listener: (entry: EmulatorLogEntry) => void) => () => void;
+      deployGetEligibility: () => Promise<DeployEligibility>;
+      deployConnect: (request: DeployConnectRequest) => Promise<DeployConnectResponse>;
+      deployRun: () => Promise<DeployActionResponse>;
+      deployReload: () => Promise<DeployActionResponse>;
+      deployStop: () => Promise<DeployActionResponse>;
+      onDeployLog: (listener: (line: string) => void) => () => void;
       assets: {
         getManifest: (workspacePath: string) => Promise<ManifestSnapshot>;
         onManifest: (listener: (snapshot: ManifestSnapshot) => void) => () => void;

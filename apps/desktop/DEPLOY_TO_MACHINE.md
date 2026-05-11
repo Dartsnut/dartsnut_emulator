@@ -2,6 +2,8 @@
 
 The **Deploy** panel in Dartsnut Chat appears when the open workspace has a valid root `conf.json` (`id`, `type`: `widget` | `game`). It syncs the workspace to a Raspberry Pi-style host under **`~/dartsnut_rpi/apps/<id>/`** over SSH (default dev credential **`rpi` / `rpi`**).
 
+**Desktop OS:** Bundling uses the **`tar`** CLI on your machine (Electron main process). **Windows 10+** ships **`tar.exe`** (BSD/libarchive) with the flags we use (`--format ustar`, gzip); **macOS** and typical Linux installs are supported. **ssh2** is pure Node and works on Windows without OpenSSH being required for the app (TCP from Electron to the Pi).
+
 ## Controls
 
 - **Connect** — SSH to the device, read **`~/dartsnut_rpi/device.json`** → `name` for the UI label, then **`sudo pkill -f`** any command line matching **`dartsnut_rpi/apps/<any id>/main.py`** so no stale debug app **`main.py`** is left running (not limited to the open workspace’s **`id`**). If **`dartsnut_python.service`** is **not** **active** (e.g. left stopped after a dropped connection), **`systemctl restart`** restores it; if already active, the unit is left alone. The primary button reads **Disconnect** while connected; the IP field is locked until you disconnect.

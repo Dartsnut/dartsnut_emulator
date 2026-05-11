@@ -1,0 +1,22 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+
+/* Bridge a few tokens to shorter utilities; semantic colors still live in themes.css */
+@theme {
+  --color-page: var(--color-bg-page);
+  --color-fg: var(--color-text-primary);
+  --color-fg-strong: var(--color-text-strong);
+  --color-fg-muted: var(--color-text-muted);
+  --color-edge: var(--color-border);
+}
+
+@source ".";
+
+/* Preflight omitted — existing global CSS handles Electron window chrome and resets */
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@keyframes composer-send-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

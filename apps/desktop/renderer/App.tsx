@@ -12,6 +12,7 @@ import type {
   WidgetSize
 } from "@dartsnut/shared-ipc";
 import { AssetManagerPanel } from "./AssetManagerPanel";
+import { cn } from "./cn";
 import { EmulatorPanel } from "./EmulatorPanel";
 import { highlightDiffLine, languageFromPath } from "./highlightDiffLine";
 import { ThemeSwitcherIcon } from "./ThemeSwitcher";
@@ -68,12 +69,24 @@ const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
 /** While an agent message is streaming, cap how often we snap the timeline scroll to the bottom. */
 const STREAM_TIMELINE_AUTOSCROLL_MIN_MS = 72;
 const SUPPORTED_WIDGET_SIZES: WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
-/** Keep in sync with `.composer-pill-input { max-height }` in styles.css */
+/** Keep in sync with composer textarea `max-h-[200px]` */
 const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 /** Content taller than one line — switch composer shell from pill to rounded card */
 const COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX = 52;
 const GREETING_TEXT =
   "Hi! I can help you create or modify Dartsnut widgets and games. Pick a workspace folder and tell me what you want to build.";
+
+const chromeIconBtnClass =
+  "inline-flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border-0 bg-transparent p-0 text-[var(--color-app-btn-text)] [app-region:no-drag] [-webkit-app-region:no-drag] hover:enabled:bg-[var(--color-app-btn-bg-hover)] hover:enabled:text-[var(--color-app-btn-text-hover)] focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45";
+
+const intakeChipBaseClass =
+  "m-0 inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-full border border-[var(--color-chip-border)] bg-[var(--color-chip-bg)] px-4 py-2 text-[13px] font-medium leading-snug text-[var(--color-intake-lead)] transition-[background,border-color,box-shadow] duration-150 ease-out hover:enabled:border-[var(--color-chip-hover-border)] hover:enabled:bg-[var(--color-chip-hover-bg)] hover:enabled:shadow-[inset_0_1px_0_var(--color-chip-inset)] focus-visible:border-[var(--color-chip-focus-border)] focus-visible:shadow-[var(--shadow-chip-focus)] focus-visible:outline-none";
+
+const intakeChipPrimaryClass =
+  "border-[var(--color-chip-primary-border)] bg-[var(--color-chip-primary-bg)] hover:enabled:border-[var(--color-chip-primary-border-hover)] hover:enabled:bg-[var(--color-chip-primary-bg-hover)]";
+
+const intakeChipQuietClass =
+  "border-transparent bg-transparent font-normal text-[var(--color-chip-quiet-text)] hover:enabled:bg-[var(--color-chip-bg)] hover:enabled:text-[var(--color-chip-quiet-hover-text)]";
 
 function isSettingsShortcut(event: KeyboardEvent): boolean {
   if (event.key !== ",") {
@@ -634,7 +647,11 @@ export function App() {
     const capped = Math.min(scrollH, COMPOSER_PROMPT_MAX_HEIGHT_PX);
     el.style.height = `${capped}px`;
     el.style.overflowY = scrollH > COMPOSER_PROMPT_MAX_HEIGHT_PX ? "auto" : "hidden";
-    pill.classList.toggle("composer-pill--expanded", scrollH > COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX);
+    if (scrollH > COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX) {
+      pill.dataset.expanded = "true";
+    } else {
+      delete pill.dataset.expanded;
+    }
   }
 
   useLayoutEffect(() => {
@@ -1047,19 +1064,35 @@ export function App() {
   }
 
   return (
-    <main className="app-shell">
-      <header className="window-chrome-band" role="banner">
+    <main
+      className={cn(
+        "app-shell grid h-full w-full items-stretch overflow-visible pt-0",
+        "grid-cols-[minmax(620px,760px)_1fr] grid-rows-[auto_minmax(0,1fr)]",
+        "pr-[var(--window-control-inset-right)] pb-[var(--window-control-inset-bottom)] pl-[var(--window-control-inset-left)]",
+        "max-[1100px]:grid-cols-1 max-[1100px]:grid-rows-[auto_minmax(0,1fr)]"
+      )}
+    >
+      <header
+        className="col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),38px)] items-center gap-1.5 border-b border-edge bg-page [app-region:no-drag] [-webkit-app-region:no-drag]"
+        style={{
+          paddingLeft: "calc(6px + var(--chrome-margin-inline-start))",
+          paddingRight: "calc(6px + var(--chrome-margin-inline-end))",
+          paddingTop: "5px",
+          paddingBottom: "5px"
+        }}
+        role="banner"
+      >
         {screen === "main" ? (
           <>
-            <div className="window-chrome-band__leading">
+            <div className="flex min-w-0 shrink-0 items-center gap-1.5">
               <h1
-                className="window-chrome-band__title"
+                className="m-0 min-w-0 p-0 text-[13px] font-semibold leading-snug tracking-tight text-fg-strong"
                 title={
                   bootstrap?.workspaceRoot ??
                   "Embedded assistant for pygame + pydartsnut"
                 }
               >
-                <span className="window-chrome-band__title-text">
+                <span className="block truncate">
                   {bootstrap?.workspaceRoot
                     ? workspaceFolderBasename(bootstrap.workspaceRoot)
                     : "Dartsnut Agent"}
@@ -1067,7 +1100,7 @@ export function App() {
               </h1>
               <button
                 type="button"
-                className="chrome-icon-btn"
+                className={chromeIconBtnClass}
                 onClick={() => void handleStartNewProject()}
                 disabled={sending}
                 aria-label="Start new project"
@@ -1094,7 +1127,7 @@ export function App() {
               </button>
               <button
                 type="button"
-                className="chrome-icon-btn"
+                className={chromeIconBtnClass}
                 onClick={() => void handlePickWorkspace()}
                 disabled={sending}
                 aria-label="Choose workspace folder"
@@ -1113,17 +1146,20 @@ export function App() {
                 </svg>
               </button>
             </div>
-            <div className="window-chrome-band__drag-spacer" aria-hidden />
-            <div className="window-chrome-band__trailing">
+            <div
+              className="min-h-0 min-w-6 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
+              aria-hidden
+            />
+            <div className="inline-flex shrink-0 items-center gap-2">
               <ThemeSwitcherIcon id="main-theme-icon" value={theme} onChange={handleThemeChange} />
             </div>
           </>
         ) : (
           <>
-            <div className="window-chrome-band__leading">
+            <div className="flex min-w-0 shrink-0 items-center gap-1.5">
               <button
                 type="button"
-                className="chrome-icon-btn"
+                className={chromeIconBtnClass}
                 onClick={() => {
                   setScreen("main");
                   setProviderSettingsError(null);
@@ -1143,28 +1179,55 @@ export function App() {
                   />
                 </svg>
               </button>
-              <h1 className="window-chrome-band__title window-chrome-band__title--settings">
-                <span className="window-chrome-band__title-text">Settings</span>
+              <h1 className="m-0 min-w-0 flex-[0_1_auto] p-0 text-[13px] font-semibold leading-snug tracking-tight text-fg-strong">
+                <span className="block truncate">Settings</span>
               </h1>
             </div>
-            <div className="window-chrome-band__drag-spacer" aria-hidden />
-            <div className="window-chrome-band__trailing">
+            <div
+              className="min-h-0 min-w-6 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
+              aria-hidden
+            />
+            <div className="inline-flex shrink-0 items-center gap-2">
               <ThemeSwitcherIcon id="settings-theme-icon" value={theme} onChange={handleThemeChange} />
             </div>
           </>
         )}
       </header>
       {screen === "main" ? (
-        <section className="left-rail">
-          <div className="app-top">
-            <div className="app-meta">
-              {runtimeError ? <div className="runtime-error">{runtimeError}</div> : null}
-              {pythonRuntimeStatus ? <div className="runtime-status">{pythonRuntimeStatus}</div> : null}
+        <section
+          className={cn(
+            "left-rail col-start-1 row-start-2 grid min-h-0 h-full overflow-visible border-r border-edge bg-[var(--gradient-rail)] pt-[14px] pb-[18px] px-[18px]",
+            "grid-rows-[auto_minmax(0,1fr)_auto] gap-4",
+            "max-[1100px]:col-start-1 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]",
+            "max-[760px]:gap-2.5 max-[760px]:p-3"
+          )}
+        >
+          <div className="flex min-w-0 flex-col gap-2.5">
+            <div className="flex min-w-0 flex-col gap-2">
+              {runtimeError ? (
+                <div
+                  className="m-0 rounded-lg border border-[var(--color-runtime-error-border)] bg-[var(--color-runtime-error-bg)] p-2 text-xs"
+                  role="status"
+                >
+                  {runtimeError}
+                </div>
+              ) : null}
+              {pythonRuntimeStatus ? (
+                <div
+                  className="m-0 rounded-lg border border-[var(--color-runtime-status-border)] bg-[var(--color-runtime-status-bg)] p-2 text-xs text-[var(--color-runtime-status-text)]"
+                  role="status"
+                >
+                  {pythonRuntimeStatus}
+                </div>
+              ) : null}
             </div>
           </div>
 
           <section
-            className={`timeline${autoScrollEnabled ? " timeline--autoscroll" : ""}`}
+            className={cn(
+              "timeline min-h-0 flex flex-col items-start gap-2.5 overflow-auto overscroll-contain",
+              autoScrollEnabled && "timeline--autoscroll"
+            )}
             ref={timelineRef}
             onScroll={(event) => {
               const atBottom = isTimelineNearBottom(event.currentTarget);
@@ -1190,70 +1253,68 @@ export function App() {
             ))}
           </section>
 
-          <section className="composer">
+          <section className="flex flex-col gap-3 border-0 bg-transparent p-0">
             {pendingPrompt && intakeStep ? (
-              <div className="composer-intake" role="region" aria-label="Creation intake">
-                <p className="composer-intake-prompt" id="composer-intake-prompt">
-                  <span className="composer-intake-prompt-lead">Intake required before creation.</span>
+              <div
+                className="flex max-w-full flex-col gap-3 self-stretch rounded-[14px] border border-[var(--color-intake-border)] bg-[var(--gradient-intake)] px-4 pb-4 pt-3.5 shadow-[var(--shadow-intake)]"
+                role="region"
+                aria-label="Creation intake"
+              >
+                <p className="m-0 text-[13px] leading-normal text-[var(--color-intake-text)]" id="composer-intake-prompt">
+                  <span className="inline font-semibold text-[var(--color-intake-lead)]">
+                    Intake required before creation.
+                  </span>
                   {intakeStep === "projectType" ? " Select project type." : ""}
                   {intakeStep === "widgetSize" ? " Select widget size." : ""}
                   {intakeStep === "workspace" ? " Select an empty workspace folder." : ""}
                 </p>
                 {intakeStep === "projectType" ? (
-                  <div
-                    className="composer-intake-chips"
-                    role="group"
-                    aria-labelledby="composer-intake-prompt"
-                  >
+                  <div className="flex flex-wrap items-center gap-2" role="group" aria-labelledby="composer-intake-prompt">
                     <button
                       type="button"
-                      className="composer-intake-chip"
+                      className={intakeChipBaseClass}
                       onClick={() => continueIntake({ projectType: "game", widgetSize: null })}
                     >
                       Game
                     </button>
                     <button
                       type="button"
-                      className="composer-intake-chip"
+                      className={intakeChipBaseClass}
                       onClick={() => continueIntake({ projectType: "widget" })}
                     >
                       Widget
                     </button>
-                    <button type="button" className="composer-intake-chip composer-intake-chip--quiet" onClick={clearIntake}>
+                    <button type="button" className={cn(intakeChipBaseClass, intakeChipQuietClass)} onClick={clearIntake}>
                       Cancel
                     </button>
                   </div>
                 ) : null}
                 {intakeStep === "widgetSize" ? (
-                  <div
-                    className="composer-intake-chips"
-                    role="group"
-                    aria-labelledby="composer-intake-prompt"
-                  >
+                  <div className="flex flex-wrap items-center gap-2" role="group" aria-labelledby="composer-intake-prompt">
                     {SUPPORTED_WIDGET_SIZES.map((size) => (
                       <button
                         key={size}
                         type="button"
-                        className="composer-intake-chip"
+                        className={intakeChipBaseClass}
                         onClick={() => continueIntake({ widgetSize: size })}
                       >
                         {size}
                       </button>
                     ))}
-                    <button type="button" className="composer-intake-chip composer-intake-chip--quiet" onClick={clearIntake}>
+                    <button type="button" className={cn(intakeChipBaseClass, intakeChipQuietClass)} onClick={clearIntake}>
                       Cancel
                     </button>
                   </div>
                 ) : null}
                 {intakeStep === "workspace" ? (
                   <div
-                    className="composer-intake-chips composer-intake-chips--stack"
+                    className="flex flex-col items-stretch gap-2 [&>button]:w-full [&>button]:justify-center"
                     role="group"
                     aria-labelledby="composer-intake-prompt"
                   >
                     <button
                       type="button"
-                      className="composer-intake-chip composer-intake-chip--primary"
+                      className={cn(intakeChipBaseClass, intakeChipPrimaryClass)}
                       onClick={async () => {
                         const pickResult = await api.pickWorkspace({ requireEmpty: true });
                         setBootstrap(pickResult.state);
@@ -1272,7 +1333,7 @@ export function App() {
                     >
                       Choose Empty Workspace
                     </button>
-                    <button type="button" className="composer-intake-chip composer-intake-chip--quiet" onClick={clearIntake}>
+                    <button type="button" className={cn(intakeChipBaseClass, intakeChipQuietClass)} onClick={clearIntake}>
                       Cancel
                     </button>
                   </div>
@@ -1280,10 +1341,16 @@ export function App() {
               </div>
             ) : null}
 
-            <div className="composer-pill" ref={composerPillRef}>
+            <div
+              ref={composerPillRef}
+              className={cn(
+                "flex min-h-[38px] items-end gap-2 rounded-full border border-[var(--color-composer-pill-border)] bg-[var(--color-composer-pill-bg)] py-1 pl-2.5 pr-2 shadow-[var(--shadow-composer-inset)] transition-[border-radius,padding] duration-[180ms] ease-out",
+                "data-[expanded=true]:items-end data-[expanded=true]:rounded-[18px] data-[expanded=true]:px-2.5 data-[expanded=true]:pb-2.5 data-[expanded=true]:pt-2 data-[expanded=true]:pl-3"
+              )}
+            >
               <textarea
                 ref={promptInputRef}
-                className="composer-pill-input"
+                className="m-0 max-h-[200px] min-h-[26px] min-w-0 flex-1 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-0.5 text-[13px] leading-snug text-[var(--color-composer-input)] shadow-none outline-none [font:inherit] placeholder:text-[var(--color-composer-placeholder)] focus:border-0 focus:shadow-none focus:outline-none"
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
                 onKeyDown={(event) => {
@@ -1296,11 +1363,11 @@ export function App() {
                 rows={1}
                 aria-label="Message"
               />
-              <div className="composer-pill-trailing">
+              <div className="flex shrink-0 items-center gap-2">
                 {!autoScrollEnabled ? (
                   <button
                     type="button"
-                    className="composer-pill-scroll"
+                    className="m-0 inline-flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-full border border-[var(--color-composer-scroll-border)] bg-[var(--color-composer-scroll-bg)] p-0 text-[var(--color-composer-scroll-fg)] hover:bg-[var(--color-composer-scroll-hover)]"
                     aria-label="Scroll to bottom and enable auto-scroll"
                     title="Scroll to bottom and enable auto-scroll"
                     onClick={() => {
@@ -1322,14 +1389,17 @@ export function App() {
                 ) : null}
                 <button
                   type="button"
-                  className="composer-pill-send"
+                  className="m-0 inline-flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-full border-0 bg-[var(--color-composer-send-bg)] p-0 text-[var(--color-composer-send-fg)] hover:enabled:bg-[var(--color-composer-send-hover)] disabled:cursor-not-allowed disabled:opacity-45"
                   disabled={chatDisabled}
                   aria-busy={sending}
                   aria-label={sending ? "Sending" : "Send"}
                   onClick={() => void handleSend()}
                 >
                   {sending ? (
-                    <span className="composer-pill-send-busy" aria-hidden />
+                    <span
+                      className="block size-[13px] animate-[composer-send-spin_0.7s_linear_infinite] rounded-full border-2 border-[var(--color-composer-send-busy-border)] border-t-[var(--color-composer-send-fg)]"
+                      aria-hidden
+                    />
                   ) : (
                     <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden>
                       <path
@@ -1348,24 +1418,46 @@ export function App() {
           </section>
         </section>
       ) : (
-        <section className="left-rail settings-screen">
-          <div className="app-top">
-            <div className="app-meta">
-              {providerSettingsError ? <div className="runtime-error">{providerSettingsError}</div> : null}
-              {providerSettingsNotice ? <div className="settings-notice">{providerSettingsNotice}</div> : null}
+        <section
+          className={cn(
+            "left-rail col-start-1 row-start-2 grid min-h-0 h-full overflow-visible border-r border-edge bg-[var(--gradient-rail)] pt-[14px] pb-[18px] px-[18px]",
+            "grid-rows-[auto_minmax(0,1fr)] gap-4",
+            "max-[1100px]:col-start-1 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]",
+            "max-[760px]:gap-2.5 max-[760px]:p-3"
+          )}
+        >
+          <div className="flex min-w-0 flex-col gap-2.5">
+            <div className="flex min-w-0 flex-col gap-2">
+              {providerSettingsError ? (
+                <div
+                  className="m-0 rounded-lg border border-[var(--color-runtime-error-border)] bg-[var(--color-runtime-error-bg)] p-2 text-xs"
+                  role="alert"
+                >
+                  {providerSettingsError}
+                </div>
+              ) : null}
+              {providerSettingsNotice ? (
+                <div className="m-0 rounded-lg border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] p-2 text-xs">
+                  {providerSettingsNotice}
+                </div>
+              ) : null}
             </div>
           </div>
-          <section className="settings-layout">
-            <nav className="settings-menu" aria-label="Settings menu">
-              <button type="button" className="settings-menu-item settings-menu-item-active">
+          <section className="grid min-h-0 grid-cols-[220px_1fr] overflow-hidden rounded-[10px] border border-[var(--color-settings-layout-border)] bg-[var(--color-settings-layout-bg)]">
+            <nav className="flex flex-col gap-2 border-r border-[var(--color-settings-layout-border)] p-3" aria-label="Settings menu">
+              <button
+                type="button"
+                className="w-full rounded-md border-0 bg-[var(--color-settings-menu-active)] px-3 py-2 text-left text-[13px] text-fg [app-region:no-drag] [-webkit-app-region:no-drag]"
+              >
                 OpenAI key configure
               </button>
             </nav>
-            <div className="settings-content">
-              <label className="settings-field">
+            <div className="flex min-h-0 flex-col gap-3 overflow-auto p-4 text-[13px]">
+              <label className="flex flex-col gap-1.5">
                 <span>API endpoint</span>
                 <input
                   type="url"
+                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)]"
                   value={providerSettings.baseUrl}
                   onChange={(event) =>
                     setProviderSettings((prev) => ({ ...prev, baseUrl: event.target.value }))
@@ -1373,10 +1465,11 @@ export function App() {
                   placeholder="https://api.openai.com/v1"
                 />
               </label>
-              <label className="settings-field">
+              <label className="flex flex-col gap-1.5">
                 <span>API key</span>
                 <input
                   type="password"
+                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)]"
                   value={providerSettings.apiKey}
                   onChange={(event) =>
                     setProviderSettings((prev) => ({ ...prev, apiKey: event.target.value }))
@@ -1384,11 +1477,14 @@ export function App() {
                   placeholder="sk-..."
                 />
               </label>
-              <div className="settings-muted">Stored key preview: {maskApiKey(providerSettings.apiKey) || "(empty)"}</div>
-              <label className="settings-field">
+              <div className="text-xs text-fg-muted">
+                Stored key preview: {maskApiKey(providerSettings.apiKey) || "(empty)"}
+              </div>
+              <label className="flex flex-col gap-1.5">
                 <span>Model</span>
                 <input
                   type="text"
+                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)]"
                   value={providerSettings.model}
                   onChange={(event) =>
                     setProviderSettings((prev) => ({ ...prev, model: event.target.value }))
@@ -1396,16 +1492,25 @@ export function App() {
                   placeholder="gpt-4.1-mini"
                 />
               </label>
-              <div className="settings-actions">
-                <button type="button" onClick={() => void handleSaveProviderSettings()} disabled={savingProviderSettings}>
+              <div className="flex justify-start">
+                <button
+                  type="button"
+                  className="mt-0 cursor-pointer rounded-lg border-0 bg-[var(--color-btn-default-bg)] px-3.5 py-2 text-sm font-semibold text-white hover:enabled:bg-[var(--color-btn-default-hover)] disabled:cursor-not-allowed disabled:opacity-55"
+                  onClick={() => void handleSaveProviderSettings()}
+                  disabled={savingProviderSettings}
+                >
                   {savingProviderSettings ? "Saving..." : "Save"}
                 </button>
               </div>
-              <div className="settings-field">
+              <div className="flex flex-col gap-1.5">
                 <span>Python executable</span>
-                <div className="settings-muted">{selectedPythonPath ?? "(auto detect)"}</div>
-                <div className="settings-actions">
-                  <button type="button" onClick={() => void handlePickPythonPath()}>
+                <div className="text-xs text-fg-muted">{selectedPythonPath ?? "(auto detect)"}</div>
+                <div className="flex justify-start">
+                  <button
+                    type="button"
+                    className="mt-0 cursor-pointer rounded-lg border-0 bg-[var(--color-btn-default-bg)] px-3.5 py-2 text-sm font-semibold text-white hover:enabled:bg-[var(--color-btn-default-hover)] disabled:cursor-not-allowed disabled:opacity-55"
+                    onClick={() => void handlePickPythonPath()}
+                  >
                     Choose Python
                   </button>
                 </div>
@@ -1414,12 +1519,21 @@ export function App() {
           </section>
         </section>
       )}
-      <aside className="right-pane">
+      <aside
+        className={cn(
+          "right-pane col-start-2 row-start-2 flex min-h-0 h-full min-w-[460px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+          "max-[1100px]:hidden"
+        )}
+      >
         {assetManifest ? (
-          <div className="right-pane-tabs" role="tablist" aria-label="Right pane view">
+          <div className="flex gap-1.5 border-b border-edge px-4 pb-0 pt-2.5" role="tablist" aria-label="Right pane view">
             <button
               type="button"
-              className={`right-pane-tab${rightPaneTab === "emulator" ? " right-pane-tab--active" : ""}`}
+              className={cn(
+                "-mb-px inline-flex cursor-pointer items-center gap-2 rounded-t-lg border border-transparent border-b-0 px-3.5 pb-2.5 pt-2 text-[13px] font-medium tracking-wide text-[var(--color-text-subtle)] [font:inherit] hover:text-[var(--color-slot-action-text)]",
+                rightPaneTab === "emulator" &&
+                  "border-edge bg-[var(--color-surface-elevated)] text-[var(--color-tab-active-text)]"
+              )}
               role="tab"
               aria-selected={rightPaneTab === "emulator"}
               onClick={() => setRightPaneTab("emulator")}
@@ -1428,29 +1542,36 @@ export function App() {
             </button>
             <button
               type="button"
-              className={`right-pane-tab${rightPaneTab === "assets" ? " right-pane-tab--active" : ""}`}
+              className={cn(
+                "-mb-px inline-flex cursor-pointer items-center gap-2 rounded-t-lg border border-transparent border-b-0 px-3.5 pb-2.5 pt-2 text-[13px] font-medium tracking-wide text-[var(--color-text-subtle)] [font:inherit] hover:text-[var(--color-slot-action-text)]",
+                rightPaneTab === "assets" &&
+                  "border-edge bg-[var(--color-surface-elevated)] text-[var(--color-tab-active-text)]"
+              )}
               role="tab"
               aria-selected={rightPaneTab === "assets"}
               onClick={() => setRightPaneTab("assets")}
             >
               Assets
               {pendingChangeSlotIds.length > 0 ? (
-                <span className="right-pane-tab-badge" aria-label={`${pendingChangeSlotIds.length} pending`}>
+                <span
+                  className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-accent-purple)] px-1.5 text-[11px] font-semibold text-white"
+                  aria-label={`${pendingChangeSlotIds.length} pending`}
+                >
                   {pendingChangeSlotIds.length}
                 </span>
               ) : null}
             </button>
           </div>
         ) : null}
-        <div className={`right-pane-body${assetManifest ? " right-pane-body--tabbed" : ""}`}>
+        <div className="flex min-h-0 flex-1 flex-col">
           <div
-            className="right-pane-section"
+            className="flex min-h-0 flex-1 flex-col"
             hidden={Boolean(assetManifest) && rightPaneTab !== "emulator"}
           >
             <EmulatorPanel />
           </div>
           {assetManifest && bootstrap?.workspaceRoot ? (
-            <div className="right-pane-section" hidden={rightPaneTab !== "assets"}>
+            <div className="flex min-h-0 flex-1 flex-col" hidden={rightPaneTab !== "assets"}>
               <AssetManagerPanel
                 workspacePath={bootstrap.workspaceRoot}
                 manifest={assetManifest}

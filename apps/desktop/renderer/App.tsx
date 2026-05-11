@@ -40,6 +40,8 @@ interface ParsedAction {
   contentClosed?: boolean;
   previousContent?: string;
   isFileWrite: boolean;
+  /** read_file / list_files (and similar) — show path while streaming, no diff body. */
+  isToolPlan?: boolean;
   raw: string;
 }
 
@@ -63,6 +65,8 @@ const STREAM_PREVIEW_LINES = 8;
 const DIFF_MAX_LINES = 220;
 const DIFF_CONTEXT_LINES = 4;
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
+/** While an agent message is streaming, cap how often we snap the timeline scroll to the bottom. */
+const STREAM_TIMELINE_AUTOSCROLL_MIN_MS = 72;
 const SUPPORTED_WIDGET_SIZES: WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
 /** Keep in sync with `.composer-pill-input { max-height }` in styles.css */
 const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
@@ -391,6 +395,24 @@ function parsePartialAgentMessage(text: string): FormattedAgentMessage {
       }
     }
 
+    if (parsedTool.value === "read_file" || parsedTool.value === "list_files") {
+      const pathKey = text.indexOf("\"path\"", toolKey);
+      let pathValue: string | undefined;
+      if (pathKey >= 0 && pathKey < sectionEnd) {
+        const pathQuote = text.indexOf("\"", text.indexOf(":", pathKey));
+        if (pathQuote >= 0 && pathQuote < sectionEnd) {
+          pathValue = parseJsonStringValue(text, pathQuote).value;
+        }
+      }
+      actions.push({
+        tool: parsedTool.value,
+        path: pathValue,
+        isFileWrite: false,
+        isToolPlan: true,
+        raw: ""
+      });
+    }
+
     scanFrom = parsedTool.nextIndex;
   }
 
@@ -444,6 +466,7 @@ function formatAgentMessage(text: string): FormattedAgentMessage {
                 (action.tool === "replace_in_file" &&
                   typeof (action as { find?: unknown }).find === "string" &&
                   typeof (action as { replace?: unknown }).replace === "string"),
+              isToolPlan: action.tool === "read_file" || action.tool === "list_files",
               raw: JSON.stringify(action, null, 2)
             }))
           : []
@@ -512,6 +535,9 @@ export function App() {
   const pendingReplyIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
+  const streamPendingDeltaRef = useRef("");
+  const streamFlushRafRef = useRef<number | null>(null);
+  const streamAutoscrollGateRef = useRef(0);
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
   const timelineRef = useRef<HTMLElement | null>(null);
@@ -562,6 +588,41 @@ export function App() {
     timeline.scrollTop = timeline.scrollHeight;
   }
 
+  function cancelStreamCoalesce() {
+    if (streamFlushRafRef.current !== null) {
+      cancelAnimationFrame(streamFlushRafRef.current);
+      streamFlushRafRef.current = null;
+    }
+    streamPendingDeltaRef.current = "";
+  }
+
+  function flushPendingStreamDeltas() {
+    streamFlushRafRef.current = null;
+    const streamId = activeStreamEntryIdRef.current;
+    const pending = streamPendingDeltaRef.current;
+    streamPendingDeltaRef.current = "";
+    if (!streamId || !pending) {
+      return;
+    }
+    setEntries((prev) =>
+      prev.map((entry) =>
+        entry.id === streamId ? { ...entry, text: entry.text + pending, streaming: true } : entry
+      )
+    );
+    if (streamPendingDeltaRef.current.length > 0) {
+      scheduleStreamFlush();
+    }
+  }
+
+  function scheduleStreamFlush() {
+    if (streamFlushRafRef.current !== null) {
+      return;
+    }
+    streamFlushRafRef.current = window.requestAnimationFrame(() => {
+      flushPendingStreamDeltas();
+    });
+  }
+
   function syncComposerPromptHeight() {
     const el = promptInputRef.current;
     const pill = composerPillRef.current;
@@ -597,6 +658,14 @@ export function App() {
   useLayoutEffect(() => {
     if (!autoScrollEnabled) {
       return;
+    }
+    const streaming = entries.some((entry) => entry.streaming);
+    if (streaming) {
+      const now = performance.now();
+      if (now - streamAutoscrollGateRef.current < STREAM_TIMELINE_AUTOSCROLL_MIN_MS) {
+        return;
+      }
+      streamAutoscrollGateRef.current = now;
     }
     scrollTimelineToBottom();
   }, [entries, autoScrollEnabled]);
@@ -643,23 +712,26 @@ export function App() {
           setEntries((prev) => [...prev, entry]);
           return;
         }
-        setEntries((prev) =>
-          prev.map((entry) =>
-            entry.id === streamId ? { ...entry, text: entry.text + event.delta, streaming: true } : entry
-          )
-        );
+        streamPendingDeltaRef.current += event.delta;
+        scheduleStreamFlush();
         return;
       }
 
       if (event.type === "final" && activeStreamEntryIdRef.current) {
         const streamId = activeStreamEntryIdRef.current;
         activeStreamEntryIdRef.current = null;
+        cancelStreamCoalesce();
         setEntries((prev) =>
           prev.map((entry) =>
             entry.id === streamId ? { ...entry, text: event.content, streaming: false } : entry
           )
         );
         return;
+      }
+
+      if (event.type === "error") {
+        cancelStreamCoalesce();
+        activeStreamEntryIdRef.current = null;
       }
 
       const seq = eventSeqRef.current;
@@ -670,6 +742,7 @@ export function App() {
       setPythonRuntimeStatus(status);
     });
     return () => {
+      cancelStreamCoalesce();
       unsubscribe();
       unsubscribePythonRuntime();
     };
@@ -737,6 +810,7 @@ export function App() {
     }
     return api.onSessionReset(() => {
       discardAgentEventsRef.current = true;
+      cancelStreamCoalesce();
       activeStreamEntryIdRef.current = null;
       pendingReplyIdRef.current = null;
       eventSeqRef.current = 0;
@@ -1393,6 +1467,30 @@ export function App() {
   );
 }
 
+function dedupeToolPlansLastWins(actions: ParsedAction[]): ParsedAction[] {
+  const rev = [...actions].reverse();
+  const seen = new Set<string>();
+  const out: ParsedAction[] = [];
+  for (const action of rev) {
+    if (!action.isToolPlan) {
+      continue;
+    }
+    const key = `${action.tool}\0${action.path ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(action);
+  }
+  out.reverse();
+  return out;
+}
+
+/** Partial agent JSON while tokens arrive — avoid flashing the raw buffer as markdown. */
+function textLooksLikeToolEnvelopeDraft(text: string): boolean {
+  return text.includes("\"response\"") && (text.includes("\"tool\"") || text.includes("\"actions\""));
+}
+
 function AgentMarkdownBody({ source }: { source: string }) {
   return (
     <div className="agent-markdown">
@@ -1405,10 +1503,30 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
   const liveFormatted = formatAgentMessage(text);
   const leadText = liveFormatted.response || liveFormatted.narrative || "";
   const fileActions = liveFormatted.actions.filter((action) => action.isFileWrite);
+  const planActions = dedupeToolPlansLastWins(liveFormatted.actions);
+  const showRawMarkdownFallback =
+    !leadText &&
+    fileActions.length === 0 &&
+    planActions.length === 0 &&
+    (!isStreaming || !textLooksLikeToolEnvelopeDraft(text));
 
   return (
     <div className="entry-content">
       {leadText ? <AgentMarkdownBody source={leadText} /> : null}
+      {planActions.length > 0 ? (
+        <div className="entry-tool-plans" aria-label="Tool calls">
+          {planActions.map((action, idx) => (
+            <div key={`${action.tool}-${action.path ?? idx}`} className="entry-tool-plan">
+              <code className="entry-tool-plan-name">{action.tool}</code>
+              {action.path ? (
+                <span className="entry-tool-plan-path">{action.path}</span>
+              ) : (
+                <span className="entry-tool-plan-path entry-tool-plan-path--muted">…</span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
       {fileActions.map((action, idx) => (
         <div
           key={`${action.tool}-${action.path ?? idx}`}
@@ -1493,7 +1611,7 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
           )}
         </div>
       ))}
-      {!leadText && fileActions.length === 0 ? <AgentMarkdownBody source={text} /> : null}
+      {showRawMarkdownFallback ? <AgentMarkdownBody source={text} /> : null}
     </div>
   );
 }

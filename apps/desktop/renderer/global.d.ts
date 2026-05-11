@@ -55,6 +55,7 @@ declare global {
       onEmulatorLog: (listener: (entry: EmulatorLogEntry) => void) => () => void;
       deployGetEligibility: () => Promise<DeployEligibility>;
       deployConnect: (request: DeployConnectRequest) => Promise<DeployConnectResponse>;
+      deployDisconnect: () => Promise<DeployActionResponse>;
       deployRun: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
       deployReload: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
       deployStop: () => Promise<DeployActionResponse>;

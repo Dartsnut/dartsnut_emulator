@@ -73,6 +73,27 @@ export function DeployPanel({
     }
   }
 
+  async function handleDisconnect() {
+    if (!api?.deployDisconnect) {
+      return;
+    }
+    setLastError(null);
+    setBusyAction("disconnect");
+    try {
+      const result = await api.deployDisconnect();
+      if (!result.ok) {
+        setLastError(result.error);
+        return;
+      }
+      setConnected(false);
+      setDeviceName(null);
+    } catch (e) {
+      setLastError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function run(action: "run" | "reload" | "stop") {
     if (!api) {
       return;
@@ -127,7 +148,7 @@ export function DeployPanel({
     }
   }
 
-  if (!api?.deployConnect) {
+  if (!api?.deployConnect || !api?.deployDisconnect) {
     return (
       <div className="flex flex-col gap-2 p-4 text-sm text-[var(--color-text-subtle)]">
         Deploy bridge unavailable. Rebuild the desktop app.
@@ -144,14 +165,31 @@ export function DeployPanel({
           className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2 font-mono text-[13px] text-[var(--color-input-text)] outline-none focus:border-[var(--color-input-focus-border)]"
           placeholder="192.168.x.x"
           value={host}
-          disabled={busyAction !== null}
+          disabled={busyAction !== null || connected}
           onChange={(e) => setHost(e.target.value)}
         />
       </label>
 
       <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <button type="button" className={toolbarBtn} disabled={busyAction !== null || !host.trim()} onClick={() => void handleConnect()}>
-          {busyAction === "connect" ? "Connecting…" : "Connect"}
+        <button
+          type="button"
+          className={toolbarBtn}
+          disabled={busyAction !== null || (!connected && !host.trim())}
+          onClick={() => {
+            if (connected) {
+              void handleDisconnect();
+            } else {
+              void handleConnect();
+            }
+          }}
+        >
+          {busyAction === "connect"
+            ? "Connecting…"
+            : busyAction === "disconnect"
+              ? "Disconnecting…"
+              : connected
+                ? "Disconnect"
+                : "Connect"}
         </button>
         <span className="text-xs text-[var(--color-text-subtle)]">
           {connected ? (

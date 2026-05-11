@@ -102,6 +102,8 @@ const api = {
     ipcRenderer.invoke(IPCChannels.deployGetEligibility) as Promise<DeployEligibility>,
   deployConnect: (request: DeployConnectRequest) =>
     ipcRenderer.invoke(IPCChannels.deployConnect, request) as Promise<DeployConnectResponse>,
+  deployDisconnect: () =>
+    ipcRenderer.invoke(IPCChannels.deployDisconnect) as Promise<DeployActionResponse>,
   deployRun: (request?: DeployLaunchRequest) =>
     ipcRenderer.invoke(IPCChannels.deployRun, request) as Promise<DeployActionResponse>,
   deployReload: (request?: DeployLaunchRequest) =>

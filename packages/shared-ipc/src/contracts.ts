@@ -24,6 +24,7 @@ export const IPCChannels = {
   windowChromeInsetsChanged: "shell:window-chrome-insets-changed",
   deployGetEligibility: "deploy:get-eligibility",
   deployConnect: "deploy:connect",
+  deployDisconnect: "deploy:disconnect",
   deployRun: "deploy:run",
   deployReload: "deploy:reload",
   deployStop: "deploy:stop",

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { cn } from "./cn";
 import type {
   AssetBindError,
   AssetBindErrorCode,
@@ -210,12 +211,12 @@ export function AssetManagerPanel({
   }
 
   return (
-    <div className="asset-manager">
-      <header className="asset-manager-header">
-        <h2 className="asset-manager-title">Assets</h2>
+    <div className="flex h-full min-h-0 flex-col gap-3 p-4">
+      <header className="flex items-center justify-between gap-3">
+        <h2 className="m-0 text-[15px] font-semibold tracking-wide text-[var(--color-tab-active-text)]">Assets</h2>
         <button
           type="button"
-          className="asset-manager-apply"
+          className="cursor-pointer rounded-lg border border-[var(--color-accent-purple-ring)] bg-[var(--gradient-accent-btn)] px-3.5 py-2 text-xs font-semibold tracking-wide text-[var(--color-badge-text)] [font:inherit] hover:enabled:brightness-110 disabled:cursor-not-allowed disabled:border-[var(--color-border-dashed)] disabled:bg-[var(--color-border-dashed)] disabled:opacity-45"
           onClick={() => void handleApplyAssets()}
           disabled={!hasPendingChanges || inFlight.applying}
           title={
@@ -229,7 +230,10 @@ export function AssetManagerPanel({
       </header>
 
       {errors.__apply__ ? (
-        <div className="asset-manager-error" role="alert">
+        <div
+          className="rounded-lg border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-xs text-[var(--color-error-text)]"
+          role="alert"
+        >
           {describeError({
             slotId: "__apply__",
             code: errors.__apply__.code,
@@ -239,12 +243,12 @@ export function AssetManagerPanel({
       ) : null}
 
       {manifest.slots.length === 0 ? (
-        <div className="asset-manager-empty">
+        <div className="rounded-[10px] border border-dashed border-[var(--color-border-dashed)] p-3.5 text-[13px] text-[var(--color-text-subtle)]">
           This workspace declares <code>dartsnut.assets.json</code> but has no slots yet.
         </div>
       ) : null}
 
-      <ul className="asset-slot-list">
+      <ul className="m-0 flex min-h-0 list-none flex-col gap-2.5 overflow-y-auto p-0">
         {manifest.slots.map((slot) => {
           const error = errors[slot.id];
           const busy = inFlight.slotId === slot.id;
@@ -254,9 +258,12 @@ export function AssetManagerPanel({
           return (
             <li
               key={slot.id}
-              className={`asset-slot${busy ? " asset-slot--busy" : ""}${pending ? " asset-slot--pending" : ""}${
-                dragOverSlot === slot.id ? " asset-slot--drag-over" : ""
-              }`}
+              className={cn(
+                "grid grid-cols-[60px_1fr_auto] items-center gap-3 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-2.5 transition-[border-color,background] duration-100 ease-out",
+                busy && "opacity-70",
+                pending && "border-[var(--color-border-accent-soft)]",
+                dragOverSlot === slot.id && "border-[var(--color-border-accent)] bg-[var(--color-surface-elevated-hover)]"
+              )}
               onDragOver={(event) => {
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "copy";
@@ -275,7 +282,7 @@ export function AssetManagerPanel({
               }}
             >
               <div
-                className="asset-slot-preview"
+                className="flex size-[60px] shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[var(--color-border)] [image-rendering:pixelated]"
                 style={
                   slot.binding
                     ? { backgroundColor: "transparent" }
@@ -286,30 +293,39 @@ export function AssetManagerPanel({
                   <img
                     src={previewSrc}
                     alt={`${slot.id} preview`}
-                    className="asset-slot-preview-img"
+                    className="max-h-full max-w-full [image-rendering:pixelated]"
                     draggable={false}
                   />
                 ) : null}
               </div>
-              <div className="asset-slot-meta">
-                <div className="asset-slot-id">
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <div className="flex items-center gap-2 text-[13.5px] font-semibold text-[var(--color-tab-active-text)]">
                   {slot.id}
-                  {pending ? <span className="asset-slot-pending-dot" title="Pending Apply" aria-hidden /> : null}
+                  {pending ? (
+                    <span
+                      className="inline-block size-2 rounded-full bg-[var(--color-accent-purple)]"
+                      title="Pending Apply"
+                      aria-hidden
+                    />
+                  ) : null}
                 </div>
-                <div className="asset-slot-description">{slot.description}</div>
-                <div className="asset-slot-specs">
+                <div className="truncate text-xs text-[var(--color-text-subtle)]">{slot.description}</div>
+                <div className="text-[11.5px] uppercase tracking-wide text-[var(--color-text-hint)]">
                   {formatKindLabel(slot.kind)} · {formatSize(slot)} · {slot.frames} frame{slot.frames === 1 ? "" : "s"}
                 </div>
                 {error ? (
-                  <div className="asset-slot-error" role="alert">
+                  <div
+                    className="mt-1 rounded-md bg-[var(--color-error-soft-bg)] px-2 py-1.5 text-xs text-[var(--color-error-text)]"
+                    role="alert"
+                  >
                     {describeError({ slotId: slot.id, code: error.code, message: error.message })}
                   </div>
                 ) : null}
               </div>
-              <div className="asset-slot-actions">
+              <div className="flex flex-col items-stretch gap-1.5">
                 <button
                   type="button"
-                  className="asset-slot-action"
+                  className="cursor-pointer whitespace-nowrap rounded-md border border-[var(--color-border-dashed)] bg-[var(--color-slot-action-bg)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-slot-action-text)] [font:inherit] hover:enabled:bg-[var(--color-slot-action-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => pickFileForSlot(slot.id)}
                   disabled={busy}
                 >
@@ -318,7 +334,7 @@ export function AssetManagerPanel({
                 {slot.binding ? (
                   <button
                     type="button"
-                    className="asset-slot-action asset-slot-action--ghost"
+                    className="cursor-pointer whitespace-nowrap rounded-md border border-[var(--color-border-dashed)] bg-transparent px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-subtle)] [font:inherit] hover:enabled:bg-[var(--color-slot-action-bg)] disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={() => void handleUnbind(slot.id)}
                     disabled={busy}
                   >
@@ -331,7 +347,7 @@ export function AssetManagerPanel({
                   }}
                   type="file"
                   accept={slot.kind === "gif" ? "image/gif" : "image/png"}
-                  className="asset-slot-file-input"
+                  className="hidden"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
                     if (!file) {

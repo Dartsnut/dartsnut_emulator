@@ -1,4 +1,17 @@
+import type { CSSProperties } from "react";
 import type { ThemeId } from "./theme";
+import { cn } from "./cn";
+
+const themeSelectChevronStyle: CSSProperties = {
+  backgroundImage:
+    "linear-gradient(45deg, transparent 50%, var(--color-text-muted) 50%), linear-gradient(135deg, var(--color-text-muted) 50%, transparent 50%)",
+  backgroundPosition: "calc(100% - 14px) calc(50% - 3px), calc(100% - 10px) calc(50% - 3px)",
+  backgroundSize: "5px 5px, 5px 5px",
+  backgroundRepeat: "no-repeat"
+};
+
+const themeIconBtnClass =
+  "inline-flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border-0 bg-transparent p-0 text-fg hover:enabled:bg-[var(--color-app-btn-bg-hover)] focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:outline-none [app-region:no-drag] [-webkit-app-region:no-drag]";
 
 interface ThemeSwitcherProps {
   value: ThemeId;
@@ -9,11 +22,18 @@ interface ThemeSwitcherProps {
 
 export function ThemeSwitcher({ value, onChange, id, className }: ThemeSwitcherProps) {
   return (
-    <label className={className ?? "theme-switcher"} htmlFor={id ?? "theme-select"}>
-      <span className="theme-switcher-label">Appearance</span>
+    <label
+      className={cn(
+        "inline-flex shrink-0 items-center gap-2 [app-region:no-drag] [-webkit-app-region:no-drag]",
+        className
+      )}
+      htmlFor={id ?? "theme-select"}
+    >
+      <span className="text-[11px] font-normal tracking-wide text-[var(--theme-switcher-text)]">Appearance</span>
       <select
         id={id ?? "theme-select"}
-        className="theme-switcher-select"
+        className="m-0 cursor-pointer appearance-none rounded-md border border-[var(--theme-switcher-border)] bg-[var(--theme-switcher-bg)] py-1 pl-2 pr-[26px] text-[11px] text-fg [font:inherit] focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:outline-none"
+        style={themeSelectChevronStyle}
         value={value}
         onChange={(event) => onChange(event.target.value as ThemeId)}
         aria-label="Appearance"
@@ -38,7 +58,7 @@ export function ThemeSwitcherIcon({ value, onChange, id }: ThemeSwitcherIconProp
     <button
       type="button"
       id={id}
-      className="theme-switcher-icon-btn"
+      className={themeIconBtnClass}
       aria-label={label}
       title={value === "light" ? "Switch to Dark theme" : "Switch to Light theme"}
       onClick={() => onChange(value === "dark" ? "light" : "dark")}

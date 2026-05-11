@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { EmulatorFrame, EmulatorLogEntry, EmulatorStateSnapshot } from "@dartsnut/emulator-protocol";
+import { cn } from "./cn";
 
 type DartCoord = { x: number; y: number } | null;
 type UiEmulatorLogEntry = EmulatorLogEntry & { id: string };
@@ -18,6 +19,11 @@ const DART_COLORS = Array.from({ length: 12 }, (_, idx) => {
   if (cycle === 2) return "#00ff00";
   return "#ffd800";
 });
+
+const emuToolbarBtn =
+  "box-border inline-flex shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] px-3 py-2 text-sm text-[var(--color-emulator-toolbar-label)]";
+
+const emuToolbarIconBtn = cn(emuToolbarBtn, "size-7 p-0");
 
 export function EmulatorPanel() {
   const CANVAS_BASE_WIDTH = 588;
@@ -492,18 +498,18 @@ export function EmulatorPanel() {
   }
 
   return (
-    <section className="emulator-panel">
+    <section className="flex h-full min-h-0 flex-col bg-[var(--color-emulator-bg)] text-[var(--color-emulator-text)]">
       {!bridgeReady ? (
-        <header className="emulator-panel-header">
-          <div className="warning">Desktop bridge is unavailable.</div>
+        <header className="border-b border-[var(--color-emulator-border)] p-4">
+          <div className="m-0 text-xs text-[var(--color-warning-text)]">Desktop bridge is unavailable.</div>
         </header>
       ) : null}
-      <div className="emulator-canvas">
-        <div className="emulator-screen-slot">
-          <div className="emulator-screen-frame">
+      <div className="relative flex min-h-0 flex-1 flex-col items-stretch justify-start gap-0 overflow-hidden p-0 text-[var(--color-emulator-canvas-hint)]">
+        <div className="box-border flex min-h-0 min-w-0 w-full flex-1 flex-row items-center justify-center gap-2 overflow-hidden p-0">
+          <div className="flex shrink-0 flex-col items-center gap-1.5">
             <canvas
               ref={canvasRef}
-              className="screen-canvas"
+              className="block h-[400px] w-[294px] shrink-0 border-0 bg-transparent [image-rendering:pixelated]"
               width={CANVAS_BASE_WIDTH}
               height={CANVAS_BASE_HEIGHT}
               onContextMenu={(e) => e.preventDefault()}
@@ -551,7 +557,7 @@ export function EmulatorPanel() {
                 }
               }}
             />
-            <div className="state-line">
+            <div className="box-border m-0 flex w-full max-w-[294px] shrink-0 flex-row items-center justify-center gap-2.5 self-stretch px-2 pb-2 pt-1.5 text-center text-xs text-[var(--color-state-line)]">
               <span>{state.running ? "Running" : "Stopped"}</span>
               <span>
                 {runningTypeStatus ??
@@ -560,9 +566,14 @@ export function EmulatorPanel() {
               <span>FPS C{captureFps} / R{renderFps}</span>
             </div>
           </div>
-          <div className="emulator-toolbar emulator-controls" role="toolbar" aria-label="Emulator actions">
+          <div
+            className="flex shrink-0 flex-col flex-nowrap items-center justify-start gap-1.5 border-t-0 p-0 [app-region:no-drag] [-webkit-app-region:no-drag]"
+            role="toolbar"
+            aria-label="Emulator actions"
+          >
             <button
               type="button"
+              className={emuToolbarIconBtn}
               disabled={!bridgeReady || !widgetPath.trim()}
               onClick={() => void applyWidgetPathAndReload(widgetPath)}
               aria-label="Start or reload"
@@ -581,6 +592,7 @@ export function EmulatorPanel() {
             </button>
             <button
               type="button"
+              className={emuToolbarIconBtn}
               disabled={!bridgeReady}
               onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "capture_screenshot" })}
               aria-label="Capture screenshot"
@@ -598,7 +610,13 @@ export function EmulatorPanel() {
                 <circle cx="12" cy="13" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
               </svg>
             </button>
-            <button type="button" onClick={() => setZoomOpen(true)} aria-label="Zoom 2x" title="Zoom 2x">
+            <button
+              type="button"
+              className={emuToolbarIconBtn}
+              onClick={() => setZoomOpen(true)}
+              aria-label="Zoom 2x"
+              title="Zoom 2x"
+            >
               <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
                 <circle cx="11" cy="11" r="8" fill="none" stroke="currentColor" strokeWidth="2" />
                 <path
@@ -613,6 +631,7 @@ export function EmulatorPanel() {
             </button>
             <button
               type="button"
+              className={emuToolbarIconBtn}
               onClick={() => setLogsOpen((prev) => !prev)}
               aria-label={logsOpen ? "Hide Python logs" : "Show Python logs"}
               title={logsOpen ? "Hide logs" : "Logs"}
@@ -631,12 +650,12 @@ export function EmulatorPanel() {
           </div>
         </div>
         {showParamsPanel ? (
-          <div className="params-panel">
-            <div className="params-panel-header">
+          <div className="mx-3.5 mb-0 mt-0 box-border flex w-auto shrink-0 flex-col gap-2 self-stretch rounded-lg border border-[var(--color-params-border)] bg-[var(--color-params-bg)] px-4 py-3">
+            <div className="text-xs text-[var(--color-params-header)]">
               <strong>Widget Params (JSON)</strong>
             </div>
             <textarea
-              className="params-textarea"
+              className="box-border max-h-[200px] min-h-[100px] w-full resize-y rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 font-mono text-xs leading-snug text-[var(--color-input-text)] [font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)]"
               value={widgetParamsText}
               onChange={(e) => {
                 setWidgetParamsText(e.target.value);
@@ -645,19 +664,26 @@ export function EmulatorPanel() {
               spellCheck={false}
               placeholder='{"city":"tokyo"}'
             />
-            {widgetParamsError ? <div className="params-error">{widgetParamsError}</div> : null}
-            <div className="params-actions">
-              <button type="button" disabled={!bridgeReady} onClick={() => formatParamsJsonInEditor()}>
+            {widgetParamsError ? (
+              <div className="rounded-md border border-[var(--color-params-error-border)] bg-[var(--color-params-error-bg)] px-2 py-1.5 text-xs text-[var(--color-params-error-text)]">
+                {widgetParamsError}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button type="button" className={emuToolbarBtn} disabled={!bridgeReady} onClick={() => formatParamsJsonInEditor()}>
                 Format JSON
               </button>
-              <button type="button" disabled={!bridgeReady} onClick={() => void applyParamsAndReload()}>
+              <button type="button" className={emuToolbarBtn} disabled={!bridgeReady} onClick={() => void applyParamsAndReload()}>
                 Apply Params + Reload
               </button>
             </div>
           </div>
         ) : null}
         {showDartLegend ? (
-          <div className="dart-legend" aria-label="Dart indexes">
+          <div
+            className="box-border grid w-full shrink-0 grid-cols-6 justify-items-center gap-2 px-2 pb-2"
+            aria-label="Dart indexes"
+          >
             {DART_COLORS.map((color, idx) => {
               const isSelected = idx === selectedDartIndex;
               const isPlaced = dartCoords[idx] !== null;
@@ -666,7 +692,12 @@ export function EmulatorPanel() {
                 <button
                   type="button"
                   key={`dart-${idx + 1}`}
-                  className={`dart-dot${useLightText ? " light-text" : ""}${isSelected ? " selected" : ""}${isPlaced ? " placed" : ""}`}
+                  className={cn(
+                    "box-border inline-flex size-[30px] cursor-pointer items-center justify-center justify-self-center rounded-full border border-[var(--color-dart-dot-border)] p-0 text-[11px] font-semibold opacity-35 [image-rendering:pixelated]",
+                    useLightText ? "text-[var(--color-dart-dot-fg-light)]" : "text-[var(--color-dart-dot-fg)]",
+                    isPlaced && "opacity-100",
+                    isSelected && "outline outline-2 outline-offset-2 outline-[var(--color-text-strong)]"
+                  )}
                   style={{ backgroundColor: color }}
                   title={`F${idx + 1}${isPlaced ? " • placed" : " • not placed"}${isSelected ? " • selected" : ""}`}
                   onClick={() => {
@@ -680,43 +711,86 @@ export function EmulatorPanel() {
             })}
           </div>
         ) : null}
-        <div className="emulator-deploy-placeholder">deploy to machine coming soon..</div>
-        {captureToast ? <div className="capture-toast">{captureToast}</div> : null}
+        <div className="box-border m-0 flex min-h-[52px] w-full shrink-0 items-center justify-center border-t border-[var(--color-emulator-border)] px-3 pb-[18px] pt-4 text-center text-xs text-[var(--color-state-line)]">
+          deploy to machine coming soon..
+        </div>
+        {captureToast ? (
+          <div className="absolute bottom-4 left-1/2 z-10 max-w-[calc(100%-24px)] -translate-x-1/2 rounded-lg border border-[var(--color-toast-border)] bg-[var(--color-toast-backdrop)] px-3 py-2 text-xs text-[var(--color-toast-text)]">
+            {captureToast}
+          </div>
+        ) : null}
       </div>
       {zoomOpen ? (
-        <div className="zoom-popover-backdrop" onClick={() => setZoomOpen(false)} role="presentation">
-          <div className="zoom-popover" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Zoomed emulator">
-            <div className="zoom-popover-header">
+        <div
+          className="fixed inset-0 z-[2000] flex items-center justify-center bg-[var(--color-zoom-overlay)]"
+          onClick={() => setZoomOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="flex max-h-[94vh] w-[min(96vw,1260px)] max-w-[96vw] flex-col overflow-hidden rounded-[10px] border border-[var(--color-zoom-popover-border)] bg-[var(--color-zoom-popover-bg)]"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-label="Zoomed emulator"
+          >
+            <div className="flex items-center justify-between border-b border-[var(--color-zoom-popover-border)] px-3 py-2.5">
               <strong>Emulator Zoom 2x</strong>
-              <button onClick={() => setZoomOpen(false)}>Close</button>
+              <button type="button" className={emuToolbarBtn} onClick={() => setZoomOpen(false)}>
+                Close
+              </button>
             </div>
-            <canvas ref={zoomCanvasRef} className="zoom-canvas" width={CANVAS_BASE_WIDTH * 2} height={CANVAS_BASE_HEIGHT * 2} />
+            <canvas
+              ref={zoomCanvasRef}
+              className="mx-auto block max-h-[calc(94vh-52px)] max-w-full object-contain [image-rendering:pixelated]"
+              width={CANVAS_BASE_WIDTH * 2}
+              height={CANVAS_BASE_HEIGHT * 2}
+            />
           </div>
         </div>
       ) : null}
-      <div className={`logs-drawer${logsOpen ? " open" : ""}`} aria-hidden={!logsOpen}>
-        <div className="logs-drawer-header">
+      <div
+        className={cn(
+          "fixed left-0 top-0 z-[2200] flex h-screen w-[min(540px,90vw)] -translate-x-full flex-col border-r border-[var(--color-zoom-popover-border)] bg-[var(--color-input-bg)] transition-transform duration-[180ms] ease-out",
+          logsOpen && "translate-x-0"
+        )}
+        aria-hidden={!logsOpen}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--color-zoom-popover-border)] px-3 pb-2.5 pt-6">
           <strong>Python Logs</strong>
-          <div className="logs-drawer-actions">
-            <button type="button" onClick={() => setLogsPaused((prev) => !prev)}>
+          <div className="flex gap-2">
+            <button type="button" className={emuToolbarBtn} onClick={() => setLogsPaused((prev) => !prev)}>
               {logsPaused ? "Resume" : "Pause"}
             </button>
-            <button type="button" onClick={() => setEmulatorLogs([])}>
+            <button type="button" className={emuToolbarBtn} onClick={() => setEmulatorLogs([])}>
               Clear
             </button>
-            <button type="button" onClick={() => setLogsOpen(false)}>
+            <button type="button" className={emuToolbarBtn} onClick={() => setLogsOpen(false)}>
               Close
             </button>
           </div>
         </div>
-        <div className="logs-drawer-body" ref={logsBodyRef}>
+        <div
+          className="flex-1 overflow-auto px-2.5 py-2 font-mono text-xs leading-snug [font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace]"
+          ref={logsBodyRef}
+        >
           {emulatorLogs.length === 0 ? (
-            <div className="logs-empty">No logs yet.</div>
+            <div className="px-0.5 py-1.5 text-[var(--color-state-line)]">No logs yet.</div>
           ) : (
             emulatorLogs.map((entry) => (
-              <div className={`log-line ${entry.source}`} key={entry.id}>
-                <span className="log-source">{entry.source}</span>
-                <span className="log-text">{entry.text}</span>
+              <div
+                className="flex gap-2 break-words border-b border-[var(--color-log-line-border)] px-0.5 py-1"
+                key={entry.id}
+              >
+                <span
+                  className={cn(
+                    "shrink-0 text-[10px] font-bold uppercase tracking-wide",
+                    entry.source === "stderr" && "text-[var(--color-log-stderr)]",
+                    entry.source === "stdout" && "text-[var(--color-log-stdout)]",
+                    entry.source !== "stderr" && entry.source !== "stdout" && "text-[var(--color-params-header)]"
+                  )}
+                >
+                  {entry.source}
+                </span>
+                <span className="min-w-0 flex-1 whitespace-pre-wrap text-[var(--color-log-text)]">{entry.text}</span>
               </div>
             ))
           )}

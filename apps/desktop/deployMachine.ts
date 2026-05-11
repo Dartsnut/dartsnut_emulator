@@ -2,6 +2,7 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
+import type { ProjectType } from "@dartsnut/shared-ipc";
 import { Client, type Channel, type SFTPWrapper } from "ssh2";
 
 const SSH_USER = "rpi";
@@ -10,6 +11,8 @@ const SSH_PASSWORD = "rpi";
 const REMOTE_UPLOAD_TGZ = "/tmp/dartsnut_deploy_upload.tgz";
 const REMOTE_LOG = "/tmp/dartsnut_deploy.log";
 const REMOTE_PID = "/tmp/dartsnut_dbg.pid";
+/** Widget-only: runner script materialized via heredoc (avoids `sudo bash -c "$(…)"` quote bugs). */
+const REMOTE_WIDGET_RUNNER = "/tmp/dartsnut_deploy_inner.sh";
 
 /** Same tree as `services/dartsnut_python.service` on `dartsnut_rpi` (WorkingDirectory + ExecStart paths). */
 const REMOTE_DARTSNUT_ROOT = "/home/rpi/dartsnut_rpi";
@@ -132,7 +135,7 @@ export class DeployMachineSession {
 
   private tailChannel: Channel | null = null;
 
-  constructor(private readonly emitLog: DeployLogFn) {}
+  constructor(private readonly emitLog: DeployLogFn) { }
 
   get connected(): boolean {
     return this.client !== null;
@@ -238,7 +241,7 @@ export class DeployMachineSession {
       }
       this.emitLog(`[deploy] Synced workspace to ~/dartsnut_rpi/apps/${appId}`);
     } finally {
-      await fsp.unlink(tmpTar).catch(() => {});
+      await fsp.unlink(tmpTar).catch(() => { });
     }
   }
 
@@ -268,24 +271,25 @@ export class DeployMachineSession {
     );
   }
 
-  async startDebugPython(appId: string): Promise<void> {
+  async startDebugPython(
+    appId: string,
+    launch: { projectType: ProjectType; widgetParams?: Record<string, unknown> },
+  ): Promise<void> {
     if (!this.client) {
       throw new Error("Not connected.");
     }
     /**
      * Run the synced widget/game entrypoint (`apps/<id>/main.py`), not the repo-root runtime (`main.py`).
-     * `cwd` is the app folder so relative paths behave like `widget_lifecycle` subprocesses.
-     * `python -u` + PYTHONUNBUFFERED so `/tmp/dartsnut_deploy.log` receives lines immediately.
+     * Tar sync updates workspace **files** only. Widget JSON is `JSON.stringify` from IPC on each Run/Reload.
+     *
+     * **Widgets:** do not pass a one-liner to `sudo bash -c "…"` — nested `"` / `\` break easily. Instead
+     * `sudo tee` writes **`REMOTE_WIDGET_RUNNER`** via a quoted heredoc; the file holds plain bash:
+     * base64 decode → `PARAMS`, then `exec python … --params "$PARAMS"`.
      */
     const appDir = `${REMOTE_DARTSNUT_ROOT}/apps/${appId}`;
     const appMainPy = `${appDir}/main.py`;
-    const innerCmd = [
-      `cd ${JSON.stringify(appDir)}`,
-      `export PYTHONUNBUFFERED=1 DARTSNUT_LOG_LEVEL=INFO`,
-      `exec ${JSON.stringify(REMOTE_PYTHON_BIN)} -u ${JSON.stringify(appMainPy)}`,
-    ].join(" && ");
     const passAssign = "PASS=" + JSON.stringify(SSH_PASSWORD);
-    const script = [
+    const scriptHead = [
       "set -eo pipefail",
       "LOG=" + REMOTE_LOG,
       "PIDFILE=" + REMOTE_PID,
@@ -293,14 +297,50 @@ export class DeployMachineSession {
       'echo "$PASS" | sudo -S truncate -s 0 "$LOG" 2>/dev/null || true',
       'echo "$PASS" | sudo -S chmod 666 "$LOG" 2>/dev/null || true',
       'printf "%s\\n" "[deploy] spawning python $(date -Is)" >> "$LOG"',
-      'echo "$PASS" | sudo -S bash -c ' + JSON.stringify(innerCmd) + ' >> "$LOG" 2>&1 &',
-      'echo $! > "$PIDFILE"',
-    ].join("\n");
+    ];
+    let script: string;
+    if (launch.projectType === "widget") {
+      const paramsJson = JSON.stringify(launch.widgetParams ?? {});
+      const paramsB64 = Buffer.from(paramsJson, "utf8").toString("base64");
+      let eofMarker = `DARTSNUT_DEPLOY_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+      const innerBody = [
+        "#!/usr/bin/env bash",
+        "set -eo pipefail",
+        `cd ${JSON.stringify(appDir)}`,
+        "export PYTHONUNBUFFERED=1 DARTSNUT_LOG_LEVEL=INFO",
+        `PARAMS=$(printf '%s' '${paramsB64}' | base64 -d)`,
+        `exec ${JSON.stringify(REMOTE_PYTHON_BIN)} -u ${JSON.stringify(appMainPy)} --params "$PARAMS"`,
+      ].join("\n");
+      while (innerBody.includes(eofMarker)) {
+        eofMarker = `DARTSNUT_DEPLOY_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+      }
+      script = [
+        ...scriptHead,
+        `echo "$PASS" | sudo -S tee ${JSON.stringify(REMOTE_WIDGET_RUNNER)} > /dev/null <<'${eofMarker}'`,
+        innerBody,
+        eofMarker,
+        `echo "$PASS" | sudo -S chmod 755 ${JSON.stringify(REMOTE_WIDGET_RUNNER)} 2>/dev/null || true`,
+        `echo "$PASS" | sudo -S bash ${JSON.stringify(REMOTE_WIDGET_RUNNER)} >> "$LOG" 2>&1 &`,
+        'echo $! > "$PIDFILE"',
+      ].join("\n");
+    } else {
+      const innerCmd = [
+        `cd ${JSON.stringify(appDir)}`,
+        `export PYTHONUNBUFFERED=1 DARTSNUT_LOG_LEVEL=INFO`,
+        `exec ${JSON.stringify(REMOTE_PYTHON_BIN)} -u ${JSON.stringify(appMainPy)}`,
+      ].join(" && ");
+      script = [
+        ...scriptHead,
+        'echo "$PASS" | sudo -S bash -c ' + JSON.stringify(innerCmd) + ' >> "$LOG" 2>&1 &',
+        'echo $! > "$PIDFILE"',
+      ].join("\n");
+    }
     const { stderr, code } = await execBashScriptStdin(this.client, script);
     if (code !== 0) {
       throw new Error(stderr.trim() || `failed to start debug python (exit ${code})`);
     }
-    this.emitLog(`[deploy] Started debug Python (${appMainPy}, cwd ${appDir}, logs → ${REMOTE_LOG})`);
+    const kind = launch.projectType === "widget" ? "widget" : "game";
+    this.emitLog(`[deploy] Launching ${kind}: ${appMainPy} · ${REMOTE_LOG}`);
   }
 
   stopLogTail(): void {

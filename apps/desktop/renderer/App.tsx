@@ -574,6 +574,8 @@ export function App() {
     ok: false,
     reason: "no_workspace"
   });
+  const [widgetParamsText, setWidgetParamsText] = useState("{}");
+  const [widgetParamsError, setWidgetParamsError] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeId>(() => resolveThemeFromEnvironment());
 
   const api = window.dartsnutApi;
@@ -822,6 +824,7 @@ export function App() {
   }, [api, bootstrap?.workspaceRoot]);
 
   const deployEligible = deployEligibility.ok;
+  const deployPanelShowsWidgetParams = deployEligible && deployEligibility.projectType === "widget";
 
   // Reset to Emulator tab when the active tab is no longer available.
   useEffect(() => {
@@ -1614,13 +1617,24 @@ export function App() {
               (Boolean(assetManifest) || deployEligible) && rightPaneTab !== "emulator" && "hidden"
             )}
           >
-            <EmulatorPanel />
+            <EmulatorPanel
+              widgetParamsText={widgetParamsText}
+              setWidgetParamsText={setWidgetParamsText}
+              widgetParamsError={widgetParamsError}
+              setWidgetParamsError={setWidgetParamsError}
+            />
           </div>
           {deployEligible ? (
             <div
               className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "deploy" && "hidden")}
             >
-              <DeployPanel />
+              <DeployPanel
+                showWidgetParams={deployPanelShowsWidgetParams}
+                widgetParamsText={widgetParamsText}
+                setWidgetParamsText={setWidgetParamsText}
+                widgetParamsError={widgetParamsError}
+                setWidgetParamsError={setWidgetParamsError}
+              />
             </div>
           ) : null}
           {assetManifest && bootstrap?.workspaceRoot ? (

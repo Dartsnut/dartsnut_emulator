@@ -226,6 +226,12 @@ export type DeployConnectResponse =
 
 export type DeployActionResponse = { ok: true } | { ok: false; error: string };
 
+/** Optional payload for `deploy:run` / `deploy:reload` when the workspace is a widget. */
+export interface DeployLaunchRequest {
+  /** JSON object text; passed to the device as `main.py --params <json>`. */
+  widgetParamsJson?: string;
+}
+
 /**
  * Validates workspace `conf.json` content for the debug deploy module.
  * Requires parseable JSON object with non-empty `id` and `type` of widget or game.

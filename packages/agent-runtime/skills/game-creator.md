@@ -75,7 +75,7 @@ By default, root the game at the **workspace / game directory**:
 - **`sounds/`** or **`sound/`** — BGM/SFX placeholders (optional README).
 - Optional **`game/`** package for modular code: `state.py`, `render.py` / `ui.py`, `board.py`, etc.
 - **`README.md`** — how to preview in app (**Start / Reload**, **Logs**) — wording in **`dartsnut-skill`**
-- Optional **`requirements.txt`** / **`pyproject.toml`** listing **only** libraries the code actually uses (`pygame`, `pydartsnut`, optional `pillow`) — **never** add unrelated third-party packages.
+- Optional **`requirements.txt`** / **`pyproject.toml`** listing **only** libraries the code actually uses (`pygame-ce`, `pydartsnut`, optional `pillow`; code still **`import pygame`**) — **never** add unrelated third-party packages.
 
 Within pygame code, separate **`handle_events` → `update` → `draw`** (or equivalent). When rendering text with `font.render(...)`, use **`antialias=False`** for crisp text and lower overhead on device.
 

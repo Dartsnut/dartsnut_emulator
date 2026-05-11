@@ -311,6 +311,9 @@ export function EmulatorPanel({
     });
 
     const stopLog = window.dartsnutApi.onEmulatorLog((entry: EmulatorLogEntry) => {
+      if (entry.text.startsWith("[python-setup]")) {
+        return;
+      }
       if (logsPaused) return;
       const logEntry: UiEmulatorLogEntry = {
         ...entry,

@@ -219,6 +219,10 @@ export class SessionEngine {
     return lines.join("\n");
   }
 
+  /** Per-turn: mirror the user's natural language in assistant-visible prose. */
+  private static readonly userLanguageMirrorSystemPrompt =
+    "Language: In explanations, status text, and questions to the user, try to match the natural language of the user's latest message. If it is mostly English or too short to tell, use English. Do not translate code, file paths, JSON keys, or conventional API or library names.";
+
   /** Extract top-level `{ ... }` spans (possibly multiple JSON objects in one reply). */
   private extractTopLevelJsonObjects(raw: string): string[] {
     const spans: string[] = [];
@@ -753,6 +757,7 @@ export class SessionEngine {
     const messages: ChatMessage[] = [
       { role: "system", content: this.options.skillPrompt },
       { role: "system", content: this.buildToolPrompt() },
+      { role: "system", content: SessionEngine.userLanguageMirrorSystemPrompt },
       { role: "user", content: prompt }
     ];
 

@@ -13,6 +13,7 @@ import type {
   ReadPreviewRequest,
   ReadPreviewResponse,
   SaveProviderSettingsRequest,
+  SendPromptResponse,
   UnbindSlotRequest,
   UnbindSlotResponse,
   DeployConnectRequest,
@@ -20,7 +21,8 @@ import type {
   DeployEligibility,
   DeployActionResponse,
   DeployLaunchRequest,
-  WindowChromeInsets
+  WindowChromeInsets,
+  type ShellUiTheme
 } from "@dartsnut/shared-ipc";
 import type {
   EmulatorCommand,
@@ -34,9 +36,10 @@ declare global {
     dartsnutApi: {
       getBootstrapState: () => Promise<BootstrapState>;
       getWindowChromeInsets: () => Promise<WindowChromeInsets>;
+      setShellUiTheme: (theme: ShellUiTheme) => Promise<void>;
       startNewProject: () => Promise<BootstrapState>;
       pickWorkspace: (request?: PickWorkspaceRequest) => Promise<PickWorkspaceResponse>;
-      sendPrompt: (request: PromptRequest) => Promise<{ ok: boolean }>;
+      sendPrompt: (request: PromptRequest) => Promise<SendPromptResponse>;
       cancelAgent: () => Promise<{ ok: boolean }>;
       getProviderSettings: () => Promise<ProviderSettings>;
       getPythonRuntimeStatus: () => Promise<string | null>;

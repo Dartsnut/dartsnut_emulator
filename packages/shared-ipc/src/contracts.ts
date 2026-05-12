@@ -24,6 +24,8 @@ export const IPCChannels = {
   windowChromeInsets: "shell:window-chrome-insets",
   /** Main → renderer: safe-area around OS window controls (logical px). */
   windowChromeInsetsChanged: "shell:window-chrome-insets-changed",
+  /** Renderer → main: align native title bar / system chrome with in-app light or dark theme. */
+  shellUiTheme: "shell:ui-theme",
   deployGetEligibility: "deploy:get-eligibility",
   /** Main → renderer: workspace `conf.json` created/changed; payload is {@link DeployEligibility}. */
   deployEligibilityChanged: "deploy:eligibility-changed",
@@ -44,6 +46,9 @@ export interface WindowChromeInsets {
   bottom: number;
 }
 
+/** Matches renderer `ThemeId`; used to style Windows `titleBarOverlay` and `nativeTheme`. */
+export type ShellUiTheme = "dark" | "light";
+
 export type ProviderStatus = "ready" | "missing_config" | "invalid";
 
 export interface BootstrapState {
@@ -58,10 +63,26 @@ export interface PromptRequest {
   widgetSize?: WidgetSize;
   workspacePath?: string;
   templateMode?: "game-creator" | "widget-creator" | "asset-applier";
+  /**
+   * When true and no workspace is selected yet, main runs a short **creation intake** turn
+   * (host tool `dartsnut_project_intake` only), then may chain into the normal creator run once
+   * workspace + routing are resolved.
+   */
+  creationIntake?: boolean;
   /** Required when `templateMode === "asset-applier"`. */
   assetApply?: {
     slotIds: string[];
     projectType: ProjectType;
+  };
+}
+
+/** IPC return from `sendPrompt` — optional routing snapshot for the renderer session chrome. */
+export interface SendPromptResponse {
+  ok: boolean;
+  sessionRouting?: {
+    templateMode: "game-creator" | "widget-creator";
+    projectType: ProjectType;
+    widgetSize?: WidgetSize;
   };
 }
 

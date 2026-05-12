@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
+import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
 import type {
   ChatMessage,
   CompletionOptions,
@@ -36,12 +37,19 @@ type ToolAction =
       tool: "copy_asset_file";
       source: string;
       path: string;
+    }
+  | {
+      tool: "dartsnut_project_intake";
+      args: Record<string, unknown>;
     };
 
 interface AgentActionEnvelope {
   response?: string;
   actions?: unknown[];
 }
+
+/** Host (Electron main) executes `dartsnut_project_intake`; returns JSON text for the model. */
+export type HostIntakeToolHandler = (args: Record<string, unknown>) => Promise<string>;
 
 export interface SessionEngineOptions {
   provider: CompletionProvider;
@@ -50,6 +58,11 @@ export interface SessionEngineOptions {
   assetRoots?: {
     widgetFonts?: string;
   };
+  /** When set, replaces the default {@link AGENT_TOOL_SCHEMAS} on completion requests. */
+  completionTools?: ChatCompletionTool[];
+  hostIntakeToolHandler?: HostIntakeToolHandler;
+  /** Skip the initial `workspacePolicy.resolveWithinRoot(".")` probe (intake placeholder roots). */
+  skipInitialWorkspaceResolve?: boolean;
 }
 
 export class SessionEngine {
@@ -130,12 +143,24 @@ export class SessionEngine {
         replace: action.replace
       };
     }
+    if (tool === "dartsnut_project_intake") {
+      const record = action as Record<string, unknown>;
+      const { tool: _ignored, ...args } = record;
+      if (typeof args.action !== "string" || !args.action) {
+        throw new Error("dartsnut_project_intake requires a string action.");
+      }
+      return { tool: "dartsnut_project_intake", args };
+    }
     throw new Error(`Unsupported tool action: ${tool || "unknown"}`);
   }
 
   private buildToolPrompt(): string {
-    return [
-      "You have native tools available via the API: list_files, read_file, write_file, replace_in_file, copy_asset_file.",
+    const completionTools = this.options.completionTools ?? AGENT_TOOL_SCHEMAS;
+    const names = completionTools.map((t) => (t.type === "function" ? t.function.name : ""));
+    const hasIntake = names.includes("dartsnut_project_intake");
+    const fileToolLine = `You have native tools available via the API: ${names.filter(Boolean).join(", ")}.`;
+    const lines = [
+      fileToolLine,
       "Call them through the standard tool_calls mechanism — do not emit JSON envelopes, <tool_call> XML, or any other text-shaped tool syntax.",
       "Rules:",
       "1) Use workspace-relative paths only.",
@@ -144,7 +169,13 @@ export class SessionEngine {
       "4) Use copy_asset_file for binary assets (fonts/images) instead of read_file/write_file.",
       "5) copy_asset_file strips a trailing -<8 hex> hash before the file extension on both source lookup and destination filenames (e.g. big_digits-ab12cd34.pil -> big_digits.pil).",
       "6) When you have nothing more to do, reply with a single short status sentence and no tool calls."
-    ].join("\n");
+    ];
+    if (hasIntake) {
+      lines.push(
+        "Intake: **dartsnut_project_intake** is host-executed — use `set_project_type`, `set_widget_size`, `pick_workspace`, and `read_workspace_conf` instead of composer chips. After `read_workspace_conf`, ask at most one focused question when the folder already has a valid `conf.json`, invalid JSON, or a type/size mismatch."
+      );
+    }
+    return lines.join("\n");
   }
 
   /** Extract top-level `{ ... }` spans (possibly multiple JSON objects in one reply). */
@@ -377,7 +408,13 @@ export class SessionEngine {
     return output.sort();
   }
 
-  private executeAction(action: ToolAction): string {
+  private async executeAction(action: ToolAction): Promise<string> {
+    if (action.tool === "dartsnut_project_intake") {
+      if (!this.options.hostIntakeToolHandler) {
+        throw new Error("dartsnut_project_intake is not enabled for this session.");
+      }
+      return this.options.hostIntakeToolHandler(action.args);
+    }
     if (action.tool === "list_files") {
       const files = this.listFiles(action.path);
       return JSON.stringify({ ok: true, files });
@@ -484,6 +521,10 @@ export class SessionEngine {
     if (action.tool === "replace_in_file") {
       return `Ran replace in file ${action.path}`;
     }
+    if (action.tool === "dartsnut_project_intake") {
+      const step = typeof action.args.action === "string" ? action.args.action : "intake";
+      return `Ran project intake (${step})`;
+    }
     return `Ran copy asset ${action.source} -> ${action.path}`;
   }
 
@@ -572,7 +613,7 @@ export class SessionEngine {
     return { tool: toolCall.name, ...(parsedArgs as Record<string, unknown>) };
   }
 
-  private processNativeToolCalls(completion: CompletionResult): {
+  private async processNativeToolCalls(completion: CompletionResult): Promise<{
     assistantMessage: ChatMessage;
     toolMessages: ChatMessage[];
     successfulActions: ToolAction[];
@@ -581,7 +622,7 @@ export class SessionEngine {
       action: ToolAction | null;
       result: string;
     }>;
-  } {
+  }> {
     const outcomes: Array<{
       toolCall: ParsedToolCall;
       action: ToolAction | null;
@@ -594,7 +635,7 @@ export class SessionEngine {
       try {
         const rawAction = this.rawActionFromToolCall(toolCall);
         action = this.normalizeAction(rawAction);
-        result = this.executeAction(action);
+        result = await this.executeAction(action);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown tool error";
         result = JSON.stringify({ ok: false, error: message });
@@ -604,7 +645,10 @@ export class SessionEngine {
 
     const successfulActions = outcomes
       .map((outcome) => outcome.action)
-      .filter((value): value is ToolAction => value !== null);
+      .filter(
+        (value): value is ToolAction =>
+          value !== null && value.tool !== "dartsnut_project_intake"
+      );
 
     const assistantToolCalls: ToolCallEnvelope[] = completion.toolCalls.map((toolCall) => ({
       id: toolCall.id,
@@ -630,7 +674,11 @@ export class SessionEngine {
     onEvent: (event: AgentEvent) => void,
     abortSignal?: AbortSignal
   ): Promise<string> {
-    this.options.workspacePolicy.resolveWithinRoot(".");
+    if (!this.options.skipInitialWorkspaceResolve) {
+      this.options.workspacePolicy.resolveWithinRoot(".");
+    }
+
+    const completionTools = this.options.completionTools ?? AGENT_TOOL_SCHEMAS;
 
     const messages: ChatMessage[] = [
       { role: "system", content: this.options.skillPrompt },
@@ -649,7 +697,7 @@ export class SessionEngine {
       }
 
       const completion = await this.options.provider.complete(messages, {
-        tools: AGENT_TOOL_SCHEMAS,
+        tools: completionTools,
         onChunk: (delta) => {
           onEvent({ type: "stream", delta, at: Date.now() });
         }
@@ -657,7 +705,7 @@ export class SessionEngine {
 
       if (completion.toolCalls.length > 0) {
         const { assistantMessage, toolMessages, successfulActions, outcomes } =
-          this.processNativeToolCalls(completion);
+          await this.processNativeToolCalls(completion);
         const envelope = this.buildUiEnvelopeString(successfulActions, completion.content);
         if (envelope) {
           await this.streamNativeToolEnvelopePreview(completion.content, envelope, onEvent);
@@ -710,14 +758,16 @@ export class SessionEngine {
         });
       }
 
-      const toolResults = actions.map((action) => {
-        try {
-          return { action, result: this.executeAction(action) };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Unknown tool error";
-          return { action, result: JSON.stringify({ ok: false, error: message }) };
-        }
-      });
+      const toolResults = await Promise.all(
+        actions.map(async (action) => {
+          try {
+            return { action, result: await this.executeAction(action) };
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown tool error";
+            return { action, result: JSON.stringify({ ok: false, error: message }) };
+          }
+        })
+      );
 
       messages.push({
         role: "assistant",

@@ -2,7 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import readline from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
 import {
   IPCChannels,
   type AgentEvent,
@@ -29,7 +29,9 @@ import {
   type UnbindSlotResponse,
   validateDeployWorkspaceConf,
   type WidgetSize,
-  type WindowChromeInsets
+  type ShellUiTheme,
+  type WindowChromeInsets,
+  type SendPromptResponse
 } from "@dartsnut/shared-ipc";
 import {
   loadProviderConfig,
@@ -37,7 +39,9 @@ import {
   ProviderClient,
   SessionEngine,
   WorkspacePolicy,
-  bundleForTemplateMode
+  bundleForTemplateMode,
+  AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
+  AGENT_TOOL_SCHEMAS
 } from "@dartsnut/agent-runtime";
 import {
   EMULATOR_IPC_CHANNELS,
@@ -316,10 +320,213 @@ function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
         widgetSize: parseConfWidgetSize(conf.size)
       };
     }
+    if (conf.type === "game") {
+      return {
+        templateMode: "game-creator",
+        projectType: "game"
+      };
+    }
   } catch {
     return null;
   }
   return null;
+}
+
+interface IntakeToolState {
+  projectType?: ProjectType;
+  widgetSize?: WidgetSize;
+}
+
+function getIntakePlaceholderWorkspacePath(): string {
+  return path.join(repoRoot, ".dartsnut-chat-intake-placeholder");
+}
+
+function applyWorkspaceRoot(selectedPath: string): void {
+  if (workspaceRoot && workspaceRoot !== selectedPath) {
+    performSessionCleanup({ clearWorkspace: false });
+  }
+  workspaceRoot = selectedPath;
+  if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
+    startPythonBridge();
+  }
+  if (bridgeProcess?.stdin && !bridgeProcess.stdin.destroyed) {
+    bridgeProcess.stdin.write(
+      `${JSON.stringify({ command: { type: "set_path", path: selectedPath } satisfies EmulatorCommand })}\n`,
+    );
+    bridgeProcess.stdin.write(
+      `${JSON.stringify({ command: { type: "reload_widget" } satisfies EmulatorCommand })}\n`,
+    );
+    lastWidgetDir = selectedPath;
+    writeEmulatorState();
+  }
+  assetManager.watch(selectedPath);
+  startDeployConfWatcher(selectedPath);
+}
+
+function readWorkspaceConfIntakeSnapshot(
+  absoluteWorkspacePath: string,
+  intent?: IntakeToolState
+): Record<string, unknown> {
+  const confPath = path.join(absoluteWorkspacePath, "conf.json");
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(absoluteWorkspacePath);
+  } catch {
+    entries = [];
+  }
+  const base: Record<string, unknown> = {
+    workspacePath: absoluteWorkspacePath,
+    directoryEntryCount: entries.length,
+    confPath
+  };
+  if (!fs.existsSync(confPath)) {
+    return {
+      ...base,
+      conf_status: "missing",
+      guidance:
+        "No conf.json yet — safe for a brand-new scaffold. Confirm the user's goal in one sentence, then the next agent phase can create conf.json + main.py."
+    };
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(confPath, "utf-8"));
+  } catch {
+    return {
+      ...base,
+      conf_status: "invalid_json",
+      guidance:
+        "conf.json exists but is not valid JSON. Ask whether to repair/replace it or pick a different empty folder."
+    };
+  }
+  const deploy = validateDeployWorkspaceConf(raw);
+  const hints = readWorkspaceCreatorHints(absoluteWorkspacePath);
+  const conf = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const size = conf.size;
+  const parsedSize = parseConfWidgetSize(size);
+  const notes: string[] = [];
+  if (intent?.projectType && deploy.ok && deploy.projectType !== intent.projectType) {
+    notes.push(
+      `User chose "${intent.projectType}" but conf.json declares "${deploy.projectType}". Ask one question: extend the existing project or use another folder.`
+    );
+  }
+  if (
+    intent?.projectType === "widget" &&
+    intent.widgetSize &&
+    parsedSize &&
+    parsedSize !== intent.widgetSize
+  ) {
+    notes.push(
+      `User chose widget size ${intent.widgetSize} but conf.json size maps to ${parsedSize}. Ask which size to follow.`
+    );
+  }
+  if (deploy.ok && entries.some((n) => n === "main.py")) {
+    notes.push("main.py is already present — confirm whether to modify it or start fresh.");
+  }
+  return {
+    ...base,
+    conf_status: deploy.ok ? "valid" : "invalid",
+    deploy_eligibility: deploy,
+    creator_hints: hints,
+    conf_size_parsed: parsedSize ?? null,
+    guidance_notes: notes
+  };
+}
+
+async function intakeHostToolExecute(
+  args: Record<string, unknown>,
+  state: IntakeToolState
+): Promise<string> {
+  const action = args.action;
+  if (typeof action !== "string") {
+    return JSON.stringify({ ok: false, error: "action is required" });
+  }
+  if (action === "set_project_type") {
+    const pt = args.project_type;
+    if (pt !== "game" && pt !== "widget") {
+      return JSON.stringify({ ok: false, error: "project_type must be \"game\" or \"widget\"." });
+    }
+    state.projectType = pt;
+    if (pt === "game") {
+      state.widgetSize = undefined;
+    }
+    return JSON.stringify({
+      ok: true,
+      recorded: { projectType: pt },
+      next:
+        pt === "widget"
+          ? "Call set_widget_size unless the user already specified a supported size, then pick_workspace."
+          : "Call pick_workspace (empty folder), then read_workspace_conf."
+    });
+  }
+  if (action === "set_widget_size") {
+    if (state.projectType !== "widget") {
+      return JSON.stringify({
+        ok: false,
+        error: "set_widget_size requires project_type widget (call set_project_type first)."
+      });
+    }
+    const sz = args.widget_size;
+    if (typeof sz !== "string" || !SUPPORTED_WIDGET_SIZES.includes(sz as WidgetSize)) {
+      return JSON.stringify({
+        ok: false,
+        error: `widget_size must be one of: ${SUPPORTED_WIDGET_SIZES.join(", ")}.`
+      });
+    }
+    state.widgetSize = sz as WidgetSize;
+    return JSON.stringify({
+      ok: true,
+      recorded: { widgetSize: state.widgetSize },
+      next: "Call pick_workspace, then read_workspace_conf."
+    });
+  }
+  if (action === "pick_workspace") {
+    const result = await dialog.showOpenDialog({
+      properties: ["openDirectory", "createDirectory"]
+    });
+    if (result.canceled || !result.filePaths[0]) {
+      return JSON.stringify({ ok: false, cancelled: true, message: "Folder dialog was cancelled." });
+    }
+    const selectedPath = result.filePaths[0];
+    if (!isDirectoryEmpty(selectedPath)) {
+      return JSON.stringify({
+        ok: false,
+        reason: "non_empty",
+        message: "Folder must be empty for a new scaffold from this flow. Ask the user to pick another folder."
+      });
+    }
+    applyWorkspaceRoot(selectedPath);
+    const snapshot = readWorkspaceConfIntakeSnapshot(selectedPath, state);
+    return JSON.stringify({ ok: true, workspace_selected: selectedPath, ...snapshot });
+  }
+  if (action === "read_workspace_conf") {
+    const root = workspaceRoot;
+    if (!root) {
+      return JSON.stringify({
+        ok: false,
+        need_workspace: true,
+        message: "No workspace is selected yet — call pick_workspace first."
+      });
+    }
+    return JSON.stringify({ ok: true, ...readWorkspaceConfIntakeSnapshot(root, state) });
+  }
+  return JSON.stringify({ ok: false, error: `Unknown intake action: ${action}` });
+}
+
+function buildCreationIntakeUserPrompt(userRequest: string): string {
+  return [
+    "## New project intake (mandatory tool use)",
+    "The user has **not** chosen a workspace folder in the shell yet. You cannot read or write project files until intake completes.",
+    "Use **only** the `dartsnut_project_intake` tool (native `tool_calls`) — do **not** ask them to click composer chips.",
+    "Procedure:",
+    "1. Infer **game** vs **widget** from the user's text when it is obvious; otherwise ask one short question, then call `set_project_type`.",
+    "2. For **widget**, if size is unknown, call `set_widget_size` with one of: 128x160, 128x128, 128x64, 64x32.",
+    "3. Call `pick_workspace` so the user selects an **empty** directory.",
+    "4. Call `read_workspace_conf`. Use `guidance_notes`, `deploy_eligibility`, and `conf_status` to ask **at most one** focused follow-up when the folder is not a blank slate or types disagree.",
+    "5. Close with a one- or two-sentence confirmation of what will be built next (no code, no file paths invented).",
+    "",
+    "User request:",
+    userRequest
+  ].join("\n");
 }
 
 function buildAssetApplierPrompt(request: PromptRequest): string {
@@ -425,7 +632,9 @@ function resolveAgentRuntimeSkillsDir(): string {
   return existing;
 }
 
-function resolveSkillBundlePrompt(templateMode?: PromptRequest["templateMode"]): string {
+function resolveSkillBundlePrompt(
+  templateMode?: PromptRequest["templateMode"] | "creation-intake" | null
+): string {
   return bundleForTemplateMode(resolveAgentRuntimeSkillsDir(), templateMode ?? null);
 }
 
@@ -459,6 +668,55 @@ function sendToRenderer(channel: string, ...args: unknown[]) {
 
 /** Logical px; must match `titleBarOverlay.height` on Windows when overlay is enabled. */
 const WINDOWS_TITLE_BAR_OVERLAY_HEIGHT = 32;
+
+/** Match renderer `themes.css` `--color-bg-page` and caption contrast per theme. */
+const WINDOWS_SHELL_UI: Record<
+  ShellUiTheme,
+  { titleBarColor: string; symbolColor: string; windowBackground: string }
+> = {
+  dark: {
+    titleBarColor: "#121212",
+    symbolColor: "#e0e0e0",
+    windowBackground: "#121212"
+  },
+  light: {
+    titleBarColor: "#eef1f8",
+    symbolColor: "#1a2332",
+    windowBackground: "#eef1f8"
+  }
+};
+
+function applyShellUiTheme(theme: ShellUiTheme): void {
+  nativeTheme.themeSource = theme;
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+  if (process.platform !== "win32") {
+    return;
+  }
+  const colors = WINDOWS_SHELL_UI[theme];
+  win.setTitleBarOverlay({
+    color: colors.titleBarColor,
+    symbolColor: colors.symbolColor,
+    height: WINDOWS_TITLE_BAR_OVERLAY_HEIGHT
+  });
+  win.setBackgroundColor(colors.windowBackground);
+}
+
+async function syncShellUiThemeFromDomSnapshot(): Promise<void> {
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+  try {
+    const resolved = await win.webContents.executeJavaScript(
+      `document.documentElement.dataset.theme === "light" ? "light" : "dark"`,
+      true
+    );
+    applyShellUiTheme(resolved === "light" ? "light" : "dark");
+  } catch {
+    applyShellUiTheme("dark");
+  }
+}
 
 function computeWindowChromeInsets(window: BrowserWindow): WindowChromeInsets {
   if (window.isDestroyed()) {
@@ -926,8 +1184,18 @@ function startPythonBridge() {
   });
 }
 
-function buildSession(templateMode?: PromptRequest["templateMode"]): SessionEngine {
-  if (!workspaceRoot) {
+function buildSession(
+  templateMode: PromptRequest["templateMode"] | undefined,
+  extras?: {
+    workspacePath?: string;
+    completionTools?: typeof AGENT_TOOL_SCHEMAS | typeof AGENT_CREATION_INTAKE_TOOL_SCHEMAS;
+    hostIntakeToolHandler?: (args: Record<string, unknown>) => Promise<string>;
+    skipInitialWorkspaceResolve?: boolean;
+    skillBundleMode?: PromptRequest["templateMode"] | "creation-intake" | null;
+  }
+): SessionEngine {
+  const workspacePath = extras?.workspacePath ?? workspaceRoot;
+  if (!workspacePath) {
     throw new Error("Workspace is not selected.");
   }
   const providerSettings = readProviderSettings();
@@ -936,14 +1204,19 @@ function buildSession(templateMode?: PromptRequest["templateMode"]): SessionEngi
   if (!validation.ok) {
     throw new Error(validation.error);
   }
-  const skillPrompt = resolveSkillBundlePrompt(templateMode);
+  const skillBundleMode =
+    extras?.skillBundleMode !== undefined ? extras.skillBundleMode : templateMode ?? null;
+  const skillPrompt = resolveSkillBundlePrompt(skillBundleMode);
   return new SessionEngine({
     provider: new ProviderClient(config),
-    workspacePolicy: new WorkspacePolicy(workspaceRoot),
+    workspacePolicy: new WorkspacePolicy(workspacePath),
     skillPrompt,
     assetRoots: {
       widgetFonts: path.join(repoRoot, "assets", "fonts", "widgets")
-    }
+    },
+    completionTools: extras?.completionTools,
+    hostIntakeToolHandler: extras?.hostIntakeToolHandler,
+    skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve
   });
 }
 
@@ -955,13 +1228,13 @@ async function createWindow() {
     height: 980,
     minWidth: 1320,
     minHeight: 860,
-    backgroundColor: "#121212",
+    backgroundColor: WINDOWS_SHELL_UI.dark.windowBackground,
     ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
     ...(process.platform === "win32"
       ? {
         titleBarOverlay: {
-          color: "#121212",
-          symbolColor: "#e0e0e0",
+          color: WINDOWS_SHELL_UI.dark.titleBarColor,
+          symbolColor: WINDOWS_SHELL_UI.dark.symbolColor,
           height: WINDOWS_TITLE_BAR_OVERLAY_HEIGHT
         }
       }
@@ -972,6 +1245,12 @@ async function createWindow() {
       nodeIntegration: false,
       sandbox: false
     }
+  });
+  win.webContents.on("did-finish-load", () => {
+    void syncShellUiThemeFromDomSnapshot();
+    emitChromeInsetsAndPushStyles();
+    setTimeout(emitChromeInsetsAndPushStyles, 50);
+    setTimeout(emitChromeInsetsAndPushStyles, 300);
   });
   if (process.env.VITE_DEV_SERVER_URL) {
     await win.loadURL(process.env.VITE_DEV_SERVER_URL);
@@ -987,11 +1266,6 @@ async function createWindow() {
   win.on("unmaximize", emitChromeInsetsAndPushStyles);
   win.on("enter-full-screen", emitChromeInsetsAndPushStyles);
   win.on("leave-full-screen", emitChromeInsetsAndPushStyles);
-  win.webContents.on("did-finish-load", () => {
-    emitChromeInsetsAndPushStyles();
-    setTimeout(emitChromeInsetsAndPushStyles, 50);
-    setTimeout(emitChromeInsetsAndPushStyles, 300);
-  });
   emitEmulatorState();
 }
 
@@ -1019,6 +1293,13 @@ ipcMain.handle(IPCChannels.windowChromeInsets, (): WindowChromeInsets => {
   }
   return computeWindowChromeInsets(win);
 });
+
+ipcMain.handle(IPCChannels.shellUiTheme, (_event: unknown, theme: unknown): void => {
+  if (theme === "light" || theme === "dark") {
+    applyShellUiTheme(theme);
+  }
+});
+
 ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());
 
 ipcMain.handle(IPCChannels.deployGetEligibility, (): DeployEligibility => readDeployEligibilityFromWorkspace());
@@ -1243,31 +1524,7 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
       reason: "non_empty"
     } satisfies PickWorkspaceResponse;
   }
-  // Only tear down the prior session when we're actually switching away from an existing
-  // workspace. On the no-workspace → first-workspace transition (the intake flow), there's
-  // nothing to clean up — and firing `sessionReset` here clears the renderer chat entries,
-  // which would discard the user's prompt bubble that was just queued by `handleSend`.
-  if (workspaceRoot && workspaceRoot !== selectedPath) {
-    performSessionCleanup({ clearWorkspace: false });
-  }
-  workspaceRoot = selectedPath;
-  // Attempt to launch emulator immediately from the selected workspace.
-  // If it's not a widget folder, the bridge will emit a clear failure status.
-  if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
-    startPythonBridge();
-  }
-  if (bridgeProcess?.stdin && !bridgeProcess.stdin.destroyed) {
-    bridgeProcess.stdin.write(
-      `${JSON.stringify({ command: { type: "set_path", path: selectedPath } satisfies EmulatorCommand })}\n`,
-    );
-    bridgeProcess.stdin.write(
-      `${JSON.stringify({ command: { type: "reload_widget" } satisfies EmulatorCommand })}\n`,
-    );
-    lastWidgetDir = selectedPath;
-    writeEmulatorState();
-  }
-  assetManager.watch(selectedPath);
-  startDeployConfWatcher(selectedPath);
+  applyWorkspaceRoot(selectedPath);
   return {
     state: getBootstrapState(),
     selectedPath,
@@ -1380,29 +1637,75 @@ ipcMain.handle(
   }
 );
 
-ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest) => {
+ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest): Promise<SendPromptResponse> => {
   sendPromptAbortController?.abort();
   const runAbort = new AbortController();
   sendPromptAbortController = runAbort;
+  const emitAgent = (agentEvent: AgentEvent) => {
+    console.log("[agent-stream]", JSON.stringify(agentEvent));
+    sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
+  };
   try {
-    const session = buildSession(req.templateMode);
-    const prompt = buildRoutedPrompt(req);
-    console.log("[agent] runPrompt start", { promptChars: prompt.length });
-    await session.runPrompt(
-      prompt,
-      (agentEvent: AgentEvent) => {
-        console.log("[agent-stream]", JSON.stringify(agentEvent));
-        sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
-      },
-      runAbort.signal
-    );
+    let sessionRouting: SendPromptResponse["sessionRouting"];
+    const hostState: IntakeToolState = {};
+    const sharedIntakeHandler = async (args: Record<string, unknown>) =>
+      intakeHostToolExecute(args, hostState);
+
+    const shouldRunCreationIntake = Boolean(req.creationIntake && !workspaceRoot);
+
+    if (shouldRunCreationIntake) {
+      const intakeState: IntakeToolState = {};
+      const placeholder = getIntakePlaceholderWorkspacePath();
+      fs.mkdirSync(placeholder, { recursive: true });
+      const intakeSession = buildSession(undefined, {
+        workspacePath: placeholder,
+        completionTools: AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
+        hostIntakeToolHandler: (args) => intakeHostToolExecute(args, intakeState),
+        skipInitialWorkspaceResolve: true,
+        skillBundleMode: "creation-intake"
+      });
+      console.log("[agent] runPrompt creation-intake start");
+      await intakeSession.runPrompt(buildCreationIntakeUserPrompt(req.prompt), emitAgent, runAbort.signal);
+
+      const canChain =
+        Boolean(workspaceRoot) &&
+        intakeState.projectType &&
+        (intakeState.projectType === "game" ||
+          (intakeState.projectType === "widget" && intakeState.widgetSize));
+
+      if (canChain && intakeState.projectType && workspaceRoot) {
+        const templateMode =
+          intakeState.projectType === "game" ? "game-creator" : "widget-creator";
+        sessionRouting = {
+          templateMode,
+          projectType: intakeState.projectType,
+          widgetSize: intakeState.projectType === "widget" ? intakeState.widgetSize : undefined
+        };
+        const followUp = buildSession(templateMode);
+        const routed = buildRoutedPrompt({
+          prompt: req.prompt,
+          templateMode,
+          projectType: intakeState.projectType,
+          widgetSize: intakeState.widgetSize,
+          workspacePath: workspaceRoot
+        });
+        console.log("[agent] runPrompt chained creator", { templateMode });
+        await followUp.runPrompt(routed, emitAgent, runAbort.signal);
+      }
+    } else {
+      const session = buildSession(req.templateMode, {
+        completionTools: AGENT_TOOL_SCHEMAS,
+        hostIntakeToolHandler: sharedIntakeHandler
+      });
+      const prompt = buildRoutedPrompt(req);
+      console.log("[agent] runPrompt start", { promptChars: prompt.length });
+      await session.runPrompt(prompt, emitAgent, runAbort.signal);
+    }
+
     if (!firstRunComplete) {
       writeProofState(true);
     }
-    // Do not return streamed events here: the renderer already receives them via
-    // subscribeEvents. Returning a huge array serializes on the IPC reply and can
-    // stall the UI long after generation finishes.
-    return { ok: true };
+    return { ok: true, sessionRouting };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown prompt error";
     const event: AgentEvent = { type: "error", message, at: Date.now() };

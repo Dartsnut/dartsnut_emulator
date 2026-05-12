@@ -15,6 +15,7 @@ import {
   type ReadPreviewRequest,
   type ReadPreviewResponse,
   type SaveProviderSettingsRequest,
+  type SendPromptResponse,
   type UnbindSlotRequest,
   type UnbindSlotResponse,
   type DeployConnectRequest,
@@ -22,7 +23,8 @@ import {
   type DeployEligibility,
   type DeployActionResponse,
   type DeployLaunchRequest,
-  type WindowChromeInsets
+  type WindowChromeInsets,
+  type ShellUiTheme
 } from "@dartsnut/shared-ipc";
 import {
   EMULATOR_IPC_CHANNELS,
@@ -36,11 +38,13 @@ const api = {
   getBootstrapState: () => ipcRenderer.invoke(IPCChannels.bootstrapState) as Promise<BootstrapState>,
   getWindowChromeInsets: () =>
     ipcRenderer.invoke(IPCChannels.windowChromeInsets) as Promise<WindowChromeInsets>,
+  setShellUiTheme: (theme: ShellUiTheme) =>
+    ipcRenderer.invoke(IPCChannels.shellUiTheme, theme) as Promise<void>,
   startNewProject: () => ipcRenderer.invoke(IPCChannels.startNewProject) as Promise<BootstrapState>,
   pickWorkspace: (request?: PickWorkspaceRequest) =>
     ipcRenderer.invoke(IPCChannels.pickWorkspace, request) as Promise<PickWorkspaceResponse>,
   sendPrompt: (request: PromptRequest) =>
-    ipcRenderer.invoke(IPCChannels.sendPrompt, request) as Promise<{ ok: boolean }>,
+    ipcRenderer.invoke(IPCChannels.sendPrompt, request) as Promise<SendPromptResponse>,
   cancelAgent: () => ipcRenderer.invoke(IPCChannels.cancelAgent) as Promise<{ ok: boolean }>,
   getProviderSettings: () =>
     ipcRenderer.invoke(IPCChannels.getProviderSettings) as Promise<ProviderSettings>,

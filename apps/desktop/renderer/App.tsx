@@ -10,6 +10,7 @@ import type {
   ProviderSettings,
   ProjectType,
   PromptRequest,
+  SendPromptResponse,
   WidgetSize
 } from "@dartsnut/shared-ipc";
 import { AssetManagerPanel } from "./AssetManagerPanel";
@@ -61,7 +62,6 @@ interface DiffLine {
   text: string;
 }
 
-type IntakeStep = "projectType" | "widgetSize" | "workspace";
 type AppScreen = "main" | "settings";
 
 const STREAM_PREVIEW_LINES = 8;
@@ -70,25 +70,15 @@ const DIFF_CONTEXT_LINES = 4;
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
 /** While an agent message is streaming, cap how often we snap the timeline scroll to the bottom. */
 const STREAM_TIMELINE_AUTOSCROLL_MIN_MS = 72;
-const SUPPORTED_WIDGET_SIZES: WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
 /** Keep in sync with composer textarea `max-h-[200px]` */
 const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 /** Content taller than one line — switch composer shell from pill to rounded card */
 const COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX = 52;
 const GREETING_TEXT =
-  "Hi! I can help you create or modify Dartsnut widgets and games. Pick a workspace folder and tell me what you want to build.";
+  "Hi! I can help you create or modify Dartsnut widgets and games. Describe what you want to build — if no workspace folder is set yet, I will walk you through picking an empty folder and confirming game vs widget using in-chat tools.";
 
 const chromeIconBtnClass =
   "inline-flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border-0 bg-transparent p-0 text-[var(--color-app-btn-text)] [app-region:no-drag] [-webkit-app-region:no-drag] hover:enabled:bg-[var(--color-app-btn-bg-hover)] hover:enabled:text-[var(--color-app-btn-text-hover)] focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45";
-
-const intakeChipBaseClass =
-  "m-0 inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-full border border-[var(--color-chip-border)] bg-[var(--color-chip-bg)] px-4 py-2 text-[13px] font-medium leading-snug text-[var(--color-intake-lead)] transition-[background,border-color,box-shadow] duration-150 ease-out hover:enabled:border-[var(--color-chip-hover-border)] hover:enabled:bg-[var(--color-chip-hover-bg)] hover:enabled:shadow-[inset_0_1px_0_var(--color-chip-inset)] focus-visible:border-[var(--color-chip-focus-border)] focus-visible:shadow-[var(--shadow-chip-focus)] focus-visible:outline-none";
-
-const intakeChipPrimaryClass =
-  "border-[var(--color-chip-primary-border)] bg-[var(--color-chip-primary-bg)] hover:enabled:border-[var(--color-chip-primary-border-hover)] hover:enabled:bg-[var(--color-chip-primary-bg-hover)]";
-
-const intakeChipQuietClass =
-  "border-transparent bg-transparent font-normal text-[var(--color-chip-quiet-text)] hover:enabled:bg-[var(--color-chip-bg)] hover:enabled:text-[var(--color-chip-quiet-hover-text)]";
 
 function isSettingsShortcut(event: KeyboardEvent): boolean {
   if (event.key !== ",") {
@@ -107,27 +97,6 @@ function maskApiKey(value: string): string {
   }
   const suffix = value.slice(-4);
   return `${"*".repeat(Math.max(4, value.length - 4))}${suffix}`;
-}
-
-function inferProjectType(input: string): ProjectType | null {
-  const hasGame = /\bgame\b/i.test(input);
-  const hasWidget = /\bwidget\b/i.test(input);
-  if (hasGame === hasWidget) {
-    return null;
-  }
-  return hasGame ? "game" : "widget";
-}
-
-function inferWidgetSize(input: string): WidgetSize | null {
-  const match = input.match(/\b(128\s*x\s*160|128\s*x\s*128|128\s*x\s*64|64\s*x\s*32)\b/i);
-  if (!match) {
-    return null;
-  }
-  const normalized = match[1].toLowerCase().replace(/\s+/g, "");
-  if (normalized === "128x160" || normalized === "128x128" || normalized === "128x64" || normalized === "64x32") {
-    return normalized;
-  }
-  return null;
 }
 
 function getLatestPreviewLines(content: string): { lines: string[]; truncated: boolean } {
@@ -535,12 +504,7 @@ export function App() {
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [pythonRuntimeStatus, setPythonRuntimeStatus] = useState<string | null>(null);
   const [screen, setScreen] = useState<AppScreen>("main");
-  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
-  const [intakeProjectType, setIntakeProjectType] = useState<ProjectType | null>(null);
-  const [intakeWidgetSize, setIntakeWidgetSize] = useState<WidgetSize | null>(null);
-  const [intakeWorkspacePath, setIntakeWorkspacePath] = useState<string | null>(null);
-  const [intakeStep, setIntakeStep] = useState<IntakeStep | null>(null);
-  /** Preserves widget/game creator routing for follow-up prompts (intake only runs once). */
+  /** Preserves widget/game creator routing for follow-up prompts after the first send. */
   const [sessionTemplateMode, setSessionTemplateMode] = useState<
     "game-creator" | "widget-creator" | null
   >(null);
@@ -863,14 +827,6 @@ export function App() {
     return sending;
   }, [bootstrap, sending]);
 
-  function clearIntake() {
-    setPendingPrompt(null);
-    setIntakeProjectType(null);
-    setIntakeWidgetSize(null);
-    setIntakeWorkspacePath(null);
-    setIntakeStep(null);
-  }
-
   useEffect(() => {
     if (!api) {
       return;
@@ -881,12 +837,10 @@ export function App() {
       activeStreamEntryIdRef.current = null;
       pendingReplyIdRef.current = null;
       eventSeqRef.current = 0;
-      clearIntake();
       setSessionTemplateMode(null);
       setSessionWidgetSize(null);
       setSessionProjectType(null);
       setPrompt("");
-      setPendingPrompt(null);
       setRuntimeError(null);
       setEntries([{ id: `greeting-${Date.now()}`, role: "agent", text: GREETING_TEXT, streaming: false }]);
     });
@@ -894,23 +848,6 @@ export function App() {
 
   function postStatus(text: string) {
     setEntries((prev) => [...prev, { id: `status-${Date.now()}`, role: "status", text }]);
-  }
-
-  function resolveNextIntakeStep(
-    projectType: ProjectType | null,
-    widgetSize: WidgetSize | null,
-    workspacePath: string | null
-  ): IntakeStep | null {
-    if (!projectType) {
-      return "projectType";
-    }
-    if (projectType === "widget" && !widgetSize) {
-      return "widgetSize";
-    }
-    if (!workspacePath) {
-      return "workspace";
-    }
-    return null;
   }
 
   async function submitPrompt(request: PromptRequest) {
@@ -925,47 +862,18 @@ export function App() {
       return;
     }
     try {
-      await api.sendPrompt(request);
+      const result: SendPromptResponse = await api.sendPrompt(request);
       const refreshed = await api.getBootstrapState();
       setBootstrap(refreshed);
+      if (result.ok && result.sessionRouting) {
+        setSessionTemplateMode(result.sessionRouting.templateMode);
+        setSessionProjectType(result.sessionRouting.projectType);
+        setSessionWidgetSize(result.sessionRouting.widgetSize ?? null);
+      }
     } finally {
       clearPendingReplyIndicator();
       setSending(false);
     }
-  }
-
-  async function continueIntake(overrides?: {
-    projectType?: ProjectType | null;
-    widgetSize?: WidgetSize | null;
-    workspacePath?: string | null;
-  }) {
-    const promptText = pendingPrompt;
-    if (!promptText) {
-      return;
-    }
-    const projectType = overrides?.projectType ?? intakeProjectType;
-    const widgetSize = overrides?.widgetSize ?? intakeWidgetSize;
-    const workspacePath = overrides?.workspacePath ?? intakeWorkspacePath ?? bootstrap?.workspaceRoot ?? null;
-    setIntakeProjectType(projectType);
-    setIntakeWidgetSize(widgetSize);
-    setIntakeWorkspacePath(workspacePath);
-    const nextStep = resolveNextIntakeStep(projectType, widgetSize, workspacePath);
-    setIntakeStep(nextStep);
-    if (nextStep) {
-      return;
-    }
-    const templateMode = projectType === "game" ? "game-creator" : "widget-creator";
-    setSessionTemplateMode(templateMode);
-    setSessionProjectType(projectType ?? null);
-    setSessionWidgetSize(widgetSize ?? null);
-    await submitPrompt({
-      prompt: promptText,
-      projectType: projectType ?? undefined,
-      widgetSize: widgetSize ?? undefined,
-      workspacePath: workspacePath ?? undefined,
-      templateMode
-    });
-    clearIntake();
   }
 
   async function handlePickWorkspace() {
@@ -1085,32 +993,17 @@ export function App() {
     setPrompt("");
     setEntries((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", text: current }]);
 
-    const shouldRunIntake = !bootstrap?.workspaceRoot;
-    if (!shouldRunIntake) {
+    if (bootstrap?.workspaceRoot) {
       await submitPrompt({
         prompt: current,
-        workspacePath: bootstrap.workspaceRoot ?? undefined,
+        workspacePath: bootstrap.workspaceRoot,
         templateMode: sessionTemplateMode ?? undefined,
         widgetSize: sessionWidgetSize ?? undefined,
         projectType: sessionProjectType ?? undefined
       });
       return;
     }
-    const inferredType = inferProjectType(current);
-    const inferredSize = inferredType === "widget" ? inferWidgetSize(current) : null;
-    setPendingPrompt(current);
-    setIntakeProjectType(inferredType);
-    setIntakeWidgetSize(inferredSize);
-    setIntakeWorkspacePath(null);
-    const nextStep = resolveNextIntakeStep(inferredType, inferredSize, null);
-    setIntakeStep(nextStep);
-    if (nextStep === "projectType") {
-      postStatus("Choose project type to continue: game or widget.");
-    } else if (nextStep === "widgetSize") {
-      postStatus("Choose widget size to continue.");
-    } else if (nextStep === "workspace") {
-      postStatus("Choose an empty workspace folder to continue.");
-    }
+    await submitPrompt({ prompt: current, creationIntake: true });
   }
 
   async function handleStopAgent() {
@@ -1315,93 +1208,6 @@ export function App() {
           </section>
 
           <section className="flex flex-col gap-3 border-0 bg-transparent p-0">
-            {pendingPrompt && intakeStep ? (
-              <div
-                className="flex max-w-full flex-col gap-3 self-stretch rounded-[14px] border border-[var(--color-intake-border)] bg-[var(--gradient-intake)] px-4 pb-4 pt-3.5 shadow-[var(--shadow-intake)]"
-                role="region"
-                aria-label="Creation intake"
-              >
-                <p className="m-0 text-[13px] leading-normal text-[var(--color-intake-text)]" id="composer-intake-prompt">
-                  <span className="inline font-semibold text-[var(--color-intake-lead)]">
-                    Intake required before creation.
-                  </span>
-                  {intakeStep === "projectType" ? " Select project type." : ""}
-                  {intakeStep === "widgetSize" ? " Select widget size." : ""}
-                  {intakeStep === "workspace" ? " Select an empty workspace folder." : ""}
-                </p>
-                {intakeStep === "projectType" ? (
-                  <div className="flex flex-wrap items-center gap-2" role="group" aria-labelledby="composer-intake-prompt">
-                    <button
-                      type="button"
-                      className={intakeChipBaseClass}
-                      onClick={() => continueIntake({ projectType: "game", widgetSize: null })}
-                    >
-                      Game
-                    </button>
-                    <button
-                      type="button"
-                      className={intakeChipBaseClass}
-                      onClick={() => continueIntake({ projectType: "widget" })}
-                    >
-                      Widget
-                    </button>
-                    <button type="button" className={cn(intakeChipBaseClass, intakeChipQuietClass)} onClick={clearIntake}>
-                      Cancel
-                    </button>
-                  </div>
-                ) : null}
-                {intakeStep === "widgetSize" ? (
-                  <div className="flex flex-wrap items-center gap-2" role="group" aria-labelledby="composer-intake-prompt">
-                    {SUPPORTED_WIDGET_SIZES.map((size) => (
-                      <button
-                        key={size}
-                        type="button"
-                        className={intakeChipBaseClass}
-                        onClick={() => continueIntake({ widgetSize: size })}
-                      >
-                        {size}
-                      </button>
-                    ))}
-                    <button type="button" className={cn(intakeChipBaseClass, intakeChipQuietClass)} onClick={clearIntake}>
-                      Cancel
-                    </button>
-                  </div>
-                ) : null}
-                {intakeStep === "workspace" ? (
-                  <div
-                    className="flex flex-col items-stretch gap-2 [&>button]:w-full [&>button]:justify-center"
-                    role="group"
-                    aria-labelledby="composer-intake-prompt"
-                  >
-                    <button
-                      type="button"
-                      className={cn(intakeChipBaseClass, intakeChipPrimaryClass)}
-                      onClick={async () => {
-                        const pickResult = await api.pickWorkspace({ requireEmpty: true });
-                        setBootstrap(pickResult.state);
-                        if (pickResult.accepted && pickResult.selectedPath) {
-                          await continueIntake({ workspacePath: pickResult.selectedPath });
-                          return;
-                        }
-                        if (pickResult.reason === "non_empty") {
-                          postStatus("Selected workspace is not empty. Please choose a different folder.");
-                          return;
-                        }
-                        if (pickResult.reason === "cancelled") {
-                          postStatus("Workspace selection cancelled.");
-                        }
-                      }}
-                    >
-                      Choose Empty Workspace
-                    </button>
-                    <button type="button" className={cn(intakeChipBaseClass, intakeChipQuietClass)} onClick={clearIntake}>
-                      Cancel
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
             <div
               ref={composerPillRef}
               className={cn(

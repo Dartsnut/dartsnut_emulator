@@ -18,13 +18,5 @@
   "devDependencies": {
     "@types/node": "^22.15.3",
     "typescript": "^5.8.3"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "esbuild",
-      "cpu-features",
-      "ssh2"
-    ]
   }
 }

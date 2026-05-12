@@ -280,6 +280,66 @@ class MixedValidityNativeProvider {
   }
 }
 
+class SkillLoadThenWriteProvider {
+  private call = 0;
+  public readonly receivedMessages: ChatMessage[][] = [];
+
+  async complete(messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult> {
+    this.call += 1;
+    this.receivedMessages.push(messages.map((m) => ({ ...m }) as ChatMessage));
+    if (this.call === 1) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "skill_1",
+            name: "get_dartsnut_skill",
+            argumentsJson: JSON.stringify({ skill_id: "dartsnut-skill" })
+          }
+        ]
+      };
+    }
+    if (this.call === 2) {
+      const toolMsg = messages.find((m): m is Extract<ChatMessage, { role: "tool" }> => m.role === "tool");
+      expect(toolMsg?.content).toContain("pydartsnut");
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "wf_1",
+            name: "write_file",
+            argumentsJson: JSON.stringify({ path: "x.txt", content: "ok" })
+          }
+        ]
+      };
+    }
+    return { content: "Done.", toolCalls: [] };
+  }
+}
+
+class LoadDeniedSkillProvider {
+  private call = 0;
+
+  async complete(messages: ChatMessage[]): Promise<CompletionResult> {
+    this.call += 1;
+    if (this.call === 1) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "c1",
+            name: "get_dartsnut_skill",
+            argumentsJson: JSON.stringify({ skill_id: "dartsnut-display-mapping" })
+          }
+        ]
+      };
+    }
+    const toolMsgs = messages.filter((m): m is Extract<ChatMessage, { role: "tool" }> => m.role === "tool");
+    expect(toolMsgs[toolMsgs.length - 1]?.content).toContain('"ok":false');
+    return { content: "Noted denial.", toolCalls: [] };
+  }
+}
+
 describe("SessionEngine tool loop", () => {
   it("executes write_file actions and returns final response", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
@@ -489,5 +549,42 @@ describe("SessionEngine tool loop", () => {
     const response = await engine.runPrompt("mixed validity", (event) => events.push(event));
     expect(response).toContain("Recovered from bad call.");
     expect(fs.readFileSync(path.join(tempRoot, "ok.txt"), "utf-8")).toBe("kept");
+  });
+
+  it("executes get_dartsnut_skill then write_file with skill content in thread", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const skillsDir = path.resolve(__dirname, "../skills");
+    const provider = new SkillLoadThenWriteProvider();
+    const engine = new SessionEngine({
+      provider,
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "Use get_dartsnut_skill before editing files.",
+      skillLibrary: {
+        skillsDir,
+        allowedIds: ["dartsnut-skill", "dartsnut-display-mapping", "asset-pipeline"]
+      }
+    });
+
+    const response = await engine.runPrompt("scaffold", () => {});
+    expect(fs.readFileSync(path.join(tempRoot, "x.txt"), "utf-8")).toBe("ok");
+    expect(response).toContain("Done.");
+    expect(provider.receivedMessages.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("returns ok false for get_dartsnut_skill when skill_id is not allowed", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const skillsDir = path.resolve(__dirname, "../skills");
+    const engine = new SessionEngine({
+      provider: new LoadDeniedSkillProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "Asset applier style: two skills only.",
+      skillLibrary: {
+        skillsDir,
+        allowedIds: ["dartsnut-skill", "asset-pipeline"]
+      }
+    });
+
+    const response = await engine.runPrompt("try load display mapping", () => {});
+    expect(response).toContain("Noted denial.");
   });
 });

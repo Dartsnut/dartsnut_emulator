@@ -10,8 +10,14 @@ import type {
   ParsedToolCall,
   ToolCallEnvelope
 } from "./providerClient";
+import type { DeferredSkillId } from "./skillBundle";
+import { DEFERRED_SKILL_IDS, readDeferredSkillMarkdown } from "./skillBundle";
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import { WorkspacePolicy } from "./workspacePolicy";
+
+function isDeferredSkillId(value: unknown): value is DeferredSkillId {
+  return typeof value === "string" && (DEFERRED_SKILL_IDS as readonly string[]).includes(value);
+}
 
 type ToolAction =
   | {
@@ -41,6 +47,10 @@ type ToolAction =
   | {
       tool: "dartsnut_project_intake";
       args: Record<string, unknown>;
+    }
+  | {
+      tool: "get_dartsnut_skill";
+      skill_id: DeferredSkillId;
     };
 
 interface AgentActionEnvelope {
@@ -51,10 +61,17 @@ interface AgentActionEnvelope {
 /** Host (Electron main) executes `dartsnut_project_intake`; returns JSON text for the model. */
 export type HostIntakeToolHandler = (args: Record<string, unknown>) => Promise<string>;
 
+/** When set, `get_dartsnut_skill` reads markdown from `skillsDir` for ids in `allowedIds`. */
+export interface AgentSkillLibrary {
+  skillsDir: string;
+  allowedIds: readonly DeferredSkillId[];
+}
+
 export interface SessionEngineOptions {
   provider: CompletionProvider;
   workspacePolicy: WorkspacePolicy;
   skillPrompt: string;
+  skillLibrary?: AgentSkillLibrary;
   assetRoots?: {
     widgetFonts?: string;
   };
@@ -142,6 +159,14 @@ export class SessionEngine {
         find: action.find,
         replace: action.replace
       };
+    }
+    if (tool === "get_dartsnut_skill") {
+      const record = action as Record<string, unknown>;
+      const skillId = record.skill_id;
+      if (!isDeferredSkillId(skillId)) {
+        throw new Error("get_dartsnut_skill requires a valid skill_id.");
+      }
+      return { tool: "get_dartsnut_skill", skill_id: skillId };
     }
     if (tool === "dartsnut_project_intake") {
       const record = action as Record<string, unknown>;
@@ -415,6 +440,20 @@ export class SessionEngine {
       }
       return this.options.hostIntakeToolHandler(action.args);
     }
+    if (action.tool === "get_dartsnut_skill") {
+      const lib = this.options.skillLibrary;
+      if (!lib) {
+        throw new Error("get_dartsnut_skill requires skillLibrary to be configured.");
+      }
+      if (!lib.allowedIds.includes(action.skill_id)) {
+        return JSON.stringify({
+          ok: false,
+          error: `Skill "${action.skill_id}" is not enabled for this session. Allowed: ${lib.allowedIds.join(", ")}.`
+        });
+      }
+      const content = readDeferredSkillMarkdown(lib.skillsDir, action.skill_id);
+      return JSON.stringify({ ok: true, skill_id: action.skill_id, content });
+    }
     if (action.tool === "list_files") {
       const files = this.listFiles(action.path);
       return JSON.stringify({ ok: true, files });
@@ -524,6 +563,9 @@ export class SessionEngine {
     if (action.tool === "dartsnut_project_intake") {
       const step = typeof action.args.action === "string" ? action.args.action : "intake";
       return `Ran project intake (${step})`;
+    }
+    if (action.tool === "get_dartsnut_skill") {
+      return `Loaded skill ${action.skill_id}`;
     }
     return `Ran copy asset ${action.source} -> ${action.path}`;
   }
@@ -647,7 +689,9 @@ export class SessionEngine {
       .map((outcome) => outcome.action)
       .filter(
         (value): value is ToolAction =>
-          value !== null && value.tool !== "dartsnut_project_intake"
+          value !== null &&
+          value.tool !== "dartsnut_project_intake" &&
+          value.tool !== "get_dartsnut_skill"
       );
 
     const assistantToolCalls: ToolCallEnvelope[] = completion.toolCalls.map((toolCall) => ({

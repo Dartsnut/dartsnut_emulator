@@ -6,6 +6,32 @@
  */
 
 import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
+import { DEFERRED_SKILL_IDS } from "./skillBundle";
+
+const GET_DARTSNUT_SKILL_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "get_dartsnut_skill",
+    description: [
+      "Load the full markdown text for a **Dartsnut house skill** (runtime, display mapping, or asset pipeline).",
+      "Call **before** write_file / replace_in_file / copy_asset_file when the router system prompt lists this skill for the session.",
+      "Do not use for workspace project files — use read_file. Returns JSON with `content` (the skill body) when `ok` is true."
+    ].join(" "),
+    parameters: {
+      type: "object",
+      properties: {
+        skill_id: {
+          type: "string",
+          enum: [...DEFERRED_SKILL_IDS],
+          description: "Which bundled skill to retrieve."
+        }
+      },
+      required: ["skill_id"],
+      additionalProperties: false
+    },
+    strict: true
+  }
+};
 
 const DARTSNUT_PROJECT_INTAKE_TOOL: ChatCompletionTool = {
   type: "function",
@@ -166,8 +192,12 @@ export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
   }
 ];
 
-/** Default tool surface: workspace file tools + project intake helper. */
-export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [...AGENT_FILE_TOOL_SCHEMAS, DARTSNUT_PROJECT_INTAKE_TOOL];
+/** Default tool surface: workspace file tools + deferred skills + project intake helper. */
+export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
+  ...AGENT_FILE_TOOL_SCHEMAS,
+  GET_DARTSNUT_SKILL_TOOL,
+  DARTSNUT_PROJECT_INTAKE_TOOL
+];
 
 /** Intake-only session: host tool exclusively (no writes to the placeholder workspace). */
 export const AGENT_CREATION_INTAKE_TOOL_SCHEMAS: ChatCompletionTool[] = [DARTSNUT_PROJECT_INTAKE_TOOL];

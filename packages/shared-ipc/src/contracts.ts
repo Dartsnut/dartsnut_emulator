@@ -69,6 +69,16 @@ export interface PromptRequest {
    * workspace + routing are resolved.
    */
   creationIntake?: boolean;
+  /**
+   * With `creationIntake`, records a size the user chose from the in-app widget size chip row.
+   * Main tells the model via an `[UI] …` line so intake can call `set_widget_size` without re-asking.
+   */
+  intakeWidgetSizeChoice?: WidgetSize;
+  /**
+   * With `creationIntake`, records **game** vs **widget** from the in-app type chip row.
+   * Main pre-seeds intake and adds an `[UI] …` line so the model calls `set_project_type` without re-asking.
+   */
+  intakeProjectTypeChoice?: ProjectType;
   /** Required when `templateMode === "asset-applier"`. */
   assetApply?: {
     slotIds: string[];
@@ -89,6 +99,9 @@ export interface SendPromptResponse {
 export type ProjectType = "game" | "widget";
 
 export type WidgetSize = "128x160" | "128x128" | "128x64" | "64x32";
+
+/** Supported physical widget display sizes (WxH string tokens). */
+export const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
 
 export interface PickWorkspaceRequest {
   requireEmpty?: boolean;
@@ -133,6 +146,21 @@ export type AgentEvent =
     type: "final";
     content: string;
     at: number;
+  }
+  | {
+    type: "intake_widget_size_prompt";
+    at: number;
+    /** When true, the renderer should show the size chip row (`sizes`). When false, hide it. */
+    visible: boolean;
+    /** Supported WxH tokens for chips; set when `visible` is true. */
+    sizes?: WidgetSize[];
+  }
+  | {
+    type: "intake_project_type_prompt";
+    at: number;
+    /** When true, show the Game / Widget chip row (`options`). When false, hide it. */
+    visible: boolean;
+    options?: ProjectType[];
   };
 
 export type AssetKind = "static" | "gif" | "spritesheet";

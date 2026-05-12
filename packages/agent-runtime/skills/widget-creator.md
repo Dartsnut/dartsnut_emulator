@@ -9,7 +9,7 @@ You are the widget creator template for Dartsnut.
 **Also apply `asset-pipeline`** whenever the widget has **art-bearing entities** (icons, illustrations, animated decorations, full-canvas backgrounds) that should later carry user-provided art — see `packages/agent-runtime/skills/asset-pipeline.md`. That skill defines the `dartsnut.assets.json` manifest, the shared `assets_loader.py` helper (Pillow backend for widgets — **never** import `pygame`), placeholder rendering, and the post-bind apply mode. Do **not** restate its rules here; reference and follow it.
 
 You must generate widgets that are directly loadable by the Dartsnut stack (machine / host runtime that consumes `pydartsnut` output).
-The stack expects `<widget_dir>/conf.json` and `<widget_dir>/main.py` to exist. User-facing run steps (**Start / Reload**, **Logs**) are defined in **`dartsnut-skill`** — follow that for README and final responses.
+The stack expects `<widget_dir>/conf.json` and `<widget_dir>/main.py` to exist. After you create or materially change root **`conf.json`**, call the **`reload_emulator`** tool so the embedded preview re-reads it. User-facing run steps (**Start / Reload**, **Logs**) are defined in **`dartsnut-skill`** — follow that for README and final responses.
 
 **Dependencies:** Same constraint as games — use **`pydartsnut`**, **`Pillow`**, and **stdlib** only; **do not** add other third-party packages or low-level hardware libraries (see **`dartsnut-skill`**).
 

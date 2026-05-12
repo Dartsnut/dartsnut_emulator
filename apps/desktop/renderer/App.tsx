@@ -1,17 +1,17 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type {
-  AgentEvent,
-  AssetManifest,
-  BootstrapState,
-  DeployEligibility,
-  ManifestSnapshot,
-  ProviderSettings,
-  ProjectType,
-  PromptRequest,
-  SendPromptResponse,
-  WidgetSize
+import {
+  type AgentEvent,
+  type AssetManifest,
+  type BootstrapState,
+  type DeployEligibility,
+  type ManifestSnapshot,
+  type ProviderSettings,
+  type ProjectType,
+  type PromptRequest,
+  type SendPromptResponse,
+  type WidgetSize
 } from "@dartsnut/shared-ipc";
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { cn } from "./cn";
@@ -21,6 +21,15 @@ import { highlightDiffLine, languageFromPath } from "./highlightDiffLine";
 import { ThemeSwitcherIcon } from "./ThemeSwitcher";
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
+
+/** Same order as `WIDGET_DISPLAY_SIZES` in `@dartsnut/shared-ipc` — defined here because Vite/Rollup does not resolve that value through the package’s compiled CJS `export *` shim. */
+const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
+
+const CREATION_INTAKE_PROJECT_TYPES: readonly ProjectType[] = ["game", "widget"];
+
+function projectTypeChipLabel(pt: ProjectType): string {
+  return pt === "game" ? "Game" : "Widget";
+}
 
 type RightPaneTab = "emulator" | "assets" | "deploy";
 
@@ -75,7 +84,7 @@ const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 /** Content taller than one line — switch composer shell from pill to rounded card */
 const COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX = 52;
 const GREETING_TEXT =
-  "Hi! I can help you create or modify Dartsnut widgets and games. Describe what you want to build — if no workspace folder is set yet, I will walk you through picking an empty folder and confirming game vs widget using in-chat tools.";
+  "Hi! I can help you create or modify Dartsnut widgets and games. Describe what you want to build — if no workspace folder is set yet, use the **Game** / **Widget** chips under the chat when they appear, then follow folder and size steps until we open your empty project folder.";
 
 const chromeIconBtnClass =
   "inline-flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border-0 bg-transparent p-0 text-[var(--color-app-btn-text)] [app-region:no-drag] [-webkit-app-region:no-drag] hover:enabled:bg-[var(--color-app-btn-bg-hover)] hover:enabled:text-[var(--color-app-btn-text-hover)] focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45";
@@ -470,6 +479,9 @@ function workspaceFolderBasename(workspaceRoot: string): string {
 }
 
 function toEntry(event: AgentEvent, seq: number): TimelineEntry {
+  if (event.type === "intake_widget_size_prompt" || event.type === "intake_project_type_prompt") {
+    throw new Error("intake_*_prompt events are handled in onAgentEvent, not the timeline");
+  }
   if (event.type === "stream") {
     return { id: `${event.type}-${event.at}-${seq}`, role: "agent", text: event.delta, streaming: true };
   }
@@ -510,6 +522,16 @@ export function App() {
   >(null);
   const [sessionWidgetSize, setSessionWidgetSize] = useState<WidgetSize | null>(null);
   const [sessionProjectType, setSessionProjectType] = useState<ProjectType | null>(null);
+  /** Shown until intake records project type (`intake_project_type_prompt` from host). */
+  const [projectTypePicker, setProjectTypePicker] = useState<{
+    visible: boolean;
+    types: ProjectType[];
+  }>({ visible: false, types: [] });
+  /** Shown after intake records `widget` but not yet `set_widget_size` (host pushes `intake_widget_size_prompt`). */
+  const [widgetSizePicker, setWidgetSizePicker] = useState<{
+    visible: boolean;
+    sizes: WidgetSize[];
+  }>({ visible: false, sizes: [] });
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const pendingReplyIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
@@ -519,6 +541,8 @@ export function App() {
   const streamAutoscrollGateRef = useRef(0);
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
+  /** Last no-workspace prompt text — used when the user picks a widget size from chips so the idea is not lost. */
+  const creationIntakeBasePromptRef = useRef("");
   const timelineRef = useRef<HTMLElement | null>(null);
   const composerPillRef = useRef<HTMLDivElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -683,6 +707,30 @@ export function App() {
       if (discardAgentEventsRef.current) {
         return;
       }
+      if (event.type === "intake_project_type_prompt") {
+        setProjectTypePicker({
+          visible: event.visible,
+          types:
+            event.visible && event.options && event.options.length > 0
+              ? event.options
+              : event.visible
+                ? [...CREATION_INTAKE_PROJECT_TYPES]
+                : []
+        });
+        return;
+      }
+      if (event.type === "intake_widget_size_prompt") {
+        setWidgetSizePicker({
+          visible: event.visible,
+          sizes:
+            event.visible && event.sizes && event.sizes.length > 0
+              ? event.sizes
+              : event.visible
+                ? [...WIDGET_DISPLAY_SIZES]
+                : []
+        });
+        return;
+      }
       if (import.meta.env.DEV) {
         if (event.type === "stream") {
           console.debug("[agent-stream]", { type: "stream", deltaChars: event.delta.length, at: event.at });
@@ -820,6 +868,13 @@ export function App() {
     }
   }, [assetManifest, deployEligible, rightPaneTab]);
 
+  useEffect(() => {
+    if (bootstrap?.workspaceRoot) {
+      setWidgetSizePicker({ visible: false, sizes: [] });
+      setProjectTypePicker({ visible: false, types: [] });
+    }
+  }, [bootstrap?.workspaceRoot]);
+
   const chatDisabled = useMemo(() => {
     if (!bootstrap) {
       return true;
@@ -840,6 +895,9 @@ export function App() {
       setSessionTemplateMode(null);
       setSessionWidgetSize(null);
       setSessionProjectType(null);
+      setWidgetSizePicker({ visible: false, sizes: [] });
+      setProjectTypePicker({ visible: false, types: [] });
+      creationIntakeBasePromptRef.current = "";
       setPrompt("");
       setRuntimeError(null);
       setEntries([{ id: `greeting-${Date.now()}`, role: "agent", text: GREETING_TEXT, streaming: false }]);
@@ -851,6 +909,8 @@ export function App() {
   }
 
   async function submitPrompt(request: PromptRequest) {
+    setWidgetSizePicker({ visible: false, sizes: [] });
+    setProjectTypePicker({ visible: false, types: [] });
     discardAgentEventsRef.current = false;
     const pendingReplyId = `agent-pending-${Date.now()}`;
     pendingReplyIdRef.current = pendingReplyId;
@@ -980,6 +1040,40 @@ export function App() {
     }
   }
 
+  async function handleProjectTypeChip(projectType: ProjectType) {
+    if (!api) {
+      return;
+    }
+    const base = creationIntakeBasePromptRef.current.trim();
+    if (!base) {
+      postStatus("Describe what you want to build in the chat first, then pick Game or Widget.");
+      return;
+    }
+    setProjectTypePicker({ visible: false, types: [] });
+    await submitPrompt({
+      prompt: base,
+      creationIntake: true,
+      intakeProjectTypeChoice: projectType
+    });
+  }
+
+  async function handleWidgetSizeChip(size: WidgetSize) {
+    if (!api) {
+      return;
+    }
+    const base = creationIntakeBasePromptRef.current.trim();
+    if (!base) {
+      postStatus("Describe what you want to build in the chat first, then pick a display size.");
+      return;
+    }
+    setWidgetSizePicker({ visible: false, sizes: [] });
+    await submitPrompt({
+      prompt: base,
+      creationIntake: true,
+      intakeWidgetSizeChoice: size
+    });
+  }
+
   async function handleSend() {
     if (!prompt.trim() || chatDisabled) {
       return;
@@ -1003,6 +1097,7 @@ export function App() {
       });
       return;
     }
+    creationIntakeBasePromptRef.current = current;
     await submitPrompt({ prompt: current, creationIntake: true });
   }
 
@@ -1206,6 +1301,62 @@ export function App() {
               </div>
             ))}
           </section>
+
+          {!bootstrap?.workspaceRoot && projectTypePicker.visible && projectTypePicker.types.length > 0 ? (
+            <div
+              className="flex flex-col gap-1.5 px-0.5"
+              role="group"
+              aria-label="Project type"
+            >
+              <span className="text-[11px] font-medium text-[var(--color-text-subtle)]">
+                Game or widget?
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {projectTypePicker.types.map((pt) => (
+                  <button
+                    key={pt}
+                    type="button"
+                    className={cn(
+                      "cursor-pointer rounded-full border border-[var(--color-chip-border)] bg-[var(--color-chip-bg)] px-3 py-1.5 text-[12px] font-medium text-[var(--color-chip-text)] [font:inherit]",
+                      "hover:enabled:border-[var(--color-chip-hover-border)] hover:enabled:bg-[var(--color-chip-hover-bg)]",
+                      "focus-visible:border-[var(--color-chip-focus-border)] focus-visible:shadow-[var(--shadow-chip-focus)] focus-visible:outline-none"
+                    )}
+                    onClick={() => void handleProjectTypeChip(pt)}
+                  >
+                    {projectTypeChipLabel(pt)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {!bootstrap?.workspaceRoot && widgetSizePicker.visible && widgetSizePicker.sizes.length > 0 ? (
+            <div
+              className="flex flex-col gap-1.5 px-0.5"
+              role="group"
+              aria-label="Widget display size"
+            >
+              <span className="text-[11px] font-medium text-[var(--color-text-subtle)]">
+                Pick display size
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {widgetSizePicker.sizes.map((sz) => (
+                  <button
+                    key={sz}
+                    type="button"
+                    className={cn(
+                      "cursor-pointer rounded-full border border-[var(--color-chip-border)] bg-[var(--color-chip-bg)] px-3 py-1.5 text-[12px] font-medium tabular-nums text-[var(--color-chip-text)] [font:inherit]",
+                      "hover:enabled:border-[var(--color-chip-hover-border)] hover:enabled:bg-[var(--color-chip-hover-bg)]",
+                      "focus-visible:border-[var(--color-chip-focus-border)] focus-visible:shadow-[var(--shadow-chip-focus)] focus-visible:outline-none"
+                    )}
+                    onClick={() => void handleWidgetSizeChip(sz)}
+                  >
+                    {sz}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <section className="flex flex-col gap-3 border-0 bg-transparent p-0">
             <div

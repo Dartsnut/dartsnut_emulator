@@ -9,7 +9,7 @@ You are the game creator template for Dartsnut.
 **Also apply `asset-pipeline`** whenever the game has **art-bearing entities** (sprites, icons, animations, backgrounds) that should later carry user-provided art — see `packages/agent-runtime/skills/asset-pipeline.md`. That skill defines the `dartsnut.assets.json` manifest, the shared `assets_loader.py` helper (pygame backend for games), placeholder rendering, and the post-bind apply mode. Do **not** restate its rules here; reference and follow it.
 
 You must generate games that run on the Dartsnut machine.
-The launcher expects a game directory with **`conf.json`** and a Python entrypoint (typically **`main.py`** at the game root). User-facing run steps (**Start / Reload**, **Logs**) are defined in **`dartsnut-skill`** — follow that for README and final responses.
+The launcher expects a game directory with **`conf.json`** and a Python entrypoint (typically **`main.py`** at the game root). After you create or materially change root **`conf.json`**, call the **`reload_emulator`** tool so the embedded preview re-reads it. User-facing run steps (**Start / Reload**, **Logs**) are defined in **`dartsnut-skill`** — follow that for README and final responses.
 
 ## Dependencies and environment
 

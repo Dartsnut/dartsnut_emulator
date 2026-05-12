@@ -53,14 +53,16 @@ Font policy:
 - Use **`availableWidgetFonts`** from the creation context JSON as the authoritative font filename list (it matches centralized `assets/fonts/widgets/`).
 - Do **not** use `read_file` on `font_manifest.json` or absolute repo paths — the agent workspace sandbox cannot reliably read outside the widget directory.
 - If user requests a specific font, choose the exact **`availableWidgetFonts`** basename (no invented hash suffixes like `*-541a345d`).
-- If no font is requested, pick a sensible default from **`availableWidgetFonts`**.
+- If no font is requested, pick a sensible default from **`availableWidgetFonts`** by **layout role** (body text, labels, small metadata) vs **intentional hero digits** — not by whether the string “looks like time” (digits and colons are not a signal to switch fonts).
+- **Time-related copy and labels:** Do **not** default to **`big_digits`** (or other oversized scoreboard-style bitmap fonts) just because the widget shows a clock, duration, countdown, or ISO-like timestamp. Use normal UI fonts from **`availableWidgetFonts`** for captions, prefixes (“Elapsed”, “Ends”), units, secondary lines, and any time string that shares a line with prose. Reserve **`big_digits`** for a **primary numeric readout** where the spec or layout clearly calls for **large, dominant digits** (e.g. full-width match clock, giant countdown). When the design needs a dedicated colon glyph between big digit pairs, use the paired **`colon`** font from the list if present — still only in that hero-digit context, not for labeling.
+- **Compact date strings:** If the design is explicitly a **small date stamp** in a fixed digit style, **`date_digits`** may fit; it is still not a substitute for body/label fonts and not an automatic pick for every datetime string.
 - Once a font is selected, copy it into the target widget workspace.
 - Strict default copy convention:
   - always copy selected fonts to `./fonts/` inside the widget directory
   - always load fonts from `Path(__file__).parent / "fonts"`
 - For bitmap fonts, copy both paired files:
   - `.pil` and matching `.pbm`
-- The `copy_asset_file` tool strips any trailing `-<8 hex>` digest before the extension on both the asset filename and the destination path (e.g. workspace files end up as `fonts/big_digits.pil`, not `fonts/big_digits-ec3a002b.pil`).
+- The `copy_asset_file` tool strips any trailing `-<8 hex>` digest before the extension on both the asset filename and the destination path (e.g. workspace files end up as `fonts/6x13.pil`, not `fonts/6x13-e111fb7f.pil`).
 - In `main.py`, load fonts from the copied workspace-local path, not the centralized assets path.
 - If requested font is missing, choose closest available manifest option and note it.
 

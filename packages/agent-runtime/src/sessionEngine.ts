@@ -21,37 +21,40 @@ function isDeferredSkillId(value: unknown): value is DeferredSkillId {
 
 type ToolAction =
   | {
-      tool: "list_files";
-      path?: string;
-    }
+    tool: "list_files";
+    path?: string;
+  }
   | {
-      tool: "read_file";
-      path: string;
-    }
+    tool: "read_file";
+    path: string;
+  }
   | {
-      tool: "write_file";
-      path: string;
-      content: string;
-    }
+    tool: "write_file";
+    path: string;
+    content: string;
+  }
   | {
-      tool: "replace_in_file";
-      path: string;
-      find: string;
-      replace: string;
-    }
+    tool: "replace_in_file";
+    path: string;
+    find: string;
+    replace: string;
+  }
   | {
-      tool: "copy_asset_file";
-      source: string;
-      path: string;
-    }
+    tool: "copy_asset_file";
+    source: string;
+    path: string;
+  }
   | {
-      tool: "dartsnut_project_intake";
-      args: Record<string, unknown>;
-    }
+    tool: "dartsnut_project_intake";
+    args: Record<string, unknown>;
+  }
   | {
-      tool: "get_dartsnut_skill";
-      skill_id: DeferredSkillId;
-    };
+    tool: "reload_emulator";
+  }
+  | {
+    tool: "get_dartsnut_skill";
+    skill_id: DeferredSkillId;
+  };
 
 interface AgentActionEnvelope {
   response?: string;
@@ -60,6 +63,9 @@ interface AgentActionEnvelope {
 
 /** Host (Electron main) executes `dartsnut_project_intake`; returns JSON text for the model. */
 export type HostIntakeToolHandler = (args: Record<string, unknown>) => Promise<string>;
+
+/** Host (Electron main) reloads the embedded emulator; returns JSON text for the model. */
+export type HostReloadEmulatorHandler = () => Promise<string>;
 
 /** When set, `get_dartsnut_skill` reads markdown from `skillsDir` for ids in `allowedIds`. */
 export interface AgentSkillLibrary {
@@ -78,12 +84,13 @@ export interface SessionEngineOptions {
   /** When set, replaces the default {@link AGENT_TOOL_SCHEMAS} on completion requests. */
   completionTools?: ChatCompletionTool[];
   hostIntakeToolHandler?: HostIntakeToolHandler;
+  hostReloadEmulatorHandler?: HostReloadEmulatorHandler;
   /** Skip the initial `workspacePolicy.resolveWithinRoot(".")` probe (intake placeholder roots). */
   skipInitialWorkspaceResolve?: boolean;
 }
 
 export class SessionEngine {
-  constructor(private readonly options: SessionEngineOptions) {}
+  constructor(private readonly options: SessionEngineOptions) { }
 
   private normalizeAction(rawAction: unknown): ToolAction {
     if (!rawAction || typeof rawAction !== "object") {
@@ -176,6 +183,9 @@ export class SessionEngine {
       }
       return { tool: "dartsnut_project_intake", args };
     }
+    if (tool === "reload_emulator") {
+      return { tool: "reload_emulator" };
+    }
     throw new Error(`Unsupported tool action: ${tool || "unknown"}`);
   }
 
@@ -183,6 +193,7 @@ export class SessionEngine {
     const completionTools = this.options.completionTools ?? AGENT_TOOL_SCHEMAS;
     const names = completionTools.map((t) => (t.type === "function" ? t.function.name : ""));
     const hasIntake = names.includes("dartsnut_project_intake");
+    const hasReload = names.includes("reload_emulator");
     const fileToolLine = `You have native tools available via the API: ${names.filter(Boolean).join(", ")}.`;
     const lines = [
       fileToolLine,
@@ -197,7 +208,12 @@ export class SessionEngine {
     ];
     if (hasIntake) {
       lines.push(
-        "Intake: **dartsnut_project_intake** is host-executed — use `set_project_type`, `set_widget_size`, `pick_workspace`, and `read_workspace_conf` instead of composer chips. After `read_workspace_conf`, ask at most one focused question when the folder already has a valid `conf.json`, invalid JSON, or a type/size mismatch."
+        "Intake: **dartsnut_project_intake** is host-executed — use `set_project_type`, `set_widget_size`, `pick_workspace`, and `read_workspace_conf` instead of composer chips. The app may show **Game / Widget** chips under the chat until the type is set; for widgets it may also show **size chips**. Never assume a widget display size — ask or use chips unless the user message already names a supported WxH. After `read_workspace_conf`, ask at most one focused question when the folder already has a valid `conf.json`, invalid JSON, or a type/size mismatch."
+      );
+    }
+    if (hasReload) {
+      lines.push(
+        "After creating or changing root `conf.json`, call **reload_emulator** so the preview and deploy panel see the new config (host re-reads conf and restarts the widget process)."
       );
     }
     return lines.join("\n");
@@ -440,6 +456,12 @@ export class SessionEngine {
       }
       return this.options.hostIntakeToolHandler(action.args);
     }
+    if (action.tool === "reload_emulator") {
+      if (!this.options.hostReloadEmulatorHandler) {
+        throw new Error("reload_emulator is not enabled for this session.");
+      }
+      return this.options.hostReloadEmulatorHandler();
+    }
     if (action.tool === "get_dartsnut_skill") {
       const lib = this.options.skillLibrary;
       if (!lib) {
@@ -563,6 +585,9 @@ export class SessionEngine {
     if (action.tool === "dartsnut_project_intake") {
       const step = typeof action.args.action === "string" ? action.args.action : "intake";
       return `Ran project intake (${step})`;
+    }
+    if (action.tool === "reload_emulator") {
+      return "Reloaded emulator";
     }
     if (action.tool === "get_dartsnut_skill") {
       return `Loaded skill ${action.skill_id}`;
@@ -691,6 +716,7 @@ export class SessionEngine {
         (value): value is ToolAction =>
           value !== null &&
           value.tool !== "dartsnut_project_intake" &&
+          value.tool !== "reload_emulator" &&
           value.tool !== "get_dartsnut_skill"
       );
 

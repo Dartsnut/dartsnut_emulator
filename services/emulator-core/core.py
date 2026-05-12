@@ -146,8 +146,8 @@ class EmulatorCore:
     def start_widget_process_for_current(self) -> None:
         if not self.current_path:
             raise ValueError("No widget path is configured")
-        if self.config is None:
-            self.load_widget_config(self.current_path, self.current_params)
+        # Always refresh conf.json from disk so reload_widget picks up a file created after the first load.
+        self.load_widget_config(self.current_path, self.current_params)
 
         self.stop_widget_process()
         time.sleep(0.2)

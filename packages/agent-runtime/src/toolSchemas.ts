@@ -41,10 +41,10 @@ const DARTSNUT_PROJECT_INTAKE_TOOL: ChatCompletionTool = {
       "Dartsnut Chat **new-project / workspace** setup (host-executed). Use standard `tool_calls` only.",
       "Actions:",
       "- **set_project_type** — record whether the user is building a `game` or `widget` (required before scaffolding).",
-      "- **set_widget_size** — for widgets only; one of the supported WxH tokens.",
+      "- **set_widget_size** — for widgets only; one of the supported WxH tokens. Do **not** infer a default — the user must choose (or their message must already name a supported size).",
       "- **pick_workspace** — opens a folder picker for an **empty** project directory; required before any files are written.",
       "- **read_workspace_conf** — reads `conf.json` in the **currently selected** workspace and reports deploy-style validity plus guidance (call after the folder is chosen, and again if the user switches workspace).",
-      "Typical order when starting from no workspace: infer or confirm `set_project_type` → if widget, `set_widget_size` → `pick_workspace` → `read_workspace_conf`, then ask **one** focused follow-up question when `read_workspace_conf` shows an existing project or invalid `conf.json`."
+      "Typical order when starting from no workspace: infer or confirm `set_project_type` (the app may show **Game / Widget** chips until this is set) → if widget, confirm display size (ask if missing, or use the in-app size chips) then `set_widget_size` → `pick_workspace` → `read_workspace_conf`, then ask **one** focused follow-up question when `read_workspace_conf` shows an existing project or invalid `conf.json`."
     ].join(" "),
     parameters: {
       type: "object",
@@ -192,10 +192,26 @@ export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
   }
 ];
 
+const RELOAD_EMULATOR_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "reload_emulator",
+    description:
+      "Host-executed: re-applies the current workspace path to the embedded emulator, **re-reads `conf.json` from disk**, restarts the widget/game process, and refreshes deploy eligibility in the UI. Call after creating or editing `conf.json` (especially when the workspace started empty), or when the preview is stale.",
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    },
+    strict: true
+  }
+};
+
 /** Default tool surface: workspace file tools + deferred skills + project intake helper. */
 export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
   ...AGENT_FILE_TOOL_SCHEMAS,
   GET_DARTSNUT_SKILL_TOOL,
+  RELOAD_EMULATOR_TOOL,
   DARTSNUT_PROJECT_INTAKE_TOOL
 ];
 

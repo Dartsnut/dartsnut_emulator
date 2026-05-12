@@ -28,6 +28,7 @@ import {
   type UnbindSlotRequest,
   type UnbindSlotResponse,
   validateDeployWorkspaceConf,
+  WIDGET_DISPLAY_SIZES,
   type WidgetSize,
   type ShellUiTheme,
   type WindowChromeInsets,
@@ -148,6 +149,40 @@ function readDeployEligibilityFromWorkspace(): DeployEligibility {
     return { ok: false, reason: "invalid_conf" };
   }
 }
+
+/** Agent tool `reload_emulator`: sync bridge path, reload widget (Python re-reads conf.json), refresh deploy UI. */
+async function executeHostReloadEmulatorForAgent(): Promise<string> {
+  if (!workspaceRoot) {
+    return JSON.stringify({
+      ok: false,
+      error: "No workspace is selected — finish intake or pick a project folder first."
+    });
+  }
+  if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
+    startPythonBridge();
+  }
+  if (!bridgeProcess?.stdin || bridgeProcess.stdin.destroyed) {
+    return JSON.stringify({ ok: false, error: "Emulator bridge is not available." });
+  }
+  const baseRoot = getEmulatorWorkspaceRoot();
+  let selectedPath = path.isAbsolute(workspaceRoot) ? workspaceRoot : path.join(baseRoot, workspaceRoot);
+  if (!isWithinDirectory(workspaceRoot, selectedPath)) {
+    selectedPath = workspaceRoot;
+  }
+  const setPath: EmulatorCommand = { type: "set_path", path: selectedPath };
+  const reload: EmulatorCommand = { type: "reload_widget" };
+  bridgeProcess.stdin.write(`${JSON.stringify({ command: setPath })}\n`);
+  bridgeProcess.stdin.write(`${JSON.stringify({ command: reload })}\n`);
+  lastWidgetDir = selectedPath;
+  writeEmulatorState();
+  startDeployConfWatcher(workspaceRoot);
+  return JSON.stringify({
+    ok: true,
+    message:
+      "Emulator path re-applied and reload_widget sent; conf.json re-read on the Python side and deploy eligibility refreshed."
+  });
+}
+
 const emulatorState: EmulatorStateSnapshot = {
   widgetPath: null,
   running: false,
@@ -286,8 +321,6 @@ function resolveCreatorTemplatePath(templateMode: CreatorTemplateMode): string {
   return path.join(repoRoot, creatorTemplatePaths[templateMode]);
 }
 
-const SUPPORTED_WIDGET_SIZES = ["128x160", "128x128", "128x64", "64x32"] as const satisfies readonly WidgetSize[];
-
 function parseConfWidgetSize(size: unknown): WidgetSize | undefined {
   if (!Array.isArray(size) || size.length !== 2) {
     return undefined;
@@ -298,7 +331,7 @@ function parseConfWidgetSize(size: unknown): WidgetSize | undefined {
     return undefined;
   }
   const key = `${w}x${h}` as WidgetSize;
-  return SUPPORTED_WIDGET_SIZES.includes(key as (typeof SUPPORTED_WIDGET_SIZES)[number]) ? key : undefined;
+  return WIDGET_DISPLAY_SIZES.includes(key) ? key : undefined;
 }
 
 function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
@@ -456,7 +489,7 @@ async function intakeHostToolExecute(
       recorded: { projectType: pt },
       next:
         pt === "widget"
-          ? "Call set_widget_size unless the user already specified a supported size, then pick_workspace."
+          ? "Widget display size: if the user's message already names a supported WxH (128x160, 128x128, 128x64, 64x32), call set_widget_size with that value next. Otherwise reply listing those four options and ask which they want — do **not** pick a default, invent a size, or call set_widget_size or pick_workspace until they choose (or their next message is only one of those tokens — then call set_widget_size with it)."
           : "Call pick_workspace (empty folder), then read_workspace_conf."
     });
   }
@@ -468,10 +501,10 @@ async function intakeHostToolExecute(
       });
     }
     const sz = args.widget_size;
-    if (typeof sz !== "string" || !SUPPORTED_WIDGET_SIZES.includes(sz as WidgetSize)) {
+    if (typeof sz !== "string" || !WIDGET_DISPLAY_SIZES.includes(sz as WidgetSize)) {
       return JSON.stringify({
         ok: false,
-        error: `widget_size must be one of: ${SUPPORTED_WIDGET_SIZES.join(", ")}.`
+        error: `widget_size must be one of: ${WIDGET_DISPLAY_SIZES.join(", ")}.`
       });
     }
     state.widgetSize = sz as WidgetSize;
@@ -514,20 +547,31 @@ async function intakeHostToolExecute(
   return JSON.stringify({ ok: false, error: `Unknown intake action: ${action}` });
 }
 
-function buildCreationIntakeUserPrompt(userRequest: string): string {
+function buildCreationIntakeUserPrompt(
+  userRequest: string,
+  opts?: { widgetSizeFromPicker?: WidgetSize; projectTypeFromPicker?: ProjectType }
+): string {
+  const projectTypeLine =
+    opts?.projectTypeFromPicker != null
+      ? `\n\n[UI] User chose project type **${opts.projectTypeFromPicker}** from the in-app **Game / Widget** chip row. Call \`set_project_type\` with that exact \`project_type\` value, then continue intake per the procedure (widget size if \`widget\`, then \`pick_workspace\`, \`read_workspace_conf\`). Do not ask game vs widget again.`
+      : "";
+  const pickerLine =
+    opts?.widgetSizeFromPicker != null
+      ? `\n\n[UI] User chose widget display size **${opts.widgetSizeFromPicker}** from the in-app size chip row. Call \`set_project_type\` with \`widget\` then \`set_widget_size\` with exactly that WxH token, then continue intake (\`pick_workspace\`, \`read_workspace_conf\`). Do not ask for size again.`
+      : "";
   return [
     "## New project intake (mandatory tool use)",
     "The user has **not** chosen a workspace folder in the shell yet. You cannot read or write project files until intake completes.",
-    "Use **only** the `dartsnut_project_intake` tool (native `tool_calls`) — do **not** ask them to click composer chips.",
+    "Use **only** the `dartsnut_project_intake` tool (native `tool_calls`). The app shows **Game** and **Widget** chips under the chat until the type is set; for widgets it may also show **display size** chips — point at them in one short sentence instead of long bullet lists; users may also type choices.",
     "Procedure:",
-    "1. Infer **game** vs **widget** from the user's text when it is obvious; otherwise ask one short question, then call `set_project_type`.",
-    "2. For **widget**, if size is unknown, call `set_widget_size` with one of: 128x160, 128x128, 128x64, 64x32.",
+    "1. Infer **game** vs **widget** from the user's text when it is obvious; otherwise ask one short question (or point at the type chips), then call `set_project_type`.",
+    "2. For **widget** display size: supported values are exactly **128x160**, **128x128**, **128x64**, **64x32**. If the user's message already includes one of those literals, call `set_widget_size` with it. Otherwise ask one short question — **never** assume a default, pick a size for them, or call `set_widget_size` / `pick_workspace` until they have chosen (via chips or typed). If the user's message is **only** one of those four literals (no other words), treat it as their size choice for a widget: call `set_project_type` with `widget` then `set_widget_size` with that token, then continue.",
     "3. Call `pick_workspace` so the user selects an **empty** directory.",
     "4. Call `read_workspace_conf`. Use `guidance_notes`, `deploy_eligibility`, and `conf_status` to ask **at most one** focused follow-up when the folder is not a blank slate or types disagree.",
     "5. Close with a one- or two-sentence confirmation of what will be built next (no code, no file paths invented).",
     "",
     "User request:",
-    userRequest
+    `${userRequest}${projectTypeLine}${pickerLine}`
   ].join("\n");
 }
 
@@ -1224,6 +1268,7 @@ function buildSession(
   const skillBundleMode =
     extras?.skillBundleMode !== undefined ? extras.skillBundleMode : templateMode ?? null;
   const { skillPrompt, skillLibrary } = resolveSkillSessionContext(skillBundleMode);
+  const intakeToolsOnly = extras?.completionTools === AGENT_CREATION_INTAKE_TOOL_SCHEMAS;
   return new SessionEngine({
     provider: new ProviderClient(config),
     workspacePolicy: new WorkspacePolicy(workspacePath),
@@ -1234,6 +1279,7 @@ function buildSession(
     },
     completionTools: extras?.completionTools,
     hostIntakeToolHandler: extras?.hostIntakeToolHandler,
+    hostReloadEmulatorHandler: intakeToolsOnly ? undefined : () => executeHostReloadEmulatorForAgent(),
     skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve
   });
 }
@@ -1672,18 +1718,68 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     const shouldRunCreationIntake = Boolean(req.creationIntake && !workspaceRoot);
 
     if (shouldRunCreationIntake) {
+      emitAgent({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
+      emitAgent({ type: "intake_project_type_prompt", at: Date.now(), visible: false });
       const intakeState: IntakeToolState = {};
+      if (req.intakeProjectTypeChoice) {
+        intakeState.projectType = req.intakeProjectTypeChoice;
+        if (req.intakeProjectTypeChoice === "game") {
+          intakeState.widgetSize = undefined;
+        }
+      }
+      if (req.intakeWidgetSizeChoice) {
+        intakeState.projectType = "widget";
+        intakeState.widgetSize = req.intakeWidgetSizeChoice;
+      }
+      const showProjectTypeChips =
+        !req.intakeProjectTypeChoice && !req.intakeWidgetSizeChoice;
+      if (showProjectTypeChips) {
+        emitAgent({
+          type: "intake_project_type_prompt",
+          at: Date.now(),
+          visible: true,
+          options: ["game", "widget"]
+        });
+      }
       const placeholder = getIntakePlaceholderWorkspacePath();
       fs.mkdirSync(placeholder, { recursive: true });
       const intakeSession = buildSession(undefined, {
         workspacePath: placeholder,
         completionTools: AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
-        hostIntakeToolHandler: (args) => intakeHostToolExecute(args, intakeState),
+        hostIntakeToolHandler: async (args) => {
+          const out = await intakeHostToolExecute(args, intakeState);
+          const act = args.action;
+          if (typeof act === "string") {
+            if (act === "set_project_type" && intakeState.projectType) {
+              emitAgent({ type: "intake_project_type_prompt", at: Date.now(), visible: false });
+            }
+            if (act === "set_project_type" && intakeState.projectType === "widget" && !intakeState.widgetSize) {
+              emitAgent({
+                type: "intake_widget_size_prompt",
+                at: Date.now(),
+                visible: true,
+                sizes: [...WIDGET_DISPLAY_SIZES]
+              });
+            } else if (act === "set_widget_size" && intakeState.widgetSize) {
+              emitAgent({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
+            } else if (act === "set_project_type" && intakeState.projectType === "game") {
+              emitAgent({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
+            }
+          }
+          return out;
+        },
         skipInitialWorkspaceResolve: true,
         skillBundleMode: "creation-intake"
       });
       console.log("[agent] runPrompt creation-intake start");
-      await intakeSession.runPrompt(buildCreationIntakeUserPrompt(req.prompt), emitAgent, runAbort.signal);
+      await intakeSession.runPrompt(
+        buildCreationIntakeUserPrompt(req.prompt, {
+          widgetSizeFromPicker: req.intakeWidgetSizeChoice,
+          projectTypeFromPicker: req.intakeProjectTypeChoice
+        }),
+        emitAgent,
+        runAbort.signal
+      );
 
       const canChain =
         Boolean(workspaceRoot) &&

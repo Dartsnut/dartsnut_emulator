@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
-import { bundleForTemplateMode, loadSkillBundle } from "../src/skillBundle";
+import {
+  allowedDeferredSkillIdsForMode,
+  bundleForTemplateMode,
+  loadSkillBundle,
+  readDeferredSkillMarkdown,
+  resolveSkillRouterPrompt
+} from "../src/skillBundle";
 
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
 
@@ -144,5 +150,30 @@ describe("bundleForTemplateMode", () => {
     const bundle = bundleForTemplateMode(SKILLS_DIR, "creation-intake");
     const single = loadSkillBundle(path.join(SKILLS_DIR, "dartsnut-skill.md"));
     expect(bundle).toBe(single);
+  });
+});
+
+describe("deferred skill router", () => {
+  it("allowedDeferredSkillIdsForMode matches bundle composition", () => {
+    expect(allowedDeferredSkillIdsForMode("asset-applier")).toEqual(["dartsnut-skill", "asset-pipeline"]);
+    expect(allowedDeferredSkillIdsForMode("creation-intake")).toEqual(["dartsnut-skill"]);
+    expect(allowedDeferredSkillIdsForMode(null)).toEqual([
+      "dartsnut-skill",
+      "dartsnut-display-mapping",
+      "asset-pipeline"
+    ]);
+  });
+
+  it("resolveSkillRouterPrompt lists only allowed skills and mentions get_dartsnut_skill", () => {
+    const router = resolveSkillRouterPrompt(SKILLS_DIR, "asset-applier");
+    expect(router).toContain("get_dartsnut_skill");
+    expect(router).toContain("dartsnut-skill");
+    expect(router).toContain("asset-pipeline");
+    expect(router).not.toContain("dartsnut-display-mapping");
+  });
+
+  it("readDeferredSkillMarkdown returns file body", () => {
+    const body = readDeferredSkillMarkdown(SKILLS_DIR, "dartsnut-skill");
+    expect(body).toContain("pydartsnut");
   });
 });

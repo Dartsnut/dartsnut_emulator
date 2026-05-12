@@ -40,6 +40,8 @@ import {
   SessionEngine,
   WorkspacePolicy,
   bundleForTemplateMode,
+  resolveSkillRouterPrompt,
+  allowedDeferredSkillIdsForMode,
   AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
   AGENT_TOOL_SCHEMAS
 } from "@dartsnut/agent-runtime";
@@ -632,10 +634,25 @@ function resolveAgentRuntimeSkillsDir(): string {
   return existing;
 }
 
-function resolveSkillBundlePrompt(
+function resolveSkillSessionContext(
   templateMode?: PromptRequest["templateMode"] | "creation-intake" | null
-): string {
-  return bundleForTemplateMode(resolveAgentRuntimeSkillsDir(), templateMode ?? null);
+): {
+  skillPrompt: string;
+  skillLibrary?: { skillsDir: string; allowedIds: ReturnType<typeof allowedDeferredSkillIdsForMode> };
+} {
+  const skillsDir = resolveAgentRuntimeSkillsDir();
+  if (templateMode === "creation-intake") {
+    return {
+      skillPrompt: bundleForTemplateMode(skillsDir, "creation-intake")
+    };
+  }
+  return {
+    skillPrompt: resolveSkillRouterPrompt(skillsDir, templateMode ?? null),
+    skillLibrary: {
+      skillsDir,
+      allowedIds: allowedDeferredSkillIdsForMode(templateMode ?? null)
+    }
+  };
 }
 
 function getEmulatorWorkspaceRoot(): string {
@@ -1206,11 +1223,12 @@ function buildSession(
   }
   const skillBundleMode =
     extras?.skillBundleMode !== undefined ? extras.skillBundleMode : templateMode ?? null;
-  const skillPrompt = resolveSkillBundlePrompt(skillBundleMode);
+  const { skillPrompt, skillLibrary } = resolveSkillSessionContext(skillBundleMode);
   return new SessionEngine({
     provider: new ProviderClient(config),
     workspacePolicy: new WorkspacePolicy(workspacePath),
     skillPrompt,
+    skillLibrary,
     assetRoots: {
       widgetFonts: path.join(repoRoot, "assets", "fonts", "widgets")
     },

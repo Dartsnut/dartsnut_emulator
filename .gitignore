@@ -5,6 +5,7 @@
 .env
 .electron-cache
 .cursor
+.dartsnut-chat-intake-placeholder
 .DS_Store
 __pycache__
 .venv

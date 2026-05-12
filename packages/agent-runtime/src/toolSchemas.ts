@@ -1,13 +1,52 @@
 /**
  * OpenAI Chat Completions function definitions for the agent runtime's tools.
  *
- * These mirror the parameter validation in `SessionEngine.normalizeAction` and are sent on each
- * `chat/completions` request so the model can emit native `tool_calls`.
+ * File tools mirror `SessionEngine.normalizeAction` / `executeAction`.
+ * `dartsnut_project_intake` is executed by the host (Electron main) when configured.
  */
 
 import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
 
-export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
+const DARTSNUT_PROJECT_INTAKE_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "dartsnut_project_intake",
+    description: [
+      "Dartsnut Chat **new-project / workspace** setup (host-executed). Use standard `tool_calls` only.",
+      "Actions:",
+      "- **set_project_type** — record whether the user is building a `game` or `widget` (required before scaffolding).",
+      "- **set_widget_size** — for widgets only; one of the supported WxH tokens.",
+      "- **pick_workspace** — opens a folder picker for an **empty** project directory; required before any files are written.",
+      "- **read_workspace_conf** — reads `conf.json` in the **currently selected** workspace and reports deploy-style validity plus guidance (call after the folder is chosen, and again if the user switches workspace).",
+      "Typical order when starting from no workspace: infer or confirm `set_project_type` → if widget, `set_widget_size` → `pick_workspace` → `read_workspace_conf`, then ask **one** focused follow-up question when `read_workspace_conf` shows an existing project or invalid `conf.json`."
+    ].join(" "),
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["set_project_type", "set_widget_size", "pick_workspace", "read_workspace_conf"]
+        },
+        project_type: {
+          type: "string",
+          enum: ["game", "widget"],
+          description: "Required when action is set_project_type."
+        },
+        widget_size: {
+          type: "string",
+          enum: ["128x160", "128x128", "128x64", "64x32"],
+          description: "Required when action is set_widget_size."
+        }
+      },
+      required: ["action"],
+      additionalProperties: false
+    },
+    strict: false
+  }
+};
+
+/** File + asset tools only (no host intake). */
+export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
@@ -126,3 +165,9 @@ export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
     }
   }
 ];
+
+/** Default tool surface: workspace file tools + project intake helper. */
+export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [...AGENT_FILE_TOOL_SCHEMAS, DARTSNUT_PROJECT_INTAKE_TOOL];
+
+/** Intake-only session: host tool exclusively (no writes to the placeholder workspace). */
+export const AGENT_CREATION_INTAKE_TOOL_SCHEMAS: ChatCompletionTool[] = [DARTSNUT_PROJECT_INTAKE_TOOL];

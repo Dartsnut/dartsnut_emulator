@@ -4,7 +4,7 @@ import path from "node:path";
 const SKILL_SEPARATOR = "\n\n---\n\n";
 
 /** Template-mode-aware bundle selectors. Superset of `PromptRequest.templateMode`. */
-export type SkillBundleMode = "game-creator" | "widget-creator" | "asset-applier";
+export type SkillBundleMode = "game-creator" | "widget-creator" | "asset-applier" | "creation-intake";
 
 /**
  * Read one or more skill markdown files and concatenate them with a horizontal-rule separator.
@@ -43,6 +43,7 @@ export function resolveSkillBundlePaths(skillsDir: string): SkillBundlePaths {
  * - `asset-applier` — minimal: `dartsnut-skill` + `asset-pipeline` only.
  *   No display-mapping (apply mode does not touch layout/fonts) and no creator
  *   skills (apply mode forbids scaffolding).
+ * - `creation-intake` — `dartsnut-skill` only (no file writes; host tools handle workspace setup).
  * - All other modes (game-creator, widget-creator, or unset) — full bundle:
  *   `dartsnut-skill` + `dartsnut-display-mapping` + `asset-pipeline`. Creator
  *   templates are still injected separately into the user prompt.
@@ -54,6 +55,9 @@ export function bundleForTemplateMode(
   const paths = resolveSkillBundlePaths(skillsDir);
   if (mode === "asset-applier") {
     return loadSkillBundle(paths.dartsnutSkill, paths.assetPipeline);
+  }
+  if (mode === "creation-intake") {
+    return loadSkillBundle(paths.dartsnutSkill);
   }
   return loadSkillBundle(paths.dartsnutSkill, paths.displayMapping, paths.assetPipeline);
 }

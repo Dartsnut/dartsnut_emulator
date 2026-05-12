@@ -139,4 +139,10 @@ describe("bundleForTemplateMode", () => {
     expect(bundle).not.toContain("game creator template");
     expect(bundle).not.toContain("widget creator template");
   });
+
+  it("for creation-intake mode bundles only dartsnut-skill", () => {
+    const bundle = bundleForTemplateMode(SKILLS_DIR, "creation-intake");
+    const single = loadSkillBundle(path.join(SKILLS_DIR, "dartsnut-skill.md"));
+    expect(bundle).toBe(single);
+  });
 });

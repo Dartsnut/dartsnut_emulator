@@ -1,108 +1,254 @@
+import OpenAI from "openai";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions/completions";
+import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
 import type { ProviderConfig } from "./providerConfig";
 
-interface ChatMessage {
-  role: "system" | "user" | "assistant";
+/**
+ * Mirrors the assistant `tool_calls` entry as it is sent back to the API in subsequent turns.
+ */
+export interface ToolCallEnvelope {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export type ChatMessage =
+  | {
+      role: "system" | "user";
+      content: string;
+    }
+  | {
+      role: "assistant";
+      content: string;
+      tool_calls?: ToolCallEnvelope[];
+    }
+  | {
+      role: "tool";
+      tool_call_id: string;
+      content: string;
+    };
+
+/** Parsed native tool call from chat completions (`tool_calls[]`). */
+export interface ParsedToolCall {
+  id: string;
+  name: string;
+  argumentsJson: string;
+}
+
+export interface CompletionResult {
   content: string;
+  toolCalls: ParsedToolCall[];
+}
+
+export interface CompletionOptions {
+  tools?: ChatCompletionTool[];
+  onChunk?: (delta: string) => void;
+}
+
+export interface CompletionProvider {
+  complete(messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult>;
+}
+
+/** Stable JSON.stringify; falls back to String() if a value is not serializable. */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function isRawDebugEnabled(): boolean {
+  const raw = process.env.AGENT_DEBUG_RAW;
+  if (raw === undefined) {
+    return !process.env.VITEST;
+  }
+  return raw !== "0" && raw.toLowerCase() !== "false" && raw !== "";
+}
+
+interface StreamingToolCallAccumulator {
+  id: string;
+  name: string;
+  argumentsJson: string;
+}
+
+interface OpenAIToolCallDelta {
+  index?: number;
+  id?: string;
+  type?: string;
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+}
+
+interface OpenAIToolCallMessage {
+  id?: string;
+  type?: string;
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
 }
 
 /** Default cap so a hung provider does not leave the UI stuck forever. */
 const DEFAULT_CHAT_COMPLETION_TIMEOUT_MS = 180_000;
 
-export class ProviderClient {
-  constructor(private readonly config: ProviderConfig) { }
+/**
+ * OpenAI Chat Completions client (official `openai` SDK). Compatible with OpenAI and
+ * OpenAI-compatible gateways (e.g. Xiaomi MiMo token plan).
+ */
+export class ProviderClient implements CompletionProvider {
+  private readonly openai: OpenAI;
+  private readonly model: string;
 
-  async complete(messages: ChatMessage[], onChunk?: (delta: string) => void): Promise<string> {
+  constructor(private readonly config: ProviderConfig) {
+    const timeoutMs = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS) || DEFAULT_CHAT_COMPLETION_TIMEOUT_MS;
+    this.model = config.model;
+    this.openai = new OpenAI({
+      apiKey: config.apiKey,
+      baseURL: config.baseUrl,
+      timeout: timeoutMs,
+      maxRetries: 0,
+      ...(config.fetchImpl ? { fetch: config.fetchImpl } : {})
+    });
+  }
+
+  async complete(messages: ChatMessage[], options: CompletionOptions = {}): Promise<CompletionResult> {
+    const { tools, onChunk } = options;
     const timeoutMs = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS) || DEFAULT_CHAT_COMPLETION_TIMEOUT_MS;
     const signal = AbortSignal.timeout(timeoutMs);
-    const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.config.apiKey}`
-      },
-      body: JSON.stringify({
-        model: this.config.model,
-        messages,
-        temperature: 0.2,
-        stream: Boolean(onChunk)
-      }),
-      signal
-    }).catch((error: unknown) => {
-      if (error instanceof Error && error.name === "TimeoutError") {
-        throw new Error(
-          `Provider request timed out after ${timeoutMs}ms. Check OPENAI_BASE_URL, network, and model availability.`
-        );
-      }
-      throw error;
-    });
+    const requestMessages = ProviderClient.toWireMessages(messages) as ChatCompletionMessageParam[];
 
-    if (!response.ok) {
-      const rawBody = await response.text();
-      let detail = rawBody.trim();
-      try {
-        const parsed = JSON.parse(rawBody) as {
-          error?: { message?: string; type?: string; code?: string | number };
-          message?: string;
-        };
-        const typed = parsed.error
-          ? [parsed.error.type, parsed.error.code, parsed.error.message].filter(Boolean).join(" - ")
-          : parsed.message;
-        if (typed) {
-          detail = typed;
-        }
-      } catch {
-        // Keep raw response body when provider returns non-JSON errors.
-      }
-      const suffix = detail ? `: ${detail}` : "";
-      throw new Error(`Provider request failed: ${response.status}${suffix}`);
+    const common = {
+      model: this.model,
+      messages: requestMessages,
+      temperature: 0.2,
+      ...(tools && tools.length > 0 ? { tools, tool_choice: "auto" as const } : {})
+    };
+
+    if (isRawDebugEnabled()) {
+      console.log(`[agent-provider] chat.completions ${safeStringify({ ...common, stream: Boolean(onChunk) })}`);
     }
 
     if (!onChunk) {
-      const payload = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      return payload.choices?.[0]?.message?.content?.trim() || "No response content returned.";
+      const response = await this.openai.chat.completions.create({ ...common, stream: false }, { signal });
+      const message = response.choices[0]?.message;
+      const content = typeof message?.content === "string" ? message.content : "";
+      const toolCalls = ProviderClient.normalizeToolCallsMessage(
+        message?.tool_calls as OpenAIToolCallMessage[] | undefined
+      );
+      const trimmed = content.trim();
+      if (isRawDebugEnabled()) {
+        console.log(`[agent-provider] response ${safeStringify({ stream: false, content: trimmed, toolCalls })}`);
+      }
+      return { content: trimmed, toolCalls };
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error("Provider streaming response body is unavailable.");
-    }
-    const decoder = new TextDecoder();
-    let pending = "";
+    const stream = await this.openai.chat.completions.create({ ...common, stream: true }, { signal });
     let fullText = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
+    const toolCallAccumulators = new Map<number, StreamingToolCallAccumulator>();
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta;
+      if (!delta) {
+        continue;
       }
-      pending += decoder.decode(value, { stream: true });
-      const lines = pending.split(/\r?\n/);
-      pending = lines.pop() ?? "";
-      for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line.startsWith("data:")) {
-          continue;
-        }
-        const payload = line.slice(5).trim();
-        if (!payload || payload === "[DONE]") {
-          continue;
-        }
-        try {
-          const parsed = JSON.parse(payload) as {
-            choices?: Array<{ delta?: { content?: string } }>;
-          };
-          const delta = parsed.choices?.[0]?.delta?.content ?? "";
-          if (!delta) {
-            continue;
-          }
-          fullText += delta;
-          onChunk(delta);
-        } catch {
-          // Ignore malformed partial streaming frames.
-        }
+      const contentDelta = delta.content ?? "";
+      if (contentDelta) {
+        fullText += contentDelta;
+        onChunk(contentDelta);
+      }
+      if (Array.isArray(delta.tool_calls)) {
+        ProviderClient.mergeToolCallDeltas(toolCallAccumulators, delta.tool_calls as OpenAIToolCallDelta[]);
       }
     }
-    return fullText.trim() || "No response content returned.";
+
+    const orderedIndices = Array.from(toolCallAccumulators.keys()).sort((a, b) => a - b);
+    const toolCalls: ParsedToolCall[] = orderedIndices
+      .map((index) => toolCallAccumulators.get(index)!)
+      .filter((entry) => entry.name.length > 0)
+      .map((entry, position) => ({
+        id: entry.id || `call_${position}`,
+        name: entry.name,
+        argumentsJson: entry.argumentsJson
+      }));
+
+    const trimmed = fullText.trim();
+    if (isRawDebugEnabled()) {
+      console.log(`[agent-provider] response ${safeStringify({ stream: true, content: trimmed, toolCalls })}`);
+    }
+    return { content: trimmed, toolCalls };
+  }
+
+  /**
+   * Stricter gateways hang when an assistant message with `tool_calls` sends `content: ""`.
+   * OpenAI allows `null` there.
+   */
+  private static toWireMessages(messages: ChatMessage[]): unknown[] {
+    return messages.map((message) => {
+      if (
+        message.role === "assistant" &&
+        Array.isArray(message.tool_calls) &&
+        message.tool_calls.length > 0 &&
+        message.content.length === 0
+      ) {
+        return {
+          role: "assistant",
+          content: null,
+          tool_calls: message.tool_calls
+        };
+      }
+      return message;
+    });
+  }
+
+  private static normalizeToolCallsMessage(toolCalls: OpenAIToolCallMessage[] | undefined): ParsedToolCall[] {
+    if (!Array.isArray(toolCalls)) {
+      return [];
+    }
+    const parsed: ParsedToolCall[] = [];
+    for (let i = 0; i < toolCalls.length; i += 1) {
+      const entry = toolCalls[i];
+      const name = entry?.function?.name;
+      if (typeof name !== "string" || name.length === 0) {
+        continue;
+      }
+      const id = typeof entry?.id === "string" && entry.id.length > 0 ? entry.id : `call_${i}`;
+      const argumentsJson =
+        typeof entry?.function?.arguments === "string" ? entry.function.arguments : "";
+      parsed.push({ id, name, argumentsJson });
+    }
+    return parsed;
+  }
+
+  private static mergeToolCallDeltas(
+    accumulators: Map<number, StreamingToolCallAccumulator>,
+    deltas: OpenAIToolCallDelta[]
+  ): void {
+    for (let i = 0; i < deltas.length; i += 1) {
+      const delta = deltas[i];
+      if (!delta) {
+        continue;
+      }
+      const index = typeof delta.index === "number" ? delta.index : i;
+      const existing =
+        accumulators.get(index) ?? { id: "", name: "", argumentsJson: "" };
+      if (typeof delta.id === "string" && delta.id.length > 0) {
+        existing.id = delta.id;
+      }
+      const fn = delta.function;
+      if (fn) {
+        if (typeof fn.name === "string" && fn.name.length > 0) {
+          existing.name = fn.name;
+        }
+        if (typeof fn.arguments === "string" && fn.arguments.length > 0) {
+          existing.argumentsJson += fn.arguments;
+        }
+      }
+      accumulators.set(index, existing);
+    }
   }
 }

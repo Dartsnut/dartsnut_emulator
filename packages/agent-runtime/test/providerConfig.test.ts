@@ -2,7 +2,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { findEnvFile, resolveProviderConfig, validateProviderConfig } from "../src/providerConfig";
+import {
+  findEnvFile,
+  normalizeProviderBaseUrl,
+  resolveProviderConfig,
+  validateProviderConfig
+} from "../src/providerConfig";
+
+describe("normalizeProviderBaseUrl", () => {
+  it("appends /v1 for bare origins", () => {
+    expect(normalizeProviderBaseUrl("https://api.example.com")).toBe("https://api.example.com/v1");
+    expect(normalizeProviderBaseUrl("https://api.example.com/")).toBe("https://api.example.com/v1");
+  });
+
+  it("preserves existing /v1 base", () => {
+    expect(normalizeProviderBaseUrl("https://api.openai.com/v1")).toBe("https://api.openai.com/v1");
+  });
+});
 
 describe("validateProviderConfig", () => {
   it("fails when config fields are missing", () => {

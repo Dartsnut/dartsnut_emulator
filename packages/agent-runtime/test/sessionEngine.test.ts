@@ -3,155 +3,280 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
+import type { ChatMessage, CompletionOptions, CompletionResult } from "../src/providerClient";
 import { SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
+
+function textOnly(content: string): CompletionResult {
+  return { content, toolCalls: [] };
+}
 
 class FakeProvider {
   private call = 0;
 
-  async complete(): Promise<string> {
+  async complete(): Promise<CompletionResult> {
     this.call += 1;
     if (this.call === 1) {
-      return JSON.stringify({
-        response: "Creating file now.",
-        actions: [
-          {
-            tool: "write_file",
-            path: "hello.txt",
-            content: "hello dartsnut"
-          }
-        ]
-      });
+      return textOnly(
+        JSON.stringify({
+          response: "Creating file now.",
+          actions: [
+            {
+              tool: "write_file",
+              path: "hello.txt",
+              content: "hello dartsnut"
+            }
+          ]
+        })
+      );
     }
-    return JSON.stringify({
-      response: "Created hello.txt successfully.",
-      actions: []
-    });
+    return textOnly(
+      JSON.stringify({
+        response: "Created hello.txt successfully.",
+        actions: []
+      })
+    );
   }
 }
 
 class FinalOnlyProvider {
-  async complete(): Promise<string> {
-    return JSON.stringify({
-      response: "Done without tool actions.",
-      actions: []
-    });
+  async complete(): Promise<CompletionResult> {
+    return textOnly(
+      JSON.stringify({
+        response: "Done without tool actions.",
+        actions: []
+      })
+    );
   }
 }
 
 class CreateFileAliasProvider {
   private call = 0;
 
-  async complete(): Promise<string> {
+  async complete(): Promise<CompletionResult> {
     this.call += 1;
     if (this.call === 1) {
-      return JSON.stringify({
-        response: "Creating file with alias.",
-        actions: [
-          {
-            tool: "create_file",
-            path: "alias.txt",
-            text: "alias content"
-          }
-        ]
-      });
+      return textOnly(
+        JSON.stringify({
+          response: "Creating file with alias.",
+          actions: [
+            {
+              tool: "create_file",
+              path: "alias.txt",
+              text: "alias content"
+            }
+          ]
+        })
+      );
     }
-    return JSON.stringify({
-      response: "Created alias.txt successfully.",
-      actions: []
-    });
+    return textOnly(
+      JSON.stringify({
+        response: "Created alias.txt successfully.",
+        actions: []
+      })
+    );
   }
 }
 
 class MultiEnvelopeProvider {
   private call = 0;
 
-  async complete(): Promise<string> {
+  async complete(): Promise<CompletionResult> {
     this.call += 1;
     if (this.call === 1) {
-      return (
+      return textOnly(
         '{"response":"first envelope","actions":[{"tool":"write_file","path":"one.txt","content":"1"}]}' +
-        "\n\n" +
-        '{"response":"second envelope","actions":[{"tool":"write_file","path":"two.txt","content":"2"}]}'
+          "\n\n" +
+          '{"response":"second envelope","actions":[{"tool":"write_file","path":"two.txt","content":"2"}]}'
       );
     }
-    return JSON.stringify({
-      response: "All files written.",
-      actions: []
-    });
-  }
-}
-
-class HashSuffixCopyProvider {
-  private call = 0;
-
-  async complete(): Promise<string> {
-    this.call += 1;
-    if (this.call === 1) {
-      return JSON.stringify({
-        response: "Copy with hash-style names.",
-        actions: [
-          {
-            tool: "copy_asset_file",
-            source: "font-deadbeef.pil",
-            path: "fonts/font-cafebabe.pil"
-          }
-        ]
-      });
-    }
-    return JSON.stringify({
-      response: "Copied with canonical file names.",
-      actions: []
-    });
+    return textOnly(
+      JSON.stringify({
+        response: "All files written.",
+        actions: []
+      })
+    );
   }
 }
 
 class CopyAssetProvider {
   private call = 0;
 
-  async complete(): Promise<string> {
+  async complete(): Promise<CompletionResult> {
     this.call += 1;
     if (this.call === 1) {
-      return JSON.stringify({
-        response: "Copying font asset.",
-        actions: [
-          {
-            tool: "copy_asset_file",
-            source: "font.pil",
-            path: "fonts/font.pil"
-          }
-        ]
-      });
+      return textOnly(
+        JSON.stringify({
+          response: "Copying font asset.",
+          actions: [
+            {
+              tool: "copy_asset_file",
+              source: "font.pil",
+              path: "fonts/font.pil"
+            }
+          ]
+        })
+      );
     }
-    return JSON.stringify({
-      response: "Copied font asset.",
-      actions: []
-    });
+    return textOnly(
+      JSON.stringify({
+        response: "Copied font asset.",
+        actions: []
+      })
+    );
+  }
+}
+
+class XmlToolCallProvider {
+  private call = 0;
+
+  async complete(): Promise<CompletionResult> {
+    this.call += 1;
+    if (this.call === 1) {
+      return textOnly(
+        [
+          "I'll create a G-Shock style digital time widget. Let me first check the workspace.",
+          "<tool_call>",
+          "<function=list_files>",
+          "<parameter=path>.</parameter>",
+          "</function>",
+          "</tool_call>"
+        ].join("\n")
+      );
+    }
+    if (this.call === 2) {
+      return textOnly(
+        [
+          "<tool_call>",
+          "<function=write_file>",
+          "<parameter=path>note.txt</parameter>",
+          "<parameter=content>",
+          "line one",
+          "line two",
+          "</parameter>",
+          "</function>",
+          "</tool_call>"
+        ].join("\n")
+      );
+    }
+    return textOnly(
+      JSON.stringify({
+        response: "Done with XML tool calls.",
+        actions: []
+      })
+    );
   }
 }
 
 class ReplaceInFileProvider {
   private call = 0;
 
-  async complete(): Promise<string> {
+  async complete(): Promise<CompletionResult> {
     this.call += 1;
     if (this.call === 1) {
-      return JSON.stringify({
-        response: "Updating greeting with replace action.",
-        actions: [
+      return textOnly(
+        JSON.stringify({
+          response: "Updating greeting with replace action.",
+          actions: [
+            {
+              tool: "replace_in_file",
+              path: "hello.txt",
+              find: "hello dartsnut",
+              replace: "hello faster dartsnut"
+            }
+          ]
+        })
+      );
+    }
+    return textOnly(
+      JSON.stringify({
+        response: "Updated greeting.",
+        actions: []
+      })
+    );
+  }
+}
+
+class HashSuffixCopyProvider {
+  private call = 0;
+
+  async complete(): Promise<CompletionResult> {
+    this.call += 1;
+    if (this.call === 1) {
+      return textOnly(
+        JSON.stringify({
+          response: "Copy with hash-style names.",
+          actions: [
+            {
+              tool: "copy_asset_file",
+              source: "font-deadbeef.pil",
+              path: "fonts/font-cafebabe.pil"
+            }
+          ]
+        })
+      );
+    }
+    return textOnly(
+      JSON.stringify({
+        response: "Copied with canonical file names.",
+        actions: []
+      })
+    );
+  }
+}
+
+class NativeToolCallProvider {
+  private call = 0;
+  public readonly receivedMessages: ChatMessage[][] = [];
+
+  async complete(messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult> {
+    this.call += 1;
+    this.receivedMessages.push(messages.map((m) => ({ ...m }) as ChatMessage));
+    expect(options?.tools).toBeDefined();
+    expect(options?.tools?.some((t) => t.function.name === "write_file")).toBe(true);
+    if (this.call === 1) {
+      return {
+        content: "Creating widget.",
+        toolCalls: [
           {
-            tool: "replace_in_file",
-            path: "hello.txt",
-            find: "hello dartsnut",
-            replace: "hello faster dartsnut"
+            id: "call_alpha",
+            name: "write_file",
+            argumentsJson: JSON.stringify({ path: "widget.py", content: "print('hi')" })
           }
         ]
-      });
+      };
     }
-    return JSON.stringify({
-      response: "Updated greeting.",
-      actions: []
-    });
+    return { content: "All done with native tools.", toolCalls: [] };
+  }
+}
+
+class MixedValidityNativeProvider {
+  private call = 0;
+
+  async complete(messages: ChatMessage[]): Promise<CompletionResult> {
+    this.call += 1;
+    if (this.call === 1) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "call_bad",
+            name: "write_file",
+            argumentsJson: "{not json"
+          },
+          {
+            id: "call_good",
+            name: "write_file",
+            argumentsJson: JSON.stringify({ path: "ok.txt", content: "kept" })
+          }
+        ]
+      };
+    }
+    const errorEcho = messages
+      .filter((m): m is Extract<ChatMessage, { role: "tool" }> => m.role === "tool")
+      .find((m) => m.tool_call_id === "call_bad");
+    expect(errorEcho?.content).toContain('"ok":false');
+    return { content: "Recovered from bad call.", toolCalls: [] };
   }
 }
 
@@ -264,6 +389,38 @@ describe("SessionEngine tool loop", () => {
     expect(fs.existsSync(path.join(tempRoot, "fonts", "font-cafebabe.pil"))).toBe(false);
   });
 
+  it("parses Anthropic-style <tool_call> XML drift as tool actions and strips it from response text", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const events: AgentEvent[] = [];
+    const engine = new SessionEngine({
+      provider: new XmlToolCallProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant."
+    });
+
+    const response = await engine.runPrompt("create widget", (event) => events.push(event));
+    const fileContent = fs.readFileSync(path.join(tempRoot, "note.txt"), "utf-8");
+
+    expect(response).toContain("Done with XML tool calls.");
+    expect(fileContent).toBe("line one\nline two");
+
+    const finalEvents = events.filter(
+      (event): event is Extract<AgentEvent, { type: "final" }> => event.type === "final"
+    );
+    expect(finalEvents.length).toBeGreaterThan(0);
+    for (const event of finalEvents) {
+      expect(event.content).not.toContain("<tool_call>");
+      expect(event.content).not.toContain("<function=");
+      expect(event.content).not.toContain("<parameter=");
+    }
+
+    const statusMessages = events
+      .filter((event): event is Extract<AgentEvent, { type: "status" }> => event.type === "status")
+      .map((event) => event.message);
+    expect(statusMessages).toContain("Ran list files in .");
+    expect(statusMessages).toContain("Ran write file note.txt");
+  });
+
   it("applies targeted replace_in_file actions for existing files", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     fs.writeFileSync(path.join(tempRoot, "hello.txt"), "hello dartsnut", "utf-8");
@@ -280,5 +437,57 @@ describe("SessionEngine tool loop", () => {
     expect(response).toContain("Updated greeting.");
     expect(fileContent).toBe("hello faster dartsnut");
     expect(events.some((event) => event.type === "status")).toBe(true);
+  });
+
+  it("executes native tool_calls and threads tool_call_id through the conversation", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const events: AgentEvent[] = [];
+    const provider = new NativeToolCallProvider();
+    const engine = new SessionEngine({
+      provider,
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant."
+    });
+
+    const response = await engine.runPrompt("build widget", (event) => events.push(event));
+    const fileContent = fs.readFileSync(path.join(tempRoot, "widget.py"), "utf-8");
+
+    expect(response).toContain("All done with native tools.");
+    expect(fileContent).toBe("print('hi')");
+
+    const secondTurnMessages = provider.receivedMessages[1];
+    expect(secondTurnMessages).toBeDefined();
+    const assistantMessage = secondTurnMessages.find(
+      (m): m is Extract<ChatMessage, { role: "assistant" }> => m.role === "assistant"
+    );
+    expect(assistantMessage?.tool_calls?.[0]?.id).toBe("call_alpha");
+    expect(assistantMessage?.tool_calls?.[0]?.function.name).toBe("write_file");
+    const toolMessage = secondTurnMessages.find(
+      (m): m is Extract<ChatMessage, { role: "tool" }> => m.role === "tool"
+    );
+    expect(toolMessage?.tool_call_id).toBe("call_alpha");
+    expect(toolMessage?.content).toContain("widget.py");
+
+    const finalEvents = events.filter(
+      (event): event is Extract<AgentEvent, { type: "final" }> => event.type === "final"
+    );
+    const envelopeFinal = finalEvents.find((event) => event.content.includes('"actions"'));
+    expect(envelopeFinal).toBeDefined();
+    expect(envelopeFinal!.content).toContain('"tool": "write_file"');
+    expect(envelopeFinal!.content).toContain('"path": "widget.py"');
+  });
+
+  it("returns an error tool result for malformed tool_call arguments and continues", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const events: AgentEvent[] = [];
+    const engine = new SessionEngine({
+      provider: new MixedValidityNativeProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant."
+    });
+
+    const response = await engine.runPrompt("mixed validity", (event) => events.push(event));
+    expect(response).toContain("Recovered from bad call.");
+    expect(fs.readFileSync(path.join(tempRoot, "ok.txt"), "utf-8")).toBe("kept");
   });
 });

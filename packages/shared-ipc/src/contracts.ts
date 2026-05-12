@@ -5,6 +5,8 @@ export const IPCChannels = {
   /** Main → renderer: clear chat/logs/session UI (bootstrap comes from invoke return values). */
   sessionReset: "agent:session-reset",
   sendPrompt: "agent:send-prompt",
+  /** Aborts the in-flight `sendPrompt` agent run (provider fetch + between-tool steps). */
+  cancelAgent: "agent:cancel-agent",
   subscribeEvents: "agent:subscribe-events",
   getProviderSettings: "agent:get-provider-settings",
   saveProviderSettings: "agent:save-provider-settings",
@@ -23,6 +25,8 @@ export const IPCChannels = {
   /** Main → renderer: safe-area around OS window controls (logical px). */
   windowChromeInsetsChanged: "shell:window-chrome-insets-changed",
   deployGetEligibility: "deploy:get-eligibility",
+  /** Main → renderer: workspace `conf.json` created/changed; payload is {@link DeployEligibility}. */
+  deployEligibilityChanged: "deploy:eligibility-changed",
   deployConnect: "deploy:connect",
   deployDisconnect: "deploy:disconnect",
   deployRun: "deploy:run",

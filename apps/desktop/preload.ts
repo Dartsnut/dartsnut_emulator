@@ -41,6 +41,7 @@ const api = {
     ipcRenderer.invoke(IPCChannels.pickWorkspace, request) as Promise<PickWorkspaceResponse>,
   sendPrompt: (request: PromptRequest) =>
     ipcRenderer.invoke(IPCChannels.sendPrompt, request) as Promise<{ ok: boolean }>,
+  cancelAgent: () => ipcRenderer.invoke(IPCChannels.cancelAgent) as Promise<{ ok: boolean }>,
   getProviderSettings: () =>
     ipcRenderer.invoke(IPCChannels.getProviderSettings) as Promise<ProviderSettings>,
   getPythonRuntimeStatus: () =>
@@ -100,6 +101,11 @@ const api = {
   },
   deployGetEligibility: () =>
     ipcRenderer.invoke(IPCChannels.deployGetEligibility) as Promise<DeployEligibility>,
+  onDeployEligibility: (listener: (eligibility: DeployEligibility) => void) => {
+    const handler = (_: unknown, eligibility: DeployEligibility) => listener(eligibility);
+    ipcRenderer.on(IPCChannels.deployEligibilityChanged, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.deployEligibilityChanged, handler);
+  },
   deployConnect: (request: DeployConnectRequest) =>
     ipcRenderer.invoke(IPCChannels.deployConnect, request) as Promise<DeployConnectResponse>,
   deployDisconnect: () =>

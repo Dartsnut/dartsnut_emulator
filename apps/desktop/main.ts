@@ -77,6 +77,38 @@ const widgetFontManifestRelativePath = "assets/fonts/widgets/font_manifest.json"
 
 let deployMachineSession: DeployMachineSession | null = null;
 
+/** Set while `sendPrompt` is running; used to abort the provider + tool loop from the renderer Stop control. */
+let sendPromptAbortController: AbortController | null = null;
+
+/** Poll `conf.json` like `AssetManager` does for the manifest — survives atomic writes; works before the file exists. */
+const DEPLOY_CONF_POLL_MS = 600;
+let deployConfWatch: { watchedPath: string; workspacePath: string } | null = null;
+
+function stopDeployConfWatcher(): void {
+  if (!deployConfWatch) {
+    return;
+  }
+  try {
+    fs.unwatchFile(deployConfWatch.watchedPath);
+  } catch {
+    // ignore
+  }
+  deployConfWatch = null;
+}
+
+function startDeployConfWatcher(workspacePath: string): void {
+  stopDeployConfWatcher();
+  const watchedPath = path.join(workspacePath, "conf.json");
+  fs.watchFile(watchedPath, { interval: DEPLOY_CONF_POLL_MS }, () => {
+    if (!deployConfWatch || deployConfWatch.workspacePath !== workspaceRoot) {
+      return;
+    }
+    sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
+  });
+  deployConfWatch = { watchedPath, workspacePath };
+  sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
+}
+
 function emitDeployLog(line: string): void {
   sendToRenderer(IPCChannels.deployLog, line);
 }
@@ -537,6 +569,7 @@ function performSessionCleanup(options: { clearWorkspace: boolean }): void {
   if (options.clearWorkspace) {
     workspaceRoot = null;
     assetManager.stop();
+    stopDeployConfWatcher();
     lastWidgetDir = null;
     writeEmulatorState();
   }
@@ -1210,7 +1243,13 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
       reason: "non_empty"
     } satisfies PickWorkspaceResponse;
   }
-  performSessionCleanup({ clearWorkspace: false });
+  // Only tear down the prior session when we're actually switching away from an existing
+  // workspace. On the no-workspace → first-workspace transition (the intake flow), there's
+  // nothing to clean up — and firing `sessionReset` here clears the renderer chat entries,
+  // which would discard the user's prompt bubble that was just queued by `handleSend`.
+  if (workspaceRoot && workspaceRoot !== selectedPath) {
+    performSessionCleanup({ clearWorkspace: false });
+  }
   workspaceRoot = selectedPath;
   // Attempt to launch emulator immediately from the selected workspace.
   // If it's not a widget folder, the bridge will emit a clear failure status.
@@ -1228,6 +1267,7 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
     writeEmulatorState();
   }
   assetManager.watch(selectedPath);
+  startDeployConfWatcher(selectedPath);
   return {
     state: getBootstrapState(),
     selectedPath,
@@ -1341,14 +1381,21 @@ ipcMain.handle(
 );
 
 ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest) => {
+  sendPromptAbortController?.abort();
+  const runAbort = new AbortController();
+  sendPromptAbortController = runAbort;
   try {
     const session = buildSession(req.templateMode);
     const prompt = buildRoutedPrompt(req);
     console.log("[agent] runPrompt start", { promptChars: prompt.length });
-    await session.runPrompt(prompt, (agentEvent: AgentEvent) => {
-      console.log("[agent-stream]", JSON.stringify(agentEvent));
-      sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
-    });
+    await session.runPrompt(
+      prompt,
+      (agentEvent: AgentEvent) => {
+        console.log("[agent-stream]", JSON.stringify(agentEvent));
+        sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
+      },
+      runAbort.signal
+    );
     if (!firstRunComplete) {
       writeProofState(true);
     }
@@ -1362,7 +1409,16 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     console.error("[agent-stream]", JSON.stringify(event));
     sendToRenderer(IPCChannels.subscribeEvents, event);
     return { ok: false };
+  } finally {
+    if (sendPromptAbortController === runAbort) {
+      sendPromptAbortController = null;
+    }
   }
+});
+
+ipcMain.handle(IPCChannels.cancelAgent, () => {
+  sendPromptAbortController?.abort();
+  return { ok: true };
 });
 
 ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorCommand, async (_event, command: EmulatorCommand) => {

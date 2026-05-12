@@ -832,8 +832,14 @@ export function App() {
         setDeployEligibility(result);
       }
     });
+    const unsubscribe = api.onDeployEligibility((result) => {
+      if (!cancelled) {
+        setDeployEligibility(result);
+      }
+    });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [api, bootstrap?.workspaceRoot]);
 
@@ -1104,6 +1110,17 @@ export function App() {
       postStatus("Choose widget size to continue.");
     } else if (nextStep === "workspace") {
       postStatus("Choose an empty workspace folder to continue.");
+    }
+  }
+
+  async function handleStopAgent() {
+    if (!api || !sending) {
+      return;
+    }
+    try {
+      await api.cancelAgent();
+    } catch {
+      // Bridge unavailable — nothing to abort.
     }
   }
 
@@ -1434,16 +1451,15 @@ export function App() {
                 <button
                   type="button"
                   className="m-0 inline-flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-full border-0 bg-[var(--color-composer-send-bg)] p-0 text-[var(--color-composer-send-fg)] hover:enabled:bg-[var(--color-composer-send-hover)] disabled:cursor-not-allowed disabled:opacity-45"
-                  disabled={chatDisabled}
-                  aria-busy={sending}
-                  aria-label={sending ? "Sending" : "Send"}
-                  onClick={() => void handleSend()}
+                  disabled={sending ? false : chatDisabled}
+                  aria-busy={false}
+                  aria-label={sending ? "Stop" : "Send"}
+                  onClick={() => (sending ? void handleStopAgent() : void handleSend())}
                 >
                   {sending ? (
-                    <span
-                      className="block size-[13px] animate-[composer-send-spin_0.7s_linear_infinite] rounded-full border-2 border-[var(--color-composer-send-busy-border)] border-t-[var(--color-composer-send-fg)]"
-                      aria-hidden
-                    />
+                    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                      <rect x="5" y="5" width="14" height="14" rx="1.5" fill="currentColor" />
+                    </svg>
                   ) : (
                     <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden>
                       <path

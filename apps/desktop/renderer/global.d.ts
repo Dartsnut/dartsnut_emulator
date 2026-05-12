@@ -37,6 +37,7 @@ declare global {
       startNewProject: () => Promise<BootstrapState>;
       pickWorkspace: (request?: PickWorkspaceRequest) => Promise<PickWorkspaceResponse>;
       sendPrompt: (request: PromptRequest) => Promise<{ ok: boolean }>;
+      cancelAgent: () => Promise<{ ok: boolean }>;
       getProviderSettings: () => Promise<ProviderSettings>;
       getPythonRuntimeStatus: () => Promise<string | null>;
       getSelectedPythonPath: () => Promise<string | null>;
@@ -54,6 +55,7 @@ declare global {
       onEmulatorFrame: (listener: (frame: EmulatorFrame) => void) => () => void;
       onEmulatorLog: (listener: (entry: EmulatorLogEntry) => void) => () => void;
       deployGetEligibility: () => Promise<DeployEligibility>;
+      onDeployEligibility: (listener: (eligibility: DeployEligibility) => void) => () => void;
       deployConnect: (request: DeployConnectRequest) => Promise<DeployConnectResponse>;
       deployDisconnect: () => Promise<DeployActionResponse>;
       deployRun: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;

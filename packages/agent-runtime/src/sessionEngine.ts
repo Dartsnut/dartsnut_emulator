@@ -1,42 +1,42 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
+import type {
+  ChatMessage,
+  CompletionOptions,
+  CompletionProvider,
+  CompletionResult,
+  ParsedToolCall,
+  ToolCallEnvelope
+} from "./providerClient";
+import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import { WorkspacePolicy } from "./workspacePolicy";
-
-interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
-interface CompletionProvider {
-  complete(messages: ChatMessage[], onChunk?: (delta: string) => void): Promise<string>;
-}
 
 type ToolAction =
   | {
-    tool: "list_files";
-    path?: string;
-  }
+      tool: "list_files";
+      path?: string;
+    }
   | {
-    tool: "read_file";
-    path: string;
-  }
+      tool: "read_file";
+      path: string;
+    }
   | {
-    tool: "write_file";
-    path: string;
-    content: string;
-  }
+      tool: "write_file";
+      path: string;
+      content: string;
+    }
   | {
-    tool: "replace_in_file";
-    path: string;
-    find: string;
-    replace: string;
-  }
+      tool: "replace_in_file";
+      path: string;
+      find: string;
+      replace: string;
+    }
   | {
-    tool: "copy_asset_file";
-    source: string;
-    path: string;
-  };
+      tool: "copy_asset_file";
+      source: string;
+      path: string;
+    };
 
 interface AgentActionEnvelope {
   response?: string;
@@ -53,7 +53,7 @@ export interface SessionEngineOptions {
 }
 
 export class SessionEngine {
-  constructor(private readonly options: SessionEngineOptions) { }
+  constructor(private readonly options: SessionEngineOptions) {}
 
   private normalizeAction(rawAction: unknown): ToolAction {
     if (!rawAction || typeof rawAction !== "object") {
@@ -135,23 +135,15 @@ export class SessionEngine {
 
   private buildToolPrompt(): string {
     return [
-      "You can use tools by returning STRICT JSON only.",
-      "Schema: {\"response\": string, \"actions\": ToolAction[]}",
-      "ToolAction variants:",
-      "- {\"tool\":\"list_files\",\"path\":\".\"}",
-      "- {\"tool\":\"read_file\",\"path\":\"relative/path.txt\"}",
-      "- {\"tool\":\"write_file\",\"path\":\"relative/path.txt\",\"content\":\"...\"}",
-      "- {\"tool\":\"replace_in_file\",\"path\":\"relative/path.txt\",\"find\":\"old text\",\"replace\":\"new text\"}",
-      "- {\"tool\":\"copy_asset_file\",\"source\":\"font.pil\",\"path\":\"fonts/font.pil\"}",
+      "You have native tools available via the API: list_files, read_file, write_file, replace_in_file, copy_asset_file.",
+      "Call them through the standard tool_calls mechanism — do not emit JSON envelopes, <tool_call> XML, or any other text-shaped tool syntax.",
       "Rules:",
-      "1) Use relative paths only.",
-      "2) Request tool actions when needed; after results, return final response with empty actions.",
-      "3) For existing files, prefer replace_in_file over write_file to keep payloads small and fast.",
-      "4) Use write_file only for creating a new file or fully rewriting content when replace_in_file cannot express the change.",
-      "5) Use copy_asset_file for binary assets (fonts/images) instead of read_file/write_file.",
-      "6) copy_asset_file strips a trailing -<8 hex> hash before the file extension on both source lookup and destination filenames (e.g. big_digits-ab12cd34.pil -> big_digits.pil).",
-      "7) Keep response concise (one short sentence) and never include full file contents in response text.",
-      "8) Do not wrap JSON in markdown fences."
+      "1) Use workspace-relative paths only.",
+      "2) For existing files, prefer replace_in_file over write_file to keep payloads small and fast.",
+      "3) Use write_file only when creating a new file or when replace_in_file cannot express the change.",
+      "4) Use copy_asset_file for binary assets (fonts/images) instead of read_file/write_file.",
+      "5) copy_asset_file strips a trailing -<8 hex> hash before the file extension on both source lookup and destination filenames (e.g. big_digits-ab12cd34.pil -> big_digits.pil).",
+      "6) When you have nothing more to do, reply with a single short status sentence and no tool calls."
     ].join("\n");
   }
 
@@ -225,7 +217,6 @@ export class SessionEngine {
       return direct;
     }
 
-    // Recover from common model formatting drift: JSON wrapped in markdown fences.
     const fencedMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
     if (fencedMatch?.[1]) {
       const fenced = tryParse(fencedMatch[1].trim());
@@ -245,11 +236,6 @@ export class SessionEngine {
     return null;
   }
 
-  /**
-   * Parse one or many `{response, actions}` tool envelopes. Concatenated blobs in one reply are merged so
-   * all actions run in order.
-
-   */
   private tryParseEnvelopesMerged(raw: string): {
     responseText: string;
     rawActions: unknown[];
@@ -287,10 +273,22 @@ export class SessionEngine {
 
     if (envelopes.length === 0) {
       const single = this.tryParseEnvelope(raw);
-      if (!single) {
+      if (single) {
+        envelopes.push(single);
+      } else {
+        const xml = SessionEngine.parseXmlToolCalls(raw);
+        if (xml) {
+          return {
+            responseText: xml.responseText,
+            rawActions: xml.rawActions,
+            originalAssistantPayload: {
+              response: xml.responseText || undefined,
+              actions: xml.rawActions
+            }
+          };
+        }
         return null;
       }
-      envelopes.push(single);
     }
 
     const responseText = envelopes
@@ -309,11 +307,43 @@ export class SessionEngine {
     };
   }
 
-  /**
-   * Strip trailing `-<8 hex>` before extension (e.g. `big_digits-541a345d.pil` → `big_digits.pil`).
-   * Repeats so nested suffixes are removed.
+  private static parseXmlToolCalls(raw: string): {
+    responseText: string;
+    rawActions: unknown[];
+  } | null {
+    const toolCallRegex = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+    const matches = Array.from(raw.matchAll(toolCallRegex));
+    if (matches.length === 0) {
+      return null;
+    }
 
-   */
+    const rawActions: unknown[] = [];
+    for (const match of matches) {
+      const inner = match[1] ?? "";
+      const fnMatch = inner.match(/<function=([^>\s]+)\s*>([\s\S]*?)<\/function>/i);
+      if (!fnMatch) {
+        continue;
+      }
+      const toolName = fnMatch[1].trim();
+      const paramsBody = fnMatch[2] ?? "";
+      const action: Record<string, string> = { tool: toolName };
+      const paramRegex = /<parameter=([^>\s]+)\s*>([\s\S]*?)<\/parameter>/gi;
+      for (const pMatch of paramsBody.matchAll(paramRegex)) {
+        const key = pMatch[1].trim();
+        const rawValue = pMatch[2] ?? "";
+        action[key] = rawValue.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+      }
+      rawActions.push(action);
+    }
+
+    if (rawActions.length === 0) {
+      return null;
+    }
+
+    const responseText = raw.replace(toolCallRegex, "").trim();
+    return { responseText, rawActions };
+  }
+
   private static stripArtifactHashSuffixFromFileName(fileName: string): string {
     let previous = "";
     let current = fileName;
@@ -333,10 +363,7 @@ export class SessionEngine {
       const entries = fs.readdirSync(current, { withFileTypes: true });
       for (const entry of entries) {
         const absolute = path.join(current, entry.name);
-        const rel = path.relative(
-          this.options.workspacePolicy.resolveWithinRoot("."),
-          absolute
-        );
+        const rel = path.relative(this.options.workspacePolicy.resolveWithinRoot("."), absolute);
         if (entry.isDirectory()) {
           stack.push(absolute);
         } else {
@@ -460,11 +487,149 @@ export class SessionEngine {
     return `Ran copy asset ${action.source} -> ${action.path}`;
   }
 
+  private static readonly DEFAULT_TOOL_LOOP_MAX = 32;
+
+  private static resolveToolLoopMax(): number {
+    const raw = process.env.AGENT_TOOL_LOOP_MAX;
+    if (raw === undefined || raw === "") {
+      return SessionEngine.DEFAULT_TOOL_LOOP_MAX;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n)) {
+      return SessionEngine.DEFAULT_TOOL_LOOP_MAX;
+    }
+    return Math.min(128, Math.max(1, Math.floor(n)));
+  }
+
+  private buildUiEnvelopeString(actions: ToolAction[], responseText: string): string | null {
+    const trimmedResponse = responseText.trim();
+    if (actions.length === 0 && trimmedResponse.length === 0) {
+      return null;
+    }
+    const uiActions = actions.map((action) => {
+      if (action.tool !== "write_file") {
+        return action;
+      }
+      return {
+        ...action,
+        previousContent: this.readPreviousContent(action)
+      };
+    });
+    const writeCount = actions.filter((action) => action.tool === "write_file").length;
+    let uiResponse: string | undefined;
+    if (trimmedResponse.length > 0) {
+      uiResponse = responseText;
+    } else if (writeCount > 0) {
+      uiResponse = `Applying ${writeCount} file update(s).`;
+    } else if (actions.length > 0) {
+      uiResponse = "Executing requested tool actions.";
+    }
+    return JSON.stringify(
+      {
+        response: uiResponse,
+        actions: uiActions
+      },
+      null,
+      2
+    );
+  }
+
+  private emitUiEnvelope(
+    actions: ToolAction[],
+    responseText: string,
+    onEvent: (event: AgentEvent) => void
+  ): void {
+    const uiEnvelope = this.buildUiEnvelopeString(actions, responseText);
+    if (!uiEnvelope) {
+      return;
+    }
+    onEvent({ type: "final", content: uiEnvelope, at: Date.now() });
+  }
+
+  private async streamNativeToolEnvelopePreview(
+    leadContent: string,
+    envelopeJson: string,
+    onEvent: (event: AgentEvent) => void
+  ): Promise<void> {
+    const lead = leadContent.trimEnd();
+    const tail = lead.length > 0 ? `\n\n${envelopeJson}` : envelopeJson;
+    const chunkSize = Math.max(256, Math.ceil(tail.length / 10));
+    const renderFrameMs = 24;
+    for (let i = 0; i < tail.length; i += chunkSize) {
+      onEvent({ type: "stream", delta: tail.slice(i, i + chunkSize), at: Date.now() });
+      await new Promise<void>((resolve) => setTimeout(resolve, renderFrameMs));
+    }
+    const finalContent = lead.length > 0 ? `${lead}\n\n${envelopeJson}` : envelopeJson;
+    onEvent({ type: "final", content: finalContent, at: Date.now() });
+  }
+
+  private rawActionFromToolCall(toolCall: ParsedToolCall): unknown {
+    const argumentsText = toolCall.argumentsJson.length > 0 ? toolCall.argumentsJson : "{}";
+    const parsedArgs: unknown = JSON.parse(argumentsText);
+    if (!parsedArgs || typeof parsedArgs !== "object" || Array.isArray(parsedArgs)) {
+      throw new Error("Tool arguments must be a JSON object.");
+    }
+    return { tool: toolCall.name, ...(parsedArgs as Record<string, unknown>) };
+  }
+
+  private processNativeToolCalls(completion: CompletionResult): {
+    assistantMessage: ChatMessage;
+    toolMessages: ChatMessage[];
+    successfulActions: ToolAction[];
+    outcomes: Array<{
+      toolCall: ParsedToolCall;
+      action: ToolAction | null;
+      result: string;
+    }>;
+  } {
+    const outcomes: Array<{
+      toolCall: ParsedToolCall;
+      action: ToolAction | null;
+      result: string;
+    }> = [];
+
+    for (const toolCall of completion.toolCalls) {
+      let action: ToolAction | null = null;
+      let result: string;
+      try {
+        const rawAction = this.rawActionFromToolCall(toolCall);
+        action = this.normalizeAction(rawAction);
+        result = this.executeAction(action);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown tool error";
+        result = JSON.stringify({ ok: false, error: message });
+      }
+      outcomes.push({ toolCall, action, result });
+    }
+
+    const successfulActions = outcomes
+      .map((outcome) => outcome.action)
+      .filter((value): value is ToolAction => value !== null);
+
+    const assistantToolCalls: ToolCallEnvelope[] = completion.toolCalls.map((toolCall) => ({
+      id: toolCall.id,
+      type: "function",
+      function: { name: toolCall.name, arguments: toolCall.argumentsJson }
+    }));
+    const assistantMessage: ChatMessage = {
+      role: "assistant",
+      content: completion.content,
+      tool_calls: assistantToolCalls
+    };
+    const toolMessages: ChatMessage[] = outcomes.map((outcome) => ({
+      role: "tool",
+      tool_call_id: outcome.toolCall.id,
+      content: outcome.result
+    }));
+
+    return { assistantMessage, toolMessages, successfulActions, outcomes };
+  }
+
   async runPrompt(
     prompt: string,
-    onEvent: (event: AgentEvent) => void
+    onEvent: (event: AgentEvent) => void,
+    abortSignal?: AbortSignal
   ): Promise<string> {
-    // Sanity probe to ensure workspace guard is active from the first turn.
     this.options.workspacePolicy.resolveWithinRoot(".");
 
     const messages: ChatMessage[] = [
@@ -473,18 +638,51 @@ export class SessionEngine {
       { role: "user", content: prompt }
     ];
 
-    for (let step = 0; step < 8; step += 1) {
+    const maxToolRounds = SessionEngine.resolveToolLoopMax();
+
+    for (let step = 0; step < maxToolRounds; step += 1) {
+      if (abortSignal?.aborted) {
+        throw new Error("Agent stopped.");
+      }
       if (step > 0) {
         onEvent({ type: "status", message: "Agent is thinking...", at: Date.now() });
       }
-      const raw = await this.options.provider.complete(messages, (delta) => {
-        onEvent({ type: "stream", delta, at: Date.now() });
+
+      const completion = await this.options.provider.complete(messages, {
+        tools: AGENT_TOOL_SCHEMAS,
+        onChunk: (delta) => {
+          onEvent({ type: "stream", delta, at: Date.now() });
+        }
       });
-      const merged = this.tryParseEnvelopesMerged(raw);
+
+      if (completion.toolCalls.length > 0) {
+        const { assistantMessage, toolMessages, successfulActions, outcomes } =
+          this.processNativeToolCalls(completion);
+        const envelope = this.buildUiEnvelopeString(successfulActions, completion.content);
+        if (envelope) {
+          await this.streamNativeToolEnvelopePreview(completion.content, envelope, onEvent);
+        }
+        for (const outcome of outcomes) {
+          if (outcome.action) {
+            onEvent({
+              type: "status",
+              message: this.describeStatusAction(outcome.action),
+              at: Date.now()
+            });
+          }
+        }
+        messages.push(assistantMessage);
+        for (const toolMessage of toolMessages) {
+          messages.push(toolMessage);
+        }
+        continue;
+      }
+
+      const merged = this.tryParseEnvelopesMerged(completion.content);
 
       if (!merged) {
-        onEvent({ type: "final", content: raw, at: Date.now() });
-        return raw;
+        onEvent({ type: "final", content: completion.content, at: Date.now() });
+        return completion.content;
       }
 
       const actions: ToolAction[] = [];
@@ -502,37 +700,7 @@ export class SessionEngine {
         return finalText;
       }
 
-      // Surface tool action payloads to the UI so chat can render
-      // rolling previews and final diff-style file change messages.
-      const uiActions = actions.map((action) => {
-        if (action.tool !== "write_file") {
-          return action;
-        }
-        return {
-          ...action,
-          previousContent: this.readPreviousContent(action)
-        };
-      });
-      const hasWriteActions = actions.some((action) => action.tool === "write_file");
-      const trimmedResponse = merged.responseText.trim();
-      let uiResponse: string | undefined;
-      if (trimmedResponse.length > 0) {
-        // Keep the assistant narrative even when file payloads are large (do not replace with a stub).
-        uiResponse = merged.responseText;
-      } else if (hasWriteActions) {
-        uiResponse = `Applying ${actions.filter((action) => action.tool === "write_file").length} file update(s).`;
-      } else if (merged.rawActions.length > 0) {
-        uiResponse = "Executing requested tool actions.";
-      }
-      const uiEnvelope = JSON.stringify(
-        {
-          response: uiResponse,
-          actions: uiActions
-        },
-        null,
-        2
-      );
-      onEvent({ type: "final", content: uiEnvelope, at: Date.now() });
+      this.emitUiEnvelope(actions, merged.responseText, onEvent);
 
       for (const action of actions) {
         onEvent({

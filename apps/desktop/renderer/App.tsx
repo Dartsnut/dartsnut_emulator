@@ -1459,7 +1459,7 @@ export function App() {
             >
               <textarea
                 ref={promptInputRef}
-                className="m-0 max-h-[200px] min-h-[26px] min-w-0 flex-1 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-0.5 text-[13px] leading-snug text-[var(--color-composer-input)] shadow-none outline-none [font:inherit] placeholder:text-[var(--color-composer-placeholder)] focus:border-0 focus:shadow-none focus:outline-none"
+                className="m-0 max-h-[200px] min-h-[26px] min-w-0 flex-1 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-0.5 text-[13px] leading-snug text-[var(--color-composer-input)] shadow-none outline-none [font:inherit] placeholder:text-[var(--color-composer-placeholder)] focus:border-0 focus:shadow-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
                 onKeyDown={(event) => {
@@ -1471,6 +1471,8 @@ export function App() {
                 placeholder="Message..."
                 rows={1}
                 aria-label="Message"
+                disabled={chatDisabled}
+                aria-busy={sending}
               />
               <div className="flex shrink-0 items-center gap-2">
                 {!autoScrollEnabled ? (

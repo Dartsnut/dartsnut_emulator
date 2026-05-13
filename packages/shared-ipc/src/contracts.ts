@@ -1,6 +1,8 @@
 export const IPCChannels = {
   bootstrapState: "agent:bootstrap-state",
   pickWorkspace: "agent:pick-workspace",
+  /** Renderer invokes after user taps the intake folder bubble; completes deferred `pick_workspace` tool. */
+  intakePickWorkspaceFolder: "agent:intake-pick-workspace-folder",
   startNewProject: "agent:start-new-project",
   /** Main → renderer: clear chat/logs/session UI (bootstrap comes from invoke return values). */
   sessionReset: "agent:session-reset",
@@ -115,6 +117,16 @@ export const INTAKE_UI_SHOW_PROJECT_TYPE_MARKER = "@dartsnut-intake-ui:project-t
  */
 export const INTAKE_UI_SHOW_WIDGET_SIZE_MARKER = "@dartsnut-intake-ui:widget-size";
 
+/**
+ * Label for the deferred folder-picker step during `dartsnut_project_intake` — matches the status line
+ * the session engine would emit for `pick_workspace` (suppressed while the bubble is shown).
+ */
+export const INTAKE_PICK_WORKSPACE_STATUS_LABEL = "Ran project intake (pick_workspace)";
+
+export type IntakePickWorkspaceFolderResponse =
+  | { ok: true }
+  | { ok: false; reason: "no_pending" };
+
 /** Remove intake UI control tokens from text shown in the chat timeline. */
 export function stripIntakeUiMarkers(text: string): string {
   return text
@@ -189,6 +201,11 @@ export type AgentEvent =
     /** When true, the renderer may show the Game / Widget chip row (`options`) after the model includes `@dartsnut-intake-ui:project-type` in its reply. When false, hide it. */
     visible: boolean;
     options?: ProjectType[];
+  }
+  | {
+    /** Model called `pick_workspace`; show a tap target — folder dialog opens only after the user activates it. */
+    type: "intake_pick_workspace_prompt";
+    at: number;
   };
 
 export type AssetKind = "static" | "gif" | "spritesheet";

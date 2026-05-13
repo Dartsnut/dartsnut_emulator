@@ -10,6 +10,7 @@ import {
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
+  type IntakePickWorkspaceFolderResponse,
   type PromptRequest,
   type ProviderSettings,
   type ReadPreviewRequest,
@@ -43,6 +44,8 @@ const api = {
   startNewProject: () => ipcRenderer.invoke(IPCChannels.startNewProject) as Promise<BootstrapState>,
   pickWorkspace: (request?: PickWorkspaceRequest) =>
     ipcRenderer.invoke(IPCChannels.pickWorkspace, request) as Promise<PickWorkspaceResponse>,
+  intakePickWorkspaceFolder: () =>
+    ipcRenderer.invoke(IPCChannels.intakePickWorkspaceFolder) as Promise<IntakePickWorkspaceFolderResponse>,
   sendPrompt: (request: PromptRequest) =>
     ipcRenderer.invoke(IPCChannels.sendPrompt, request) as Promise<SendPromptResponse>,
   cancelAgent: () => ipcRenderer.invoke(IPCChannels.cancelAgent) as Promise<{ ok: boolean }>,

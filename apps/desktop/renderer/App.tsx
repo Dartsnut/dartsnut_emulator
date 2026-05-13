@@ -482,8 +482,12 @@ function workspaceFolderBasename(workspaceRoot: string): string {
 }
 
 function toEntry(event: AgentEvent, seq: number): TimelineEntry {
-  if (event.type === "intake_widget_size_prompt" || event.type === "intake_project_type_prompt") {
-    throw new Error("intake_*_prompt events are handled in onAgentEvent, not the timeline");
+  if (
+    event.type === "intake_widget_size_prompt" ||
+    event.type === "intake_project_type_prompt" ||
+    event.type === "intake_pick_workspace_prompt"
+  ) {
+    throw new Error("intake_* events are handled in onAgentEvent, not the timeline");
   }
   if (event.type === "stream") {
     return { id: `${event.type}-${event.at}-${seq}`, role: "agent", text: event.delta, streaming: true };
@@ -516,6 +520,8 @@ export function App() {
   ]);
   const [prompt, setPrompt] = useState("");
   const [sending, setSending] = useState(false);
+  /** True while the OS folder dialog is open from the intake workspace bubble. */
+  const [intakeFolderDialogOpen, setIntakeFolderDialogOpen] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [pythonRuntimeStatus, setPythonRuntimeStatus] = useState<string | null>(null);
   const [screen, setScreen] = useState<AppScreen>("main");
@@ -535,6 +541,8 @@ export function App() {
     visible: boolean;
     sizes: WidgetSize[];
   }>({ visible: false, sizes: [] });
+  /** Host pushes `intake_pick_workspace_prompt` when the model calls `pick_workspace` — same slot as type/size chip rows. */
+  const [workspaceFolderPickerVisible, setWorkspaceFolderPickerVisible] = useState(false);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const pendingReplyIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
@@ -734,6 +742,11 @@ export function App() {
         });
         return;
       }
+      if (event.type === "intake_pick_workspace_prompt") {
+        clearPendingReplyIndicator();
+        setWorkspaceFolderPickerVisible(true);
+        return;
+      }
       if (import.meta.env.DEV) {
         if (event.type === "stream") {
           console.debug("[agent-stream]", { type: "stream", deltaChars: event.delta.length, at: event.at });
@@ -772,6 +785,11 @@ export function App() {
       if (event.type === "error") {
         cancelStreamCoalesce();
         activeStreamEntryIdRef.current = null;
+        setWorkspaceFolderPickerVisible(false);
+        const seq = eventSeqRef.current;
+        eventSeqRef.current += 1;
+        setEntries((prev) => [...prev, toEntry(event, seq)]);
+        return;
       }
 
       const seq = eventSeqRef.current;
@@ -890,6 +908,7 @@ export function App() {
     if (bootstrap?.workspaceRoot) {
       setWidgetSizePicker({ visible: false, sizes: [] });
       setProjectTypePicker({ visible: false, types: [] });
+      setWorkspaceFolderPickerVisible(false);
     }
   }, [bootstrap?.workspaceRoot]);
 
@@ -915,6 +934,7 @@ export function App() {
       setSessionProjectType(null);
       setWidgetSizePicker({ visible: false, sizes: [] });
       setProjectTypePicker({ visible: false, types: [] });
+      setWorkspaceFolderPickerVisible(false);
       creationIntakeBasePromptRef.current = "";
       setPrompt("");
       setRuntimeError(null);
@@ -929,6 +949,7 @@ export function App() {
   async function submitPrompt(request: PromptRequest) {
     setWidgetSizePicker({ visible: false, sizes: [] });
     setProjectTypePicker({ visible: false, types: [] });
+    setWorkspaceFolderPickerVisible(false);
     discardAgentEventsRef.current = false;
     const pendingReplyId = `agent-pending-${Date.now()}`;
     pendingReplyIdRef.current = pendingReplyId;
@@ -960,6 +981,24 @@ export function App() {
     }
     const updated = await api.pickWorkspace();
     setBootstrap(updated.state);
+  }
+
+  async function handleWorkspaceFolderPickerClick() {
+    if (!api || intakeFolderDialogOpen) {
+      return;
+    }
+    setIntakeFolderDialogOpen(true);
+    try {
+      const result = await api.intakePickWorkspaceFolder();
+      if (!result.ok && result.reason === "no_pending") {
+        return;
+      }
+      setWorkspaceFolderPickerVisible(false);
+      const refreshed = await api.getBootstrapState();
+      setBootstrap(refreshed);
+    } finally {
+      setIntakeFolderDialogOpen(false);
+    }
   }
 
   async function handleStartNewProject() {
@@ -1320,7 +1359,7 @@ export function App() {
             ))}
           </section>
 
-          {/* Chip rows: host enables visibility; model must include marker lines when asking (see creation-intake prompt in main). */}
+          {/* Chip rows: host enables visibility; type/size rows also require model marker lines (see creation-intake prompt in main). */}
           {!bootstrap?.workspaceRoot &&
           projectTypePicker.visible &&
           projectTypePicker.types.length > 0 &&
@@ -1379,6 +1418,33 @@ export function App() {
                     {sz}
                   </button>
                 ))}
+              </div>
+            </div>
+          ) : null}
+
+          {!bootstrap?.workspaceRoot && workspaceFolderPickerVisible ? (
+            <div
+              className="flex flex-col gap-1.5 px-0.5"
+              role="group"
+              aria-label="Project folder"
+            >
+              <span className="text-[11px] font-medium text-[var(--color-text-subtle)]">
+                Choose empty project folder
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={cn(
+                    "cursor-pointer rounded-full border border-[var(--color-chip-border)] bg-[var(--color-chip-bg)] px-3 py-1.5 text-[12px] font-medium text-[var(--color-chip-text)] [font:inherit]",
+                    "hover:enabled:border-[var(--color-chip-hover-border)] hover:enabled:bg-[var(--color-chip-hover-bg)]",
+                    "focus-visible:border-[var(--color-chip-focus-border)] focus-visible:shadow-[var(--shadow-chip-focus)] focus-visible:outline-none",
+                    "disabled:cursor-not-allowed disabled:opacity-45"
+                  )}
+                  disabled={intakeFolderDialogOpen}
+                  onClick={() => void handleWorkspaceFolderPickerClick()}
+                >
+                  Choose folder…
+                </button>
               </div>
             </div>
           ) : null}

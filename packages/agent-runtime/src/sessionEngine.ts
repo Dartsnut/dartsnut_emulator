@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
+import { INTAKE_PICK_WORKSPACE_STATUS_LABEL } from "@dartsnut/shared-ipc";
 import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
 import type {
   ChatMessage,
@@ -588,6 +589,9 @@ export class SessionEngine {
     }
     if (action.tool === "dartsnut_project_intake") {
       const step = typeof action.args.action === "string" ? action.args.action : "intake";
+      if (step === "pick_workspace") {
+        return INTAKE_PICK_WORKSPACE_STATUS_LABEL;
+      }
       return `Ran project intake (${step})`;
     }
     if (action.tool === "reload_emulator") {
@@ -790,11 +794,16 @@ export class SessionEngine {
         }
         for (const outcome of outcomes) {
           if (outcome.action) {
-            onEvent({
-              type: "status",
-              message: this.describeStatusAction(outcome.action),
-              at: Date.now()
-            });
+            const skipStatus =
+              outcome.action.tool === "dartsnut_project_intake" &&
+              outcome.action.args.action === "pick_workspace";
+            if (!skipStatus) {
+              onEvent({
+                type: "status",
+                message: this.describeStatusAction(outcome.action),
+                at: Date.now()
+              });
+            }
           }
         }
         messages.push(assistantMessage);
@@ -829,11 +838,15 @@ export class SessionEngine {
       this.emitUiEnvelope(actions, merged.responseText, onEvent);
 
       for (const action of actions) {
-        onEvent({
-          type: "status",
-          message: this.describeStatusAction(action),
-          at: Date.now()
-        });
+        const skipStatus =
+          action.tool === "dartsnut_project_intake" && action.args.action === "pick_workspace";
+        if (!skipStatus) {
+          onEvent({
+            type: "status",
+            message: this.describeStatusAction(action),
+            at: Date.now()
+          });
+        }
       }
 
       const toolResults = await Promise.all(

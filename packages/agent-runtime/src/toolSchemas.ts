@@ -44,7 +44,7 @@ const DARTSNUT_PROJECT_INTAKE_TOOL: ChatCompletionTool = {
       "- **set_widget_size** — for widgets only; one of the supported WxH tokens. Do **not** infer a default — the user must choose (or their message must already name a supported size).",
       "- **pick_workspace** — opens a folder picker for an **empty** project directory; required before any files are written.",
       "- **read_workspace_conf** — reads `conf.json` in the **currently selected** workspace and reports deploy-style validity plus guidance (call after the folder is chosen, and again if the user switches workspace).",
-      "Typical order when starting from no workspace: infer or confirm `set_project_type` (the app may show **Game / Widget** chips until this is set) → if widget, confirm display size (ask if missing, or use the in-app size chips) then `set_widget_size` → `pick_workspace` → `read_workspace_conf`, then ask **one** focused follow-up question when `read_workspace_conf` shows an existing project or invalid `conf.json`."
+      "Typical order when starting from no workspace: infer or confirm `set_project_type` (Dartsnut Chat shows **Game / Widget** chips only after you ask and include the `@dartsnut-intake-ui:project-type` marker from the intake prompt) → if widget, confirm display size (ask if missing; use the `@dartsnut-intake-ui:widget-size` marker and size chips) then `set_widget_size` → `pick_workspace` → `read_workspace_conf`, then ask **one** focused follow-up question when `read_workspace_conf` shows an existing project or invalid `conf.json`."
     ].join(" "),
     parameters: {
       type: "object",

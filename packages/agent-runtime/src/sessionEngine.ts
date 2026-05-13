@@ -208,7 +208,7 @@ export class SessionEngine {
     ];
     if (hasIntake) {
       lines.push(
-        "Intake: **dartsnut_project_intake** is host-executed — use `set_project_type`, `set_widget_size`, `pick_workspace`, and `read_workspace_conf` instead of composer chips. The app may show **Game / Widget** chips under the chat until the type is set; for widgets it may also show **size chips**. Never assume a widget display size — ask or use chips unless the user message already names a supported WxH. After `read_workspace_conf`, ask at most one focused question when the folder already has a valid `conf.json`, invalid JSON, or a type/size mismatch."
+        "Intake: **dartsnut_project_intake** is host-executed — use `set_project_type`, `set_widget_size`, `pick_workspace`, and `read_workspace_conf`. In Dartsnut Chat creation intake, **Game / Widget** and **size** chip rows appear only after the assistant includes the marker lines defined in the user intake prompt (`@dartsnut-intake-ui:…`). Never assume a widget display size — ask unless the user message already names a supported WxH. After `read_workspace_conf`, ask at most one focused question when the folder already has a valid `conf.json`, invalid JSON, or a type/size mismatch."
       );
     }
     if (hasReload) {

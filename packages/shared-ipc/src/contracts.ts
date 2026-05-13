@@ -103,6 +103,34 @@ export type WidgetSize = "128x160" | "128x128" | "128x64" | "64x32";
 /** Supported physical widget display sizes (WxH string tokens). */
 export const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
 
+/**
+ * Creation-intake assistant text must include this exact substring when (and only when) asking the
+ * user to choose **game** vs **widget**. The desktop app then shows the Game/Widget chip row.
+ */
+export const INTAKE_UI_SHOW_PROJECT_TYPE_MARKER = "@dartsnut-intake-ui:project-type";
+
+/**
+ * Creation-intake assistant text must include this exact substring when (and only when) asking
+ * the user to pick a **widget display size**. The desktop app then shows the size chip row.
+ */
+export const INTAKE_UI_SHOW_WIDGET_SIZE_MARKER = "@dartsnut-intake-ui:widget-size";
+
+/** Remove intake UI control tokens from text shown in the chat timeline. */
+export function stripIntakeUiMarkers(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (trimmed === INTAKE_UI_SHOW_PROJECT_TYPE_MARKER || trimmed === INTAKE_UI_SHOW_WIDGET_SIZE_MARKER) {
+        return "";
+      }
+      return line
+        .replaceAll(INTAKE_UI_SHOW_PROJECT_TYPE_MARKER, "")
+        .replaceAll(INTAKE_UI_SHOW_WIDGET_SIZE_MARKER, "");
+    })
+    .join("\n");
+}
+
 export interface PickWorkspaceRequest {
   requireEmpty?: boolean;
 }
@@ -150,7 +178,7 @@ export type AgentEvent =
   | {
     type: "intake_widget_size_prompt";
     at: number;
-    /** When true, the renderer should show the size chip row (`sizes`). When false, hide it. */
+    /** When true, the renderer may show the size chip row (`sizes`) after the model includes `@dartsnut-intake-ui:widget-size` in its reply. When false, hide it. */
     visible: boolean;
     /** Supported WxH tokens for chips; set when `visible` is true. */
     sizes?: WidgetSize[];
@@ -158,7 +186,7 @@ export type AgentEvent =
   | {
     type: "intake_project_type_prompt";
     at: number;
-    /** When true, show the Game / Widget chip row (`options`). When false, hide it. */
+    /** When true, the renderer may show the Game / Widget chip row (`options`) after the model includes `@dartsnut-intake-ui:project-type` in its reply. When false, hide it. */
     visible: boolean;
     options?: ProjectType[];
   };

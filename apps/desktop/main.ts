@@ -582,6 +582,21 @@ function buildCreationIntakeUserPrompt(
   ].join("\n");
 }
 
+/** User line for the automatic creator run after creation intake — avoids re-welcoming on stale first messages like "hello". */
+function buildPostIntakeCreatorUserPrompt(originalUserPrompt: string): string {
+  const original = originalUserPrompt.trim();
+  const originalLine =
+    original.length > 0
+      ? `Original first message (use only if it already states what to build): ${original}`
+      : "There was no substantive first message before intake.";
+  return [
+    "Creation **intake just finished**: the empty workspace is selected and **Creation context** above already has project type and (for widgets) display size.",
+    "Do **not** open with a generic **Hello / Welcome to Dartsnut Chat** or repeat product onboarding — the user already completed intake.",
+    "Give a **one-sentence** acknowledgement that the folder is ready (you may mention type/size from context), then ask what they want this project to display or do, with a few short examples if helpful.",
+    originalLine
+  ].join("\n");
+}
+
 function buildAssetApplierPrompt(request: PromptRequest): string {
   const apply = request.assetApply ?? { slotIds: [], projectType: "game" };
   const slotIds = Array.isArray(apply.slotIds) ? apply.slotIds : [];
@@ -1804,7 +1819,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         };
         const followUp = buildSession(templateMode);
         const routed = buildRoutedPrompt({
-          prompt: req.prompt,
+          prompt: buildPostIntakeCreatorUserPrompt(req.prompt),
           templateMode,
           projectType: intakeState.projectType,
           widgetSize: intakeState.widgetSize,

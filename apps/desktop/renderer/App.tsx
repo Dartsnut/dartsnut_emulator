@@ -87,7 +87,7 @@ const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 /** Content taller than one line — switch composer shell from pill to rounded card */
 const COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX = 52;
 const GREETING_TEXT =
-  "Hi! I can help you create or modify Dartsnut widgets and games. Describe what you want to build — if no workspace folder is set yet, use the **Game** / **Widget** chips under the chat when they appear, then follow folder and size steps until we open your empty project folder.";
+  "What are we making today? Share your idea and I'll help turn it into a Dartsnut widget or game.";
 
 const chromeIconBtnClass =
   "inline-flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border-0 bg-transparent p-0 text-[var(--color-app-btn-text)] [app-region:no-drag] [-webkit-app-region:no-drag] hover:enabled:bg-[var(--color-app-btn-bg-hover)] hover:enabled:text-[var(--color-app-btn-text-hover)] focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45";

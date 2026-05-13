@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 import type { ProjectType } from "@dartsnut/shared-ipc";
 import { Client, type Channel, type SFTPWrapper } from "ssh2";
+import { buildSyncWorkspaceScript } from "./deployMachineScripts";
 
 const SSH_USER = "rpi";
 const SSH_PASSWORD = "rpi";
@@ -225,26 +226,12 @@ export class DeployMachineSession {
       await runTarCreate(localWorkspaceRoot, tmpTar);
       this.emitLog(`[deploy] Uploading bundle (${path.basename(tmpTar)})…`);
       await fastPut(this.client, tmpTar, REMOTE_UPLOAD_TGZ);
-      const qid = appId.replace(/'/g, "'\\''");
       /** Pipe script to `bash -s` so `$TGZ`, `$STAGING`, etc. are never mangled by SSH/JSON quoting. */
-      const passAssign = "PASS=" + JSON.stringify(SSH_PASSWORD);
-      const script = [
-        "set -eo pipefail",
-        passAssign,
-        "TGZ=" + REMOTE_UPLOAD_TGZ,
-        "APPID='" + qid + "'",
-        'BASE="$HOME/dartsnut_rpi/apps"',
-        'TARGET="$BASE/$APPID"',
-        'STAGING="${TARGET}.new.${RANDOM}"',
-        'rm -rf "$STAGING"',
-        'mkdir -p "$BASE"',
-        'mkdir -p "$STAGING"',
-        'tar -xzf "$TGZ" -C "$STAGING"',
-        // Prior debug/service runs may leave root-owned cache files under apps/<id>.
-        'echo "$PASS" | sudo -S rm -rf "$TARGET"',
-        'mv "$STAGING" "$TARGET"',
-        'rm -f "$TGZ"',
-      ].join("\n");
+      const script = buildSyncWorkspaceScript({
+        appId,
+        password: SSH_PASSWORD,
+        remoteUploadTgz: REMOTE_UPLOAD_TGZ,
+      });
       const { stderr, code } = await execBashScriptStdin(this.client, script);
       if (code !== 0) {
         throw new Error(stderr.trim() || `remote sync failed (exit ${code})`);

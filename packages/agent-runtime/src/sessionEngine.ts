@@ -732,7 +732,10 @@ export class SessionEngine {
     const assistantMessage: ChatMessage = {
       role: "assistant",
       content: completion.content,
-      tool_calls: assistantToolCalls
+      tool_calls: assistantToolCalls,
+      ...(completion.reasoningContent !== undefined
+        ? { reasoningContent: completion.reasoningContent }
+        : {})
     };
     const toolMessages: ChatMessage[] = outcomes.map((outcome) => ({
       role: "tool",

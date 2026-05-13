@@ -25,10 +25,28 @@ function makeFetchMock(response: unknown): { fetchImpl: typeof fetch; captured: 
 }
 
 describe("ProviderClient wire format", () => {
-
-  it("rewrites assistant content from \"\" to null when tool_calls are present", async () => {
+  it("uses stream:true when onChunk is set and there is no tool history", async () => {
     const { fetchImpl, captured } = makeFetchMock({
       choices: [{ message: { content: "done", tool_calls: [] } }]
+    });
+    const client = new ProviderClient({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "test-model",
+      fetchImpl
+    });
+
+    await client.complete([{ role: "user", content: "hi" }], {
+      onChunk: vi.fn()
+    });
+
+    expect(captured.body.stream).toBe(true);
+  });
+
+  it("uses stream:false when onChunk is set but a tool message is already in context", async () => {
+    const onChunk = vi.fn();
+    const { fetchImpl, captured } = makeFetchMock({
+      choices: [{ message: { content: "Pick a size.", tool_calls: [] } }]
     });
     const client = new ProviderClient({
       baseUrl: "https://example.test/v1",
@@ -53,15 +71,15 @@ describe("ProviderClient wire format", () => {
       { role: "tool", tool_call_id: "call_1", content: '{"ok":true}' }
     ];
 
-    await client.complete(messages);
+    const result = await client.complete(messages, { onChunk });
 
-    const sent = captured.body.messages;
-    expect(sent[1].role).toBe("assistant");
-    expect(sent[1].content).toBeNull();
-    expect(sent[1].tool_calls).toBeDefined();
+    expect(captured.body.stream).toBe(false);
+    expect(onChunk).toHaveBeenCalledTimes(1);
+    expect(onChunk).toHaveBeenCalledWith("Pick a size.");
+    expect(result.content).toBe("Pick a size.");
   });
 
-  it("preserves non-empty assistant content alongside tool_calls", async () => {
+  it("preserves assistant messages on the wire (no content rewriting)", async () => {
     const { fetchImpl, captured } = makeFetchMock({
       choices: [{ message: { content: "done" } }]
     });
@@ -88,6 +106,33 @@ describe("ProviderClient wire format", () => {
 
     const sent = captured.body.messages;
     expect(sent[0].content).toBe("Inspecting workspace.");
+  });
+
+  it("maps assistant reasoningContent to wire reasoning_content (MiMo thinking echo-back)", async () => {
+    const { fetchImpl, captured } = makeFetchMock({
+      choices: [{ message: { content: "ok", tool_calls: [] } }]
+    });
+    const client = new ProviderClient({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "test-model",
+      fetchImpl
+    });
+
+    await client.complete([
+      { role: "user", content: "hi" },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          { id: "c1", type: "function", function: { name: "dartsnut_project_intake", arguments: "{}" } }
+        ],
+        reasoningContent: "thinking blob from prior turn"
+      }
+    ]);
+
+    const assistant = captured.body.messages[1] as Record<string, unknown>;
+    expect(assistant.reasoning_content).toBe("thinking blob from prior turn");
   });
 
   it("parses native tool_calls from a non-streaming response", async () => {
@@ -122,5 +167,29 @@ describe("ProviderClient wire format", () => {
       name: "write_file",
       argumentsJson: '{"path":"a.txt","content":"hi"}'
     });
+  });
+
+  it("returns reasoningContent from a non-streaming assistant message when present", async () => {
+    const { fetchImpl } = makeFetchMock({
+      choices: [
+        {
+          message: {
+            content: "Visible reply.",
+            reasoning_content: "Hidden reasoning.",
+            tool_calls: []
+          }
+        }
+      ]
+    });
+    const client = new ProviderClient({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "test-model",
+      fetchImpl
+    });
+
+    const result = await client.complete([{ role: "user", content: "x" }]);
+    expect(result.content).toBe("Visible reply.");
+    expect(result.reasoningContent).toBe("Hidden reasoning.");
   });
 });

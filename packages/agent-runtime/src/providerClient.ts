@@ -17,19 +17,21 @@ export interface ToolCallEnvelope {
 
 export type ChatMessage =
   | {
-      role: "system" | "user";
-      content: string;
-    }
+    role: "system" | "user";
+    content: string;
+  }
   | {
-      role: "assistant";
-      content: string;
-      tool_calls?: ToolCallEnvelope[];
-    }
+    role: "assistant";
+    content: string;
+    tool_calls?: ToolCallEnvelope[];
+    /** MiMo / thinking-mode: replay on the next request as wire `reasoning_content`. */
+    reasoningContent?: string;
+  }
   | {
-      role: "tool";
-      tool_call_id: string;
-      content: string;
-    };
+    role: "tool";
+    tool_call_id: string;
+    content: string;
+  };
 
 /** Parsed native tool call from chat completions (`tool_calls[]`). */
 export interface ParsedToolCall {
@@ -41,6 +43,8 @@ export interface ParsedToolCall {
 export interface CompletionResult {
   content: string;
   toolCalls: ParsedToolCall[];
+  /** Thinking-mode (e.g. MiMo): must be echoed on follow-up turns as `reasoning_content`. */
+  reasoningContent?: string;
 }
 
 export interface CompletionOptions {
@@ -94,12 +98,37 @@ interface OpenAIToolCallMessage {
   };
 }
 
+function readReasoningContent(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const rc = (message as { reasoning_content?: unknown }).reasoning_content;
+  return typeof rc === "string" ? rc : undefined;
+}
+
+function readReasoningDelta(delta: unknown): string {
+  if (!delta || typeof delta !== "object") {
+    return "";
+  }
+  const rc = (delta as { reasoning_content?: unknown }).reasoning_content;
+  return typeof rc === "string" ? rc : "";
+}
+
 /** Default cap so a hung provider does not leave the UI stuck forever. */
 const DEFAULT_CHAT_COMPLETION_TIMEOUT_MS = 180_000;
 
 /**
  * OpenAI Chat Completions client (official `openai` SDK). Compatible with OpenAI and
  * OpenAI-compatible gateways (e.g. Xiaomi MiMo token plan).
+ *
+ * **MiMo thinking mode:** responses may include `reasoning_content`. The next request must
+ * echo it on the assistant turn or the API returns `400 Param Incorrect` (upstream:
+ * "The reasoning_content in the thinking mode must be passed back to the API."). We
+ * accumulate and replay it through `ChatMessage.reasoningContent` / wire `reasoning_content`.
+ *
+ * **MiMo + tool history:** some deployments reject `stream: true` once `role: "tool"` exists;
+ * those rounds use `stream: false` while still flushing `onChunk` once. Set
+ * `AGENT_FORCE_STREAM_WITH_TOOL_HISTORY=1` to force streaming anyway.
  */
 export class ProviderClient implements CompletionProvider {
   private readonly openai: OpenAI;
@@ -121,7 +150,13 @@ export class ProviderClient implements CompletionProvider {
     const { tools, onChunk } = options;
     const timeoutMs = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS) || DEFAULT_CHAT_COMPLETION_TIMEOUT_MS;
     const signal = AbortSignal.timeout(timeoutMs);
-    const requestMessages = ProviderClient.toWireMessages(messages) as ChatCompletionMessageParam[];
+    const requestMessages = ProviderClient.toWireMessages(messages);
+
+    const forceStreamWithToolHistory =
+      process.env.AGENT_FORCE_STREAM_WITH_TOOL_HISTORY === "1" ||
+      process.env.AGENT_FORCE_STREAM_WITH_TOOL_HISTORY?.toLowerCase() === "true";
+    const hasToolHistory = messages.some((m) => m.role === "tool");
+    const useStreaming = Boolean(onChunk) && (forceStreamWithToolHistory || !hasToolHistory);
 
     const common = {
       model: this.model,
@@ -131,10 +166,10 @@ export class ProviderClient implements CompletionProvider {
     };
 
     if (isRawDebugEnabled()) {
-      console.log(`[agent-provider] chat.completions ${safeStringify({ ...common, stream: Boolean(onChunk) })}`);
+      console.log(`[agent-provider] chat.completions ${safeStringify({ ...common, stream: useStreaming })}`);
     }
 
-    if (!onChunk) {
+    if (!useStreaming) {
       const response = await this.openai.chat.completions.create({ ...common, stream: false }, { signal });
       const message = response.choices[0]?.message;
       const content = typeof message?.content === "string" ? message.content : "";
@@ -142,14 +177,24 @@ export class ProviderClient implements CompletionProvider {
         message?.tool_calls as OpenAIToolCallMessage[] | undefined
       );
       const trimmed = content.trim();
+      const reasoningContent = readReasoningContent(message);
+      if (onChunk && trimmed.length > 0) {
+        onChunk(trimmed);
+      }
       if (isRawDebugEnabled()) {
         console.log(`[agent-provider] response ${safeStringify({ stream: false, content: trimmed, toolCalls })}`);
       }
-      return { content: trimmed, toolCalls };
+      return {
+        content: trimmed,
+        toolCalls,
+        ...(reasoningContent !== undefined ? { reasoningContent } : {})
+      };
     }
 
+    const notifyChunk = onChunk!;
     const stream = await this.openai.chat.completions.create({ ...common, stream: true }, { signal });
     let fullText = "";
+    let fullReasoning = "";
     const toolCallAccumulators = new Map<number, StreamingToolCallAccumulator>();
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
@@ -159,7 +204,11 @@ export class ProviderClient implements CompletionProvider {
       const contentDelta = delta.content ?? "";
       if (contentDelta) {
         fullText += contentDelta;
-        onChunk(contentDelta);
+        notifyChunk(contentDelta);
+      }
+      const reasoningDelta = readReasoningDelta(delta);
+      if (reasoningDelta) {
+        fullReasoning += reasoningDelta;
       }
       if (Array.isArray(delta.tool_calls)) {
         ProviderClient.mergeToolCallDeltas(toolCallAccumulators, delta.tool_calls as OpenAIToolCallDelta[]);
@@ -180,28 +229,25 @@ export class ProviderClient implements CompletionProvider {
     if (isRawDebugEnabled()) {
       console.log(`[agent-provider] response ${safeStringify({ stream: true, content: trimmed, toolCalls })}`);
     }
-    return { content: trimmed, toolCalls };
+    return {
+      content: trimmed,
+      toolCalls,
+      ...(fullReasoning.length > 0 ? { reasoningContent: fullReasoning } : {})
+    };
   }
 
-  /**
-   * Stricter gateways hang when an assistant message with `tool_calls` sends `content: ""`.
-   * OpenAI allows `null` there.
-   */
-  private static toWireMessages(messages: ChatMessage[]): unknown[] {
+  private static toWireMessages(messages: ChatMessage[]): ChatCompletionMessageParam[] {
     return messages.map((message) => {
-      if (
-        message.role === "assistant" &&
-        Array.isArray(message.tool_calls) &&
-        message.tool_calls.length > 0 &&
-        message.content.length === 0
-      ) {
-        return {
-          role: "assistant",
-          content: null,
-          tool_calls: message.tool_calls
-        };
+      if (message.role !== "assistant" || message.reasoningContent === undefined) {
+        return message as ChatCompletionMessageParam;
       }
-      return message;
+      const { reasoningContent, ...rest } = message;
+      return {
+        role: "assistant" as const,
+        content: rest.content,
+        ...(rest.tool_calls && rest.tool_calls.length > 0 ? { tool_calls: rest.tool_calls } : {}),
+        reasoning_content: reasoningContent
+      } as ChatCompletionMessageParam;
     });
   }
 

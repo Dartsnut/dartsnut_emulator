@@ -3,6 +3,7 @@
 **/dist-electron
 **/.vite
 .env
+.env.macos-notarize
 .electron-cache
 .cursor
 .dartsnut-chat-intake-placeholder

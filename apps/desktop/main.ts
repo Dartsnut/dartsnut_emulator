@@ -19,6 +19,7 @@ import {
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
+  type IntakePickWorkspaceFolderResponse,
   type ProjectType,
   type PromptRequest,
   type ProviderSettings,
@@ -374,6 +375,51 @@ interface IntakeToolState {
   widgetSize?: WidgetSize;
 }
 
+/** Cleared in `sendPrompt` finally so an in-flight deferred `pick_workspace` cannot strand the agent. */
+let agentEventEmitter: ((event: AgentEvent) => void) | null = null;
+
+interface IntakePickWorkspacePending {
+  resolve: (json: string) => void;
+  state: IntakeToolState;
+}
+
+let intakePickWorkspacePending: IntakePickWorkspacePending | null = null;
+
+function cancelIntakePickWorkspacePending(): void {
+  if (!intakePickWorkspacePending) {
+    return;
+  }
+  const { resolve } = intakePickWorkspacePending;
+  intakePickWorkspacePending = null;
+  resolve(
+    JSON.stringify({
+      ok: false,
+      cancelled: true,
+      message: "Folder selection was interrupted."
+    })
+  );
+}
+
+async function runIntakePickWorkspaceDialog(state: IntakeToolState): Promise<string> {
+  const result = await dialog.showOpenDialog({
+    properties: ["openDirectory", "createDirectory"]
+  });
+  if (result.canceled || !result.filePaths[0]) {
+    return JSON.stringify({ ok: false, cancelled: true, message: "Folder dialog was cancelled." });
+  }
+  const selectedPath = result.filePaths[0];
+  if (!isDirectoryEmpty(selectedPath)) {
+    return JSON.stringify({
+      ok: false,
+      reason: "non_empty",
+      message: "Folder must be empty for a new scaffold from this flow. Ask the user to pick another folder."
+    });
+  }
+  applyWorkspaceRoot(selectedPath);
+  const snapshot = readWorkspaceConfIntakeSnapshot(selectedPath, state);
+  return JSON.stringify({ ok: true, workspace_selected: selectedPath, ...snapshot });
+}
+
 function getIntakePlaceholderWorkspacePath(): string {
   return path.join(repoRoot, ".dartsnut-chat-intake-placeholder");
 }
@@ -517,23 +563,10 @@ async function intakeHostToolExecute(
     });
   }
   if (action === "pick_workspace") {
-    const result = await dialog.showOpenDialog({
-      properties: ["openDirectory", "createDirectory"]
+    agentEventEmitter?.({ type: "intake_pick_workspace_prompt", at: Date.now() });
+    return await new Promise<string>((resolve) => {
+      intakePickWorkspacePending = { resolve, state };
     });
-    if (result.canceled || !result.filePaths[0]) {
-      return JSON.stringify({ ok: false, cancelled: true, message: "Folder dialog was cancelled." });
-    }
-    const selectedPath = result.filePaths[0];
-    if (!isDirectoryEmpty(selectedPath)) {
-      return JSON.stringify({
-        ok: false,
-        reason: "non_empty",
-        message: "Folder must be empty for a new scaffold from this flow. Ask the user to pick another folder."
-      });
-    }
-    applyWorkspaceRoot(selectedPath);
-    const snapshot = readWorkspaceConfIntakeSnapshot(selectedPath, state);
-    return JSON.stringify({ ok: true, workspace_selected: selectedPath, ...snapshot });
   }
   if (action === "read_workspace_conf") {
     const root = workspaceRoot;
@@ -1619,6 +1652,20 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
 });
 
 ipcMain.handle(
+  IPCChannels.intakePickWorkspaceFolder,
+  async (): Promise<IntakePickWorkspaceFolderResponse> => {
+    if (!intakePickWorkspacePending) {
+      return { ok: false, reason: "no_pending" };
+    }
+    const { resolve, state } = intakePickWorkspacePending;
+    intakePickWorkspacePending = null;
+    const json = await runIntakePickWorkspaceDialog(state);
+    resolve(json);
+    return { ok: true };
+  }
+);
+
+ipcMain.handle(
   IPCChannels.assetsGetManifest,
   async (_event: unknown, workspacePath: string): Promise<ManifestSnapshot> => {
     return assetManager.getSnapshot(workspacePath);
@@ -1732,6 +1779,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
   };
   try {
+    agentEventEmitter = emitAgent;
     let sessionRouting: SendPromptResponse["sessionRouting"];
     const hostState: IntakeToolState = {};
     const sharedIntakeHandler = async (args: Record<string, unknown>) =>
@@ -1849,6 +1897,8 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     sendToRenderer(IPCChannels.subscribeEvents, event);
     return { ok: false };
   } finally {
+    cancelIntakePickWorkspacePending();
+    agentEventEmitter = null;
     if (sendPromptAbortController === runAbort) {
       sendPromptAbortController = null;
     }
@@ -1856,6 +1906,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
 });
 
 ipcMain.handle(IPCChannels.cancelAgent, () => {
+  cancelIntakePickWorkspacePending();
   sendPromptAbortController?.abort();
   return { ok: true };
 });

@@ -8,6 +8,7 @@ import type {
   ManifestSnapshot,
   PickWorkspaceRequest,
   PickWorkspaceResponse,
+  IntakePickWorkspaceFolderResponse,
   PromptRequest,
   ProviderSettings,
   ReadPreviewRequest,
@@ -39,6 +40,7 @@ declare global {
       setShellUiTheme: (theme: ShellUiTheme) => Promise<void>;
       startNewProject: () => Promise<BootstrapState>;
       pickWorkspace: (request?: PickWorkspaceRequest) => Promise<PickWorkspaceResponse>;
+      intakePickWorkspaceFolder: () => Promise<IntakePickWorkspaceFolderResponse>;
       sendPrompt: (request: PromptRequest) => Promise<SendPromptResponse>;
       cancelAgent: () => Promise<{ ok: boolean }>;
       getProviderSettings: () => Promise<ProviderSettings>;

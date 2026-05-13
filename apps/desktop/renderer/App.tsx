@@ -6,11 +6,14 @@ import {
   type AssetManifest,
   type BootstrapState,
   type DeployEligibility,
+  INTAKE_UI_SHOW_PROJECT_TYPE_MARKER,
+  INTAKE_UI_SHOW_WIDGET_SIZE_MARKER,
   type ManifestSnapshot,
   type ProviderSettings,
   type ProjectType,
   type PromptRequest,
   type SendPromptResponse,
+  stripIntakeUiMarkers,
   type WidgetSize
 } from "@dartsnut/shared-ipc";
 import { AssetManagerPanel } from "./AssetManagerPanel";
@@ -858,6 +861,21 @@ export function App() {
   const deployEligible = deployEligibility.ok;
   const deployPanelShowsWidgetParams = deployEligible && deployEligibility.projectType === "widget";
 
+  /** Agent text after the latest user message — used to detect intake UI marker lines from the model. */
+  const agentTailTextSinceLastUser = useMemo(() => {
+    const parts: string[] = [];
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const entry = entries[i];
+      if (entry.role === "user") {
+        break;
+      }
+      if (entry.role === "agent") {
+        parts.push(entry.text);
+      }
+    }
+    return parts.reverse().join("\n");
+  }, [entries]);
+
   // Reset to Emulator tab when the active tab is no longer available.
   useEffect(() => {
     if (!assetManifest && rightPaneTab === "assets") {
@@ -1302,7 +1320,11 @@ export function App() {
             ))}
           </section>
 
-          {!bootstrap?.workspaceRoot && projectTypePicker.visible && projectTypePicker.types.length > 0 ? (
+          {/* Chip rows: host enables visibility; model must include marker lines when asking (see creation-intake prompt in main). */}
+          {!bootstrap?.workspaceRoot &&
+          projectTypePicker.visible &&
+          projectTypePicker.types.length > 0 &&
+          agentTailTextSinceLastUser.includes(INTAKE_UI_SHOW_PROJECT_TYPE_MARKER) ? (
             <div
               className="flex flex-col gap-1.5 px-0.5"
               role="group"
@@ -1330,7 +1352,10 @@ export function App() {
             </div>
           ) : null}
 
-          {!bootstrap?.workspaceRoot && widgetSizePicker.visible && widgetSizePicker.sizes.length > 0 ? (
+          {!bootstrap?.workspaceRoot &&
+          widgetSizePicker.visible &&
+          widgetSizePicker.sizes.length > 0 &&
+          agentTailTextSinceLastUser.includes(INTAKE_UI_SHOW_WIDGET_SIZE_MARKER) ? (
             <div
               className="flex flex-col gap-1.5 px-0.5"
               role="group"
@@ -1675,7 +1700,8 @@ function AgentMarkdownBody({ source }: { source: string }) {
 }
 
 function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
-  const liveFormatted = formatAgentMessage(text);
+  const displayText = stripIntakeUiMarkers(text);
+  const liveFormatted = formatAgentMessage(displayText);
   const leadText = liveFormatted.response || liveFormatted.narrative || "";
   const fileActions = liveFormatted.actions.filter((action) => action.isFileWrite);
   const planActions = dedupeToolPlansLastWins(liveFormatted.actions);
@@ -1683,7 +1709,7 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
     !leadText &&
     fileActions.length === 0 &&
     planActions.length === 0 &&
-    (!isStreaming || !textLooksLikeToolEnvelopeDraft(text));
+    (!isStreaming || !textLooksLikeToolEnvelopeDraft(displayText));
 
   return (
     <div className="entry-content">
@@ -1786,7 +1812,7 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
           )}
         </div>
       ))}
-      {showRawMarkdownFallback ? <AgentMarkdownBody source={text} /> : null}
+      {showRawMarkdownFallback ? <AgentMarkdownBody source={displayText} /> : null}
     </div>
   );
 }

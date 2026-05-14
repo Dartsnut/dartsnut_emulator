@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  AgentSessionWorkspaceSummary,
   ApplyAssetsRequest,
   ApplyAssetsResponse,
   BindSlotRequest,
@@ -39,6 +40,10 @@ declare global {
   interface Window {
     dartsnutApi: {
       getBootstrapState: () => Promise<BootstrapState>;
+      getWorkspaceSessionSummary: () => Promise<AgentSessionWorkspaceSummary>;
+      resetWorkspaceSession: () => Promise<
+        { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" }
+      >;
       getWindowChromeInsets: () => Promise<WindowChromeInsets>;
       setShellUiTheme: (theme: ShellUiTheme) => Promise<void>;
       startNewProject: () => Promise<BootstrapState>;

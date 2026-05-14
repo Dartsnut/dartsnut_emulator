@@ -1,6 +1,8 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   type AgentEvent,
+  type AgentSessionIntent,
+  type AgentSessionTranscriptLine,
   type AssetManifest,
   type BootstrapState,
   type DeployEligibility,
@@ -92,6 +94,18 @@ const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 const COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX = 52;
 const GREETING_TEXT =
   "What are we making today? Share your idea and I'll help turn it into a Dartsnut widget or game.";
+
+function transcriptLineToTimelineEntry(line: AgentSessionTranscriptLine, seq: number): TimelineEntry {
+  const id = `persisted-${line.at}-${seq}`;
+  if (line.kind === "user") {
+    return { id, role: "user", text: stripIntakeUiMarkers(line.text), streaming: false };
+  }
+  if (line.kind === "assistant") {
+    return { id, role: "agent", text: stripIntakeUiMarkers(line.text), streaming: false };
+  }
+  const tool = line.toolName ? `${line.toolName}: ` : "";
+  return { id, role: "status", text: `${tool}${line.text}` };
+}
 
 const chromeIconBtnClass =
   "inline-flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border-0 bg-transparent p-0 text-[var(--color-app-btn-text)] [app-region:no-drag] [-webkit-app-region:no-drag] hover:enabled:bg-[var(--color-app-btn-bg-hover)] hover:enabled:text-[var(--color-app-btn-text-hover)] focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45";
@@ -556,6 +570,13 @@ export function App() {
   const streamAutoscrollGateRef = useRef(0);
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
+  /** Next `sendPrompt` workspace-session intent (`fresh` is consumed once). */
+  const pendingAgentSessionIntentRef = useRef<AgentSessionIntent>("auto");
+  const lastAgentSessionHydrateKeyRef = useRef<string>("");
+  /** Workspace has on-disk agent session — show continue / new-session banner. */
+  const [showPersistedAgentSessionBanner, setShowPersistedAgentSessionBanner] = useState(false);
+  /** Bumped after on-disk session reset so the hydrate effect can re-query the same workspace. */
+  const [agentSessionHydrateEpoch, setAgentSessionHydrateEpoch] = useState(0);
   /** Last no-workspace prompt text — used when the user picks a widget size from chips so the idea is not lost. */
   const creationIntakeBasePromptRef = useRef("");
   const timelineRef = useRef<HTMLElement | null>(null);
@@ -909,6 +930,40 @@ export function App() {
     }
   }, [bootstrap?.workspaceRoot]);
 
+  useEffect(() => {
+    const ws = bootstrap?.workspaceRoot;
+    if (!api || !ws) {
+      lastAgentSessionHydrateKeyRef.current = "";
+      setShowPersistedAgentSessionBanner(false);
+      return;
+    }
+    if (lastAgentSessionHydrateKeyRef.current === ws) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const summary = await api.getWorkspaceSessionSummary();
+      if (cancelled) {
+        return;
+      }
+      lastAgentSessionHydrateKeyRef.current = ws;
+      if (!summary.hasPersistedSession || summary.transcriptTail.length === 0) {
+        setShowPersistedAgentSessionBanner(false);
+        setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT, streaming: false }]);
+        return;
+      }
+      setShowPersistedAgentSessionBanner(true);
+      const hydrated = summary.transcriptTail.map((line, idx) => transcriptLineToTimelineEntry(line, idx));
+      setEntries([
+        ...hydrated,
+        { id: "greeting-initial", role: "agent", text: GREETING_TEXT, streaming: false }
+      ]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, bootstrap?.workspaceRoot, agentSessionHydrateEpoch]);
+
   const chatDisabled = useMemo(() => {
     if (!bootstrap) {
       return true;
@@ -926,6 +981,9 @@ export function App() {
       activeStreamEntryIdRef.current = null;
       pendingReplyIdRef.current = null;
       eventSeqRef.current = 0;
+      lastAgentSessionHydrateKeyRef.current = "";
+      setShowPersistedAgentSessionBanner(false);
+      pendingAgentSessionIntentRef.current = "auto";
       setSessionTemplateMode(null);
       setSessionWidgetSize(null);
       setSessionProjectType(null);
@@ -940,6 +998,12 @@ export function App() {
 
   function postStatus(text: string) {
     setEntries((prev) => [...prev, { id: `status-${Date.now()}`, role: "status", text }]);
+  }
+
+  function takeAgentSessionIntentForNextPrompt(): AgentSessionIntent {
+    const intent = pendingAgentSessionIntentRef.current;
+    pendingAgentSessionIntentRef.current = "auto";
+    return intent;
   }
 
   async function submitPrompt(request: PromptRequest) {
@@ -1134,6 +1198,7 @@ export function App() {
     }
     const current = prompt.trim();
     setPrompt("");
+    setShowPersistedAgentSessionBanner(false);
     setEntries((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", text: current }]);
 
     if (bootstrap?.workspaceRoot) {
@@ -1142,7 +1207,8 @@ export function App() {
         workspacePath: bootstrap.workspaceRoot,
         templateMode: sessionTemplateMode ?? undefined,
         widgetSize: sessionWidgetSize ?? undefined,
-        projectType: sessionProjectType ?? undefined
+        projectType: sessionProjectType ?? undefined,
+        agentSession: { intent: takeAgentSessionIntentForNextPrompt() }
       });
       return;
     }
@@ -1349,6 +1415,54 @@ export function App() {
               ) : null}
             </div>
           </div>
+
+          {showPersistedAgentSessionBanner ? (
+            <div className="flex shrink-0 flex-col gap-2 rounded-lg border border-edge bg-page p-3 text-xs">
+              <div className="font-medium text-fg-strong">Saved agent session in this folder</div>
+              <p className="m-0 text-[var(--color-text-subtle)]">
+                Continue your previous conversation with the model, or start a new session (archives the old
+                transcript and logs under <code className="text-[11px]">.dartsnut/agent-session/archives/</code>
+                ).
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-edge bg-[var(--color-app-btn-bg)] px-2.5 py-1 text-[12px] font-medium text-fg-strong hover:bg-[var(--color-app-btn-bg-hover)]"
+                  onClick={() => {
+                    pendingAgentSessionIntentRef.current = "resume";
+                    setShowPersistedAgentSessionBanner(false);
+                  }}
+                >
+                  Continue session
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-edge bg-transparent px-2.5 py-1 text-[12px] font-medium text-fg-strong hover:bg-[var(--color-app-btn-bg-hover)]"
+                  onClick={async () => {
+                    if (!api) {
+                      return;
+                    }
+                    const res = await api.resetWorkspaceSession();
+                    if (!res.ok) {
+                      postStatus(
+                        res.reason === "no_workspace"
+                          ? "No workspace selected."
+                          : "Session reset is disabled for this workspace."
+                      );
+                      return;
+                    }
+                    pendingAgentSessionIntentRef.current = "fresh";
+                    setShowPersistedAgentSessionBanner(false);
+                    lastAgentSessionHydrateKeyRef.current = "";
+                    setAgentSessionHydrateEpoch((n) => n + 1);
+                    setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT, streaming: false }]);
+                  }}
+                >
+                  New session
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           <section
             className={cn(

@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
-import type { ChatMessage, CompletionOptions, CompletionResult } from "../src/providerClient";
+import type { ChatMessage, CompletionOptions, CompletionProvider, CompletionResult } from "../src/providerClient";
 import { SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
+import { AgentSessionPersistence } from "../src/agentSessionPersistence";
 
 function textOnly(content: string): CompletionResult {
   return { content, toolCalls: [] };
@@ -586,5 +587,42 @@ describe("SessionEngine tool loop", () => {
 
     const response = await engine.runPrompt("try load display mapping", () => {});
     expect(response).toContain("Noted denial.");
+  });
+});
+
+class CountingTextProvider implements CompletionProvider {
+  calls = 0;
+  lastMessages: ChatMessage[] = [];
+
+  async complete(messages: ChatMessage[], _options?: CompletionOptions): Promise<CompletionResult> {
+    this.calls += 1;
+    this.lastMessages = messages;
+    return textOnly(`Reply ${this.calls}`);
+  }
+}
+
+describe("SessionEngine workspace persistence", () => {
+  it("sends prior user turns on the next runPrompt when persistence is enabled", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-persist-"));
+    const persistence = new AgentSessionPersistence(tempRoot);
+    const provider = new CountingTextProvider();
+    const engine = new SessionEngine({
+      provider,
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant.",
+      sessionPersistence: persistence,
+      sessionTemplateMode: "game-creator",
+      sessionSection: "game-creator"
+    });
+
+    await engine.runPrompt("first line", () => {});
+    await engine.runPrompt("second line", () => {});
+
+    const userLines = provider.lastMessages
+      .filter((m): m is Extract<ChatMessage, { role: "user" }> => m.role === "user")
+      .map((m) => m.content);
+    expect(userLines.some((c) => c.includes("first line"))).toBe(true);
+    expect(userLines.some((c) => c.includes("second line"))).toBe(true);
+    expect(fs.existsSync(path.join(tempRoot, ".dartsnut", "agent-session", "conversation.json"))).toBe(true);
   });
 });

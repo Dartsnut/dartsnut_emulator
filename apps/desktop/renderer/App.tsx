@@ -96,12 +96,20 @@ const GREETING_TEXT =
 const chromeIconBtnClass =
   "inline-flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border-0 bg-transparent p-0 text-[var(--color-app-btn-text)] [app-region:no-drag] [-webkit-app-region:no-drag] hover:enabled:bg-[var(--color-app-btn-bg-hover)] hover:enabled:text-[var(--color-app-btn-text-hover)] focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45";
 
+function hasPrimaryShortcutModifier(event: { metaKey: boolean; ctrlKey: boolean }): boolean {
+  const isMac = navigator.platform.toLowerCase().includes("mac");
+  return isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+}
+
 function isSettingsShortcut(event: KeyboardEvent): boolean {
   if (event.key !== ",") {
     return false;
   }
-  const isMac = navigator.platform.toLowerCase().includes("mac");
-  return isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+  return hasPrimaryShortcutModifier(event);
+}
+
+function isComposerSendShortcut(event: { key: string; metaKey: boolean; ctrlKey: boolean }): boolean {
+  return event.key === "Enter" && hasPrimaryShortcutModifier(event);
 }
 
 function maskApiKey(value: string): string {
@@ -1461,7 +1469,7 @@ export function App() {
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
+                  if (isComposerSendShortcut(event)) {
                     event.preventDefault();
                     void handleSend();
                   }

@@ -1,6 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   type AgentEvent,
   type AssetManifest,
@@ -20,7 +18,8 @@ import { AssetManagerPanel } from "./AssetManagerPanel";
 import { cn } from "./cn";
 import { DeployPanel } from "./DeployPanel";
 import { EmulatorPanel } from "./EmulatorPanel";
-import { highlightDiffLine, languageFromPath } from "./highlightDiffLine";
+import type { DiffLine } from "./FinalDiffPreview";
+import { languageFromPath } from "./languageFromPath";
 import { ThemeSwitcherIcon } from "./ThemeSwitcher";
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
@@ -29,6 +28,9 @@ import { useWindowChromeInsets } from "./useWindowChromeInsets";
 const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
 
 const CREATION_INTAKE_PROJECT_TYPES: readonly ProjectType[] = ["game", "widget"];
+
+const AgentMarkdownRenderer = lazy(() => import("./AgentMarkdownRenderer"));
+const FinalDiffPreview = lazy(() => import("./FinalDiffPreview"));
 
 function projectTypeChipLabel(pt: ProjectType): string {
   return pt === "game" ? "Game" : "Widget";
@@ -1761,9 +1763,20 @@ function textLooksLikeToolEnvelopeDraft(text: string): boolean {
 
 function AgentMarkdownBody({ source }: { source: string }) {
   return (
-    <div className="agent-markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{source}</ReactMarkdown>
-    </div>
+    <Suspense fallback={<div className="agent-markdown whitespace-pre-wrap">{source}</div>}>
+      <AgentMarkdownRenderer source={source} />
+    </Suspense>
+  );
+}
+
+function DiffPreviewFallback({ lines, truncated }: { lines: DiffLine[]; truncated: boolean }) {
+  return (
+    <>
+      <pre className="entry-json">
+        {lines.map((line) => `${line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}${line.text}`).join("\n")}
+      </pre>
+      {truncated ? <div className="diff-truncation">Additional changes not shown.</div> : null}
+    </>
   );
 }
 
@@ -1830,48 +1843,17 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
                   pathParts && pathParts.length > 0 ? pathParts[pathParts.length - 1]! : "file";
                 const lang = languageFromPath(action.path);
                 return (
-                  <>
-                    <div
-                      className={`final-diff-card${isNewFileWrite(action) ? " final-diff-card--new-file" : ""}`}
-                    >
-                      <header className="final-diff-header">
-                        <span className="final-diff-title">
-                          <span className="final-diff-hash">#</span>
-                          <span className="final-diff-filename">{fileLabel}</span>
-                        </span>
-                        <span className="final-diff-stats">
-                          {addCount > 0 ? (
-                            <span className="final-diff-stat final-diff-stat--add">+{addCount}</span>
-                          ) : null}
-                          {removeCount > 0 ? (
-                            <span className="final-diff-stat final-diff-stat--remove">-{removeCount}</span>
-                          ) : null}
-                        </span>
-                      </header>
-                      <div className="final-diff-body">
-                        {diff.lines.map((line, lineIdx) => (
-                          <div
-                            key={`${line.kind}-${lineIdx}`}
-                            className={`final-diff-line final-diff-line--${line.kind}`}
-                          >
-                            <span className="final-diff-prefix">
-                              {line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}
-                            </span>
-                            <code
-                              className="final-diff-code"
-                              dangerouslySetInnerHTML={{
-                                __html: highlightDiffLine(line.text, lang)
-                              }}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                      <div className="final-diff-chevron" aria-hidden />
-                    </div>
-                    {diff.truncated ? (
-                      <div className="diff-truncation">Additional changes not shown.</div>
-                    ) : null}
-                  </>
+                  <Suspense fallback={<DiffPreviewFallback lines={diff.lines} truncated={diff.truncated} />}>
+                    <FinalDiffPreview
+                      addCount={addCount}
+                      fileLabel={fileLabel}
+                      isNewFile={isNewFileWrite(action)}
+                      lang={lang}
+                      lines={diff.lines}
+                      removeCount={removeCount}
+                      truncated={diff.truncated}
+                    />
+                  </Suspense>
                 );
               })()}
             </>

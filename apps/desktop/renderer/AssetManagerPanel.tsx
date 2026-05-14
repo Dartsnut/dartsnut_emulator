@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "./cn";
+import { getMissingPreviewReads, getPreviewCacheKey } from "./assetPreviewCache";
 import type {
   AssetBindError,
   AssetBindErrorCode,
@@ -83,19 +84,14 @@ export function AssetManagerPanel({
     if (!manifest || !workspacePath || !api?.assets?.readPreview) {
       return;
     }
+    const readPlan = getMissingPreviewReads(manifest, previewDataUrls);
+    if (readPlan.length === 0) {
+      return;
+    }
     let cancelled = false;
     void (async () => {
       const updates: Record<string, string | null> = {};
-      for (const slot of manifest.slots) {
-        const framePath = slot.binding?.frames[0];
-        const cacheKey = `${slot.id}:${framePath ?? "none"}`;
-        if (!framePath) {
-          updates[cacheKey] = null;
-          continue;
-        }
-        if (previewDataUrls[cacheKey] !== undefined) {
-          continue;
-        }
+      for (const { cacheKey, framePath } of readPlan) {
         const result = await api.assets.readPreview({ workspacePath, framePath });
         if (cancelled) {
           return;
@@ -253,7 +249,7 @@ export function AssetManagerPanel({
           const error = errors[slot.id];
           const busy = inFlight.slotId === slot.id;
           const pending = pendingSet.has(slot.id);
-          const cacheKey = `${slot.id}:${slot.binding?.frames[0] ?? "none"}`;
+          const cacheKey = getPreviewCacheKey(slot.id, slot.binding?.frames[0]);
           const previewSrc = slot.binding ? previewDataUrls[cacheKey] ?? null : null;
           return (
             <li

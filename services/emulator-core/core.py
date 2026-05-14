@@ -60,6 +60,18 @@ class EmulatorCore:
         self._darts: list[list[int]] = [[-1, -1] for _ in range(12)]
         self._init_shared_memory()
 
+    def _queue_bridge_log(self, text: str, source: str = "stdout") -> None:
+        trimmed = text.strip()
+        if not trimmed:
+            return
+        self._pending_widget_logs.append(
+            {
+                "source": source,
+                "text": f"[bridge] {trimmed}",
+                "timestampMs": int(time.time() * 1000),
+            }
+        )
+
     def _cleanup_shared_memory_name(self, name: str) -> None:
         try:
             existing = shared_memory.SharedMemory(name=name)
@@ -129,10 +141,15 @@ class EmulatorCore:
         if self.widget_process is None:
             return
         if self.widget_process.poll() is None:
+            self._queue_bridge_log("Stopping running widget process.")
             self.widget_process.terminate()
             try:
                 self.widget_process.wait(timeout=2)
             except subprocess.TimeoutExpired:
+                self._queue_bridge_log(
+                    "Widget process did not exit after terminate(); killing.",
+                    source="stderr",
+                )
                 self.widget_process.kill()
                 try:
                     self.widget_process.wait(timeout=2)
@@ -149,11 +166,17 @@ class EmulatorCore:
         # Always refresh conf.json from disk so reload_widget picks up a file created after the first load.
         self.load_widget_config(self.current_path, self.current_params)
 
+        is_restart = self.widget_process is not None and self.widget_process.poll() is None
+        target_type = self.state.widgetType or "widget"
+        self._queue_bridge_log(
+            f"{'Restarting' if is_restart else 'Launching'} {target_type} from {self.current_path}."
+        )
         self.stop_widget_process()
         time.sleep(0.2)
+        launch_cwd = os.path.join(self.workspace_root, self.current_path)
         command = [
             sys.executable,
-            os.path.join(self.workspace_root, self.current_path, "main.py"),
+            os.path.join(launch_cwd, "main.py"),
             "--params",
             json.dumps(self.current_params),
             "--shm",
@@ -167,10 +190,11 @@ class EmulatorCore:
         child_env.setdefault("SDL_AUDIODRIVER", "dummy")
         child_env.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
         child_env.setdefault("PYTHONUNBUFFERED", "1")
+        self._queue_bridge_log(f"launch command cwd={launch_cwd} argv={json.dumps(command)}")
 
         self.widget_process = subprocess.Popen(
             command,
-            cwd=os.path.join(self.workspace_root, self.current_path),
+            cwd=launch_cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -181,6 +205,10 @@ class EmulatorCore:
         self.state.lastError = None
         self._widget_stream_tail = ""
         self._start_widget_log_readers()
+        pid = getattr(self.widget_process, "pid", None)
+        self._queue_bridge_log(
+            f"Child process started{f' (pid={pid})' if pid is not None else ''}."
+        )
 
     def _pump_widget_stream(self, stream: Any, source: str) -> None:
         try:
@@ -232,6 +260,7 @@ class EmulatorCore:
                 if not isinstance(path, str):
                     raise ValueError("set_path requires string path")
                 self.load_widget_config(path, self.current_params)
+                self._queue_bridge_log(f"set_path -> {path}")
             elif action == "set_params":
                 params = command.get("params")
                 if not isinstance(params, dict):
@@ -239,6 +268,7 @@ class EmulatorCore:
                 self.current_params = params
                 self.state.status = "Params updated"
             elif action == "stop_widget":
+                self._queue_bridge_log("stop_widget requested")
                 self.stop_widget_process()
                 self.current_path = None
                 self.current_params = {}
@@ -252,6 +282,9 @@ class EmulatorCore:
                 self.state.status = "Idle"
             elif action == "reload_widget":
                 self.state.lastError = None
+                self._queue_bridge_log(
+                    f"reload_widget requested for {self.current_path or '(no path set)'}"
+                )
                 self.start_widget_process_for_current()
             elif action == "capture_screenshot":
                 filepath = self._capture_screenshot_png()
@@ -301,6 +334,10 @@ class EmulatorCore:
             else:
                 raise ValueError(f"Unsupported command: {action}")
         except Exception as exc:
+            self._queue_bridge_log(
+                f"{action or 'unknown'} failed: {exc}",
+                source="stderr",
+            )
             self.state.lastError = str(exc)
             self.state.status = "Command failed"
         return self.snapshot()

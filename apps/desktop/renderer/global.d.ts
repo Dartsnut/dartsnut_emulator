@@ -23,7 +23,8 @@ import type {
   DeployActionResponse,
   DeployLaunchRequest,
   WindowChromeInsets,
-  type ShellUiTheme
+  type ShellUiTheme,
+  type MainProcessConsoleMirrorPayload
 } from "@dartsnut/shared-ipc";
 import type {
   EmulatorCommand,
@@ -49,6 +50,7 @@ declare global {
       pickPythonPath: () => Promise<{ accepted: boolean; selectedPath: string | null; error?: string }>;
       saveProviderSettings: (request: SaveProviderSettingsRequest) => Promise<ProviderSettings>;
       onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
+      onMainProcessConsoleMirror: (listener: (payload: MainProcessConsoleMirrorPayload) => void) => () => void;
       onWindowChromeInsets: (listener: (insets: WindowChromeInsets) => void) => () => void;
       onSessionReset: (listener: () => void) => () => void;
       onPythonRuntimeStatus: (listener: (status: string | null) => void) => () => void;

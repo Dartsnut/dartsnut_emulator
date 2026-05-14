@@ -37,8 +37,25 @@ export const IPCChannels = {
   deployReload: "deploy:reload",
   deployStop: "deploy:stop",
   /** Main → renderer: remote debug log line or status message. */
-  deployLog: "deploy:log"
+  deployLog: "deploy:log",
+  /**
+   * Main → renderer: mirror main-process terminal lines into DevTools.
+   * Payload must stay free of raw LLM request/response bodies (metadata and safe summaries only).
+   */
+  mainProcessConsoleMirror: "agent:main-process-console-mirror"
 } as const;
+
+/** Main → renderer mirror for DevTools; never include raw chat payloads. */
+export type MainProcessConsoleMirrorPayload = {
+  level: "log" | "info" | "debug" | "warn" | "error";
+  /**
+   * Optional first `console.*` argument. When empty, only `message` is logged (one string, matches
+   * `console.log(fullLine)` in the main process).
+   */
+  prefix: string;
+  /** Log body: either the second argument next to `prefix`, or the full line when `prefix` is empty. */
+  message: string;
+};
 
 /** Padding (logical px) that MUST stay clear of traffic lights / caption overlay. */
 export interface WindowChromeInsets {

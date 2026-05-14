@@ -35,7 +35,8 @@ import {
   type WidgetSize,
   type ShellUiTheme,
   type WindowChromeInsets,
-  type SendPromptResponse
+  type SendPromptResponse,
+  type MainProcessConsoleMirrorPayload
 } from "@dartsnut/shared-ipc";
 import {
   loadProviderConfig,
@@ -49,6 +50,7 @@ import {
   AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
   AGENT_TOOL_SCHEMAS
 } from "@dartsnut/agent-runtime";
+import { formatAgentEventForConsole } from "./agentEventConsole";
 import {
   EMULATOR_IPC_CHANNELS,
   type EmulatorCommand,
@@ -780,6 +782,50 @@ function sendToRenderer(channel: string, ...args: unknown[]) {
     return;
   }
   win.webContents.send(channel, ...(args as [unknown, ...unknown[]]));
+}
+
+function mirrorMainProcessConsole(payload: MainProcessConsoleMirrorPayload): void {
+  sendToRenderer(IPCChannels.mainProcessConsoleMirror, payload);
+}
+
+/** Logs to the Electron terminal and mirrors the same line into renderer DevTools (no raw LLM payloads). */
+function terminalAgentLifecycleLog(message: string, meta?: Record<string, unknown>): void {
+  const line = meta ? `${message} ${JSON.stringify(meta)}` : message;
+  console.log(line);
+  mirrorMainProcessConsole({ level: "log", prefix: "", message: line });
+}
+
+function logAgentEventToConsole(event: AgentEvent, mirrorToDevtools: boolean): void {
+  const formatted = formatAgentEventForConsole(event);
+  if (!formatted) {
+    return;
+  }
+  for (const line of formatted.lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    if (formatted.level === "error") {
+      console.error("[agent]", line);
+      if (mirrorToDevtools) {
+        mirrorMainProcessConsole({ level: "error", prefix: "[agent]", message: line });
+      }
+    } else if (formatted.level === "warn") {
+      console.warn("[agent]", line);
+      if (mirrorToDevtools) {
+        mirrorMainProcessConsole({ level: "warn", prefix: "[agent]", message: line });
+      }
+    } else if (formatted.level === "debug") {
+      console.debug("[agent]", line);
+      if (mirrorToDevtools) {
+        mirrorMainProcessConsole({ level: "debug", prefix: "[agent]", message: line });
+      }
+    } else {
+      console.info("[agent]", line);
+      if (mirrorToDevtools) {
+        mirrorMainProcessConsole({ level: "info", prefix: "[agent]", message: line });
+      }
+    }
+  }
 }
 
 /** Logical px; must match `titleBarOverlay.height` on Windows when overlay is enabled. */
@@ -1748,13 +1794,13 @@ ipcMain.handle(
         workspacePath: targetWorkspace,
         assetApply: { slotIds: requestedSlots, projectType }
       });
-      console.log("[agent] runPrompt asset-applier", {
+      terminalAgentLifecycleLog("[agent] runPrompt asset-applier", {
         slotIds: requestedSlots,
         projectType,
         promptChars: prompt.length
       });
       await session.runPrompt(prompt, (agentEvent: AgentEvent) => {
-        console.log("[agent-stream]", JSON.stringify(agentEvent));
+        logAgentEventToConsole(agentEvent, true);
         sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
       });
       assetManager.clearPending(targetWorkspace, requestedSlots);
@@ -1775,7 +1821,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
   const runAbort = new AbortController();
   sendPromptAbortController = runAbort;
   const emitAgent = (agentEvent: AgentEvent) => {
-    console.log("[agent-stream]", JSON.stringify(agentEvent));
+    logAgentEventToConsole(agentEvent, true);
     sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
   };
   try {
@@ -1841,7 +1887,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         skipInitialWorkspaceResolve: true,
         skillBundleMode: "creation-intake"
       });
-      console.log("[agent] runPrompt creation-intake start");
+      terminalAgentLifecycleLog("[agent] runPrompt creation-intake start");
       await intakeSession.runPrompt(
         buildCreationIntakeUserPrompt(req.prompt, {
           widgetSizeFromPicker: req.intakeWidgetSizeChoice,
@@ -1873,7 +1919,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
           widgetSize: intakeState.widgetSize,
           workspacePath: workspaceRoot
         });
-        console.log("[agent] runPrompt chained creator", { templateMode });
+        terminalAgentLifecycleLog("[agent] runPrompt chained creator", { templateMode });
         await followUp.runPrompt(routed, emitAgent, runAbort.signal);
       }
     } else {
@@ -1882,7 +1928,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         hostIntakeToolHandler: sharedIntakeHandler
       });
       const prompt = buildRoutedPrompt(req);
-      console.log("[agent] runPrompt start", { promptChars: prompt.length });
+      terminalAgentLifecycleLog("[agent] runPrompt start", { promptChars: prompt.length });
       await session.runPrompt(prompt, emitAgent, runAbort.signal);
     }
 
@@ -1893,7 +1939,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown prompt error";
     const event: AgentEvent = { type: "error", message, at: Date.now() };
-    console.error("[agent-stream]", JSON.stringify(event));
+    logAgentEventToConsole(event, true);
     sendToRenderer(IPCChannels.subscribeEvents, event);
     return { ok: false };
   } finally {

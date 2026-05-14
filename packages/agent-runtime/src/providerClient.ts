@@ -56,23 +56,6 @@ export interface CompletionProvider {
   complete(messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult>;
 }
 
-/** Stable JSON.stringify; falls back to String() if a value is not serializable. */
-function safeStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function isRawDebugEnabled(): boolean {
-  const raw = process.env.AGENT_DEBUG_RAW;
-  if (raw === undefined) {
-    return !process.env.VITEST;
-  }
-  return raw !== "0" && raw.toLowerCase() !== "false" && raw !== "";
-}
-
 interface StreamingToolCallAccumulator {
   id: string;
   name: string;
@@ -165,10 +148,6 @@ export class ProviderClient implements CompletionProvider {
       ...(tools && tools.length > 0 ? { tools, tool_choice: "auto" as const } : {})
     };
 
-    if (isRawDebugEnabled()) {
-      console.log(`[agent-provider] chat.completions ${safeStringify({ ...common, stream: useStreaming })}`);
-    }
-
     if (!useStreaming) {
       const response = await this.openai.chat.completions.create({ ...common, stream: false }, { signal });
       const message = response.choices[0]?.message;
@@ -180,9 +159,6 @@ export class ProviderClient implements CompletionProvider {
       const reasoningContent = readReasoningContent(message);
       if (onChunk && trimmed.length > 0) {
         onChunk(trimmed);
-      }
-      if (isRawDebugEnabled()) {
-        console.log(`[agent-provider] response ${safeStringify({ stream: false, content: trimmed, toolCalls })}`);
       }
       return {
         content: trimmed,
@@ -226,9 +202,6 @@ export class ProviderClient implements CompletionProvider {
       }));
 
     const trimmed = fullText.trim();
-    if (isRawDebugEnabled()) {
-      console.log(`[agent-provider] response ${safeStringify({ stream: true, content: trimmed, toolCalls })}`);
-    }
     return {
       content: trimmed,
       toolCalls,

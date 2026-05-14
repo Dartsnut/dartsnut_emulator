@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   IPCChannels,
   type AgentEvent,
+  type MainProcessConsoleMirrorPayload,
   type ApplyAssetsRequest,
   type ApplyAssetsResponse,
   type BindSlotRequest,
@@ -67,6 +68,11 @@ const api = {
     const handler = (_: unknown, event: AgentEvent) => listener(event);
     ipcRenderer.on(IPCChannels.subscribeEvents, handler);
     return () => ipcRenderer.removeListener(IPCChannels.subscribeEvents, handler);
+  },
+  onMainProcessConsoleMirror: (listener: (payload: MainProcessConsoleMirrorPayload) => void) => {
+    const handler = (_: unknown, payload: MainProcessConsoleMirrorPayload) => listener(payload);
+    ipcRenderer.on(IPCChannels.mainProcessConsoleMirror, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.mainProcessConsoleMirror, handler);
   },
   onWindowChromeInsets: (listener: (insets: WindowChromeInsets) => void) => {
     const handler = (_: unknown, insets: WindowChromeInsets) => listener(insets);

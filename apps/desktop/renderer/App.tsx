@@ -11,10 +11,12 @@ import {
   type ProjectType,
   type PromptRequest,
   type SendPromptResponse,
+  type MainProcessConsoleMirrorPayload,
   stripIntakeUiMarkers,
   type WidgetSize
 } from "@dartsnut/shared-ipc";
 import { AssetManagerPanel } from "./AssetManagerPanel";
+import { isStructuredAgentEnvelopeText } from "../agentEventConsole";
 import { cn } from "./cn";
 import { DeployPanel } from "./DeployPanel";
 import { EmulatorPanel } from "./EmulatorPanel";
@@ -749,13 +751,6 @@ export function App() {
         setWorkspaceFolderPickerVisible(true);
         return;
       }
-      if (import.meta.env.DEV) {
-        if (event.type === "stream") {
-          console.debug("[agent-stream]", { type: "stream", deltaChars: event.delta.length, at: event.at });
-        } else {
-          console.debug("[agent-stream]", event);
-        }
-      }
       clearPendingReplyIndicator();
       if (event.type === "stream") {
         const streamId = activeStreamEntryIdRef.current;
@@ -804,21 +799,22 @@ export function App() {
         console.info("[python-runtime]", status);
       }
     });
-    const unsubscribePythonSetupLog = api.onEmulatorLog((entry) => {
-      if (!entry.text.startsWith("[python-setup]")) {
-        return;
-      }
+    const unsubscribeEmulatorConsoleLog = api.onEmulatorLog((entry) => {
       if (entry.source === "stderr") {
         console.warn(entry.text);
       } else {
         console.info(entry.text);
       }
     });
+    const unsubscribeMainConsoleMirror = api.onMainProcessConsoleMirror((payload) => {
+      printMainProcessMirrorToDevtools(payload);
+    });
     return () => {
       cancelStreamCoalesce();
       unsubscribe();
       unsubscribePythonRuntime();
-      unsubscribePythonSetupLog();
+      unsubscribeEmulatorConsoleLog();
+      unsubscribeMainConsoleMirror();
     };
   }, [api]);
 
@@ -1756,9 +1752,21 @@ function dedupeToolPlansLastWins(actions: ParsedAction[]): ParsedAction[] {
   return out;
 }
 
-/** Partial agent JSON while tokens arrive — avoid flashing the raw buffer as markdown. */
-function textLooksLikeToolEnvelopeDraft(text: string): boolean {
-  return text.includes("\"response\"") && (text.includes("\"tool\"") || text.includes("\"actions\""));
+function printMainProcessMirrorToDevtools(payload: MainProcessConsoleMirrorPayload): void {
+  const { level, prefix, message } = payload;
+  const impl =
+    level === "error"
+      ? console.error.bind(console)
+      : level === "warn"
+        ? console.warn.bind(console)
+        : level === "debug"
+          ? console.debug.bind(console)
+          : console.log.bind(console);
+  if (prefix.trim().length > 0) {
+    impl(prefix, message);
+  } else {
+    impl(message);
+  }
 }
 
 function AgentMarkdownBody({ source }: { source: string }) {
@@ -1790,7 +1798,7 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
     !leadText &&
     fileActions.length === 0 &&
     planActions.length === 0 &&
-    (!isStreaming || !textLooksLikeToolEnvelopeDraft(displayText));
+    !isStructuredAgentEnvelopeText(displayText);
 
   return (
     <div className="entry-content">

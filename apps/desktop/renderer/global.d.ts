@@ -8,13 +8,15 @@ import type {
   ManifestSnapshot,
   PickWorkspaceRequest,
   PickWorkspaceResponse,
-  IntakePickWorkspaceFolderResponse,
+  IntakeSubmitQuestionAnswerRequest,
+  IntakeSubmitQuestionAnswerResponse,
   PromptRequest,
   ProviderSettings,
   ReadPreviewRequest,
   ReadPreviewResponse,
   SaveProviderSettingsRequest,
   SendPromptResponse,
+  SaveTempWorkspaceResponse,
   UnbindSlotRequest,
   UnbindSlotResponse,
   DeployConnectRequest,
@@ -40,8 +42,11 @@ declare global {
       getWindowChromeInsets: () => Promise<WindowChromeInsets>;
       setShellUiTheme: (theme: ShellUiTheme) => Promise<void>;
       startNewProject: () => Promise<BootstrapState>;
+      saveTempWorkspace: () => Promise<SaveTempWorkspaceResponse>;
       pickWorkspace: (request?: PickWorkspaceRequest) => Promise<PickWorkspaceResponse>;
-      intakePickWorkspaceFolder: () => Promise<IntakePickWorkspaceFolderResponse>;
+      intakeSubmitQuestionAnswer: (
+        body: IntakeSubmitQuestionAnswerRequest
+      ) => Promise<IntakeSubmitQuestionAnswerResponse>;
       sendPrompt: (request: PromptRequest) => Promise<SendPromptResponse>;
       cancelAgent: () => Promise<{ ok: boolean }>;
       getProviderSettings: () => Promise<ProviderSettings>;

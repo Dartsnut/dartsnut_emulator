@@ -40,7 +40,8 @@ import {
   type SendPromptResponse,
   type MainProcessConsoleMirrorPayload,
   type IntakeSubmitQuestionAnswerRequest,
-  type IntakeSubmitQuestionAnswerResponse
+  type IntakeSubmitQuestionAnswerResponse,
+  type AgentSessionWorkspaceSummary
 } from "@dartsnut/shared-ipc";
 import {
   loadProviderConfig,
@@ -52,7 +53,10 @@ import {
   resolveSkillRouterPrompt,
   allowedDeferredSkillIdsForMode,
   AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
-  AGENT_TOOL_SCHEMAS
+  AGENT_TOOL_SCHEMAS,
+  AgentSessionPersistence,
+  isAgentSessionPersistenceDisabledByEnv,
+  type ChatMessage
 } from "@dartsnut/agent-runtime";
 import { formatAgentEventForConsole } from "./agentEventConsole";
 import {
@@ -1620,6 +1624,29 @@ function startPythonBridge() {
   });
 }
 
+function shouldAttachAgentSessionPersistence(workspaceForSession: string | null | undefined): boolean {
+  if (!workspaceForSession) {
+    return false;
+  }
+  if (isAgentSessionPersistenceDisabledByEnv()) {
+    return false;
+  }
+  const normalized = path.resolve(workspaceForSession);
+  if (normalized === path.resolve(getIntakePlaceholderWorkspacePath())) {
+    return false;
+  }
+  return true;
+}
+
+function buildWorkspaceSessionPersistence(
+  workspaceForSession: string | null | undefined
+): AgentSessionPersistence | undefined {
+  if (!shouldAttachAgentSessionPersistence(workspaceForSession)) {
+    return undefined;
+  }
+  return new AgentSessionPersistence(workspaceForSession!);
+}
+
 function buildSession(
   templateMode: PromptRequest["templateMode"] | undefined,
   extras?: {
@@ -1629,6 +1656,8 @@ function buildSession(
     hostAskQuestionHandler?: (args: Record<string, unknown>) => Promise<string>;
     skipInitialWorkspaceResolve?: boolean;
     skillBundleMode?: PromptRequest["templateMode"] | "creation-intake" | null;
+    sessionPersistence?: AgentSessionPersistence;
+    initialConversation?: ChatMessage[];
   }
 ): SessionEngine {
   const workspacePath = extras?.workspacePath ?? workspaceRoot;
@@ -1657,7 +1686,11 @@ function buildSession(
     hostIntakeToolHandler: extras?.hostIntakeToolHandler,
     hostAskQuestionHandler: extras?.hostAskQuestionHandler,
     hostReloadEmulatorHandler: intakeToolsOnly ? undefined : () => executeHostReloadEmulatorForAgent(),
-    skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve
+    skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve,
+    sessionPersistence: extras?.sessionPersistence,
+    initialConversation: extras?.initialConversation,
+    sessionTemplateMode: templateMode ?? null,
+    sessionSection: skillBundleMode === null ? null : String(skillBundleMode)
   });
 }
 
@@ -1771,6 +1804,44 @@ ipcMain.handle(IPCChannels.shellUiTheme, (_event: unknown, theme: unknown): void
 });
 
 ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());
+
+ipcMain.handle(IPCChannels.getWorkspaceSessionSummary, (): AgentSessionWorkspaceSummary => {
+  const ws = workspaceRoot;
+  if (!ws || !shouldAttachAgentSessionPersistence(ws)) {
+    return {
+      hasPersistedSession: false,
+      sessionId: null,
+      updatedAt: null,
+      templateMode: null,
+      transcriptTail: []
+    };
+  }
+  const persistence = new AgentSessionPersistence(ws);
+  const manifest = persistence.readManifest();
+  return {
+    hasPersistedSession: persistence.hasPersistedSession(),
+    sessionId: manifest?.sessionId ?? null,
+    updatedAt: manifest?.updatedAt ?? null,
+    templateMode: manifest?.templateMode ?? null,
+    transcriptTail: persistence.readTranscriptTail(200)
+  };
+});
+
+ipcMain.handle(
+  IPCChannels.resetWorkspaceSession,
+  (): { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" } => {
+    const ws = workspaceRoot;
+    if (!ws) {
+      return { ok: false, reason: "no_workspace" };
+    }
+    const persistence = buildWorkspaceSessionPersistence(ws);
+    if (!persistence) {
+      return { ok: false, reason: "persistence_disabled" };
+    }
+    persistence.archiveOrResetSession("user-reset");
+    return { ok: true };
+  }
+);
 
 ipcMain.handle(IPCChannels.deployGetEligibility, (): DeployEligibility => readDeployEligibilityFromWorkspace());
 
@@ -2245,6 +2316,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
           (intakeState.projectType === "widget" && intakeState.widgetSize));
 
       if (canChain && intakeState.projectType && workspaceRoot) {
+        const intent = req.agentSession?.intent ?? "auto";
         const templateMode =
           intakeState.projectType === "game" ? "game-creator" : "widget-creator";
         sessionRouting = {
@@ -2252,7 +2324,18 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
           projectType: intakeState.projectType,
           widgetSize: intakeState.projectType === "widget" ? intakeState.widgetSize : undefined
         };
-        const followUp = buildSession(templateMode);
+        const followUpPersistence = buildWorkspaceSessionPersistence(workspaceRoot);
+        if (intent === "fresh" && followUpPersistence) {
+          followUpPersistence.archiveOrResetSession("renderer-fresh");
+        }
+        const followUpInitial =
+          followUpPersistence && intent !== "fresh" ? followUpPersistence.readConversation() : [];
+        const followUp = buildSession(templateMode, {
+          completionTools: AGENT_TOOL_SCHEMAS,
+          hostIntakeToolHandler: sharedIntakeHandler,
+          sessionPersistence: followUpPersistence,
+          initialConversation: followUpInitial
+        });
         const routed = buildRoutedPrompt({
           prompt: buildPostIntakeCreatorUserPrompt(req.prompt),
           templateMode,
@@ -2264,9 +2347,18 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         await followUp.runPrompt(routed, emitAgent, runAbort.signal);
       }
     } else {
+      const intent = req.agentSession?.intent ?? "auto";
+      const persistence = buildWorkspaceSessionPersistence(workspaceRoot);
+      if (intent === "fresh" && persistence) {
+        persistence.archiveOrResetSession("renderer-fresh");
+      }
+      const initialConversation =
+        persistence && intent !== "fresh" ? persistence.readConversation() : [];
       const session = buildSession(req.templateMode, {
         completionTools: AGENT_TOOL_SCHEMAS,
-        hostIntakeToolHandler: sharedIntakeHandler
+        hostIntakeToolHandler: sharedIntakeHandler,
+        sessionPersistence: persistence,
+        initialConversation
       });
       const prompt = buildRoutedPrompt(req);
       terminalAgentLifecycleLog("[agent] runPrompt start", { promptChars: prompt.length });

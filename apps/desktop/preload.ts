@@ -28,7 +28,8 @@ import {
   type DeployActionResponse,
   type DeployLaunchRequest,
   type WindowChromeInsets,
-  type ShellUiTheme
+  type ShellUiTheme,
+  type AgentSessionWorkspaceSummary
 } from "@dartsnut/shared-ipc";
 import {
   EMULATOR_IPC_CHANNELS,
@@ -40,6 +41,12 @@ import {
 
 const api = {
   getBootstrapState: () => ipcRenderer.invoke(IPCChannels.bootstrapState) as Promise<BootstrapState>,
+  getWorkspaceSessionSummary: () =>
+    ipcRenderer.invoke(IPCChannels.getWorkspaceSessionSummary) as Promise<AgentSessionWorkspaceSummary>,
+  resetWorkspaceSession: () =>
+    ipcRenderer.invoke(IPCChannels.resetWorkspaceSession) as Promise<
+      { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" }
+    >,
   getWindowChromeInsets: () =>
     ipcRenderer.invoke(IPCChannels.windowChromeInsets) as Promise<WindowChromeInsets>,
   setShellUiTheme: (theme: ShellUiTheme) =>

@@ -6,6 +6,8 @@
 .env.macos-notarize
 .electron-cache
 .cursor
+# Per-workspace agent session + transaction logs (when a project folder is opened in-repo)
+**/.dartsnut/
 .dartsnut-chat-intake-placeholder
 .DS_Store
 __pycache__
@@ -19,3 +21,4 @@ config
 logs
 test_configs
 docs/superpowers
+openspec

@@ -1,7 +1,7 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
-import { INTAKE_PICK_WORKSPACE_STATUS_LABEL } from "@dartsnut/shared-ipc";
 import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
 import type {
   ChatMessage,
@@ -13,6 +13,8 @@ import type {
 } from "./providerClient";
 import type { DeferredSkillId } from "./skillBundle";
 import { DEFERRED_SKILL_IDS, readDeferredSkillMarkdown } from "./skillBundle";
+import type { AgentSessionPersistence } from "./agentSessionPersistence";
+import { AGENT_SESSION_SCHEMA_VERSION } from "./agentSessionPersistence";
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import { WorkspacePolicy } from "./workspacePolicy";
 
@@ -50,6 +52,10 @@ type ToolAction =
     args: Record<string, unknown>;
   }
   | {
+    tool: "dartsnut_ask_question";
+    args: Record<string, unknown>;
+  }
+  | {
     tool: "reload_emulator";
   }
   | {
@@ -64,6 +70,9 @@ interface AgentActionEnvelope {
 
 /** Host (Electron main) executes `dartsnut_project_intake`; returns JSON text for the model. */
 export type HostIntakeToolHandler = (args: Record<string, unknown>) => Promise<string>;
+
+/** Host (Electron main) executes `dartsnut_ask_question` during creation intake; returns JSON text for the model. */
+export type HostAskQuestionHandler = (args: Record<string, unknown>) => Promise<string>;
 
 /** Host (Electron main) reloads the embedded emulator; returns JSON text for the model. */
 export type HostReloadEmulatorHandler = () => Promise<string>;
@@ -85,13 +94,73 @@ export interface SessionEngineOptions {
   /** When set, replaces the default {@link AGENT_TOOL_SCHEMAS} on completion requests. */
   completionTools?: ChatCompletionTool[];
   hostIntakeToolHandler?: HostIntakeToolHandler;
+  hostAskQuestionHandler?: HostAskQuestionHandler;
   hostReloadEmulatorHandler?: HostReloadEmulatorHandler;
   /** Skip the initial `workspacePolicy.resolveWithinRoot(".")` probe (intake placeholder roots). */
   skipInitialWorkspaceResolve?: boolean;
+  /** When set, rolling chat (user/assistant/tool) is persisted under the workspace and replayed on resume. */
+  sessionPersistence?: AgentSessionPersistence;
+  /** Stored in session manifest for debugging / fine-tuning metadata. */
+  sessionTemplateMode?: string | null;
+  sessionSection?: string | null;
+  /** Prior turns loaded from disk (or empty); excluded from system prompts. */
+  initialConversation?: ChatMessage[];
 }
 
 export class SessionEngine {
-  constructor(private readonly options: SessionEngineOptions) { }
+  /** User / assistant / tool messages for this workspace session (excludes system prompts). */
+  private rollingConversation: ChatMessage[];
+
+  constructor(private readonly options: SessionEngineOptions) {
+    this.rollingConversation = [...(options.initialConversation ?? [])];
+  }
+
+  private buildSystemMessages(): ChatMessage[] {
+    return [
+      { role: "system", content: this.options.skillPrompt },
+      { role: "system", content: this.buildToolPrompt() },
+      { role: "system", content: SessionEngine.userLanguageMirrorSystemPrompt }
+    ];
+  }
+
+  private emitTransaction(record: Record<string, unknown>): void {
+    this.options.sessionPersistence?.appendTransaction({ at: Date.now(), ...record });
+  }
+
+  private finalizeWorkspacePersistence(
+    messages: ChatMessage[],
+    systemSlots: number,
+    finalUserVisibleSummary: string
+  ): void {
+    this.rollingConversation = messages.slice(systemSlots);
+    const p = this.options.sessionPersistence;
+    if (!p) {
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const existing = p.readManifest();
+    const sessionId = existing?.sessionId ?? randomUUID();
+    const createdAt = existing?.createdAt ?? nowIso;
+    p.writeManifestAtomic({
+      schemaVersion: AGENT_SESSION_SCHEMA_VERSION,
+      sessionId,
+      createdAt,
+      updatedAt: nowIso,
+      templateMode: this.options.sessionTemplateMode ?? null,
+      section: this.options.sessionSection ?? null
+    });
+    p.saveConversationAtomic(this.rollingConversation);
+    const trimmed =
+      finalUserVisibleSummary.length > 50_000
+        ? `${finalUserVisibleSummary.slice(0, 50_000)}…`
+        : finalUserVisibleSummary;
+    p.appendTranscript({ kind: "assistant", at: Date.now(), text: trimmed });
+    p.appendTransaction({
+      type: "turn.end",
+      at: Date.now(),
+      assistantSummaryChars: trimmed.length
+    });
+  }
 
   private normalizeAction(rawAction: unknown): ToolAction {
     if (!rawAction || typeof rawAction !== "object") {
@@ -184,6 +253,17 @@ export class SessionEngine {
       }
       return { tool: "dartsnut_project_intake", args };
     }
+    if (tool === "dartsnut_ask_question") {
+      const record = action as Record<string, unknown>;
+      const { tool: _ignored, ...args } = record;
+      const qid = args.question_id;
+      if (qid !== "project_type" && qid !== "widget_display_size") {
+        throw new Error(
+          "dartsnut_ask_question requires question_id project_type or widget_display_size."
+        );
+      }
+      return { tool: "dartsnut_ask_question", args };
+    }
     if (tool === "reload_emulator") {
       return { tool: "reload_emulator" };
     }
@@ -194,6 +274,7 @@ export class SessionEngine {
     const completionTools = this.options.completionTools ?? AGENT_TOOL_SCHEMAS;
     const names = completionTools.map((t) => (t.type === "function" ? t.function.name : ""));
     const hasIntake = names.includes("dartsnut_project_intake");
+    const hasAskQuestion = names.includes("dartsnut_ask_question");
     const hasReload = names.includes("reload_emulator");
     const fileToolLine = `You have native tools available via the API: ${names.filter(Boolean).join(", ")}.`;
     const lines = [
@@ -209,7 +290,12 @@ export class SessionEngine {
     ];
     if (hasIntake) {
       lines.push(
-        "Intake: **dartsnut_project_intake** is host-executed — use `set_project_type`, `set_widget_size`, `pick_workspace`, and `read_workspace_conf`. In Dartsnut Chat creation intake, **Game / Widget** and **size** chip rows appear only after the assistant includes the marker lines defined in the user intake prompt (`@dartsnut-intake-ui:…`). Never assume a widget display size — ask unless the user message already names a supported WxH. After `read_workspace_conf`, ask at most one focused question when the folder already has a valid `conf.json`, invalid JSON, or a type/size mismatch."
+        "Intake: **dartsnut_project_intake** is host-executed — use `set_project_type`, `set_widget_size`, and `read_workspace_conf` (the host allocates an empty temp workspace automatically the first time `read_workspace_conf` runs while no folder is selected)."
+      );
+    }
+    if (hasAskQuestion) {
+      lines.push(
+        "Intake UI: **dartsnut_ask_question** is host-executed and **blocking** — it shows Game/Widget chips or widget size chips and returns only after the user answers. Use it whenever you need that choice and cannot take it reliably from the user's text alone. Never assume a widget display size without evidence. After `read_workspace_conf`, ask at most one focused question when the folder already has a valid `conf.json`, invalid JSON, or a type/size mismatch."
       );
     }
     if (hasReload) {
@@ -461,6 +547,12 @@ export class SessionEngine {
       }
       return this.options.hostIntakeToolHandler(action.args);
     }
+    if (action.tool === "dartsnut_ask_question") {
+      if (!this.options.hostAskQuestionHandler) {
+        throw new Error("dartsnut_ask_question is not enabled for this session.");
+      }
+      return this.options.hostAskQuestionHandler(action.args);
+    }
     if (action.tool === "reload_emulator") {
       if (!this.options.hostReloadEmulatorHandler) {
         throw new Error("reload_emulator is not enabled for this session.");
@@ -589,10 +681,11 @@ export class SessionEngine {
     }
     if (action.tool === "dartsnut_project_intake") {
       const step = typeof action.args.action === "string" ? action.args.action : "intake";
-      if (step === "pick_workspace") {
-        return INTAKE_PICK_WORKSPACE_STATUS_LABEL;
-      }
       return `Ran project intake (${step})`;
+    }
+    if (action.tool === "dartsnut_ask_question") {
+      const qid = typeof action.args.question_id === "string" ? action.args.question_id : "";
+      return `Asked intake question (${qid || "unknown"})`;
     }
     if (action.tool === "reload_emulator") {
       return "Reloaded emulator";
@@ -724,6 +817,7 @@ export class SessionEngine {
         (value): value is ToolAction =>
           value !== null &&
           value.tool !== "dartsnut_project_intake" &&
+          value.tool !== "dartsnut_ask_question" &&
           value.tool !== "reload_emulator" &&
           value.tool !== "get_dartsnut_skill"
       );
@@ -761,12 +855,27 @@ export class SessionEngine {
 
     const completionTools = this.options.completionTools ?? AGENT_TOOL_SCHEMAS;
 
+    const systemMessages = this.buildSystemMessages();
+    const systemSlots = systemMessages.length;
     const messages: ChatMessage[] = [
-      { role: "system", content: this.options.skillPrompt },
-      { role: "system", content: this.buildToolPrompt() },
-      { role: "system", content: SessionEngine.userLanguageMirrorSystemPrompt },
+      ...systemMessages,
+      ...this.rollingConversation,
       { role: "user", content: prompt }
     ];
+
+    const turnCorrelationId = randomUUID();
+    this.emitTransaction({
+      type: "turn.start",
+      correlationId: turnCorrelationId,
+      promptChars: prompt.length,
+      rollingMessages: this.rollingConversation.length
+    });
+    const p = this.options.sessionPersistence;
+    if (p) {
+      p.ensureDir();
+      const userLine = prompt.length > 50_000 ? `${prompt.slice(0, 50_000)}…` : prompt;
+      p.appendTranscript({ kind: "user", at: Date.now(), text: userLine });
+    }
 
     const maxToolRounds = SessionEngine.resolveToolLoopMax();
 
@@ -778,11 +887,26 @@ export class SessionEngine {
         onEvent({ type: "status", message: "Agent is thinking...", at: Date.now() });
       }
 
+      this.emitTransaction({
+        type: "completion.request",
+        correlationId: turnCorrelationId,
+        step,
+        messageCount: messages.length
+      });
+
       const completion = await this.options.provider.complete(messages, {
         tools: completionTools,
         onChunk: (delta) => {
           onEvent({ type: "stream", delta, at: Date.now() });
         }
+      });
+
+      this.emitTransaction({
+        type: "completion.response",
+        correlationId: turnCorrelationId,
+        step,
+        toolCallCount: completion.toolCalls.length,
+        contentLength: completion.content.length
       });
 
       if (completion.toolCalls.length > 0) {
@@ -793,17 +917,32 @@ export class SessionEngine {
           await this.streamNativeToolEnvelopePreview(completion.content, envelope, onEvent);
         }
         for (const outcome of outcomes) {
+          this.emitTransaction({
+            type: "tool.call",
+            correlationId: turnCorrelationId,
+            id: outcome.toolCall.id,
+            name: outcome.toolCall.name,
+            argsChars: outcome.toolCall.argumentsJson.length
+          });
+          this.emitTransaction({
+            type: "tool.result",
+            correlationId: turnCorrelationId,
+            id: outcome.toolCall.id,
+            name: outcome.toolCall.name,
+            resultChars: outcome.result.length
+          });
           if (outcome.action) {
-            const skipStatus =
-              outcome.action.tool === "dartsnut_project_intake" &&
-              outcome.action.args.action === "pick_workspace";
-            if (!skipStatus) {
-              onEvent({
-                type: "status",
-                message: this.describeStatusAction(outcome.action),
-                at: Date.now()
-              });
-            }
+            onEvent({
+              type: "status",
+              message: this.describeStatusAction(outcome.action),
+              at: Date.now()
+            });
+            p?.appendTranscript({
+              kind: "tool_status",
+              at: Date.now(),
+              text: this.describeStatusAction(outcome.action),
+              toolName: outcome.toolCall.name
+            });
           }
         }
         messages.push(assistantMessage);
@@ -817,6 +956,7 @@ export class SessionEngine {
 
       if (!merged) {
         onEvent({ type: "final", content: completion.content, at: Date.now() });
+        this.finalizeWorkspacePersistence(messages, systemSlots, completion.content);
         return completion.content;
       }
 
@@ -832,21 +972,31 @@ export class SessionEngine {
       if (actions.length === 0) {
         const finalText = merged.responseText || "Done.";
         onEvent({ type: "final", content: finalText, at: Date.now() });
+        this.finalizeWorkspacePersistence(messages, systemSlots, finalText);
         return finalText;
       }
 
       this.emitUiEnvelope(actions, merged.responseText, onEvent);
 
       for (const action of actions) {
-        const skipStatus =
-          action.tool === "dartsnut_project_intake" && action.args.action === "pick_workspace";
-        if (!skipStatus) {
-          onEvent({
-            type: "status",
-            message: this.describeStatusAction(action),
-            at: Date.now()
-          });
-        }
+        onEvent({
+          type: "status",
+          message: this.describeStatusAction(action),
+          at: Date.now()
+        });
+        const toolName = action.tool;
+        p?.appendTranscript({
+          kind: "tool_status",
+          at: Date.now(),
+          text: this.describeStatusAction(action),
+          toolName
+        });
+        this.emitTransaction({
+          type: "tool.call",
+          correlationId: turnCorrelationId,
+          name: toolName,
+          synthetic: true
+        });
       }
 
       const toolResults = await Promise.all(
@@ -860,6 +1010,15 @@ export class SessionEngine {
         })
       );
 
+      for (const row of toolResults) {
+        this.emitTransaction({
+          type: "tool.result",
+          correlationId: turnCorrelationId,
+          name: row.action.tool,
+          resultChars: row.result.length
+        });
+      }
+
       messages.push({
         role: "assistant",
         content: JSON.stringify(merged.originalAssistantPayload)
@@ -872,6 +1031,7 @@ export class SessionEngine {
 
     const fallback = "Tool loop limit reached before final response.";
     onEvent({ type: "error", message: fallback, at: Date.now() });
+    this.finalizeWorkspacePersistence(messages, systemSlots, fallback);
     return fallback;
   }
 }

@@ -12,6 +12,8 @@ export const IPCChannels = {
   /** Aborts the in-flight `sendPrompt` agent run (provider fetch + between-tool steps). */
   cancelAgent: "agent:cancel-agent",
   subscribeEvents: "agent:subscribe-events",
+  getWorkspaceSessionSummary: "agent:get-workspace-session-summary",
+  resetWorkspaceSession: "agent:reset-workspace-session",
   getProviderSettings: "agent:get-provider-settings",
   saveProviderSettings: "agent:save-provider-settings",
   getPythonRuntimeStatus: "agent:get-python-runtime-status",
@@ -94,12 +96,21 @@ export type SaveTempWorkspaceResponse =
       message?: string;
     };
 
+export type AgentSessionIntent = "auto" | "resume" | "fresh";
+
 export interface PromptRequest {
   prompt: string;
   projectType?: ProjectType;
   widgetSize?: WidgetSize;
   workspacePath?: string;
   templateMode?: "game-creator" | "widget-creator" | "asset-applier";
+  /**
+   * Controls loading vs resetting on-disk workspace agent session (see `AgentSessionWorkspaceSummary`).
+   * Omitted means **auto**: load `conversation.json` when present.
+   */
+  agentSession?: {
+    intent: AgentSessionIntent;
+  };
   /**
    * When true and no workspace is selected yet, main runs a short **creation intake** turn
    * (host tools `dartsnut_ask_question` + `dartsnut_project_intake`), then may chain into the normal
@@ -131,6 +142,25 @@ export interface SendPromptResponse {
     projectType: ProjectType;
     widgetSize?: WidgetSize;
   };
+}
+
+export type AgentSessionTranscriptLineKind = "user" | "assistant" | "tool_status";
+
+/** Workspace `transcript.jsonl` row shape (renderer preview). */
+export interface AgentSessionTranscriptLine {
+  kind: AgentSessionTranscriptLineKind;
+  at: number;
+  text: string;
+  toolName?: string;
+}
+
+/** Snapshot for agent session banner + history hydrate. */
+export interface AgentSessionWorkspaceSummary {
+  hasPersistedSession: boolean;
+  sessionId: string | null;
+  updatedAt: string | null;
+  templateMode: string | null;
+  transcriptTail: AgentSessionTranscriptLine[];
 }
 
 export type ProjectType = "game" | "widget";

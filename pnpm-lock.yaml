@@ -118,7 +118,14 @@ importers:
 
   packages/emulator-protocol: {}
 
-  packages/shared-ipc: {}
+  packages/shared-ipc:
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.3
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.17)(jiti@2.7.0)(lightningcss@1.32.0)
 
 packages:
 

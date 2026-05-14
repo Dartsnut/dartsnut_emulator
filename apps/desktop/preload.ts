@@ -8,10 +8,12 @@ import {
   type BindSlotRequest,
   type BindSlotResponse,
   type BootstrapState,
+  type SaveTempWorkspaceResponse,
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
-  type IntakePickWorkspaceFolderResponse,
+  type IntakeSubmitQuestionAnswerRequest,
+  type IntakeSubmitQuestionAnswerResponse,
   type PromptRequest,
   type ProviderSettings,
   type ReadPreviewRequest,
@@ -43,10 +45,12 @@ const api = {
   setShellUiTheme: (theme: ShellUiTheme) =>
     ipcRenderer.invoke(IPCChannels.shellUiTheme, theme) as Promise<void>,
   startNewProject: () => ipcRenderer.invoke(IPCChannels.startNewProject) as Promise<BootstrapState>,
+  saveTempWorkspace: () =>
+    ipcRenderer.invoke(IPCChannels.saveTempWorkspace) as Promise<SaveTempWorkspaceResponse>,
   pickWorkspace: (request?: PickWorkspaceRequest) =>
     ipcRenderer.invoke(IPCChannels.pickWorkspace, request) as Promise<PickWorkspaceResponse>,
-  intakePickWorkspaceFolder: () =>
-    ipcRenderer.invoke(IPCChannels.intakePickWorkspaceFolder) as Promise<IntakePickWorkspaceFolderResponse>,
+  intakeSubmitQuestionAnswer: (body: IntakeSubmitQuestionAnswerRequest) =>
+    ipcRenderer.invoke(IPCChannels.intakeSubmitQuestionAnswer, body) as Promise<IntakeSubmitQuestionAnswerResponse>,
   sendPrompt: (request: PromptRequest) =>
     ipcRenderer.invoke(IPCChannels.sendPrompt, request) as Promise<SendPromptResponse>,
   cancelAgent: () => ipcRenderer.invoke(IPCChannels.cancelAgent) as Promise<{ ok: boolean }>,

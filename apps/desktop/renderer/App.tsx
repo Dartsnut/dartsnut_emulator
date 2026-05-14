@@ -4,13 +4,13 @@ import {
   type AssetManifest,
   type BootstrapState,
   type DeployEligibility,
-  INTAKE_UI_SHOW_PROJECT_TYPE_MARKER,
-  INTAKE_UI_SHOW_WIDGET_SIZE_MARKER,
+  getIntakePromptTimelineText,
   type ManifestSnapshot,
   type ProviderSettings,
   type ProjectType,
   type PromptRequest,
   type SendPromptResponse,
+  type SaveTempWorkspaceResponse,
   type MainProcessConsoleMirrorPayload,
   stripIntakeUiMarkers,
   type WidgetSize
@@ -494,11 +494,7 @@ function workspaceFolderBasename(workspaceRoot: string): string {
 }
 
 function toEntry(event: AgentEvent, seq: number): TimelineEntry {
-  if (
-    event.type === "intake_widget_size_prompt" ||
-    event.type === "intake_project_type_prompt" ||
-    event.type === "intake_pick_workspace_prompt"
-  ) {
+  if (event.type === "intake_widget_size_prompt" || event.type === "intake_project_type_prompt") {
     throw new Error("intake_* events are handled in onAgentEvent, not the timeline");
   }
   if (event.type === "stream") {
@@ -532,8 +528,6 @@ export function App() {
   ]);
   const [prompt, setPrompt] = useState("");
   const [sending, setSending] = useState(false);
-  /** True while the OS folder dialog is open from the intake workspace bubble. */
-  const [intakeFolderDialogOpen, setIntakeFolderDialogOpen] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [pythonRuntimeStatus, setPythonRuntimeStatus] = useState<string | null>(null);
   const [screen, setScreen] = useState<AppScreen>("main");
@@ -553,8 +547,6 @@ export function App() {
     visible: boolean;
     sizes: WidgetSize[];
   }>({ visible: false, sizes: [] });
-  /** Host pushes `intake_pick_workspace_prompt` when the model calls `pick_workspace` — same slot as type/size chip rows. */
-  const [workspaceFolderPickerVisible, setWorkspaceFolderPickerVisible] = useState(false);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const pendingReplyIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
@@ -606,6 +598,19 @@ export function App() {
     }
     setEntries((prev) => prev.filter((entry) => entry.id !== pendingId));
     pendingReplyIdRef.current = null;
+  }
+
+  function appendIntakePromptEntry(event: AgentEvent): void {
+    const text = getIntakePromptTimelineText(event);
+    if (!text) {
+      return;
+    }
+    const seq = eventSeqRef.current;
+    eventSeqRef.current += 1;
+    setEntries((prev) => [
+      ...prev,
+      { id: `intake-prompt-${event.type}-${event.at}-${seq}`, role: "agent", text, streaming: false }
+    ]);
   }
 
   function isTimelineNearBottom(element: HTMLElement): boolean {
@@ -740,6 +745,10 @@ export function App() {
                 ? [...CREATION_INTAKE_PROJECT_TYPES]
                 : []
         });
+        if (event.visible) {
+          clearPendingReplyIndicator();
+          appendIntakePromptEntry(event);
+        }
         return;
       }
       if (event.type === "intake_widget_size_prompt") {
@@ -752,11 +761,10 @@ export function App() {
                 ? [...WIDGET_DISPLAY_SIZES]
                 : []
         });
-        return;
-      }
-      if (event.type === "intake_pick_workspace_prompt") {
-        clearPendingReplyIndicator();
-        setWorkspaceFolderPickerVisible(true);
+        if (event.visible) {
+          clearPendingReplyIndicator();
+          appendIntakePromptEntry(event);
+        }
         return;
       }
       clearPendingReplyIndicator();
@@ -790,7 +798,6 @@ export function App() {
       if (event.type === "error") {
         cancelStreamCoalesce();
         activeStreamEntryIdRef.current = null;
-        setWorkspaceFolderPickerVisible(false);
         const seq = eventSeqRef.current;
         eventSeqRef.current += 1;
         setEntries((prev) => [...prev, toEntry(event, seq)]);
@@ -885,21 +892,6 @@ export function App() {
   const deployEligible = deployEligibility.ok;
   const deployPanelShowsWidgetParams = deployEligible && deployEligibility.projectType === "widget";
 
-  /** Agent text after the latest user message — used to detect intake UI marker lines from the model. */
-  const agentTailTextSinceLastUser = useMemo(() => {
-    const parts: string[] = [];
-    for (let i = entries.length - 1; i >= 0; i -= 1) {
-      const entry = entries[i];
-      if (entry.role === "user") {
-        break;
-      }
-      if (entry.role === "agent") {
-        parts.push(entry.text);
-      }
-    }
-    return parts.reverse().join("\n");
-  }, [entries]);
-
   // Reset to Emulator tab when the active tab is no longer available.
   useEffect(() => {
     if (!assetManifest && rightPaneTab === "assets") {
@@ -914,7 +906,6 @@ export function App() {
     if (bootstrap?.workspaceRoot) {
       setWidgetSizePicker({ visible: false, sizes: [] });
       setProjectTypePicker({ visible: false, types: [] });
-      setWorkspaceFolderPickerVisible(false);
     }
   }, [bootstrap?.workspaceRoot]);
 
@@ -940,7 +931,6 @@ export function App() {
       setSessionProjectType(null);
       setWidgetSizePicker({ visible: false, sizes: [] });
       setProjectTypePicker({ visible: false, types: [] });
-      setWorkspaceFolderPickerVisible(false);
       creationIntakeBasePromptRef.current = "";
       setPrompt("");
       setRuntimeError(null);
@@ -955,7 +945,6 @@ export function App() {
   async function submitPrompt(request: PromptRequest) {
     setWidgetSizePicker({ visible: false, sizes: [] });
     setProjectTypePicker({ visible: false, types: [] });
-    setWorkspaceFolderPickerVisible(false);
     discardAgentEventsRef.current = false;
     const pendingReplyId = `agent-pending-${Date.now()}`;
     pendingReplyIdRef.current = pendingReplyId;
@@ -989,21 +978,22 @@ export function App() {
     setBootstrap(updated.state);
   }
 
-  async function handleWorkspaceFolderPickerClick() {
-    if (!api || intakeFolderDialogOpen) {
+  async function handleSaveTempWorkspace() {
+    if (!api || sending) {
       return;
     }
-    setIntakeFolderDialogOpen(true);
     try {
-      const result = await api.intakePickWorkspaceFolder();
-      if (!result.ok && result.reason === "no_pending") {
+      const result: SaveTempWorkspaceResponse = await api.saveTempWorkspace();
+      if (!result.ok) {
+        if (result.reason !== "cancelled") {
+          postStatus(result.message ?? `Could not save workspace (${result.reason}).`);
+        }
         return;
       }
-      setWorkspaceFolderPickerVisible(false);
-      const refreshed = await api.getBootstrapState();
-      setBootstrap(refreshed);
-    } finally {
-      setIntakeFolderDialogOpen(false);
+      setBootstrap(result.state);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Save failed.";
+      setRuntimeError(message);
     }
   }
 
@@ -1011,13 +1001,15 @@ export function App() {
     if (!api || sending) {
       return;
     }
-    const confirmed = window.confirm(
-      "Start a new project?\n\n" +
-        "Your game files on disk stay saved.\n\n" +
-        "This will leave the current workspace unset, stop the emulator, clear emulator logs, and clear this chat.",
-    );
-    if (!confirmed) {
-      return;
+    if (!bootstrap?.isTemporaryWorkspace) {
+      const confirmed = window.confirm(
+        "Start a new project?\n\n" +
+          "Your game files on disk stay saved.\n\n" +
+          "This will leave the current workspace unset, stop the emulator, clear emulator logs, and clear this chat.",
+      );
+      if (!confirmed) {
+        return;
+      }
     }
     try {
       const refreshed = await api.startNewProject();
@@ -1107,34 +1099,28 @@ export function App() {
     if (!api) {
       return;
     }
-    const base = creationIntakeBasePromptRef.current.trim();
-    if (!base) {
-      postStatus("Describe what you want to build in the chat first, then pick Game or Widget.");
-      return;
+    const res = await api.intakeSubmitQuestionAnswer({ kind: "project_type", value: projectType });
+    if (!res.ok) {
+      if (res.reason === "no_pending") {
+        postStatus("Nothing is waiting for a Game/Widget choice right now — send your idea in the chat first.");
+      } else if (res.reason === "kind_mismatch" || res.reason === "invalid_value") {
+        postStatus("That choice does not match the current question.");
+      }
     }
-    setProjectTypePicker({ visible: false, types: [] });
-    await submitPrompt({
-      prompt: base,
-      creationIntake: true,
-      intakeProjectTypeChoice: projectType
-    });
   }
 
   async function handleWidgetSizeChip(size: WidgetSize) {
     if (!api) {
       return;
     }
-    const base = creationIntakeBasePromptRef.current.trim();
-    if (!base) {
-      postStatus("Describe what you want to build in the chat first, then pick a display size.");
-      return;
+    const res = await api.intakeSubmitQuestionAnswer({ kind: "widget_size", value: size });
+    if (!res.ok) {
+      if (res.reason === "no_pending") {
+        postStatus("Nothing is waiting for a widget size choice right now.");
+      } else if (res.reason === "kind_mismatch" || res.reason === "invalid_value") {
+        postStatus("That choice does not match the current question.");
+      }
     }
-    setWidgetSizePicker({ visible: false, sizes: [] });
-    await submitPrompt({
-      prompt: base,
-      creationIntake: true,
-      intakeWidgetSizeChoice: size
-    });
   }
 
   async function handleSend() {
@@ -1237,6 +1223,35 @@ export function App() {
                   />
                 </svg>
               </button>
+              {bootstrap?.isTemporaryWorkspace ? (
+                <button
+                  type="button"
+                  className={chromeIconBtnClass}
+                  onClick={() => void handleSaveTempWorkspace()}
+                  disabled={sending}
+                  aria-label="Save project to a folder"
+                  title="Save project to a folder"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"
+                    />
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M17 21v-8H7v8M7 3v5h8"
+                    />
+                  </svg>
+                </button>
+              ) : null}
               <button
                 type="button"
                 className={chromeIconBtnClass}
@@ -1365,11 +1380,10 @@ export function App() {
             ))}
           </section>
 
-          {/* Chip rows: host enables visibility; type/size rows also require model marker lines (see creation-intake prompt in main). */}
+          {/* Chip rows: host shows these while a blocking `dartsnut_ask_question` call is waiting. */}
           {!bootstrap?.workspaceRoot &&
           projectTypePicker.visible &&
-          projectTypePicker.types.length > 0 &&
-          agentTailTextSinceLastUser.includes(INTAKE_UI_SHOW_PROJECT_TYPE_MARKER) ? (
+          projectTypePicker.types.length > 0 ? (
             <div
               className="flex flex-col gap-1.5 px-0.5"
               role="group"
@@ -1399,8 +1413,7 @@ export function App() {
 
           {!bootstrap?.workspaceRoot &&
           widgetSizePicker.visible &&
-          widgetSizePicker.sizes.length > 0 &&
-          agentTailTextSinceLastUser.includes(INTAKE_UI_SHOW_WIDGET_SIZE_MARKER) ? (
+          widgetSizePicker.sizes.length > 0 ? (
             <div
               className="flex flex-col gap-1.5 px-0.5"
               role="group"
@@ -1424,33 +1437,6 @@ export function App() {
                     {sz}
                   </button>
                 ))}
-              </div>
-            </div>
-          ) : null}
-
-          {!bootstrap?.workspaceRoot && workspaceFolderPickerVisible ? (
-            <div
-              className="flex flex-col gap-1.5 px-0.5"
-              role="group"
-              aria-label="Project folder"
-            >
-              <span className="text-[11px] font-medium text-[var(--color-text-subtle)]">
-                Choose empty project folder
-              </span>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className={cn(
-                    "cursor-pointer rounded-full border border-[var(--color-chip-border)] bg-[var(--color-chip-bg)] px-3 py-1.5 text-[12px] font-medium text-[var(--color-chip-text)] [font:inherit]",
-                    "hover:enabled:border-[var(--color-chip-hover-border)] hover:enabled:bg-[var(--color-chip-hover-bg)]",
-                    "focus-visible:border-[var(--color-chip-focus-border)] focus-visible:shadow-[var(--shadow-chip-focus)] focus-visible:outline-none",
-                    "disabled:cursor-not-allowed disabled:opacity-45"
-                  )}
-                  disabled={intakeFolderDialogOpen}
-                  onClick={() => void handleWorkspaceFolderPickerClick()}
-                >
-                  Choose folder…
-                </button>
               </div>
             </div>
           ) : null}

@@ -1,9 +1,11 @@
 export const IPCChannels = {
   bootstrapState: "agent:bootstrap-state",
   pickWorkspace: "agent:pick-workspace",
-  /** Renderer invokes after user taps the intake folder bubble; completes deferred `pick_workspace` tool. */
-  intakePickWorkspaceFolder: "agent:intake-pick-workspace-folder",
+  /** Completes a blocking `dartsnut_ask_question` call for project type or widget size (chip row). */
+  intakeSubmitQuestionAnswer: "agent:intake-submit-question-answer",
   startNewProject: "agent:start-new-project",
+  /** Copy/move the tracked temp workspace to a user-chosen folder and clear temp tracking. */
+  saveTempWorkspace: "agent:save-temp-workspace",
   /** Main → renderer: clear chat/logs/session UI (bootstrap comes from invoke return values). */
   sessionReset: "agent:session-reset",
   sendPrompt: "agent:send-prompt",
@@ -74,7 +76,23 @@ export interface BootstrapState {
   workspaceRoot: string | null;
   providerStatus: ProviderStatus;
   firstRunComplete: boolean;
+  /** True when `workspaceRoot` is the persisted unsaved temp project directory. */
+  isTemporaryWorkspace: boolean;
 }
+
+/** IPC return from `saveTempWorkspace`. */
+export type SaveTempWorkspaceResponse =
+  | { ok: true; state: BootstrapState }
+  | {
+      ok: false;
+      reason:
+        | "not_temporary"
+        | "cancelled"
+        | "non_empty_destination"
+        | "copy_failed"
+        | "missing_workspace";
+      message?: string;
+    };
 
 export interface PromptRequest {
   prompt: string;
@@ -84,8 +102,8 @@ export interface PromptRequest {
   templateMode?: "game-creator" | "widget-creator" | "asset-applier";
   /**
    * When true and no workspace is selected yet, main runs a short **creation intake** turn
-   * (host tool `dartsnut_project_intake` only), then may chain into the normal creator run once
-   * workspace + routing are resolved.
+   * (host tools `dartsnut_ask_question` + `dartsnut_project_intake`), then may chain into the normal
+   * creator run once workspace + routing are resolved.
    */
   creationIntake?: boolean;
   /**
@@ -134,15 +152,14 @@ export const INTAKE_UI_SHOW_PROJECT_TYPE_MARKER = "@dartsnut-intake-ui:project-t
  */
 export const INTAKE_UI_SHOW_WIDGET_SIZE_MARKER = "@dartsnut-intake-ui:widget-size";
 
-/**
- * Label for the deferred folder-picker step during `dartsnut_project_intake` — matches the status line
- * the session engine would emit for `pick_workspace` (suppressed while the bubble is shown).
- */
-export const INTAKE_PICK_WORKSPACE_STATUS_LABEL = "Ran project intake (pick_workspace)";
+/** Payload from the renderer when the user picks a chip during `dartsnut_ask_question`. */
+export type IntakeSubmitQuestionAnswerRequest =
+  | { kind: "project_type"; value: ProjectType }
+  | { kind: "widget_size"; value: WidgetSize };
 
-export type IntakePickWorkspaceFolderResponse =
+export type IntakeSubmitQuestionAnswerResponse =
   | { ok: true }
-  | { ok: false; reason: "no_pending" };
+  | { ok: false; reason: "no_pending" | "kind_mismatch" | "invalid_value" };
 
 /** Remove intake UI control tokens from text shown in the chat timeline. */
 export function stripIntakeUiMarkers(text: string): string {
@@ -207,7 +224,7 @@ export type AgentEvent =
   | {
     type: "intake_widget_size_prompt";
     at: number;
-    /** When true, the renderer may show the size chip row (`sizes`) after the model includes `@dartsnut-intake-ui:widget-size` in its reply. When false, hide it. */
+    /** When true, the renderer shows the size chip row (`sizes`) after the model calls `dartsnut_ask_question` with `question_id` `widget_display_size`. When false, hide it. */
     visible: boolean;
     /** Supported WxH tokens for chips; set when `visible` is true. */
     sizes?: WidgetSize[];
@@ -215,15 +232,21 @@ export type AgentEvent =
   | {
     type: "intake_project_type_prompt";
     at: number;
-    /** When true, the renderer may show the Game / Widget chip row (`options`) after the model includes `@dartsnut-intake-ui:project-type` in its reply. When false, hide it. */
+    /** When true, the renderer shows the Game / Widget chip row (`options`) after the model calls `dartsnut_ask_question` with `question_id` `project_type`. When false, hide it. */
     visible: boolean;
     options?: ProjectType[];
-  }
-  | {
-    /** Model called `pick_workspace`; show a tap target — folder dialog opens only after the user activates it. */
-    type: "intake_pick_workspace_prompt";
-    at: number;
   };
+
+export function getIntakePromptTimelineText(event: AgentEvent): string | null {
+  switch (event.type) {
+    case "intake_project_type_prompt":
+      return event.visible ? "Game or widget?" : null;
+    case "intake_widget_size_prompt":
+      return event.visible ? "Pick display size" : null;
+    default:
+      return null;
+  }
+}
 
 export type AssetKind = "static" | "gif" | "spritesheet";
 

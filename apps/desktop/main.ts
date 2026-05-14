@@ -1,8 +1,10 @@
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import readline from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
+import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import {
   IPCChannels,
   type AgentEvent,
@@ -11,6 +13,9 @@ import {
   type BindSlotRequest,
   type BindSlotResponse,
   type BootstrapState,
+  type SaveTempWorkspaceResponse,
+  isTemporaryWorkspaceForBootstrap,
+  normalizeFsPathComparable,
   type DeployActionResponse,
   type DeployConnectRequest,
   type DeployConnectResponse,
@@ -19,7 +24,6 @@ import {
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
-  type IntakePickWorkspaceFolderResponse,
   type ProjectType,
   type PromptRequest,
   type ProviderSettings,
@@ -29,14 +33,14 @@ import {
   type UnbindSlotRequest,
   type UnbindSlotResponse,
   validateDeployWorkspaceConf,
-  INTAKE_UI_SHOW_PROJECT_TYPE_MARKER,
-  INTAKE_UI_SHOW_WIDGET_SIZE_MARKER,
   WIDGET_DISPLAY_SIZES,
   type WidgetSize,
   type ShellUiTheme,
   type WindowChromeInsets,
   type SendPromptResponse,
-  type MainProcessConsoleMirrorPayload
+  type MainProcessConsoleMirrorPayload,
+  type IntakeSubmitQuestionAnswerRequest,
+  type IntakeSubmitQuestionAnswerResponse
 } from "@dartsnut/shared-ipc";
 import {
   loadProviderConfig,
@@ -63,6 +67,12 @@ import { DeployMachineSession } from "./deployMachine";
 
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
+/** Persisted unsaved temp workspace directory (under OS temp), or null. */
+let trackedTempWorkspacePath: string | null = null;
+/** When true, the next window close can continue without showing the temp-workspace prompt again. */
+let allowWindowCloseWithoutTempPrompt = false;
+/** Set once app quit has been requested so the guarded close can resume quitting after save/discard. */
+let appQuitRequested = false;
 let firstRunComplete = false;
 let bridgeProcess: ReturnType<typeof spawn> | null = null;
 const repoRoot = app.isPackaged
@@ -196,6 +206,7 @@ const emulatorState: EmulatorStateSnapshot = {
 };
 
 const proofStatePath = () => path.join(app.getPath("userData"), "first-run-proof.json");
+const tempWorkspaceRecordPath = () => path.join(app.getPath("userData"), "temp-workspace.json");
 const emulatorStatePath = () => path.join(app.getPath("userData"), "emulator-state.json");
 const providerSettingsPath = () => path.join(app.getPath("userData"), "provider-settings.json");
 const pythonSettingsPath = () => path.join(app.getPath("userData"), "python-settings.json");
@@ -302,6 +313,222 @@ function writeEmulatorState() {
   fs.writeFileSync(emulatorStatePath(), JSON.stringify({ lastWidgetDir }, null, 2));
 }
 
+function readTempWorkspaceJsonFromDisk(): string | null {
+  const file = tempWorkspaceRecordPath();
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+  try {
+    const content = JSON.parse(fs.readFileSync(file, "utf-8")) as { temporaryPath?: unknown };
+    if (typeof content.temporaryPath === "string" && content.temporaryPath.trim()) {
+      return path.resolve(content.temporaryPath.trim());
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function writeTempWorkspaceRecordToDisk(next: string | null): void {
+  trackedTempWorkspacePath = next;
+  const file = tempWorkspaceRecordPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ temporaryPath: next }, null, 2));
+}
+
+function loadTrackedTempWorkspaceFromDisk(): void {
+  trackedTempWorkspacePath = readTempWorkspaceJsonFromDisk();
+}
+
+function isTemporaryWorkspaceActiveNow(): boolean {
+  return isTemporaryWorkspaceForBootstrap(workspaceRoot, trackedTempWorkspacePath);
+}
+
+function getDialogParent(): BrowserWindow | undefined {
+  return win && !win.isDestroyed() ? win : undefined;
+}
+
+async function showAppMessageBox(options: MessageBoxOptions) {
+  const parent = getDialogParent();
+  return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+}
+
+async function showAppOpenDialog(options: OpenDialogOptions) {
+  const parent = getDialogParent();
+  return parent ? dialog.showOpenDialog(parent, options) : dialog.showOpenDialog(options);
+}
+
+function removeDirectoryBestEffort(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // ignore
+  }
+}
+
+function isProbableAllocatedTempDir(absPath: string): boolean {
+  const base = path.basename(absPath);
+  if (!base.startsWith("dartsnut-chat-")) {
+    return false;
+  }
+  const abs = path.resolve(absPath);
+  const tmp = path.resolve(os.tmpdir());
+  const rel = path.relative(tmp, abs);
+  return rel !== "" && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+}
+
+function markNewTemporaryWorkspaceAllocated(root: string): void {
+  const absRoot = path.resolve(root);
+  const previous = trackedTempWorkspacePath;
+  if (
+    previous &&
+    normalizeFsPathComparable(previous) !== normalizeFsPathComparable(absRoot) &&
+    fs.existsSync(previous) &&
+    isProbableAllocatedTempDir(previous)
+  ) {
+    removeDirectoryBestEffort(previous);
+  }
+  writeTempWorkspaceRecordToDisk(absRoot);
+}
+
+type TempWorkspaceGuardReason = "quit" | "open_workspace" | "new_project";
+
+function tempGuardDialogMessage(reason: TempWorkspaceGuardReason): string {
+  switch (reason) {
+    case "quit":
+      return "You have an unsaved project in a temporary folder. Save it to a permanent folder, discard it, or cancel.";
+    case "open_workspace":
+      return "Opening another workspace will leave your temporary project. Save it, discard it, or cancel.";
+    case "new_project":
+      return "Starting a new project will clear the current session. Save the temporary project, discard it, or cancel to stay.";
+  }
+}
+
+async function promptSaveDiscardCancel(reason: TempWorkspaceGuardReason): Promise<"save" | "discard" | "cancel"> {
+  const { response } = await showAppMessageBox({
+    type: "question",
+    buttons: ["Save", "Discard", "Cancel"],
+    defaultId: 2,
+    cancelId: 2,
+    title: "Unsaved temporary project",
+    message: tempGuardDialogMessage(reason)
+  });
+  if (response === 0) {
+    return "save";
+  }
+  if (response === 1) {
+    return "discard";
+  }
+  return "cancel";
+}
+
+async function discardTrackedTemporaryProject(): Promise<void> {
+  const tracked = trackedTempWorkspacePath;
+  if (!tracked) {
+    return;
+  }
+  const toRemove = path.resolve(tracked);
+  if (workspaceRoot && path.resolve(workspaceRoot) === toRemove) {
+    performSessionCleanup({ clearWorkspace: true });
+  } else {
+    writeTempWorkspaceRecordToDisk(null);
+  }
+  removeDirectoryBestEffort(toRemove);
+}
+
+async function runInteractiveSaveTemporaryWorkspace(): Promise<boolean> {
+  const tracked = trackedTempWorkspacePath;
+  if (!tracked || !isTemporaryWorkspaceActiveNow()) {
+    return false;
+  }
+  if (!fs.existsSync(tracked)) {
+    return false;
+  }
+  const pick = await showAppOpenDialog({
+    title: "Save project — choose an empty folder",
+    properties: ["openDirectory", "createDirectory"]
+  });
+  if (pick.canceled || !pick.filePaths[0]) {
+    return false;
+  }
+  const dest = pick.filePaths[0];
+  if (!isDirectoryEmpty(dest)) {
+    await showAppMessageBox({
+      type: "warning",
+      title: "Cannot save",
+      message: "The destination folder must be empty."
+    });
+    return false;
+  }
+  try {
+    fs.cpSync(tracked, dest, { recursive: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await showAppMessageBox({
+      type: "error",
+      title: "Save failed",
+      message: `Could not copy the project: ${message}`
+    });
+    return false;
+  }
+  const toRemove = path.resolve(tracked);
+  writeTempWorkspaceRecordToDisk(null);
+  applyWorkspaceRoot(dest);
+  removeDirectoryBestEffort(toRemove);
+  return true;
+}
+
+async function ensureTemporaryWorkspaceResolvedForGuard(reason: TempWorkspaceGuardReason): Promise<boolean> {
+  if (!isTemporaryWorkspaceActiveNow()) {
+    return true;
+  }
+  for (;;) {
+    const choice = await promptSaveDiscardCancel(reason);
+    if (choice === "cancel") {
+      return false;
+    }
+    if (choice === "discard") {
+      await discardTrackedTemporaryProject();
+      return true;
+    }
+    const saved = await runInteractiveSaveTemporaryWorkspace();
+    if (saved) {
+      return true;
+    }
+  }
+}
+
+async function maybeRecoverTrackedTempWorkspaceAtLaunch(): Promise<void> {
+  loadTrackedTempWorkspaceFromDisk();
+  const tp = trackedTempWorkspacePath;
+  if (!tp) {
+    return;
+  }
+  if (!fs.existsSync(tp) || !fs.statSync(tp).isDirectory()) {
+    writeTempWorkspaceRecordToDisk(null);
+    return;
+  }
+  const { response } = await showAppMessageBox({
+    type: "question",
+    buttons: ["Resume", "Discard"],
+    defaultId: 0,
+    cancelId: 1,
+    title: "Temporary project",
+    message:
+      "A project folder from your last session is still in temporary storage.\n\nResume to continue editing, or Discard to delete it.",
+    detail: tp
+  });
+  if (response === 1) {
+    const toRemove = path.resolve(tp);
+    writeTempWorkspaceRecordToDisk(null);
+    removeDirectoryBestEffort(toRemove);
+    return;
+  }
+  const resolved = path.resolve(tp);
+  writeTempWorkspaceRecordToDisk(resolved);
+  applyWorkspaceRoot(resolved);
+}
+
 function providerStatus(): BootstrapState["providerStatus"] {
   const validation = validateProviderConfig(loadProviderConfig(readProviderSettings()));
   return validation.ok ? "ready" : "missing_config";
@@ -311,7 +538,8 @@ function getBootstrapState(): BootstrapState {
   return {
     workspaceRoot,
     providerStatus: providerStatus(),
-    firstRunComplete
+    firstRunComplete,
+    isTemporaryWorkspace: isTemporaryWorkspaceActiveNow()
   };
 }
 
@@ -377,49 +605,40 @@ interface IntakeToolState {
   widgetSize?: WidgetSize;
 }
 
-/** Cleared in `sendPrompt` finally so an in-flight deferred `pick_workspace` cannot strand the agent. */
+/** Cleared in `sendPrompt` finally so an in-flight deferred chip question cannot strand the agent. */
 let agentEventEmitter: ((event: AgentEvent) => void) | null = null;
 
-interface IntakePickWorkspacePending {
+interface IntakeChipQuestionPending {
+  kind: "project_type" | "widget_size";
   resolve: (json: string) => void;
   state: IntakeToolState;
 }
 
-let intakePickWorkspacePending: IntakePickWorkspacePending | null = null;
+let intakeChipQuestionPending: IntakeChipQuestionPending | null = null;
 
-function cancelIntakePickWorkspacePending(): void {
-  if (!intakePickWorkspacePending) {
-    return;
+function cancelAllIntakeUserInputPending(): void {
+  if (intakeChipQuestionPending) {
+    const { resolve, kind } = intakeChipQuestionPending;
+    intakeChipQuestionPending = null;
+    if (agentEventEmitter) {
+      if (kind === "project_type") {
+        agentEventEmitter({ type: "intake_project_type_prompt", at: Date.now(), visible: false });
+      } else {
+        agentEventEmitter({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
+      }
+    }
+    resolve(
+      JSON.stringify({
+        ok: false,
+        cancelled: true,
+        message: "Choice was interrupted."
+      })
+    );
   }
-  const { resolve } = intakePickWorkspacePending;
-  intakePickWorkspacePending = null;
-  resolve(
-    JSON.stringify({
-      ok: false,
-      cancelled: true,
-      message: "Folder selection was interrupted."
-    })
-  );
 }
 
-async function runIntakePickWorkspaceDialog(state: IntakeToolState): Promise<string> {
-  const result = await dialog.showOpenDialog({
-    properties: ["openDirectory", "createDirectory"]
-  });
-  if (result.canceled || !result.filePaths[0]) {
-    return JSON.stringify({ ok: false, cancelled: true, message: "Folder dialog was cancelled." });
-  }
-  const selectedPath = result.filePaths[0];
-  if (!isDirectoryEmpty(selectedPath)) {
-    return JSON.stringify({
-      ok: false,
-      reason: "non_empty",
-      message: "Folder must be empty for a new scaffold from this flow. Ask the user to pick another folder."
-    });
-  }
-  applyWorkspaceRoot(selectedPath);
-  const snapshot = readWorkspaceConfIntakeSnapshot(selectedPath, state);
-  return JSON.stringify({ ok: true, workspace_selected: selectedPath, ...snapshot });
+function allocateTemporaryWorkspaceRoot(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-chat-"));
 }
 
 function getIntakePlaceholderWorkspacePath(): string {
@@ -431,6 +650,12 @@ function applyWorkspaceRoot(selectedPath: string): void {
     performSessionCleanup({ clearWorkspace: false });
   }
   workspaceRoot = selectedPath;
+  if (
+    trackedTempWorkspacePath &&
+    path.resolve(trackedTempWorkspacePath) !== path.resolve(selectedPath)
+  ) {
+    writeTempWorkspaceRecordToDisk(null);
+  }
   if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
     startPythonBridge();
   }
@@ -517,6 +742,12 @@ function readWorkspaceConfIntakeSnapshot(
   };
 }
 
+function nextAfterProjectType(pt: ProjectType): string {
+  return pt === "widget"
+    ? "Widget display size: if the user's message already names a supported WxH (128x160, 128x128, 128x64, 64x32), call set_widget_size with that value next. Otherwise call **dartsnut_ask_question** with question_id **widget_display_size** — do **not** pick a default, invent a size, or call set_widget_size or read_workspace_conf until they choose (or their next message is only one of those tokens — then call set_project_type with `widget` then set_widget_size with it)."
+    : "Call **read_workspace_conf** — the host selects an empty workspace directory under the system temp folder when none is set yet, then returns `conf.json` status.";
+}
+
 async function intakeHostToolExecute(
   args: Record<string, unknown>,
   state: IntakeToolState
@@ -537,10 +768,7 @@ async function intakeHostToolExecute(
     return JSON.stringify({
       ok: true,
       recorded: { projectType: pt },
-      next:
-        pt === "widget"
-          ? "Widget display size: if the user's message already names a supported WxH (128x160, 128x128, 128x64, 64x32), call set_widget_size with that value next. Otherwise reply listing those four options and ask which they want — do **not** pick a default, invent a size, or call set_widget_size or pick_workspace until they choose (or their next message is only one of those tokens — then call set_widget_size with it)."
-          : "Call pick_workspace (empty folder), then read_workspace_conf."
+      next: nextAfterProjectType(pt)
     });
   }
   if (action === "set_widget_size") {
@@ -561,27 +789,74 @@ async function intakeHostToolExecute(
     return JSON.stringify({
       ok: true,
       recorded: { widgetSize: state.widgetSize },
-      next: "Call pick_workspace, then read_workspace_conf."
-    });
-  }
-  if (action === "pick_workspace") {
-    agentEventEmitter?.({ type: "intake_pick_workspace_prompt", at: Date.now() });
-    return await new Promise<string>((resolve) => {
-      intakePickWorkspacePending = { resolve, state };
+      next: "Call **read_workspace_conf** — the host selects an empty workspace directory under the system temp folder when none is set yet, then returns `conf.json` status."
     });
   }
   if (action === "read_workspace_conf") {
-    const root = workspaceRoot;
+    let root = workspaceRoot;
+    let allocated = false;
     if (!root) {
-      return JSON.stringify({
-        ok: false,
-        need_workspace: true,
-        message: "No workspace is selected yet — call pick_workspace first."
-      });
+      root = allocateTemporaryWorkspaceRoot();
+      applyWorkspaceRoot(root);
+      markNewTemporaryWorkspaceAllocated(root);
+      allocated = true;
     }
-    return JSON.stringify({ ok: true, ...readWorkspaceConfIntakeSnapshot(root, state) });
+    const snapshot = readWorkspaceConfIntakeSnapshot(root, state);
+    const payload: Record<string, unknown> = { ok: true, ...snapshot };
+    if (allocated) {
+      payload.workspace_selected = root;
+      payload.workspace_note =
+        "Host created this empty directory under the system temp folder for the new project.";
+    }
+    return JSON.stringify(payload);
   }
   return JSON.stringify({ ok: false, error: `Unknown intake action: ${action}` });
+}
+
+async function askQuestionHostExecute(
+  args: Record<string, unknown>,
+  state: IntakeToolState
+): Promise<string> {
+  const questionId = args.question_id;
+  if (typeof questionId !== "string") {
+    return JSON.stringify({ ok: false, error: "question_id is required" });
+  }
+  if (intakeChipQuestionPending) {
+    return JSON.stringify({
+      ok: false,
+      error: "Another intake question is already waiting for the user."
+    });
+  }
+  if (questionId === "project_type") {
+    agentEventEmitter?.({
+      type: "intake_project_type_prompt",
+      at: Date.now(),
+      visible: true,
+      options: ["game", "widget"]
+    });
+    return await new Promise<string>((resolve) => {
+      intakeChipQuestionPending = { kind: "project_type", resolve, state };
+    });
+  }
+  if (questionId === "widget_display_size") {
+    if (state.projectType !== "widget") {
+      return JSON.stringify({
+        ok: false,
+        error:
+          "widget_display_size requires project_type widget (call set_project_type or ask project_type first)."
+      });
+    }
+    agentEventEmitter?.({
+      type: "intake_widget_size_prompt",
+      at: Date.now(),
+      visible: true,
+      sizes: [...WIDGET_DISPLAY_SIZES]
+    });
+    return await new Promise<string>((resolve) => {
+      intakeChipQuestionPending = { kind: "widget_size", resolve, state };
+    });
+  }
+  return JSON.stringify({ ok: false, error: `Unknown question_id: ${questionId}` });
 }
 
 function buildCreationIntakeUserPrompt(
@@ -590,26 +865,24 @@ function buildCreationIntakeUserPrompt(
 ): string {
   const projectTypeLine =
     opts?.projectTypeFromPicker != null
-      ? `\n\n[UI] User chose project type **${opts.projectTypeFromPicker}** from the in-app **Game / Widget** chip row. Call \`set_project_type\` with that exact \`project_type\` value, then continue intake per the procedure (widget size if \`widget\`, then \`pick_workspace\`, \`read_workspace_conf\`). Do not ask game vs widget again.`
+      ? `\n\n[UI] User chose project type **${opts.projectTypeFromPicker}** from the in-app **Game / Widget** chip row. Call \`set_project_type\` with that exact \`project_type\` value, then continue intake per the procedure (widget size if \`widget\`, then \`read_workspace_conf\`). Do not ask game vs widget again.`
       : "";
   const pickerLine =
     opts?.widgetSizeFromPicker != null
-      ? `\n\n[UI] User chose widget display size **${opts.widgetSizeFromPicker}** from the in-app size chip row. Call \`set_project_type\` with \`widget\` then \`set_widget_size\` with exactly that WxH token, then continue intake (\`pick_workspace\`, \`read_workspace_conf\`). Do not ask for size again.`
+      ? `\n\n[UI] User chose widget display size **${opts.widgetSizeFromPicker}** from the in-app size chip row. Call \`set_project_type\` with \`widget\` then \`set_widget_size\` with exactly that WxH token, then continue intake (\`read_workspace_conf\`). Do not ask for size again.`
       : "";
   return [
     "## New project intake (mandatory tool use)",
     "The user has **not** chosen a workspace folder in the shell yet. You cannot read or write project files until intake completes.",
-    "Use **only** the `dartsnut_project_intake` tool (native `tool_calls`).",
-    "**Desktop chip rows:** The app shows **Game / Widget** and **widget size** chip rows only after you ask for that choice. When you ask the user to pick game vs widget (because it is not already obvious from their message), include this exact substring on its own line in your visible reply (markdown prose or inside the JSON `response` string):",
-    INTAKE_UI_SHOW_PROJECT_TYPE_MARKER,
-    "When you ask for widget display size, include this exact substring on its own line the same way:",
-    INTAKE_UI_SHOW_WIDGET_SIZE_MARKER,
-    "Emit each marker only in the same turn where you ask that question. The UI strips these lines from the chat bubble. Users may answer via chips or by typing.",
+    "Use **only** these host tools via native `tool_calls`: **`dartsnut_ask_question`** and **`dartsnut_project_intake`**.",
+    "**Blocking questions (`dartsnut_ask_question`):** Each call shows the matching desktop UI (Game/Widget chips or widget size chips) and **does not return** until the user answers. You **must** call this tool when you need that input and cannot take it reliably from the user's message alone — do **not** rely on hidden marker lines or prose-only prompts for those choices.",
+    "Allowed `question_id` values: **`project_type`**, **`widget_display_size`** (only after `project_type` is `widget`).",
+    "**Workspace:** There is **no** folder picker. When you call **`read_workspace_conf`** and no workspace is set yet, the **host creates** an empty directory under the OS temp folder (e.g. `TMPDIR` / `%TEMP%`) and selects it automatically.",
     "Procedure:",
-    "1. Infer **game** vs **widget** from the user's text when it is obvious; otherwise ask one short question, include the project-type marker line above, then call `set_project_type`.",
-    "2. For **widget** display size: supported values are exactly **128x160**, **128x128**, **128x64**, **64x32**. If the user's message already includes one of those literals, call `set_widget_size` with it. Otherwise ask one short question and include the widget-size marker line — **never** assume a default, pick a size for them, or call `set_widget_size` / `pick_workspace` until they have chosen (via chips or typed). If the user's message is **only** one of those four literals (no other words), treat it as their size choice for a widget: call `set_project_type` with `widget` then `set_widget_size` with that token, then continue.",
-    "3. Call `pick_workspace` so the user selects an **empty** directory.",
-    "4. Call `read_workspace_conf`. Use `guidance_notes`, `deploy_eligibility`, and `conf_status` to ask **at most one** focused follow-up when the folder is not a blank slate or types disagree.",
+    "1. Infer **game** vs **widget** from the user's text when it is obvious, then call `set_project_type`. When it is **not** obvious, call **`dartsnut_ask_question`** with `question_id` **`project_type`** (then continue from the tool result).",
+    "2. For **widget** display size: supported values are exactly **128x160**, **128x128**, **128x64**, **64x32**. If the user's message already includes one of those literals, call `set_widget_size` with it. Otherwise call **`dartsnut_ask_question`** with `question_id` **`widget_display_size`** — **never** assume a default, invent a size, or call `set_widget_size` or `read_workspace_conf` until they have answered (via chips or typed follow-up). If the user's message is **only** one of those four literals (no other words), treat it as their size choice for a widget: call `set_project_type` with `widget` then `set_widget_size` with that token, then continue.",
+    "3. Call **`read_workspace_conf`** once type (and widget size if applicable) are resolved. The response includes `workspace_selected` when the host just allocated the temp directory.",
+    "4. Use `guidance_notes`, `deploy_eligibility`, and `conf_status` to ask **at most one** focused follow-up when the folder is not a blank slate or types disagree.",
     "5. Close with a one- or two-sentence confirmation of what will be built next (no code, no file paths invented).",
     "",
     "User request:",
@@ -991,6 +1264,7 @@ function performSessionCleanup(options: { clearWorkspace: boolean }): void {
     assetManager.stop();
     stopDeployConfWatcher();
     lastWidgetDir = null;
+    writeTempWorkspaceRecordToDisk(null);
     writeEmulatorState();
   }
   sendToRenderer(IPCChannels.sessionReset);
@@ -1352,6 +1626,7 @@ function buildSession(
     workspacePath?: string;
     completionTools?: typeof AGENT_TOOL_SCHEMAS | typeof AGENT_CREATION_INTAKE_TOOL_SCHEMAS;
     hostIntakeToolHandler?: (args: Record<string, unknown>) => Promise<string>;
+    hostAskQuestionHandler?: (args: Record<string, unknown>) => Promise<string>;
     skipInitialWorkspaceResolve?: boolean;
     skillBundleMode?: PromptRequest["templateMode"] | "creation-intake" | null;
   }
@@ -1380,6 +1655,7 @@ function buildSession(
     },
     completionTools: extras?.completionTools,
     hostIntakeToolHandler: extras?.hostIntakeToolHandler,
+    hostAskQuestionHandler: extras?.hostAskQuestionHandler,
     hostReloadEmulatorHandler: intakeToolsOnly ? undefined : () => executeHostReloadEmulatorForAgent(),
     skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve
   });
@@ -1422,7 +1698,31 @@ async function createWindow() {
   } else {
     await win.loadFile(path.join(__dirname, "../dist/index.html"));
   }
+  // Guard quit here while the window is still alive; async native dialogs during `before-quit`
+  // caused unstable macOS teardown behavior.
+  win.on("close", (event) => {
+    if (allowWindowCloseWithoutTempPrompt || !isTemporaryWorkspaceActiveNow()) {
+      allowWindowCloseWithoutTempPrompt = false;
+      return;
+    }
+    event.preventDefault();
+    const shouldResumeQuit = appQuitRequested;
+    void (async () => {
+      const proceed = await ensureTemporaryWorkspaceResolvedForGuard("quit");
+      if (!proceed) {
+        appQuitRequested = false;
+        return;
+      }
+      allowWindowCloseWithoutTempPrompt = true;
+      if (shouldResumeQuit) {
+        app.quit();
+        return;
+      }
+      win?.close();
+    })();
+  });
   win.on("closed", () => {
+    allowWindowCloseWithoutTempPrompt = false;
     chromeInsetInsertedCssKey = undefined;
     win = null;
   });
@@ -1438,6 +1738,7 @@ app.whenReady().then(async () => {
   await createWindow();
   pythonExec = await resolvePythonExecutable();
   startPythonBridge();
+  await maybeRecoverTrackedTempWorkspaceAtLaunch();
 });
 
 app.on("window-all-closed", () => {
@@ -1445,6 +1746,10 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  appQuitRequested = true;
+});
+
+app.on("will-quit", () => {
   if (bridgeProcess) {
     bridgeProcess.kill();
   }
@@ -1663,12 +1968,25 @@ ipcMain.handle(IPCChannels.pickPythonPath, async () => {
   };
 });
 
-ipcMain.handle(IPCChannels.startNewProject, () => {
+ipcMain.handle(IPCChannels.startNewProject, async () => {
+  const proceed = await ensureTemporaryWorkspaceResolvedForGuard("new_project");
+  if (!proceed) {
+    return getBootstrapState();
+  }
   performSessionCleanup({ clearWorkspace: true });
   return getBootstrapState();
 });
 
 ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: PickWorkspaceRequest) => {
+  const proceed = await ensureTemporaryWorkspaceResolvedForGuard("open_workspace");
+  if (!proceed) {
+    return {
+      state: getBootstrapState(),
+      selectedPath: null,
+      accepted: false,
+      reason: "cancelled"
+    } satisfies PickWorkspaceResponse;
+  }
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory", "createDirectory"]
   });
@@ -1697,17 +2015,70 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
   } satisfies PickWorkspaceResponse;
 });
 
+ipcMain.handle(IPCChannels.saveTempWorkspace, async (): Promise<SaveTempWorkspaceResponse> => {
+  if (!workspaceRoot) {
+    return { ok: false, reason: "missing_workspace" };
+  }
+  if (!isTemporaryWorkspaceActiveNow()) {
+    return { ok: false, reason: "not_temporary" };
+  }
+  const saved = await runInteractiveSaveTemporaryWorkspace();
+  if (!saved) {
+    return { ok: false, reason: "cancelled" };
+  }
+  return { ok: true, state: getBootstrapState() };
+});
+
 ipcMain.handle(
-  IPCChannels.intakePickWorkspaceFolder,
-  async (): Promise<IntakePickWorkspaceFolderResponse> => {
-    if (!intakePickWorkspacePending) {
+  IPCChannels.intakeSubmitQuestionAnswer,
+  async (_event: unknown, body: IntakeSubmitQuestionAnswerRequest): Promise<IntakeSubmitQuestionAnswerResponse> => {
+    if (!intakeChipQuestionPending) {
       return { ok: false, reason: "no_pending" };
     }
-    const { resolve, state } = intakePickWorkspacePending;
-    intakePickWorkspacePending = null;
-    const json = await runIntakePickWorkspaceDialog(state);
-    resolve(json);
-    return { ok: true };
+    if (body.kind === "project_type") {
+      if (intakeChipQuestionPending.kind !== "project_type") {
+        return { ok: false, reason: "kind_mismatch" };
+      }
+      if (body.value !== "game" && body.value !== "widget") {
+        return { ok: false, reason: "invalid_value" };
+      }
+      const { resolve, state } = intakeChipQuestionPending;
+      intakeChipQuestionPending = null;
+      state.projectType = body.value;
+      if (body.value === "game") {
+        state.widgetSize = undefined;
+      }
+      agentEventEmitter?.({ type: "intake_project_type_prompt", at: Date.now(), visible: false });
+      resolve(
+        JSON.stringify({
+          ok: true,
+          recorded: { projectType: body.value },
+          next: nextAfterProjectType(body.value)
+        })
+      );
+      return { ok: true };
+    }
+    if (body.kind === "widget_size") {
+      if (intakeChipQuestionPending.kind !== "widget_size") {
+        return { ok: false, reason: "kind_mismatch" };
+      }
+      if (!WIDGET_DISPLAY_SIZES.includes(body.value)) {
+        return { ok: false, reason: "invalid_value" };
+      }
+      const { resolve, state } = intakeChipQuestionPending;
+      intakeChipQuestionPending = null;
+      state.widgetSize = body.value;
+      agentEventEmitter?.({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
+      resolve(
+        JSON.stringify({
+          ok: true,
+          recorded: { widgetSize: body.value },
+          next: "Call **read_workspace_conf** — the host selects an empty workspace directory under the system temp folder when none is set yet, then returns `conf.json` status."
+        })
+      );
+      return { ok: true };
+    }
+    return { ok: false, reason: "invalid_value" };
   }
 );
 
@@ -1847,43 +2218,13 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         intakeState.projectType = "widget";
         intakeState.widgetSize = req.intakeWidgetSizeChoice;
       }
-      const showProjectTypeChips =
-        !req.intakeProjectTypeChoice && !req.intakeWidgetSizeChoice;
-      if (showProjectTypeChips) {
-        emitAgent({
-          type: "intake_project_type_prompt",
-          at: Date.now(),
-          visible: true,
-          options: ["game", "widget"]
-        });
-      }
       const placeholder = getIntakePlaceholderWorkspacePath();
       fs.mkdirSync(placeholder, { recursive: true });
       const intakeSession = buildSession(undefined, {
         workspacePath: placeholder,
         completionTools: AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
-        hostIntakeToolHandler: async (args) => {
-          const out = await intakeHostToolExecute(args, intakeState);
-          const act = args.action;
-          if (typeof act === "string") {
-            if (act === "set_project_type" && intakeState.projectType) {
-              emitAgent({ type: "intake_project_type_prompt", at: Date.now(), visible: false });
-            }
-            if (act === "set_project_type" && intakeState.projectType === "widget" && !intakeState.widgetSize) {
-              emitAgent({
-                type: "intake_widget_size_prompt",
-                at: Date.now(),
-                visible: true,
-                sizes: [...WIDGET_DISPLAY_SIZES]
-              });
-            } else if (act === "set_widget_size" && intakeState.widgetSize) {
-              emitAgent({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
-            } else if (act === "set_project_type" && intakeState.projectType === "game") {
-              emitAgent({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
-            }
-          }
-          return out;
-        },
+        hostIntakeToolHandler: (args) => intakeHostToolExecute(args, intakeState),
+        hostAskQuestionHandler: (args) => askQuestionHostExecute(args, intakeState),
         skipInitialWorkspaceResolve: true,
         skillBundleMode: "creation-intake"
       });
@@ -1943,7 +2284,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     sendToRenderer(IPCChannels.subscribeEvents, event);
     return { ok: false };
   } finally {
-    cancelIntakePickWorkspacePending();
+    cancelAllIntakeUserInputPending();
     agentEventEmitter = null;
     if (sendPromptAbortController === runAbort) {
       sendPromptAbortController = null;
@@ -1952,7 +2293,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
 });
 
 ipcMain.handle(IPCChannels.cancelAgent, () => {
-  cancelIntakePickWorkspacePending();
+  cancelAllIntakeUserInputPending();
   sendPromptAbortController?.abort();
   return { ok: true };
 });

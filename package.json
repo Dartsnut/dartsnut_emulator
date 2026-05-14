@@ -12,7 +12,7 @@
     "package": "pnpm --dir packages/shared-ipc run build && pnpm --dir packages/emulator-protocol run build && pnpm --dir packages/agent-runtime run build && pnpm --dir apps/desktop run package",
     "package:mac": "pnpm --dir packages/shared-ipc run build && pnpm --dir packages/emulator-protocol run build && pnpm --dir packages/agent-runtime run build && pnpm --dir apps/desktop run package:mac",
     "package:win": "pnpm --dir packages/shared-ipc run build && pnpm --dir packages/emulator-protocol run build && pnpm --dir packages/agent-runtime run build && pnpm --dir apps/desktop run package:win",
-    "test": "pnpm --dir packages/agent-runtime run test",
+    "test": "pnpm --dir packages/shared-ipc run test && pnpm --dir packages/agent-runtime run test",
     "setup:python": "node scripts/setup_python_env.mjs"
   },
   "devDependencies": {

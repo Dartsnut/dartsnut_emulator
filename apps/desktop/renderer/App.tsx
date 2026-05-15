@@ -1098,10 +1098,7 @@ export function App() {
       const hydrated = summary.transcriptTail
         .map((line, idx) => transcriptLineToTimelineEntry(line, idx))
         .filter((entry): entry is TimelineEntry => entry != null);
-      setEntries([
-        ...hydrated,
-        { id: "greeting-initial", role: "agent", text: GREETING_TEXT, streaming: false }
-      ]);
+      setEntries(hydrated);
     })();
     return () => {
       cancelled = true;

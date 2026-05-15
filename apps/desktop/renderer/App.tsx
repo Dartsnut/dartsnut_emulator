@@ -625,7 +625,6 @@ export function App() {
     sizes: WidgetSize[];
   }>({ visible: false, sizes: [] });
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
-  const pendingReplyIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
   const streamPendingDeltaRef = useRef("");
@@ -676,15 +675,6 @@ export function App() {
 
   function handleThemeChange(next: ThemeId) {
     setTheme(next);
-  }
-
-  function clearPendingReplyIndicator() {
-    const pendingId = pendingReplyIdRef.current;
-    if (!pendingId) {
-      return;
-    }
-    setEntries((prev) => prev.filter((entry) => entry.id !== pendingId));
-    pendingReplyIdRef.current = null;
   }
 
   function appendIntakePromptEntry(event: AgentEvent): void {
@@ -865,7 +855,6 @@ export function App() {
                 : []
         });
         if (event.visible) {
-          clearPendingReplyIndicator();
           appendIntakePromptEntry(event);
         }
         return;
@@ -881,12 +870,10 @@ export function App() {
                 : []
         });
         if (event.visible) {
-          clearPendingReplyIndicator();
           appendIntakePromptEntry(event);
         }
         return;
       }
-      clearPendingReplyIndicator();
       if (event.type === "reasoning_stream") {
         const reasoningId = activeReasoningStreamEntryIdRef.current;
         if (!reasoningId) {
@@ -1121,7 +1108,6 @@ export function App() {
       cancelStreamCoalesce();
       activeStreamEntryIdRef.current = null;
       activeReasoningStreamEntryIdRef.current = null;
-      pendingReplyIdRef.current = null;
       eventSeqRef.current = 0;
       lastAgentSessionHydrateKeyRef.current = "";
       setShowPersistedAgentSessionBanner(false);
@@ -1152,12 +1138,8 @@ export function App() {
     setWidgetSizePicker({ visible: false, sizes: [] });
     setProjectTypePicker({ visible: false, types: [] });
     discardAgentEventsRef.current = false;
-    const pendingReplyId = `agent-pending-${Date.now()}`;
-    pendingReplyIdRef.current = pendingReplyId;
-    setEntries((prev) => [...prev, { id: pendingReplyId, role: "status", text: "Agent is thinking..." }]);
     setSending(true);
     if (!api) {
-      clearPendingReplyIndicator();
       setSending(false);
       return;
     }
@@ -1171,7 +1153,6 @@ export function App() {
         setSessionWidgetSize(result.sessionRouting.widgetSize ?? null);
       }
     } finally {
-      clearPendingReplyIndicator();
       setSending(false);
     }
   }

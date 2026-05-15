@@ -887,10 +887,6 @@ export class SessionEngine {
       if (abortSignal?.aborted) {
         throw new Error("Agent stopped.");
       }
-      if (step > 0) {
-        onEvent({ type: "status", message: "Agent is thinking...", at: Date.now() });
-      }
-
       this.emitTransaction({
         type: "completion.request",
         correlationId: turnCorrelationId,

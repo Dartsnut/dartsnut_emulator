@@ -1134,11 +1134,15 @@ function applyShellUiTheme(theme: ShellUiTheme): void {
     return;
   }
   const colors = WINDOWS_SHELL_UI[theme];
-  win.setTitleBarOverlay({
-    color: colors.titleBarColor,
-    symbolColor: colors.symbolColor,
-    height: WINDOWS_TITLE_BAR_OVERLAY_HEIGHT
-  });
+  try {
+    win.setTitleBarOverlay({
+      color: colors.titleBarColor,
+      symbolColor: colors.symbolColor,
+      height: WINDOWS_TITLE_BAR_OVERLAY_HEIGHT
+    });
+  } catch {
+    /* WCO only after `titleBarStyle: "hidden"` + `titleBarOverlay` at construction; ignore if unsupported. */
+  }
   win.setBackgroundColor(colors.windowBackground);
 }
 
@@ -1544,7 +1548,11 @@ function startPythonBridge() {
     return;
   }
   const bridgePath = path.join(repoRoot, "services", "emulator-core", "bridge_service.py");
-  bridgeProcess = spawn(pythonExec, [bridgePath], { stdio: ["pipe", "pipe", "pipe"] });
+  bridgeProcess = spawn(pythonExec, [bridgePath], {
+    stdio: ["pipe", "pipe", "pipe"],
+    cwd: repoRoot,
+    env: { ...process.env, PYTHONUNBUFFERED: "1" },
+  });
   emulatorState.status = `Bridge starting with ${pythonExec}`;
   emitEmulatorState();
 
@@ -1557,13 +1565,18 @@ function startPythonBridge() {
       if (!line.trim()) {
         continue;
       }
+      const jsonLine = line.replace(/\r/g, "");
       try {
-        const event = JSON.parse(line) as {
-          event: "ready" | "state" | "heartbeat" | "error" | "frame" | "log";
+        const event = JSON.parse(jsonLine) as {
+          event: string;
           payload: Record<string, unknown>;
         };
+        if (event.event === "diag") {
+          continue;
+        }
         if (event.event === "frame") {
-          emitEmulatorFrame(event.payload as EmulatorFrame);
+          const fr = event.payload as EmulatorFrame;
+          emitEmulatorFrame(fr);
           continue;
         }
         if (event.event === "log") {
@@ -1598,7 +1611,7 @@ function startPythonBridge() {
         }
         emitEmulatorState();
       } catch {
-        emulatorState.status = line.trim();
+        emulatorState.status = jsonLine.trim();
         emitEmulatorState();
       }
     }
@@ -1706,6 +1719,8 @@ async function createWindow() {
     ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
     ...(process.platform === "win32"
       ? {
+        /* Required with `titleBarOverlay` so `setTitleBarOverlay` works (avoids "Titlebar overlay is not enabled"). */
+        titleBarStyle: "hidden" as const,
         titleBarOverlay: {
           color: WINDOWS_SHELL_UI.dark.titleBarColor,
           symbolColor: WINDOWS_SHELL_UI.dark.symbolColor,
@@ -1721,7 +1736,9 @@ async function createWindow() {
     }
   });
   win.webContents.on("did-finish-load", () => {
-    void syncShellUiThemeFromDomSnapshot();
+    void syncShellUiThemeFromDomSnapshot().catch(() => {
+      /* Theme sync uses executeJavaScript; failures are non-fatal. */
+    });
     emitChromeInsetsAndPushStyles();
     setTimeout(emitChromeInsetsAndPushStyles, 50);
     setTimeout(emitChromeInsetsAndPushStyles, 300);
@@ -2398,7 +2415,9 @@ ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorCommand, async (_event, command: Em
     let commandToSend = command;
     if (command.type === "set_path") {
       const baseRoot = getEmulatorWorkspaceRoot();
-      let selectedPath = path.isAbsolute(command.path) ? command.path : path.join(baseRoot, command.path);
+      const rawPath = (typeof command.path === "string" ? command.path : "").trim().replace(/^["']|["']$/g, "");
+      let selectedPath = path.isAbsolute(rawPath) ? rawPath : path.join(baseRoot, rawPath);
+      selectedPath = path.resolve(path.normalize(selectedPath));
       if (workspaceRoot && !isWithinDirectory(workspaceRoot, selectedPath)) {
         selectedPath = workspaceRoot;
       }

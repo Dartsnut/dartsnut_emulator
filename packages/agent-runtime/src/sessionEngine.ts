@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentEvent } from "@dartsnut/shared-ipc";
+import { transcriptUserBubbleText, type AgentEvent } from "@dartsnut/shared-ipc";
 import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
 import type {
   ChatMessage,
@@ -873,8 +873,12 @@ export class SessionEngine {
     const p = this.options.sessionPersistence;
     if (p) {
       p.ensureDir();
-      const userLine = prompt.length > 50_000 ? `${prompt.slice(0, 50_000)}…` : prompt;
-      p.appendTranscript({ kind: "user", at: Date.now(), text: userLine });
+      const forTranscript = transcriptUserBubbleText(prompt);
+      if (forTranscript != null) {
+        const userLine =
+          forTranscript.length > 50_000 ? `${forTranscript.slice(0, 50_000)}…` : forTranscript;
+        p.appendTranscript({ kind: "user", at: Date.now(), text: userLine });
+      }
     }
 
     const maxToolRounds = SessionEngine.resolveToolLoopMax();

@@ -191,6 +191,45 @@ export type IntakeSubmitQuestionAnswerResponse =
   | { ok: true }
   | { ok: false; reason: "no_pending" | "kind_mismatch" | "invalid_value" };
 
+const TRANSCRIPT_USER_REQUEST_SECTION = "\n\nUser request:\n";
+
+/** Prefix line inside the post-intake creator user prompt (see desktop `buildPostIntakeCreatorUserPrompt`). */
+const TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX =
+  "Original first message (use only if it already states what to build):";
+
+/**
+ * Routed agent turns send a long `user` message (creator template + JSON context + instructions).
+ * The timeline should only show what the human typed (or nothing when the host supplied only
+ * boilerplate after intake).
+ */
+export function transcriptUserBubbleText(fullUserPrompt: string): string | null {
+  const trimmed = fullUserPrompt.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const markerAt = trimmed.lastIndexOf(TRANSCRIPT_USER_REQUEST_SECTION);
+  const body =
+    markerAt >= 0 ? trimmed.slice(markerAt + TRANSCRIPT_USER_REQUEST_SECTION.length).trim() : trimmed;
+  if (!body) {
+    return null;
+  }
+
+  const originalAt = body.indexOf(TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX);
+  if (originalAt >= 0) {
+    const afterOriginal = body.slice(originalAt + TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX.length).trim();
+    return afterOriginal.length > 0 ? afterOriginal : null;
+  }
+
+  if (body === "There was no substantive first message before intake.") {
+    return null;
+  }
+  if (body.includes("Creation **intake just finished**")) {
+    return null;
+  }
+
+  return body;
+}
+
 /** Remove intake UI control tokens from text shown in the chat timeline. */
 export function stripIntakeUiMarkers(text: string): string {
   return text

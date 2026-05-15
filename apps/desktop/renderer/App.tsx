@@ -15,6 +15,7 @@ import {
   type SaveTempWorkspaceResponse,
   type MainProcessConsoleMirrorPayload,
   stripIntakeUiMarkers,
+  transcriptUserBubbleText,
   type WidgetSize
 } from "@dartsnut/shared-ipc";
 import { AssetManagerPanel } from "./AssetManagerPanel";
@@ -95,10 +96,14 @@ const COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX = 52;
 const GREETING_TEXT =
   "What are we making today? Share your idea and I'll help turn it into a Dartsnut widget or game.";
 
-function transcriptLineToTimelineEntry(line: AgentSessionTranscriptLine, seq: number): TimelineEntry {
+function transcriptLineToTimelineEntry(line: AgentSessionTranscriptLine, seq: number): TimelineEntry | null {
   const id = `persisted-${line.at}-${seq}`;
   if (line.kind === "user") {
-    return { id, role: "user", text: stripIntakeUiMarkers(line.text), streaming: false };
+    const visible = transcriptUserBubbleText(line.text);
+    if (visible == null || !visible.trim()) {
+      return null;
+    }
+    return { id, role: "user", text: stripIntakeUiMarkers(visible), streaming: false };
   }
   if (line.kind === "assistant") {
     return { id, role: "agent", text: stripIntakeUiMarkers(line.text), streaming: false };
@@ -953,7 +958,9 @@ export function App() {
         return;
       }
       setShowPersistedAgentSessionBanner(true);
-      const hydrated = summary.transcriptTail.map((line, idx) => transcriptLineToTimelineEntry(line, idx));
+      const hydrated = summary.transcriptTail
+        .map((line, idx) => transcriptLineToTimelineEntry(line, idx))
+        .filter((entry): entry is TimelineEntry => entry != null);
       setEntries([
         ...hydrated,
         { id: "greeting-initial", role: "agent", text: GREETING_TEXT, streaming: false }

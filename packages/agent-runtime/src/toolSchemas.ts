@@ -2,7 +2,7 @@
  * OpenAI Chat Completions function definitions for the agent runtime's tools.
  *
  * File tools mirror `SessionEngine.normalizeAction` / `executeAction`.
- * `dartsnut_project_intake` is executed by the host (Electron main) when configured.
+ * `dartsnut_project_intake` and `dartsnut_ask_question` are executed by the host (Electron main) when configured.
  */
 
 import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
@@ -33,6 +33,32 @@ const GET_DARTSNUT_SKILL_TOOL: ChatCompletionTool = {
   }
 };
 
+const DARTSNUT_ASK_QUESTION_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "dartsnut_ask_question",
+    description: [
+      "Dartsnut Chat **creation intake** only (host-executed). Presents a **blocking** question in the desktop UI — the call does not return until the user answers.",
+      "Use native `tool_calls` only. Prefer this whenever the user must choose in the UI rather than inferring from their message.",
+      "**question_id** `project_type` — Game vs Widget chips; on success updates the same intake state as `set_project_type`.",
+      "**question_id** `widget_display_size` — only when intake is already `widget`; shows WxH chips; on success same as `set_widget_size`."
+    ].join(" "),
+    parameters: {
+      type: "object",
+      properties: {
+        question_id: {
+          type: "string",
+          enum: ["project_type", "widget_display_size"],
+          description: "Which blocking intake question to present."
+        }
+      },
+      required: ["question_id"],
+      additionalProperties: false
+    },
+    strict: true
+  }
+};
+
 const DARTSNUT_PROJECT_INTAKE_TOOL: ChatCompletionTool = {
   type: "function",
   function: {
@@ -40,18 +66,17 @@ const DARTSNUT_PROJECT_INTAKE_TOOL: ChatCompletionTool = {
     description: [
       "Dartsnut Chat **new-project / workspace** setup (host-executed). Use standard `tool_calls` only.",
       "Actions:",
-      "- **set_project_type** — record whether the user is building a `game` or `widget` (required before scaffolding).",
-      "- **set_widget_size** — for widgets only; one of the supported WxH tokens. Do **not** infer a default — the user must choose (or their message must already name a supported size).",
-      "- **pick_workspace** — opens a folder picker for an **empty** project directory; required before any files are written.",
-      "- **read_workspace_conf** — reads `conf.json` in the **currently selected** workspace and reports deploy-style validity plus guidance (call after the folder is chosen, and again if the user switches workspace).",
-      "Typical order when starting from no workspace: infer or confirm `set_project_type` (Dartsnut Chat shows **Game / Widget** chips only after you ask and include the `@dartsnut-intake-ui:project-type` marker from the intake prompt) → if widget, confirm display size (ask if missing; use the `@dartsnut-intake-ui:widget-size` marker and size chips) then `set_widget_size` → `pick_workspace` → `read_workspace_conf`, then ask **one** focused follow-up question when `read_workspace_conf` shows an existing project or invalid `conf.json`."
+      "- **set_project_type** — record whether the user is building a `game` or `widget` (required before scaffolding). Use when the user already stated it clearly in text; otherwise call **`dartsnut_ask_question`** with `question_id` `project_type` first.",
+      "- **set_widget_size** — for widgets only; one of the supported WxH tokens. Use when the user already named a supported size; otherwise call **`dartsnut_ask_question`** with `widget_display_size` first.",
+      "- **read_workspace_conf** — reads `conf.json` in the **selected** workspace and reports deploy-style validity plus guidance. **If no workspace is selected yet**, the host **creates** an empty directory under the OS temp folder, selects it, then reads — call after type (and widget size if applicable) are resolved; call again if the user switches workspace via the app shell.",
+      "Typical order when starting from no workspace: infer or **`dartsnut_ask_question`(`project_type`)** → if widget, infer size or **`dartsnut_ask_question`(`widget_display_size`)** then `set_widget_size` when needed → **`read_workspace_conf`** (host allocates temp workspace on first call if needed), then ask **one** focused follow-up question when the snapshot shows an existing project or invalid `conf.json`."
     ].join(" "),
     parameters: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["set_project_type", "set_widget_size", "pick_workspace", "read_workspace_conf"]
+          enum: ["set_project_type", "set_widget_size", "read_workspace_conf"]
         },
         project_type: {
           type: "string",
@@ -215,5 +240,8 @@ export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
   DARTSNUT_PROJECT_INTAKE_TOOL
 ];
 
-/** Intake-only session: host tool exclusively (no writes to the placeholder workspace). */
-export const AGENT_CREATION_INTAKE_TOOL_SCHEMAS: ChatCompletionTool[] = [DARTSNUT_PROJECT_INTAKE_TOOL];
+/** Intake-only session: host tools only (no writes to the placeholder workspace). */
+export const AGENT_CREATION_INTAKE_TOOL_SCHEMAS: ChatCompletionTool[] = [
+  DARTSNUT_ASK_QUESTION_TOOL,
+  DARTSNUT_PROJECT_INTAKE_TOOL
+];

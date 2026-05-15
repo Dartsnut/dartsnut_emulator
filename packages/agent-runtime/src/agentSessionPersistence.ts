@@ -19,7 +19,7 @@ export type AgentSessionManifest = {
 };
 
 export type TranscriptRecord = {
-  kind: "user" | "assistant" | "tool_status";
+  kind: "user" | "assistant" | "tool_status" | "thinking";
   at: number;
   text: string;
   toolName?: string;

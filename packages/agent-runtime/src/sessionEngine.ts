@@ -898,19 +898,39 @@ export class SessionEngine {
         messageCount: messages.length
       });
 
+      let reasoningChunkEvents = 0;
       const completion = await this.options.provider.complete(messages, {
         tools: completionTools,
         onChunk: (delta) => {
           onEvent({ type: "stream", delta, at: Date.now() });
+        },
+        onReasoningChunk: (delta) => {
+          if (delta.length > 0) {
+            reasoningChunkEvents += 1;
+          }
+          onEvent({ type: "reasoning_stream", delta, at: Date.now() });
         }
       });
+
+      const reasoningTrimmed = completion.reasoningContent?.trim() ?? "";
+      if (reasoningTrimmed.length > 0) {
+        const forTranscript =
+          reasoningTrimmed.length > 50_000
+            ? `${reasoningTrimmed.slice(0, 50_000)}…`
+            : reasoningTrimmed;
+        p?.appendTranscript({ kind: "thinking", at: Date.now(), text: forTranscript });
+      }
+      onEvent({ type: "reasoning_done", at: Date.now() });
 
       this.emitTransaction({
         type: "completion.response",
         correlationId: turnCorrelationId,
         step,
         toolCallCount: completion.toolCalls.length,
-        contentLength: completion.content.length
+        contentLength: completion.content.length,
+        reasoningChars: reasoningTrimmed.length,
+        reasoningChunkEvents,
+        reasoningHttpStream: completion.usedHttpStream === true
       });
 
       if (completion.toolCalls.length > 0) {

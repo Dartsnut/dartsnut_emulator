@@ -45,9 +45,11 @@ type RightPaneTab = "emulator" | "assets" | "deploy";
 
 interface TimelineEntry {
   id: string;
-  role: "user" | "agent" | "status" | "error";
+  role: "user" | "agent" | "status" | "error" | "thinking";
   text: string;
   streaming?: boolean;
+  /** Thinking blocks: when true, body is hidden unless streaming. */
+  collapsed?: boolean;
 }
 
 interface FormattedAgentMessage {
@@ -76,11 +78,6 @@ function isNewFileWrite(action: ParsedAction): boolean {
   );
 }
 
-interface DiffLine {
-  kind: "add" | "remove" | "context";
-  text: string;
-}
-
 type AppScreen = "main" | "settings";
 
 const STREAM_PREVIEW_LINES = 8;
@@ -104,6 +101,15 @@ function transcriptLineToTimelineEntry(line: AgentSessionTranscriptLine, seq: nu
       return null;
     }
     return { id, role: "user", text: stripIntakeUiMarkers(visible), streaming: false };
+  }
+  if (line.kind === "thinking") {
+    return {
+      id,
+      role: "thinking",
+      text: stripIntakeUiMarkers(line.text),
+      streaming: false,
+      collapsed: true
+    };
   }
   if (line.kind === "assistant") {
     return { id, role: "agent", text: stripIntakeUiMarkers(line.text), streaming: false };
@@ -150,6 +156,22 @@ function getLatestPreviewLines(content: string): { lines: string[]; truncated: b
     lines,
     truncated: allLines.length > lines.length
   };
+}
+
+/** Last lines + tail char cap — mirrors agent rolling preview while thought streams. */
+function getThinkingRollingPreview(full: string): { text: string; truncated: boolean } {
+  const normalized = full.replace(/\r/g, "");
+  const allLines = normalized.split("\n");
+  const lineTruncated = allLines.length > STREAM_PREVIEW_LINES;
+  const tailLines = allLines.slice(-STREAM_PREVIEW_LINES);
+  let text = tailLines.join("\n");
+  let truncated = lineTruncated;
+  const maxChars = 1200;
+  if (text.length > maxChars) {
+    text = text.slice(-maxChars);
+    truncated = true;
+  }
+  return { text, truncated };
 }
 
 function getStreamingPreviewDiffLines(action: ParsedAction): { lines: DiffLine[]; truncated: boolean } {
@@ -506,6 +528,39 @@ function formatAgentMessage(text: string): FormattedAgentMessage {
   return parsePartialAgentMessage(text);
 }
 
+function ThinkingTimelineEntry(props: { entry: TimelineEntry; onToggleHeader: () => void }) {
+  const { entry, onToggleHeader } = props;
+  const bodyVisible = entry.collapsed !== true;
+  const rolling =
+    entry.streaming && entry.text.length > 0 && bodyVisible ? getThinkingRollingPreview(entry.text) : null;
+
+  return (
+    <div className="thinking-entry">
+      <button
+        type="button"
+        className="thinking-entry__header"
+        onClick={onToggleHeader}
+        aria-expanded={bodyVisible}
+      >
+        <span className="thinking-entry__chevron" aria-hidden>
+          {bodyVisible ? "▼" : "▶"}
+        </span>
+        <span className="thinking-entry__title">Thought</span>
+        {entry.streaming ? <span className="thinking-entry__streaming"> … </span> : null}
+      </button>
+      {rolling ? (
+        <div className="thinking-entry__rolling rolling-preview">
+          <pre className="entry-json">{rolling.text}</pre>
+          {rolling.truncated ? <div className="diff-truncation">Earlier thought not shown.</div> : null}
+        </div>
+      ) : null}
+      {!entry.streaming && bodyVisible ? (
+        <div className="thinking-entry__body entry-text">{entry.text}</div>
+      ) : null}
+    </div>
+  );
+}
+
 function workspaceFolderBasename(workspaceRoot: string): string {
   const normalized = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
   const segments = normalized.split("/").filter(Boolean);
@@ -515,6 +570,9 @@ function workspaceFolderBasename(workspaceRoot: string): string {
 function toEntry(event: AgentEvent, seq: number): TimelineEntry {
   if (event.type === "intake_widget_size_prompt" || event.type === "intake_project_type_prompt") {
     throw new Error("intake_* events are handled in onAgentEvent, not the timeline");
+  }
+  if (event.type === "reasoning_stream" || event.type === "reasoning_done") {
+    throw new Error("reasoning_* events are handled in onAgentEvent, not toEntry");
   }
   if (event.type === "stream") {
     return { id: `${event.type}-${event.at}-${seq}`, role: "agent", text: event.delta, streaming: true };
@@ -572,6 +630,9 @@ export function App() {
   const activeStreamEntryIdRef = useRef<string | null>(null);
   const streamPendingDeltaRef = useRef("");
   const streamFlushRafRef = useRef<number | null>(null);
+  const activeReasoningStreamEntryIdRef = useRef<string | null>(null);
+  const reasoningPendingDeltaRef = useRef("");
+  const reasoningStreamFlushRafRef = useRef<number | null>(null);
   const streamAutoscrollGateRef = useRef(0);
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
@@ -657,6 +718,11 @@ export function App() {
       streamFlushRafRef.current = null;
     }
     streamPendingDeltaRef.current = "";
+    if (reasoningStreamFlushRafRef.current !== null) {
+      cancelAnimationFrame(reasoningStreamFlushRafRef.current);
+      reasoningStreamFlushRafRef.current = null;
+    }
+    reasoningPendingDeltaRef.current = "";
   }
 
   function flushPendingStreamDeltas() {
@@ -683,6 +749,33 @@ export function App() {
     }
     streamFlushRafRef.current = window.requestAnimationFrame(() => {
       flushPendingStreamDeltas();
+    });
+  }
+
+  function flushPendingReasoningDeltas() {
+    reasoningStreamFlushRafRef.current = null;
+    const streamId = activeReasoningStreamEntryIdRef.current;
+    const pending = reasoningPendingDeltaRef.current;
+    reasoningPendingDeltaRef.current = "";
+    if (!streamId || !pending) {
+      return;
+    }
+    setEntries((prev) =>
+      prev.map((entry) =>
+        entry.id === streamId ? { ...entry, text: entry.text + pending, streaming: true } : entry
+      )
+    );
+    if (reasoningPendingDeltaRef.current.length > 0) {
+      scheduleReasoningStreamFlush();
+    }
+  }
+
+  function scheduleReasoningStreamFlush() {
+    if (reasoningStreamFlushRafRef.current !== null) {
+      return;
+    }
+    reasoningStreamFlushRafRef.current = window.requestAnimationFrame(() => {
+      flushPendingReasoningDeltas();
     });
   }
 
@@ -794,6 +887,49 @@ export function App() {
         return;
       }
       clearPendingReplyIndicator();
+      if (event.type === "reasoning_stream") {
+        const reasoningId = activeReasoningStreamEntryIdRef.current;
+        if (!reasoningId) {
+          const seq = eventSeqRef.current;
+          eventSeqRef.current += 1;
+          const id = `reasoning-${event.at}-${seq}`;
+          activeReasoningStreamEntryIdRef.current = id;
+          setEntries((prev) => [
+            ...prev,
+            { id, role: "thinking", text: event.delta, streaming: true, collapsed: false }
+          ]);
+          return;
+        }
+        reasoningPendingDeltaRef.current += event.delta;
+        scheduleReasoningStreamFlush();
+        return;
+      }
+      if (event.type === "reasoning_done") {
+        if (reasoningStreamFlushRafRef.current !== null) {
+          cancelAnimationFrame(reasoningStreamFlushRafRef.current);
+          reasoningStreamFlushRafRef.current = null;
+        }
+        const rid = activeReasoningStreamEntryIdRef.current;
+        const pending = reasoningPendingDeltaRef.current;
+        reasoningPendingDeltaRef.current = "";
+        activeReasoningStreamEntryIdRef.current = null;
+        if (rid && pending) {
+          setEntries((prev) =>
+            prev.map((entry) =>
+              entry.id === rid
+                ? { ...entry, text: entry.text + pending, streaming: false, collapsed: true }
+                : entry
+            )
+          );
+        } else if (rid) {
+          setEntries((prev) =>
+            prev.map((entry) =>
+              entry.id === rid ? { ...entry, streaming: false, collapsed: true } : entry
+            )
+          );
+        }
+        return;
+      }
       if (event.type === "stream") {
         const streamId = activeStreamEntryIdRef.current;
         if (!streamId) {
@@ -824,6 +960,7 @@ export function App() {
       if (event.type === "error") {
         cancelStreamCoalesce();
         activeStreamEntryIdRef.current = null;
+        activeReasoningStreamEntryIdRef.current = null;
         const seq = eventSeqRef.current;
         eventSeqRef.current += 1;
         setEntries((prev) => [...prev, toEntry(event, seq)]);
@@ -986,6 +1123,7 @@ export function App() {
       discardAgentEventsRef.current = true;
       cancelStreamCoalesce();
       activeStreamEntryIdRef.current = null;
+      activeReasoningStreamEntryIdRef.current = null;
       pendingReplyIdRef.current = null;
       eventSeqRef.current = 0;
       lastAgentSessionHydrateKeyRef.current = "";
@@ -1491,9 +1629,22 @@ export function App() {
             }}
           >
             {entries.map((entry) => (
-              <div key={entry.id} className={`entry ${entry.role}`}>
+              <div key={entry.id} className={cn("entry", entry.role)}>
                 {entry.role === "agent" ? (
                   <AgentEntryContent text={entry.text} isStreaming={Boolean(entry.streaming)} />
+                ) : entry.role === "thinking" ? (
+                  <ThinkingTimelineEntry
+                    entry={entry}
+                    onToggleHeader={() =>
+                      setEntries((prev) =>
+                        prev.map((e) =>
+                          e.id === entry.id && e.role === "thinking"
+                            ? { ...e, collapsed: e.collapsed === true ? false : true }
+                            : e
+                        )
+                      )
+                    }
+                  />
                 ) : (
                   <div className="entry-text">{entry.text}</div>
                 )}

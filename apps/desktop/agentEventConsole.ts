@@ -224,6 +224,12 @@ export function formatAgentEventForConsole(
       const lines = summarizeAgentTextForConsole(event.delta);
       return lines.length > 0 ? { level: "debug", lines } : null;
     }
+    case "reasoning_stream": {
+      const lines = summarizeAgentTextForConsole(event.delta);
+      return lines.length > 0 ? { level: "debug", lines: lines.map((l) => `[reasoning] ${l}`) } : null;
+    }
+    case "reasoning_done":
+      return { level: "debug", lines: ["[reasoning] done"] };
     case "final": {
       const lines = summarizeAgentTextForConsole(event.content);
       return lines.length > 0 ? { level: "info", lines } : null;

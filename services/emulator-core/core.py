@@ -93,6 +93,26 @@ class EmulatorCore:
         except FileNotFoundError:
             return
 
+    def _create_or_attach_shm(self, name: str, size: int) -> shared_memory.SharedMemory:
+        """Open a named segment, creating it if possible.
+
+        Windows: ``SharedMemory.unlink()`` is a no-op; stale or concurrent ``pdoshm``
+        therefore survives until all handles close. If exclusive create fails with
+        ``FileExistsError``, attach to the existing mapping when it is large enough.
+        """
+        try:
+            return shared_memory.SharedMemory(name=name, create=True, size=size)
+        except FileExistsError:
+            mem = shared_memory.SharedMemory(name=name, create=False)
+            if mem.size < size:
+                mem.close()
+                raise RuntimeError(
+                    f"Shared memory {name!r} already exists with size {mem.size}, "
+                    f"expected at least {size}; close other emulator or widget processes "
+                    "using the same PDO buffer."
+                ) from None
+            return mem
+
     def _init_shared_memory(self) -> None:
         # Remove legacy fixed framebuffer name left by older builds (Windows session-global).
         self._cleanup_shared_memory_name("shmpdi")
@@ -102,7 +122,7 @@ class EmulatorCore:
             name=self.shm_pdi_name, create=True, size=128 * 160 * 3 + 1
         )
         self.shm_pdi.buf[0] = 1
-        self.shm_pdo = shared_memory.SharedMemory(name=self.shm_pdo_name, create=True, size=49)
+        self.shm_pdo = self._create_or_attach_shm(self.shm_pdo_name, size=49)
         self._write_button_state()
         self._write_all_darts()
 

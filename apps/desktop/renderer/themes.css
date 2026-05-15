@@ -230,10 +230,6 @@
   --chrome-margin-inline-start: 76px;
 }
 
-:root[data-platform="win32"] {
-  --chrome-margin-inline-end: 132px;
-}
-
 [data-theme="light"] {
   color-scheme: light;
 

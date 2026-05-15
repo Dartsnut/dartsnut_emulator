@@ -27,6 +27,12 @@ const emuToolbarBtn =
 
 const emuToolbarIconBtn = cn(emuToolbarBtn, "size-7 p-0");
 
+const BRIDGE_DEBUG_PREFIX = "[bridge]";
+
+function isBridgeDebugStdout(entry: UiEmulatorLogEntry): boolean {
+  return entry.source === "stdout" && entry.text.trimStart().startsWith(BRIDGE_DEBUG_PREFIX);
+}
+
 function isEmulatorStoppedWithError(state: EmulatorStateSnapshot): boolean {
   if (state.running) {
     return false;
@@ -755,24 +761,36 @@ export function EmulatorPanel({
           {emulatorLogs.length === 0 ? (
             <div className="px-0.5 py-1.5 text-[var(--color-state-line)]">No logs yet.</div>
           ) : (
-            emulatorLogs.map((entry) => (
+            emulatorLogs.map((entry) => {
+              const bridgeDebug = isBridgeDebugStdout(entry);
+              return (
               <div
-                className="flex gap-2 break-words border-b border-[var(--color-log-line-border)] px-0.5 py-1"
                 key={entry.id}
+                title={entry.source}
+                className={cn(
+                  "break-words border-l-[3px] py-1 pl-2 pr-0.5",
+                  entry.source === "stderr" && "border-l-[var(--color-log-stderr)]",
+                  entry.source === "stdout" &&
+                    !bridgeDebug &&
+                    "border-l-[var(--color-log-stdout)]",
+                  entry.source === "stdout" && bridgeDebug && "border-l-[var(--color-text-muted)]",
+                  entry.source !== "stderr" && entry.source !== "stdout" && "border-l-[var(--color-params-header)]"
+                )}
               >
                 <span
                   className={cn(
-                    "shrink-0 text-[10px] font-bold uppercase tracking-wide",
+                    "block min-w-0 whitespace-pre-wrap",
                     entry.source === "stderr" && "text-[var(--color-log-stderr)]",
-                    entry.source === "stdout" && "text-[var(--color-log-stdout)]",
-                    entry.source !== "stderr" && entry.source !== "stdout" && "text-[var(--color-params-header)]"
+                    entry.source === "stdout" && !bridgeDebug && "text-[var(--color-log-stdout)]",
+                    entry.source === "stdout" && bridgeDebug && "text-[var(--color-text-muted)]",
+                    entry.source !== "stderr" && entry.source !== "stdout" && "text-[var(--color-log-text)]"
                   )}
                 >
-                  {entry.source}
+                  {entry.text}
                 </span>
-                <span className="min-w-0 flex-1 whitespace-pre-wrap text-[var(--color-log-text)]">{entry.text}</span>
               </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>

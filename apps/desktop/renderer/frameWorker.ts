@@ -12,6 +12,8 @@ type FrameResult = {
   timestampMs: number;
 };
 
+type WorkerNack = { kind: "workerNack" };
+
 type WorkerScope = {
   onmessage: ((event: MessageEvent<FrameJob>) => void) | null;
   postMessage: (message: unknown, transfer?: Transferable[]) => void;
@@ -30,16 +32,31 @@ function decodeBase64ToBytes(base64: string): Uint8Array {
 
 workerScope.onmessage = async (event: MessageEvent<FrameJob>) => {
   const { width, height, rgbBase64, timestampMs } = event.data;
-  const rgb = decodeBase64ToBytes(rgbBase64);
-  const rgba = new Uint8ClampedArray(width * height * 4);
-  for (let src = 0, dst = 0; src < rgb.length; src += 3, dst += 4) {
-    rgba[dst] = rgb[src];
-    rgba[dst + 1] = rgb[src + 1];
-    rgba[dst + 2] = rgb[src + 2];
-    rgba[dst + 3] = 255;
+  const expectedRgb = width * height * 3;
+  try {
+    let rgb: Uint8Array;
+    try {
+      rgb = decodeBase64ToBytes(rgbBase64);
+    } catch {
+      workerScope.postMessage({ kind: "workerNack" } satisfies WorkerNack);
+      return;
+    }
+    if (rgb.length !== expectedRgb) {
+      workerScope.postMessage({ kind: "workerNack" } satisfies WorkerNack);
+      return;
+    }
+    const rgba = new Uint8ClampedArray(width * height * 4);
+    for (let src = 0, dst = 0; src < rgb.length; src += 3, dst += 4) {
+      rgba[dst] = rgb[src];
+      rgba[dst + 1] = rgb[src + 1];
+      rgba[dst + 2] = rgb[src + 2];
+      rgba[dst + 3] = 255;
+    }
+    const imageData = new ImageData(rgba, width, height);
+    const bitmap = await createImageBitmap(imageData);
+    const result: FrameResult = { bitmap, width, height, timestampMs };
+    workerScope.postMessage(result, [bitmap]);
+  } catch {
+    workerScope.postMessage({ kind: "workerNack" } satisfies WorkerNack);
   }
-  const imageData = new ImageData(rgba, width, height);
-  const bitmap = await createImageBitmap(imageData);
-  const result: FrameResult = { bitmap, width, height, timestampMs };
-  workerScope.postMessage(result, [bitmap]);
 };

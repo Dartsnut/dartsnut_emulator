@@ -6,12 +6,23 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from multiprocessing import shared_memory
 from typing import Any
 
 from PIL import Image, ImageDraw
+
+
+def _widget_root_fs_path(workspace_root: str, path: str) -> str:
+    """Resolve widget directory to an absolute, normalized path (Windows/macOS safe)."""
+    raw = os.path.expandvars(os.path.expanduser((path or "").strip()))
+    if not raw:
+        raise ValueError("Widget path is empty")
+    if os.path.isabs(raw):
+        return os.path.abspath(os.path.normpath(raw))
+    return os.path.abspath(os.path.normpath(os.path.join(workspace_root, raw)))
 
 
 def sanitize_name(name: str) -> str:
@@ -43,7 +54,8 @@ class EmulatorCore:
         self.config: dict[str, Any] | None = None
         self.data_store_path: str | None = None
         self.state = EmulatorState()
-        self.shm_pdi_name = "shmpdi"
+        # Unique per process: Windows global shared-memory names caused stale collisions with "shmpdi".
+        self.shm_pdi_name = f"dartsnut_pdi_{uuid.uuid4().hex}"
         self.shm_pdo_name = "pdoshm"
         self.shm_pdi: shared_memory.SharedMemory | None = None
         self.shm_pdo: shared_memory.SharedMemory | None = None
@@ -58,6 +70,7 @@ class EmulatorCore:
         self.capture_base_name = "capture"
         self._button_state = 0
         self._darts: list[list[int]] = [[-1, -1] for _ in range(12)]
+        self._last_launch_argv_chars = -1
         self._init_shared_memory()
 
     def _queue_bridge_log(self, text: str, source: str = "stdout") -> None:
@@ -81,6 +94,8 @@ class EmulatorCore:
             return
 
     def _init_shared_memory(self) -> None:
+        # Remove legacy fixed framebuffer name left by older builds (Windows session-global).
+        self._cleanup_shared_memory_name("shmpdi")
         self._cleanup_shared_memory_name(self.shm_pdi_name)
         self._cleanup_shared_memory_name(self.shm_pdo_name)
         self.shm_pdi = shared_memory.SharedMemory(
@@ -121,10 +136,11 @@ class EmulatorCore:
         return asdict(self.state)
 
     def load_widget_config(self, path: str, params: dict[str, Any] | None = None) -> None:
-        conf_path = os.path.join(self.workspace_root, path, "conf.json")
+        root = _widget_root_fs_path(self.workspace_root, path)
+        conf_path = os.path.join(root, "conf.json")
         with open(conf_path, "r", encoding="utf-8") as f:
             self.config = json.load(f)
-        self.current_path = path
+        self.current_path = root
         self.current_params = params or {}
         app_id = self.config.get("id", "unknown_app")
         self.data_store_path = os.path.join(self.workspace_root, "user", "guest", app_id)
@@ -173,7 +189,7 @@ class EmulatorCore:
         )
         self.stop_widget_process()
         time.sleep(0.2)
-        launch_cwd = os.path.join(self.workspace_root, self.current_path)
+        launch_cwd = self.current_path
         command = [
             sys.executable,
             os.path.join(launch_cwd, "main.py"),
@@ -185,16 +201,35 @@ class EmulatorCore:
         if self.data_store_path:
             command.extend(["--data-store", self.data_store_path])
 
+        self._last_launch_argv_chars = sum(len(str(a)) for a in command) + max(0, len(command) - 1)
+
         child_env = os.environ.copy()
-        child_env.setdefault("SDL_VIDEODRIVER", "dummy")
-        child_env.setdefault("SDL_AUDIODRIVER", "dummy")
-        child_env.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+        # Always headless for emulator widgets. setdefault() would keep a host
+        # SDL_VIDEODRIVER (e.g. from Electron/shell), which can block set_mode or
+        # prevent frames from ever reaching shared memory on Windows.
+        child_env["SDL_VIDEODRIVER"] = "dummy"
+        child_env["SDL_AUDIODRIVER"] = "dummy"
         child_env.setdefault("PYTHONUNBUFFERED", "1")
+        # Pygame prints a welcome banner to stderr unless this is set — absence of that line does not
+        # mean the interpreter failed to start. Set DARTSNUT_EMULATOR_VERBOSE=1 (host env) to show it.
+        emulator_verbose = os.environ.get("DARTSNUT_EMULATOR_VERBOSE", "").strip().lower() in ("1", "true", "yes")
+        if emulator_verbose:
+            child_env.pop("PYGAME_HIDE_SUPPORT_PROMPT", None)
+            self._queue_bridge_log("DARTSNUT_EMULATOR_VERBOSE=1: pygame welcome banner will appear in Python logs if pygame loads.")
+        else:
+            child_env.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+            self._queue_bridge_log(
+                "Pygame welcome banner is suppressed (PYGAME_HIDE_SUPPORT_PROMPT=1). "
+                "The widget process can still be running; set DARTSNUT_EMULATOR_VERBOSE=1 to show the banner."
+            )
         self._queue_bridge_log(f"launch command cwd={launch_cwd} argv={json.dumps(command)}")
 
         self.widget_process = subprocess.Popen(
             command,
             cwd=launch_cwd,
+            # Do not inherit the bridge's stdin (a pipe from Electron). On Windows, SDL/pygame
+            # or the console layer can interact badly with that handle and stall before the frame loop.
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -209,6 +244,12 @@ class EmulatorCore:
         self._queue_bridge_log(
             f"Child process started{f' (pid={pid})' if pid is not None else ''}."
         )
+        early = self.widget_process.poll()
+        if early is not None:
+            self._queue_bridge_log(
+                f"Widget process exited immediately with code {early} (check Python Logs stderr / import errors).",
+                source="stderr",
+            )
 
     def _pump_widget_stream(self, stream: Any, source: str) -> None:
         try:
@@ -260,7 +301,7 @@ class EmulatorCore:
                 if not isinstance(path, str):
                     raise ValueError("set_path requires string path")
                 self.load_widget_config(path, self.current_params)
-                self._queue_bridge_log(f"set_path -> {path}")
+                self._queue_bridge_log(f"set_path -> {self.current_path}")
             elif action == "set_params":
                 params = command.get("params")
                 if not isinstance(params, dict):

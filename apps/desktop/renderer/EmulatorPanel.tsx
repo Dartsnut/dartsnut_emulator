@@ -256,7 +256,18 @@ export function EmulatorPanel({
   useEffect(() => {
     frameWorkerRef.current = new Worker(new URL("./frameWorker.ts", import.meta.url), { type: "module" });
     frameWorkerRef.current.onmessage = (event: MessageEvent) => {
-      const payload = event.data as { bitmap: ImageBitmap; width: number; height: number };
+      const data = event.data as { kind?: string; bitmap?: ImageBitmap; width?: number; height?: number };
+      if (data && typeof data === "object" && data.kind === "workerNack") {
+        workerBusyRef.current = false;
+        const pending = pendingFrameRef.current;
+        if (pending && frameWorkerRef.current) {
+          pendingFrameRef.current = null;
+          workerBusyRef.current = true;
+          frameWorkerRef.current.postMessage(pending);
+        }
+        return;
+      }
+      const payload = data as { bitmap: ImageBitmap; width: number; height: number };
       latestFrameMetaRef.current = { width: payload.width, height: payload.height };
       drawFrameToCanvas(canvasRef.current, payload.bitmap, { width: payload.width, height: payload.height }, 1);
       if (zoomOpenRef.current) {
@@ -285,6 +296,7 @@ export function EmulatorPanel({
       if (bg?.url) {
         const img = new Image();
         img.src = bg.url;
+        img.onerror = () => {};
         img.onload = () => {
           backgroundRef.current = img;
           const meta = latestFrameMetaRef.current;

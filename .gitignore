@@ -23,3 +23,7 @@ test_configs
 docs/superpowers
 openspec
 .worktrees/
+
+# Cursor debug NDJSON logs (filename is debug-<sessionId>.log; session id is per chat/run)
+/debug-*.log
+apps/desktop/debug-*.log

@@ -45,11 +45,15 @@ export interface CompletionResult {
   toolCalls: ParsedToolCall[];
   /** Thinking-mode (e.g. MiMo): must be echoed on follow-up turns as `reasoning_content`. */
   reasoningContent?: string;
+  /** True when this round used OpenAI `stream: true` (incremental deltas); false for one-shot `stream: false`. */
+  usedHttpStream?: boolean;
 }
 
 export interface CompletionOptions {
   tools?: ChatCompletionTool[];
   onChunk?: (delta: string) => void;
+  /** Thinking-mode: stream wire `reasoning_content` deltas (and one-shot flush in non-streaming path). */
+  onReasoningChunk?: (delta: string) => void;
 }
 
 export interface CompletionProvider {
@@ -85,16 +89,32 @@ function readReasoningContent(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  const rc = (message as { reasoning_content?: unknown }).reasoning_content;
-  return typeof rc === "string" ? rc : undefined;
+  const m = message as Record<string, unknown>;
+  const rc = m.reasoning_content;
+  if (typeof rc === "string" && rc.length > 0) {
+    return rc;
+  }
+  const r = m.reasoning;
+  if (typeof r === "string" && r.length > 0) {
+    return r;
+  }
+  return undefined;
 }
 
 function readReasoningDelta(delta: unknown): string {
   if (!delta || typeof delta !== "object") {
     return "";
   }
-  const rc = (delta as { reasoning_content?: unknown }).reasoning_content;
-  return typeof rc === "string" ? rc : "";
+  const d = delta as Record<string, unknown>;
+  const rc = d.reasoning_content;
+  if (typeof rc === "string" && rc.length > 0) {
+    return rc;
+  }
+  const r = d.reasoning;
+  if (typeof r === "string" && r.length > 0) {
+    return r;
+  }
+  return "";
 }
 
 /** Default cap so a hung provider does not leave the UI stuck forever. */
@@ -109,9 +129,10 @@ const DEFAULT_CHAT_COMPLETION_TIMEOUT_MS = 180_000;
  * "The reasoning_content in the thinking mode must be passed back to the API."). We
  * accumulate and replay it through `ChatMessage.reasoningContent` / wire `reasoning_content`.
  *
- * **MiMo + tool history:** some deployments reject `stream: true` once `role: "tool"` exists;
- * those rounds use `stream: false` while still flushing `onChunk` once. Set
- * `AGENT_FORCE_STREAM_WITH_TOOL_HISTORY=1` to force streaming anyway.
+ * **Tool history + HTTP streaming:** By default we use `stream: true` even when `role: "tool"`
+ * messages are present, so `reasoning_content` / content arrive incrementally (rolling Thought UI).
+ * Some gateways reject that combination; set **`AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY=1`** to fall back to
+ * `stream: false` for those rounds (single-shot `onChunk` / `onReasoningChunk` flush).
  */
 export class ProviderClient implements CompletionProvider {
   private readonly openai: OpenAI;
@@ -130,16 +151,17 @@ export class ProviderClient implements CompletionProvider {
   }
 
   async complete(messages: ChatMessage[], options: CompletionOptions = {}): Promise<CompletionResult> {
-    const { tools, onChunk } = options;
+    const { tools, onChunk, onReasoningChunk } = options;
     const timeoutMs = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS) || DEFAULT_CHAT_COMPLETION_TIMEOUT_MS;
     const signal = AbortSignal.timeout(timeoutMs);
     const requestMessages = ProviderClient.toWireMessages(messages);
 
-    const forceStreamWithToolHistory =
-      process.env.AGENT_FORCE_STREAM_WITH_TOOL_HISTORY === "1" ||
-      process.env.AGENT_FORCE_STREAM_WITH_TOOL_HISTORY?.toLowerCase() === "true";
+    const disableStreamWithToolHistory =
+      process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY === "1" ||
+      process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY?.toLowerCase() === "true";
     const hasToolHistory = messages.some((m) => m.role === "tool");
-    const useStreaming = Boolean(onChunk) && (forceStreamWithToolHistory || !hasToolHistory);
+    const useStreaming =
+      Boolean(onChunk || onReasoningChunk) && (!hasToolHistory || !disableStreamWithToolHistory);
 
     const common = {
       model: this.model,
@@ -157,17 +179,22 @@ export class ProviderClient implements CompletionProvider {
       );
       const trimmed = content.trim();
       const reasoningContent = readReasoningContent(message);
+      if (onReasoningChunk && reasoningContent !== undefined && reasoningContent.length > 0) {
+        onReasoningChunk(reasoningContent);
+      }
       if (onChunk && trimmed.length > 0) {
         onChunk(trimmed);
       }
       return {
         content: trimmed,
         toolCalls,
+        usedHttpStream: false,
         ...(reasoningContent !== undefined ? { reasoningContent } : {})
       };
     }
 
-    const notifyChunk = onChunk!;
+    const notifyChunk = onChunk ?? ((_delta: string) => {});
+    const notifyReasoning = onReasoningChunk;
     const stream = await this.openai.chat.completions.create({ ...common, stream: true }, { signal });
     let fullText = "";
     let fullReasoning = "";
@@ -185,6 +212,9 @@ export class ProviderClient implements CompletionProvider {
       const reasoningDelta = readReasoningDelta(delta);
       if (reasoningDelta) {
         fullReasoning += reasoningDelta;
+        if (notifyReasoning) {
+          notifyReasoning(reasoningDelta);
+        }
       }
       if (Array.isArray(delta.tool_calls)) {
         ProviderClient.mergeToolCallDeltas(toolCallAccumulators, delta.tool_calls as OpenAIToolCallDelta[]);
@@ -205,6 +235,7 @@ export class ProviderClient implements CompletionProvider {
     return {
       content: trimmed,
       toolCalls,
+      usedHttpStream: true,
       ...(fullReasoning.length > 0 ? { reasoningContent: fullReasoning } : {})
     };
   }

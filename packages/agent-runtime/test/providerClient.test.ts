@@ -36,14 +36,66 @@ describe("ProviderClient wire format", () => {
       fetchImpl
     });
 
-    await client.complete([{ role: "user", content: "hi" }], {
+    const result = await client.complete([{ role: "user", content: "hi" }], {
       onChunk: vi.fn()
     });
 
     expect(captured.body.stream).toBe(true);
+    expect(result.usedHttpStream).toBe(true);
   });
 
-  it("uses stream:false when onChunk is set but a tool message is already in context", async () => {
+  it("uses stream:true with tool history by default", async () => {
+    const encoder = new TextEncoder();
+    const sse =
+      'data: {"choices":[{"index":0,"delta":{"content":"hi"}}]}\n\n' + "data: [DONE]\n\n";
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(sse));
+            controller.close();
+          }
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+    }) as unknown as typeof fetch;
+    const captured: CapturedRequest = { body: { messages: [] } };
+    const wrappedFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      captured.body = body;
+      return fetchImpl(url, init);
+    }) as unknown as typeof fetch;
+
+    const client = new ProviderClient({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "test-model",
+      fetchImpl: wrappedFetch
+    });
+
+    const messages: ChatMessage[] = [
+      { role: "user", content: "hi" },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: { name: "list_files", arguments: "{}" }
+          }
+        ]
+      },
+      { role: "tool", tool_call_id: "call_1", content: '{"ok":true}' }
+    ];
+
+    await client.complete(messages, { onChunk: vi.fn() });
+    expect(captured.body.stream).toBe(true);
+  });
+
+  it("uses stream:false with tool history when AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY=1", async () => {
+    const prev = process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY;
+    process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY = "1";
     const onChunk = vi.fn();
     const { fetchImpl, captured } = makeFetchMock({
       choices: [{ message: { content: "Pick a size.", tool_calls: [] } }]
@@ -71,12 +123,20 @@ describe("ProviderClient wire format", () => {
       { role: "tool", tool_call_id: "call_1", content: '{"ok":true}' }
     ];
 
-    const result = await client.complete(messages, { onChunk });
-
-    expect(captured.body.stream).toBe(false);
-    expect(onChunk).toHaveBeenCalledTimes(1);
-    expect(onChunk).toHaveBeenCalledWith("Pick a size.");
-    expect(result.content).toBe("Pick a size.");
+    try {
+      const result = await client.complete(messages, { onChunk });
+      expect(captured.body.stream).toBe(false);
+      expect(onChunk).toHaveBeenCalledTimes(1);
+      expect(onChunk).toHaveBeenCalledWith("Pick a size.");
+      expect(result.content).toBe("Pick a size.");
+      expect(result.usedHttpStream).toBe(false);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY;
+      } else {
+        process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY = prev;
+      }
+    }
   });
 
   it("preserves assistant messages on the wire (no content rewriting)", async () => {
@@ -191,5 +251,115 @@ describe("ProviderClient wire format", () => {
     const result = await client.complete([{ role: "user", content: "x" }]);
     expect(result.content).toBe("Visible reply.");
     expect(result.reasoningContent).toBe("Hidden reasoning.");
+    expect(result.usedHttpStream).toBe(false);
+  });
+
+  it("invokes onReasoningChunk once with full reasoning on non-streaming response when callback is set", async () => {
+    const prev = process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY;
+    process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY = "1";
+    const { fetchImpl } = makeFetchMock({
+      choices: [
+        {
+          message: {
+            content: "Hi",
+            reasoning_content: "Step A. Step B.",
+            tool_calls: []
+          }
+        }
+      ]
+    });
+    const client = new ProviderClient({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "test-model",
+      fetchImpl
+    });
+    const onReasoningChunk = vi.fn();
+    const messages: ChatMessage[] = [
+      { role: "user", content: "x" },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id: "c1", type: "function", function: { name: "list_files", arguments: "{}" } }]
+      },
+      { role: "tool", tool_call_id: "c1", content: "{}" }
+    ];
+    try {
+      await client.complete(messages, { onReasoningChunk });
+      expect(onReasoningChunk).toHaveBeenCalledTimes(1);
+      expect(onReasoningChunk).toHaveBeenCalledWith("Step A. Step B.");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY;
+      } else {
+        process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY = prev;
+      }
+    }
+  });
+
+  it("streams reasoning_content deltas through onReasoningChunk when streaming", async () => {
+    const encoder = new TextEncoder();
+    const sse =
+      'data: {"choices":[{"index":0,"delta":{"reasoning_content":"one"}}]}\n\n' +
+      'data: {"choices":[{"index":0,"delta":{"reasoning_content":" two"}}]}\n\n' +
+      'data: {"choices":[{"index":0,"delta":{}}]}\n\n' +
+      "data: [DONE]\n\n";
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(sse));
+            controller.close();
+          }
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+    }) as unknown as typeof fetch;
+
+    const client = new ProviderClient({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "test-model",
+      fetchImpl
+    });
+    const onChunk = vi.fn();
+    const onReasoningChunk = vi.fn();
+    const result = await client.complete([{ role: "user", content: "x" }], { onChunk, onReasoningChunk });
+    expect(onReasoningChunk.mock.calls.map((c) => c[0]).join("")).toBe("one two");
+    expect(result.reasoningContent).toBe("one two");
+    expect(result.usedHttpStream).toBe(true);
+  });
+
+  it("reads reasoning deltas from delta.reasoning when reasoning_content is absent", async () => {
+    const encoder = new TextEncoder();
+    const sse =
+      'data: {"choices":[{"index":0,"delta":{"reasoning":"alpha"}}]}\n\n' +
+      'data: {"choices":[{"index":0,"delta":{"reasoning":"beta"}}]}\n\n' +
+      "data: [DONE]\n\n";
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(sse));
+            controller.close();
+          }
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+    }) as unknown as typeof fetch;
+
+    const client = new ProviderClient({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "test-model",
+      fetchImpl
+    });
+    const onReasoningChunk = vi.fn();
+    const result = await client.complete([{ role: "user", content: "x" }], {
+      onChunk: vi.fn(),
+      onReasoningChunk
+    });
+    expect(onReasoningChunk.mock.calls.map((c) => c[0]).join("")).toBe("alphabeta");
+    expect(result.reasoningContent).toBe("alphabeta");
   });
 });

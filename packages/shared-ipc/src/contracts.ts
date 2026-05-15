@@ -144,7 +144,7 @@ export interface SendPromptResponse {
   };
 }
 
-export type AgentSessionTranscriptLineKind = "user" | "assistant" | "tool_status";
+export type AgentSessionTranscriptLineKind = "user" | "assistant" | "tool_status" | "thinking";
 
 /** Workspace `transcript.jsonl` row shape (renderer preview). */
 export interface AgentSessionTranscriptLine {
@@ -273,6 +273,17 @@ export type AgentEvent =
   | {
     type: "stream";
     delta: string;
+    at: number;
+  }
+  | {
+    /** Incremental model reasoning (e.g. wire `reasoning_content`); timeline renders separately from assistant content. */
+    type: "reasoning_stream";
+    delta: string;
+    at: number;
+  }
+  | {
+    /** End of one completion step’s reasoning stream; renderer finalizes the active Thought block. */
+    type: "reasoning_done";
     at: number;
   }
   | {

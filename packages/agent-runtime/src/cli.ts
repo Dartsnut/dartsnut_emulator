@@ -14,6 +14,12 @@ export async function runInteractiveCli(session: SessionEngine): Promise<void> {
       if (event.type === "stream") {
         output.write(event.delta);
       }
+      if (event.type === "reasoning_stream") {
+        output.write(event.delta);
+      }
+      if (event.type === "reasoning_done") {
+        output.write("\n");
+      }
       if (event.type === "status") {
         output.write(`[status] ${event.message}\n`);
       }

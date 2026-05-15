@@ -27,6 +27,17 @@ const emuToolbarBtn =
 
 const emuToolbarIconBtn = cn(emuToolbarBtn, "size-7 p-0");
 
+function isEmulatorStoppedWithError(state: EmulatorStateSnapshot): boolean {
+  if (state.running) {
+    return false;
+  }
+  if (state.lastError?.trim()) {
+    return true;
+  }
+  const s = state.status;
+  return s === "Bridge error" || s === "Command failed";
+}
+
 export type EmulatorPanelProps = {
   widgetParamsText: string;
   setWidgetParamsText: Dispatch<SetStateAction<string>>;
@@ -76,6 +87,7 @@ export function EmulatorPanel({
   const showDartLegend = hasResolvedWorkspaceType && normalizedWidgetType === "game";
   const projectKindLabel =
     normalizedWidgetType === "widget" ? "Widget" : normalizedWidgetType === "game" ? "Game" : "Unknown";
+  const stoppedWithError = isEmulatorStoppedWithError(state);
 
   useEffect(() => {
     zoomOpenRef.current = zoomOpen;
@@ -541,7 +553,15 @@ export function EmulatorPanel({
               }}
             />
             <div className="box-border m-0 flex w-full max-w-[294px] shrink-0 flex-row items-center justify-center gap-2.5 self-stretch px-2 pb-2 pt-1.5 text-center text-xs text-[var(--color-state-line)]">
-              <span>{state.running ? "Running" : "Stopped"}</span>
+              {state.running ? (
+                <span>Running</span>
+              ) : stoppedWithError ? (
+                <span className="font-medium text-[var(--color-error-text)]" title={state.lastError?.trim() || state.status}>
+                  Error
+                </span>
+              ) : (
+                <span>Stopped</span>
+              )}
               <span>{projectKindLabel}</span>
               <span>FPS C{captureFps} / R{renderFps}</span>
             </div>

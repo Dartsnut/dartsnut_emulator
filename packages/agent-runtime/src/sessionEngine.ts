@@ -1028,13 +1028,13 @@ export class SessionEngine {
           (action) => action.tool === "write_file" || action.tool === "replace_in_file"
         );
         if (envelope && hasFileWritePreview) {
-          const trimmedLead = completion.content.trim();
-          if (trimmedLead.length > 0) {
-            onEvent({ type: "final", content: trimmedLead, at: Date.now() });
-          } else if (liveToolEnvelopeStreamed.count > 0) {
-            onEvent({ type: "final", content: "", at: Date.now() });
+          if (liveToolEnvelopeStreamed.count > 0) {
+            const trimmedLead = completion.content.trim();
+            const finalContent = trimmedLead.length > 0 ? `${trimmedLead}\n\n${envelope}` : envelope;
+            onEvent({ type: "final", content: finalContent, at: Date.now() });
+          } else {
+            await this.streamNativeToolEnvelopePreview(completion.content, envelope, onEvent);
           }
-          await this.streamNativeToolEnvelopePreview("", envelope, onEvent);
         } else if (envelope) {
           await this.streamNativeToolEnvelopePreview(completion.content, envelope, onEvent);
         }

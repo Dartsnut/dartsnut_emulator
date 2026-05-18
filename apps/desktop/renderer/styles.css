@@ -173,10 +173,41 @@ body {
   overflow-x: hidden;
 }
 
-.entry-action--final-diff {
+.entry-action--file-summary {
   border: none;
   background: transparent;
   padding: 0;
+}
+
+.file-edit-summary {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.file-edit-summary__label {
+  color: var(--color-text-hint);
+}
+
+.file-edit-summary__stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.file-edit-summary__stat--add {
+  color: var(--color-diff-add);
+  font-weight: 600;
+}
+
+.file-edit-summary__stat--remove {
+  color: var(--color-diff-remove);
+  font-weight: 600;
 }
 
 .entry-action--rolling-preview {
@@ -450,6 +481,17 @@ body {
   margin-top: 0;
 }
 
+/* Streaming thought tail — grows with content up to STREAM_PREVIEW_LINES (8), anchored to bottom */
+.thinking-entry__rolling.rolling-preview {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: calc(1.5lh * 8);
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .thinking-entry__rolling.rolling-preview .agent-markdown,
 .thinking-entry__body .agent-markdown {
   margin: 0;
@@ -460,13 +502,15 @@ body {
 }
 
 .thinking-entry__rolling.rolling-preview .agent-markdown {
-  max-height: 200px;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .thinking-entry__rolling.rolling-preview .agent-markdown p,
 .thinking-entry__rolling.rolling-preview .agent-markdown ul,
-.thinking-entry__rolling.rolling-preview .agent-markdown ol,
+.thinking-entry__rolling.rolling-preview .agent-markdown ol {
+  margin: 0;
+}
+
 .thinking-entry__body .agent-markdown p,
 .thinking-entry__body .agent-markdown ul,
 .thinking-entry__body .agent-markdown ol {
@@ -474,7 +518,6 @@ body {
 }
 
 .thinking-entry__rolling.rolling-preview .agent-markdown pre {
-  max-height: 120px;
   font-size: 10px;
 }
 

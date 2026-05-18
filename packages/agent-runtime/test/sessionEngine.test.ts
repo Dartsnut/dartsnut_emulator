@@ -254,6 +254,33 @@ class StreamingNativeWriteProvider {
   }
 }
 
+class StreamingNativeReplaceInFileProvider {
+  async complete(_messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult> {
+    const args = '{"path":"main.py","find":"old","replace":"new';
+    options?.onToolCallProgress?.([
+      { id: "call_replace", name: "replace_in_file", argumentsJson: args }
+    ]);
+    options?.onToolCallProgress?.([
+      {
+        id: "call_replace",
+        name: "replace_in_file",
+        argumentsJson: `${args}"}`
+      }
+    ]);
+    return {
+      content: "",
+      toolCalls: [
+        {
+          id: "call_replace",
+          name: "replace_in_file",
+          argumentsJson: JSON.stringify({ path: "main.py", find: "old", replace: "new" })
+        }
+      ],
+      usedHttpStream: true
+    };
+  }
+}
+
 /** Models providers that buffer tool_calls until the HTTP stream ends (no incremental args). */
 class AtomicNativeWriteWithContentProvider {
   async complete(_messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult> {
@@ -553,7 +580,7 @@ describe("SessionEngine tool loop", () => {
     expect(events.some((event) => event.type === "status")).toBe(true);
   });
 
-  it("chunks write_file preview after tools even when live tool progress arrived in one burst", async () => {
+  it("finalizes write_file preview in one final when live tool progress already streamed", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     const events: AgentEvent[] = [];
     const engine = new SessionEngine({
@@ -567,14 +594,18 @@ describe("SessionEngine tool loop", () => {
     const streamEvents = events.filter(
       (event): event is Extract<AgentEvent, { type: "stream" }> => event.type === "stream"
     );
-    expect(streamEvents.length).toBeGreaterThan(3);
+    expect(streamEvents.length).toBeGreaterThan(0);
     const finals = events.filter(
       (event): event is Extract<AgentEvent, { type: "final" }> => event.type === "final"
     );
-    const narrativeFinal = finals.find((event) => event.content === "Planning the widget layout.");
-    expect(narrativeFinal).toBeDefined();
-    const envelopeFinal = finals.find((event) => event.content.includes('"tool": "write_file"'));
-    expect(envelopeFinal).toBeDefined();
+    expect(finals.some((event) => event.content === "")).toBe(false);
+    const combinedFinal = finals.find(
+      (event) =>
+        event.content.includes("Planning the widget layout.") &&
+        event.content.includes('"tool": "write_file"')
+    );
+    expect(combinedFinal).toBeDefined();
+    expect(combinedFinal?.content).toContain("widget.py");
   });
 
   it("streams write_file envelope deltas during native tool argument progress", async () => {
@@ -596,6 +627,29 @@ describe("SessionEngine tool loop", () => {
     expect(combined).toContain('"tool":"write_file"');
     expect(combined).toContain("widget.py");
     expect(combined).toContain("print(");
+  });
+
+  it("keeps replace_in_file preview content in the final envelope after live tool progress", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    fs.writeFileSync(path.join(tempRoot, "main.py"), "old", "utf-8");
+    const events: AgentEvent[] = [];
+    const engine = new SessionEngine({
+      provider: new StreamingNativeReplaceInFileProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant."
+    });
+
+    await engine.runPrompt("edit main.py", (event) => events.push(event));
+
+    const finals = events.filter(
+      (event): event is Extract<AgentEvent, { type: "final" }> => event.type === "final"
+    );
+    expect(finals.some((event) => event.content === "")).toBe(false);
+    const envelopeFinal = finals.find((event) => event.content.includes('"tool": "replace_in_file"'));
+    expect(envelopeFinal).toBeDefined();
+    expect(envelopeFinal?.content).toContain('"find": "old"');
+    expect(envelopeFinal?.content).toContain('"replace": "new"');
+    expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toBe("new");
   });
 
   it("executes native tool_calls and threads tool_call_id through the conversation", async () => {

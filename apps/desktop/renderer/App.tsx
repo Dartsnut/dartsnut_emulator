@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   type AgentEvent,
   type AgentSessionIntent,
@@ -23,8 +23,7 @@ import { isStructuredAgentEnvelopeText } from "../agentEventConsole";
 import { cn } from "./cn";
 import { DeployPanel } from "./DeployPanel";
 import { EmulatorPanel } from "./EmulatorPanel";
-import type { DiffLine } from "./FinalDiffPreview";
-import { languageFromPath } from "./languageFromPath";
+import FileEditSummary from "./FileEditSummary";
 import { ThemeSwitcherIcon } from "./ThemeSwitcher";
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
@@ -35,7 +34,11 @@ const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x
 const CREATION_INTAKE_PROJECT_TYPES: readonly ProjectType[] = ["game", "widget"];
 
 const AgentMarkdownRenderer = lazy(() => import("./AgentMarkdownRenderer"));
-const FinalDiffPreview = lazy(() => import("./FinalDiffPreview"));
+
+interface DiffLine {
+  kind: "add" | "remove" | "context";
+  text: string;
+}
 
 function projectTypeChipLabel(pt: ProjectType): string {
   return pt === "game" ? "Game" : "Widget";
@@ -528,6 +531,35 @@ function formatAgentMessage(text: string): FormattedAgentMessage {
   return parsePartialAgentMessage(text);
 }
 
+function ThinkingRollingPreview(props: { source: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const peakHeightRef = useRef(0);
+  const [minHeightPx, setMinHeightPx] = useState<number | undefined>(undefined);
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) {
+      return;
+    }
+    const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight);
+    const capPx = Number.isFinite(lineHeight) ? lineHeight * STREAM_PREVIEW_LINES : el.scrollHeight;
+    const measured = Math.min(el.scrollHeight, capPx);
+    if (measured > peakHeightRef.current) {
+      peakHeightRef.current = measured;
+      setMinHeightPx(measured);
+    }
+  }, [props.source]);
+
+  const style: CSSProperties | undefined =
+    minHeightPx !== undefined ? { minHeight: minHeightPx } : undefined;
+
+  return (
+    <div ref={containerRef} className="thinking-entry__rolling rolling-preview" style={style}>
+      <AgentMarkdownBody source={props.source} />
+    </div>
+  );
+}
+
 function ThinkingTimelineEntry(props: { entry: TimelineEntry; onToggleHeader: () => void }) {
   const { entry, onToggleHeader } = props;
   const bodyVisible = entry.collapsed !== true;
@@ -548,11 +580,7 @@ function ThinkingTimelineEntry(props: { entry: TimelineEntry; onToggleHeader: ()
         <span className="thinking-entry__title">Thought</span>
         {entry.streaming ? <span className="thinking-entry__streaming"> … </span> : null}
       </button>
-      {rolling ? (
-        <div className="thinking-entry__rolling rolling-preview">
-          <AgentMarkdownBody source={rolling.text} />
-        </div>
-      ) : null}
+      {rolling ? <ThinkingRollingPreview key={entry.id} source={rolling.text} /> : null}
       {!entry.streaming && bodyVisible ? (
         <div className="thinking-entry__body">
           <AgentMarkdownBody source={entry.text} />
@@ -940,9 +968,20 @@ export function App() {
         activeStreamEntryIdRef.current = null;
         cancelStreamCoalesce();
         setEntries((prev) =>
-          prev.map((entry) =>
-            entry.id === streamId ? { ...entry, text: event.content, streaming: false } : entry
-          )
+          prev.map((entry) => {
+            if (entry.id !== streamId) {
+              return entry;
+            }
+            // Transitional empty final must not wipe an in-flight file-tool envelope preview.
+            if (
+              event.content === "" &&
+              entry.text.trim().length > 0 &&
+              isStructuredAgentEnvelopeText(entry.text)
+            ) {
+              return { ...entry, streaming: false };
+            }
+            return { ...entry, text: event.content, streaming: false };
+          })
         );
         return;
       }
@@ -1606,7 +1645,7 @@ export function App() {
 
           <section
             className={cn(
-              "timeline min-h-0 flex flex-col items-start gap-2.5 overflow-auto overscroll-contain",
+              "timeline min-h-0 flex flex-col items-start gap-1 overflow-auto overscroll-contain",
               autoScrollEnabled && "timeline--autoscroll"
             )}
             ref={timelineRef}
@@ -2038,16 +2077,6 @@ function AgentMarkdownBody({ source }: { source: string }) {
   );
 }
 
-function DiffPreviewFallback({ lines, truncated }: { lines: DiffLine[]; truncated: boolean }) {
-  return (
-    <>
-      <pre className="entry-json">
-        {lines.map((line) => `${line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}${line.text}`).join("\n")}
-      </pre>
-      {truncated ? <div className="diff-truncation">Additional changes not shown.</div> : null}
-    </>
-  );
-}
 
 function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   const displayText = stripIntakeUiMarkers(text);
@@ -2082,7 +2111,7 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
         <div
           key={`${action.tool}-${action.path ?? idx}`}
           className={`entry-action${
-            !isStreaming && typeof action.content === "string" ? " entry-action--final-diff" : ""
+            !isStreaming && typeof action.content === "string" ? " entry-action--file-summary" : ""
           }${
             isStreaming && typeof action.content === "string" && action.contentClosed !== true
               ? " entry-action--rolling-preview"
@@ -2098,34 +2127,26 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
               </pre>
             </div>
           ) : typeof action.content === "string" ? (
-            <>
-              {(() => {
-                const diff = buildDiffLines(
-                  action.previousContent ?? "",
-                  action.content ?? "",
-                  DIFF_MAX_LINES
-                );
-                const addCount = diff.lines.filter((l) => l.kind === "add").length;
-                const removeCount = diff.lines.filter((l) => l.kind === "remove").length;
-                const pathParts = action.path?.replace(/\\/g, "/").split("/");
-                const fileLabel =
-                  pathParts && pathParts.length > 0 ? pathParts[pathParts.length - 1]! : "file";
-                const lang = languageFromPath(action.path);
-                return (
-                  <Suspense fallback={<DiffPreviewFallback lines={diff.lines} truncated={diff.truncated} />}>
-                    <FinalDiffPreview
-                      addCount={addCount}
-                      fileLabel={fileLabel}
-                      isNewFile={isNewFileWrite(action)}
-                      lang={lang}
-                      lines={diff.lines}
-                      removeCount={removeCount}
-                      truncated={diff.truncated}
-                    />
-                  </Suspense>
-                );
-              })()}
-            </>
+            (() => {
+              const diff = buildDiffLines(
+                action.previousContent ?? "",
+                action.content ?? "",
+                DIFF_MAX_LINES
+              );
+              const addCount = diff.lines.filter((l) => l.kind === "add").length;
+              const removeCount = diff.lines.filter((l) => l.kind === "remove").length;
+              const pathParts = action.path?.replace(/\\/g, "/").split("/");
+              const fileLabel =
+                pathParts && pathParts.length > 0 ? pathParts[pathParts.length - 1]! : "file";
+              return (
+                <FileEditSummary
+                  addCount={addCount}
+                  fileLabel={fileLabel}
+                  isNewFile={isNewFileWrite(action)}
+                  removeCount={removeCount}
+                />
+              );
+            })()
           ) : (
             <div className="entry-text">No file content provided.</div>
           )}

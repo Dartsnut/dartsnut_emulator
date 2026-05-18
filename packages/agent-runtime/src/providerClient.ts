@@ -54,6 +54,8 @@ export interface CompletionOptions {
   onChunk?: (delta: string) => void;
   /** Thinking-mode: stream wire `reasoning_content` deltas (and one-shot flush in non-streaming path). */
   onReasoningChunk?: (delta: string) => void;
+  /** Incremental native `tool_calls` argument JSON while HTTP streaming (for file-write rolling UI). */
+  onToolCallProgress?: (toolCalls: ParsedToolCall[]) => void;
 }
 
 export interface CompletionProvider {
@@ -151,7 +153,7 @@ export class ProviderClient implements CompletionProvider {
   }
 
   async complete(messages: ChatMessage[], options: CompletionOptions = {}): Promise<CompletionResult> {
-    const { tools, onChunk, onReasoningChunk } = options;
+    const { tools, onChunk, onReasoningChunk, onToolCallProgress } = options;
     const timeoutMs = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS) || DEFAULT_CHAT_COMPLETION_TIMEOUT_MS;
     const signal = AbortSignal.timeout(timeoutMs);
     const requestMessages = ProviderClient.toWireMessages(messages);
@@ -218,6 +220,20 @@ export class ProviderClient implements CompletionProvider {
       }
       if (Array.isArray(delta.tool_calls)) {
         ProviderClient.mergeToolCallDeltas(toolCallAccumulators, delta.tool_calls as OpenAIToolCallDelta[]);
+        if (onToolCallProgress) {
+          const orderedIndices = Array.from(toolCallAccumulators.keys()).sort((a, b) => a - b);
+          const progressCalls: ParsedToolCall[] = orderedIndices
+            .map((index) => toolCallAccumulators.get(index)!)
+            .filter((entry) => entry.name.length > 0)
+            .map((entry, position) => ({
+              id: entry.id || `call_${position}`,
+              name: entry.name,
+              argumentsJson: entry.argumentsJson
+            }));
+          if (progressCalls.length > 0) {
+            onToolCallProgress(progressCalls);
+          }
+        }
       }
     }
 

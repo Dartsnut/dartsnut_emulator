@@ -362,4 +362,76 @@ describe("ProviderClient wire format", () => {
     expect(onReasoningChunk.mock.calls.map((c) => c[0]).join("")).toBe("alphabeta");
     expect(result.reasoningContent).toBe("alphabeta");
   });
+
+  it("invokes onToolCallProgress as tool_calls argument JSON streams in", async () => {
+    const encoder = new TextEncoder();
+    const sseLines = [
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_1",
+                  function: { name: "write_file", arguments: '{"path":"a.txt"' }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [{ index: 0, function: { arguments: ',"content":"hel' } }]
+            }
+          }
+        ]
+      },
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [{ index: 0, function: { arguments: 'lo"}' } }]
+            }
+          }
+        ]
+      }
+    ];
+    const sse =
+      sseLines.map((line) => `data: ${JSON.stringify(line)}\n\n`).join("") + "data: [DONE]\n\n";
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(sse));
+            controller.close();
+          }
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+    }) as unknown as typeof fetch;
+
+    const client = new ProviderClient({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "test-model",
+      fetchImpl
+    });
+    const onToolCallProgress = vi.fn();
+    const result = await client.complete([{ role: "user", content: "go" }], {
+      onChunk: vi.fn(),
+      onToolCallProgress
+    });
+    expect(onToolCallProgress.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const last = onToolCallProgress.mock.calls.at(-1)?.[0];
+    expect(last?.[0]?.name).toBe("write_file");
+    expect(last?.[0]?.argumentsJson).toBe('{"path":"a.txt","content":"hello"}');
+    expect(result.toolCalls[0]?.argumentsJson).toBe('{"path":"a.txt","content":"hello"}');
+  });
 });

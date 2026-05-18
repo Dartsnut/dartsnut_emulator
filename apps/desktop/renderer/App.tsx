@@ -550,11 +550,13 @@ function ThinkingTimelineEntry(props: { entry: TimelineEntry; onToggleHeader: ()
       </button>
       {rolling ? (
         <div className="thinking-entry__rolling rolling-preview">
-          <pre className="entry-json">{rolling.text}</pre>
+          <AgentMarkdownBody source={rolling.text} />
         </div>
       ) : null}
       {!entry.streaming && bodyVisible ? (
-        <div className="thinking-entry__body entry-text">{entry.text}</div>
+        <div className="thinking-entry__body">
+          <AgentMarkdownBody source={entry.text} />
+        </div>
       ) : null}
     </div>
   );

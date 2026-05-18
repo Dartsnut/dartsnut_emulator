@@ -450,19 +450,42 @@ body {
   margin-top: 0;
 }
 
-.thinking-entry__rolling.rolling-preview .entry-json {
-  max-height: 200px;
+.thinking-entry__rolling.rolling-preview .agent-markdown,
+.thinking-entry__body .agent-markdown {
   margin: 0;
   padding: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  font-family: inherit;
   font-size: 11px;
   line-height: 1.5;
   color: var(--color-text-hint);
-  white-space: pre-wrap;
-  overflow-x: hidden;
+}
+
+.thinking-entry__rolling.rolling-preview .agent-markdown {
+  max-height: 200px;
+  overflow: auto;
+}
+
+.thinking-entry__rolling.rolling-preview .agent-markdown p,
+.thinking-entry__rolling.rolling-preview .agent-markdown ul,
+.thinking-entry__rolling.rolling-preview .agent-markdown ol,
+.thinking-entry__body .agent-markdown p,
+.thinking-entry__body .agent-markdown ul,
+.thinking-entry__body .agent-markdown ol {
+  margin-bottom: 0.45em;
+}
+
+.thinking-entry__rolling.rolling-preview .agent-markdown pre {
+  max-height: 120px;
+  font-size: 10px;
+}
+
+.thinking-entry__body .agent-markdown pre {
+  max-height: 200px;
+  font-size: 10px;
+}
+
+.thinking-entry__rolling.rolling-preview .agent-markdown code,
+.thinking-entry__body .agent-markdown code {
+  font-size: 10px;
 }
 
 .thinking-entry__body {
@@ -472,10 +495,6 @@ body {
   max-height: 280px;
   overflow: auto;
   padding-left: 16px;
-}
-
-.thinking-entry__body.entry-text {
-  font-size: 11px;
 }
 
 .entry.status {

@@ -19,6 +19,11 @@ Follow this process:
 3. Build or **iterate on** a Pillow-rendered widget in the selected workspace (widgets push PIL frames — **do not** use `pygame` in widget code; see **`dartsnut-skill`**).
 4. Generate runnable files with a clear entrypoint and minimal setup steps.
 
+**Build vs clarify (mandatory):**
+- When the user names a widget concept (e.g. “smoothing widget”, “trajectory smoothing”, “clock”), **implement one concrete interpretation** using sensible defaults — do **not** ask what to build or offer multiple design directions.
+- At most **one** clarifying question per project, and only when truly blocked (e.g. required size missing from context).
+- Follow-up messages are **edits** to the existing widget, not a new project — read `main.py` / `conf.json` first and apply the change; do **not** re-ask the same scoping questions.
+
 Follow-up requests (small tweaks, layout, fonts, colors):
 - Treat these as **edits to the existing widget** (read `main.py` / `conf.json` first).
 - Do **not** narrate the task as building a new standalone app or rescaffold the widget unless the user asked to start over.

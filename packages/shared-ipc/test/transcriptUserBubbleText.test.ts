@@ -28,6 +28,16 @@ describe("transcriptUserBubbleText", () => {
     expect(transcriptUserBubbleText(full)).toBe("给我点儿惊喜");
   });
 
+  it("extracts build-now post-intake user request line", () => {
+    const body = [
+      "Creation **intake just finished**: …",
+      "**Build now (mandatory):** …",
+      "User's build request (implement now): create a smoothing widget for me"
+    ].join("\n");
+    const full = ["TEMPLATE", "", "User request:", body].join("\n");
+    expect(transcriptUserBubbleText(full)).toBe("create a smoothing widget for me");
+  });
+
   it("returns null when post-intake block has no original message", () => {
     const body = [
       "Creation **intake just finished**: …",

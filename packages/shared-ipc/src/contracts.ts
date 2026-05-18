@@ -1,3 +1,5 @@
+import { POST_INTAKE_BUILD_REQUEST_PREFIX } from "./postIntakeCreatorPrompt";
+
 export const IPCChannels = {
   bootstrapState: "agent:bootstrap-state",
   pickWorkspace: "agent:pick-workspace",
@@ -193,7 +195,7 @@ export type IntakeSubmitQuestionAnswerResponse =
 
 const TRANSCRIPT_USER_REQUEST_SECTION = "\n\nUser request:\n";
 
-/** Prefix line inside the post-intake creator user prompt (see desktop `buildPostIntakeCreatorUserPrompt`). */
+/** Prefix line inside the post-intake creator user prompt (see `buildPostIntakeCreatorUserPrompt`). */
 const TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX =
   "Original first message (use only if it already states what to build):";
 
@@ -212,6 +214,12 @@ export function transcriptUserBubbleText(fullUserPrompt: string): string | null 
     markerAt >= 0 ? trimmed.slice(markerAt + TRANSCRIPT_USER_REQUEST_SECTION.length).trim() : trimmed;
   if (!body) {
     return null;
+  }
+
+  const buildAt = body.indexOf(POST_INTAKE_BUILD_REQUEST_PREFIX);
+  if (buildAt >= 0) {
+    const afterBuild = body.slice(buildAt + POST_INTAKE_BUILD_REQUEST_PREFIX.length).trim();
+    return afterBuild.length > 0 ? afterBuild : null;
   }
 
   const originalAt = body.indexOf(TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX);

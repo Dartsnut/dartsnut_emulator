@@ -43,6 +43,7 @@ function runTarCreate(workspaceRoot: string, outFile: string): Promise<void> {
         "--exclude=.git",
         "--exclude=node_modules",
         "--exclude=.DS_Store",
+        "--exclude=.dartsnut",
         ".",
       ],
       { stdio: "ignore", env },

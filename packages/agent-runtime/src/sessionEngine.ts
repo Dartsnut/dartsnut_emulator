@@ -22,6 +22,7 @@ import {
   shouldInjectCreatorIncompleteNudge
 } from "./creatorTurnGuard";
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
+import { buildStreamingFileToolEnvelope } from "./streamingToolEnvelope";
 import { WorkspacePolicy } from "./workspacePolicy";
 
 function isDeferredSkillId(value: unknown): value is DeferredSkillId {
@@ -797,14 +798,43 @@ export class SessionEngine {
   ): Promise<void> {
     const lead = leadContent.trimEnd();
     const tail = lead.length > 0 ? `\n\n${envelopeJson}` : envelopeJson;
-    const chunkSize = Math.max(256, Math.ceil(tail.length / 10));
-    const renderFrameMs = 24;
+    const chunkSize = Math.max(32, Math.ceil(tail.length / 80));
+    const renderFrameMs = 20;
     for (let i = 0; i < tail.length; i += chunkSize) {
       onEvent({ type: "stream", delta: tail.slice(i, i + chunkSize), at: Date.now() });
       await new Promise<void>((resolve) => setTimeout(resolve, renderFrameMs));
     }
     const finalContent = lead.length > 0 ? `${lead}\n\n${envelopeJson}` : envelopeJson;
     onEvent({ type: "final", content: finalContent, at: Date.now() });
+  }
+
+  private emitLiveFileToolEnvelopeProgress(
+    toolCalls: ParsedToolCall[],
+    responseLead: string,
+    streamedChars: { count: number },
+    onEvent: (event: AgentEvent) => void
+  ): boolean {
+    const envelope = buildStreamingFileToolEnvelope(toolCalls, responseLead, (relativePath) => {
+      try {
+        const filePath = this.options.workspacePolicy.resolveWithinRoot(relativePath);
+        if (!fs.existsSync(filePath)) {
+          return undefined;
+        }
+        return fs.readFileSync(filePath, "utf-8");
+      } catch {
+        return undefined;
+      }
+    });
+    if (!envelope) {
+      return false;
+    }
+    const delta = envelope.slice(streamedChars.count);
+    if (delta.length === 0) {
+      return streamedChars.count > 0;
+    }
+    onEvent({ type: "stream", delta, at: Date.now() });
+    streamedChars.count = envelope.length;
+    return true;
   }
 
   private rawActionFromToolCall(toolCall: ParsedToolCall): unknown {
@@ -932,9 +962,12 @@ export class SessionEngine {
       });
 
       let reasoningChunkEvents = 0;
+      const liveToolEnvelopeStreamed = { count: 0 };
+      let assistantContentStreamed = false;
       const completion = await this.options.provider.complete(messages, {
         tools: completionTools,
         onChunk: (delta) => {
+          assistantContentStreamed = true;
           onEvent({ type: "stream", delta, at: Date.now() });
         },
         onReasoningChunk: (delta) => {
@@ -942,6 +975,11 @@ export class SessionEngine {
             reasoningChunkEvents += 1;
           }
           onEvent({ type: "reasoning_stream", delta, at: Date.now() });
+        },
+        onToolCallProgress: (toolCalls) => {
+          if (!assistantContentStreamed) {
+            this.emitLiveFileToolEnvelopeProgress(toolCalls, "", liveToolEnvelopeStreamed, onEvent);
+          }
         }
       });
 
@@ -986,7 +1024,18 @@ export class SessionEngine {
           }
         }
         const envelope = this.buildUiEnvelopeString(successfulActions, completion.content);
-        if (envelope) {
+        const hasFileWritePreview = successfulActions.some(
+          (action) => action.tool === "write_file" || action.tool === "replace_in_file"
+        );
+        if (envelope && hasFileWritePreview) {
+          const trimmedLead = completion.content.trim();
+          if (trimmedLead.length > 0) {
+            onEvent({ type: "final", content: trimmedLead, at: Date.now() });
+          } else if (liveToolEnvelopeStreamed.count > 0) {
+            onEvent({ type: "final", content: "", at: Date.now() });
+          }
+          await this.streamNativeToolEnvelopePreview("", envelope, onEvent);
+        } else if (envelope) {
           await this.streamNativeToolEnvelopePreview(completion.content, envelope, onEvent);
         }
         for (const outcome of outcomes) {

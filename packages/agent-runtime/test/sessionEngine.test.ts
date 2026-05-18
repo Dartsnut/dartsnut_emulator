@@ -227,6 +227,58 @@ class HashSuffixCopyProvider {
   }
 }
 
+class StreamingNativeWriteProvider {
+  async complete(_messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult> {
+    const args = '{"path":"widget.py","content":"print(';
+    options?.onToolCallProgress?.([
+      { id: "call_stream", name: "write_file", argumentsJson: args }
+    ]);
+    options?.onToolCallProgress?.([
+      {
+        id: "call_stream",
+        name: "write_file",
+        argumentsJson: `${args}'hi')"}`
+      }
+    ]);
+    return {
+      content: "",
+      toolCalls: [
+        {
+          id: "call_stream",
+          name: "write_file",
+          argumentsJson: JSON.stringify({ path: "widget.py", content: "print('hi')" })
+        }
+      ],
+      usedHttpStream: true
+    };
+  }
+}
+
+/** Models providers that buffer tool_calls until the HTTP stream ends (no incremental args). */
+class AtomicNativeWriteWithContentProvider {
+  async complete(_messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult> {
+    options?.onChunk?.("Planning the widget layout.");
+    options?.onToolCallProgress?.([
+      {
+        id: "call_atomic",
+        name: "write_file",
+        argumentsJson: JSON.stringify({ path: "widget.py", content: "print('atomic')" })
+      }
+    ]);
+    return {
+      content: "Planning the widget layout.",
+      toolCalls: [
+        {
+          id: "call_atomic",
+          name: "write_file",
+          argumentsJson: JSON.stringify({ path: "widget.py", content: "print('atomic')" })
+        }
+      ],
+      usedHttpStream: true
+    };
+  }
+}
+
 class NativeToolCallProvider {
   private call = 0;
   public readonly receivedMessages: ChatMessage[][] = [];
@@ -499,6 +551,51 @@ describe("SessionEngine tool loop", () => {
     expect(response).toContain("Updated greeting.");
     expect(fileContent).toBe("hello faster dartsnut");
     expect(events.some((event) => event.type === "status")).toBe(true);
+  });
+
+  it("chunks write_file preview after tools even when live tool progress arrived in one burst", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const events: AgentEvent[] = [];
+    const engine = new SessionEngine({
+      provider: new AtomicNativeWriteWithContentProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant."
+    });
+
+    await engine.runPrompt("build widget", (event) => events.push(event));
+
+    const streamEvents = events.filter(
+      (event): event is Extract<AgentEvent, { type: "stream" }> => event.type === "stream"
+    );
+    expect(streamEvents.length).toBeGreaterThan(3);
+    const finals = events.filter(
+      (event): event is Extract<AgentEvent, { type: "final" }> => event.type === "final"
+    );
+    const narrativeFinal = finals.find((event) => event.content === "Planning the widget layout.");
+    expect(narrativeFinal).toBeDefined();
+    const envelopeFinal = finals.find((event) => event.content.includes('"tool": "write_file"'));
+    expect(envelopeFinal).toBeDefined();
+  });
+
+  it("streams write_file envelope deltas during native tool argument progress", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const events: AgentEvent[] = [];
+    const engine = new SessionEngine({
+      provider: new StreamingNativeWriteProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant."
+    });
+
+    await engine.runPrompt("build widget", (event) => events.push(event));
+
+    const streamEvents = events.filter(
+      (event): event is Extract<AgentEvent, { type: "stream" }> => event.type === "stream"
+    );
+    expect(streamEvents.length).toBeGreaterThan(0);
+    const combined = streamEvents.map((event) => event.delta).join("");
+    expect(combined).toContain('"tool":"write_file"');
+    expect(combined).toContain("widget.py");
+    expect(combined).toContain("print(");
   });
 
   it("executes native tool_calls and threads tool_call_id through the conversation", async () => {

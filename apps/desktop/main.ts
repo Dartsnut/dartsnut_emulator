@@ -41,7 +41,8 @@ import {
   type MainProcessConsoleMirrorPayload,
   type IntakeSubmitQuestionAnswerRequest,
   type IntakeSubmitQuestionAnswerResponse,
-  type AgentSessionWorkspaceSummary
+  type AgentSessionWorkspaceSummary,
+  buildPostIntakeCreatorUserPrompt
 } from "@dartsnut/shared-ipc";
 import {
   loadProviderConfig,
@@ -891,21 +892,6 @@ function buildCreationIntakeUserPrompt(
     "",
     "User request:",
     `${userRequest}${projectTypeLine}${pickerLine}`
-  ].join("\n");
-}
-
-/** User line for the automatic creator run after creation intake — avoids re-welcoming on stale first messages like "hello". */
-function buildPostIntakeCreatorUserPrompt(originalUserPrompt: string): string {
-  const original = originalUserPrompt.trim();
-  const originalLine =
-    original.length > 0
-      ? `Original first message (use only if it already states what to build): ${original}`
-      : "There was no substantive first message before intake.";
-  return [
-    "Creation **intake just finished**: the empty workspace is selected and **Creation context** above already has project type and (for widgets) display size.",
-    "Do **not** open with a generic **Hello / Welcome to Dartsnut Chat** or repeat product onboarding — the user already completed intake.",
-    "Give a **one-sentence** acknowledgement that the folder is ready (you may mention type/size from context), then ask what they want this project to display or do, with a few short examples if helpful.",
-    originalLine
   ].join("\n");
 }
 

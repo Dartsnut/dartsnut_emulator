@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
 import type { ChatMessage, CompletionOptions, CompletionProvider, CompletionResult } from "../src/providerClient";
+import { CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE } from "../src/creatorTurnGuard";
 import { SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
@@ -552,6 +553,25 @@ describe("SessionEngine tool loop", () => {
     expect(fs.readFileSync(path.join(tempRoot, "ok.txt"), "utf-8")).toBe("kept");
   });
 
+  it("injects creator incomplete nudge when widget-creator replies without project files", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const provider = new CreatorClarifyThenBuildProvider();
+    const engine = new SessionEngine({
+      provider,
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a widget creator.",
+      sessionTemplateMode: "widget-creator"
+    });
+
+    const prompt = ["TEMPLATE", "", "User request:", "Trajectory smoothing"].join("\n");
+    const response = await engine.runPrompt(prompt, () => {});
+
+    expect(provider.call).toBe(3);
+    expect(response).toContain("Done.");
+    expect(fs.existsSync(path.join(tempRoot, "conf.json"))).toBe(true);
+    expect(fs.existsSync(path.join(tempRoot, "main.py"))).toBe(true);
+  });
+
   it("executes get_dartsnut_skill then write_file with skill content in thread", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     const skillsDir = path.resolve(__dirname, "../skills");
@@ -589,6 +609,41 @@ describe("SessionEngine tool loop", () => {
     expect(response).toContain("Noted denial.");
   });
 });
+
+class CreatorClarifyThenBuildProvider implements CompletionProvider {
+  call = 0;
+  lastMessages: ChatMessage[] = [];
+
+  async complete(messages: ChatMessage[]): Promise<CompletionResult> {
+    this.call += 1;
+    this.lastMessages = messages;
+    if (this.call === 1) {
+      return textOnly("Which visualization do you prefer?");
+    }
+    if (this.call === 2) {
+      const nudgeSeen = messages.some(
+        (m) => m.role === "user" && m.content.includes(CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE.slice(0, 32))
+      );
+      expect(nudgeSeen).toBe(true);
+      return {
+        content: "Creating project files.",
+        toolCalls: [
+          {
+            id: "call_conf",
+            name: "write_file",
+            argumentsJson: JSON.stringify({ path: "conf.json", content: "{}" })
+          },
+          {
+            id: "call_main",
+            name: "write_file",
+            argumentsJson: JSON.stringify({ path: "main.py", content: "print('ok')" })
+          }
+        ]
+      };
+    }
+    return textOnly("Done.");
+  }
+}
 
 class CountingTextProvider implements CompletionProvider {
   calls = 0;

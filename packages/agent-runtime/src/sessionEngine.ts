@@ -15,6 +15,12 @@ import type { DeferredSkillId } from "./skillBundle";
 import { DEFERRED_SKILL_IDS, readDeferredSkillMarkdown } from "./skillBundle";
 import type { AgentSessionPersistence } from "./agentSessionPersistence";
 import { AGENT_SESSION_SCHEMA_VERSION } from "./agentSessionPersistence";
+import {
+  CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE,
+  isFileMutationToolName,
+  readCreatorArtifactStatus,
+  shouldInjectCreatorIncompleteNudge
+} from "./creatorTurnGuard";
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import { WorkspacePolicy } from "./workspacePolicy";
 
@@ -155,10 +161,13 @@ export class SessionEngine {
         ? `${finalUserVisibleSummary.slice(0, 50_000)}…`
         : finalUserVisibleSummary;
     p.appendTranscript({ kind: "assistant", at: Date.now(), text: trimmed });
+    const endArtifacts = this.readCreatorArtifacts();
     p.appendTransaction({
       type: "turn.end",
       at: Date.now(),
-      assistantSummaryChars: trimmed.length
+      assistantSummaryChars: trimmed.length,
+      workspaceHasConfJson: endArtifacts.confJson,
+      workspaceHasMainPy: endArtifacts.mainPy
     });
   }
 
@@ -710,6 +719,32 @@ export class SessionEngine {
     return Math.min(128, Math.max(1, Math.floor(n)));
   }
 
+  private readCreatorArtifacts(): { confJson: boolean; mainPy: boolean } {
+    return readCreatorArtifactStatus(
+      fs.existsSync.bind(fs),
+      (relativePath) => this.options.workspacePolicy.resolveWithinRoot(relativePath)
+    );
+  }
+
+  private emitTurnCompletionStats(
+    correlationId: string,
+    step: number,
+    stats: {
+      toolCallCount: number;
+      reasoningChars: number;
+      filesWrittenThisTurn: number;
+      workspaceHasConfJson: boolean;
+      workspaceHasMainPy: boolean;
+    }
+  ): void {
+    this.emitTransaction({
+      type: "turn.completion_stats",
+      correlationId,
+      step,
+      ...stats
+    });
+  }
+
   private buildUiEnvelopeString(actions: ToolAction[], responseText: string): string | null {
     const trimmedResponse = responseText.trim();
     if (actions.length === 0 && trimmedResponse.length === 0) {
@@ -882,6 +917,8 @@ export class SessionEngine {
     }
 
     const maxToolRounds = SessionEngine.resolveToolLoopMax();
+    let filesWrittenThisTurn = 0;
+    let creatorNudgeUsed = false;
 
     for (let step = 0; step < maxToolRounds; step += 1) {
       if (abortSignal?.aborted) {
@@ -918,6 +955,7 @@ export class SessionEngine {
       }
       onEvent({ type: "reasoning_done", at: Date.now() });
 
+      const artifactStatus = this.readCreatorArtifacts();
       this.emitTransaction({
         type: "completion.response",
         correlationId: turnCorrelationId,
@@ -926,12 +964,27 @@ export class SessionEngine {
         contentLength: completion.content.length,
         reasoningChars: reasoningTrimmed.length,
         reasoningChunkEvents,
-        reasoningHttpStream: completion.usedHttpStream === true
+        reasoningHttpStream: completion.usedHttpStream === true,
+        filesWrittenThisTurn,
+        workspaceHasConfJson: artifactStatus.confJson,
+        workspaceHasMainPy: artifactStatus.mainPy
+      });
+      this.emitTurnCompletionStats(turnCorrelationId, step, {
+        toolCallCount: completion.toolCalls.length,
+        reasoningChars: reasoningTrimmed.length,
+        filesWrittenThisTurn,
+        workspaceHasConfJson: artifactStatus.confJson,
+        workspaceHasMainPy: artifactStatus.mainPy
       });
 
       if (completion.toolCalls.length > 0) {
         const { assistantMessage, toolMessages, successfulActions, outcomes } =
           await this.processNativeToolCalls(completion);
+        for (const outcome of outcomes) {
+          if (outcome.action && isFileMutationToolName(outcome.toolCall.name)) {
+            filesWrittenThisTurn += 1;
+          }
+        }
         const envelope = this.buildUiEnvelopeString(successfulActions, completion.content);
         if (envelope) {
           await this.streamNativeToolEnvelopePreview(completion.content, envelope, onEvent);
@@ -975,6 +1028,39 @@ export class SessionEngine {
       const merged = this.tryParseEnvelopesMerged(completion.content);
 
       if (!merged) {
+        const afterTextArtifacts = this.readCreatorArtifacts();
+        if (
+          shouldInjectCreatorIncompleteNudge({
+            templateMode: this.options.sessionTemplateMode,
+            artifacts: afterTextArtifacts,
+            filesWrittenThisTurn,
+            initialPrompt: prompt,
+            messages,
+            systemSlots,
+            nudgeAlreadyUsed: creatorNudgeUsed
+          })
+        ) {
+          creatorNudgeUsed = true;
+          this.emitTransaction({
+            type: "creator.incomplete_turn",
+            correlationId: turnCorrelationId,
+            step,
+            toolCallCount: completion.toolCalls.length,
+            reasoningChars: reasoningTrimmed.length,
+            filesWrittenThisTurn,
+            workspaceHasConfJson: afterTextArtifacts.confJson,
+            workspaceHasMainPy: afterTextArtifacts.mainPy
+          });
+          messages.push({
+            role: "assistant",
+            content: completion.content,
+            ...(completion.reasoningContent !== undefined
+              ? { reasoningContent: completion.reasoningContent }
+              : {})
+          });
+          messages.push({ role: "user", content: CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE });
+          continue;
+        }
         onEvent({ type: "final", content: completion.content, at: Date.now() });
         this.finalizeWorkspacePersistence(messages, systemSlots, completion.content);
         return completion.content;
@@ -991,6 +1077,39 @@ export class SessionEngine {
 
       if (actions.length === 0) {
         const finalText = merged.responseText || "Done.";
+        const afterEnvelopeArtifacts = this.readCreatorArtifacts();
+        if (
+          shouldInjectCreatorIncompleteNudge({
+            templateMode: this.options.sessionTemplateMode,
+            artifacts: afterEnvelopeArtifacts,
+            filesWrittenThisTurn,
+            initialPrompt: prompt,
+            messages,
+            systemSlots,
+            nudgeAlreadyUsed: creatorNudgeUsed
+          })
+        ) {
+          creatorNudgeUsed = true;
+          this.emitTransaction({
+            type: "creator.incomplete_turn",
+            correlationId: turnCorrelationId,
+            step,
+            toolCallCount: 0,
+            reasoningChars: reasoningTrimmed.length,
+            filesWrittenThisTurn,
+            workspaceHasConfJson: afterEnvelopeArtifacts.confJson,
+            workspaceHasMainPy: afterEnvelopeArtifacts.mainPy
+          });
+          messages.push({
+            role: "assistant",
+            content: completion.content,
+            ...(completion.reasoningContent !== undefined
+              ? { reasoningContent: completion.reasoningContent }
+              : {})
+          });
+          messages.push({ role: "user", content: CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE });
+          continue;
+        }
         onEvent({ type: "final", content: finalText, at: Date.now() });
         this.finalizeWorkspacePersistence(messages, systemSlots, finalText);
         return finalText;
@@ -999,6 +1118,9 @@ export class SessionEngine {
       this.emitUiEnvelope(actions, merged.responseText, onEvent);
 
       for (const action of actions) {
+        if (isFileMutationToolName(action.tool)) {
+          filesWrittenThisTurn += 1;
+        }
         onEvent({
           type: "status",
           message: this.describeStatusAction(action),

@@ -34,6 +34,20 @@ def sanitize_name(name: str) -> str:
     return sanitized or "capture"
 
 
+# Darwin shm_open: name length includes the leading '/' (max 31 total).
+_POSIX_SHM_NAME_MAX = 31
+
+
+def _unique_shm_name(prefix: str) -> str:
+    """Return a session-unique POSIX shm name that fits macOS length limits."""
+    prefix = prefix.strip("_")
+    max_body = _POSIX_SHM_NAME_MAX - 1
+    hex_len = max_body - len(prefix) - 1
+    if hex_len < 8:
+        raise ValueError(f"SHM prefix {prefix!r} is too long for POSIX")
+    return f"{prefix}_{uuid.uuid4().hex[:hex_len]}"
+
+
 @dataclass
 class EmulatorState:
     widgetPath: str | None = None
@@ -54,8 +68,8 @@ class EmulatorCore:
         self.config: dict[str, Any] | None = None
         self.data_store_path: str | None = None
         self.state = EmulatorState()
-        # Unique per process: Windows global shared-memory names caused stale collisions with "shmpdi".
-        self.shm_pdi_name = f"dartsnut_pdi_{uuid.uuid4().hex}"
+        # Unique per process: Windows global SHM names collide on fixed "shmpdi"; keep names short for macOS.
+        self.shm_pdi_name = _unique_shm_name("pdi")
         self.shm_pdo_name = "pdoshm"
         self.shm_pdi: shared_memory.SharedMemory | None = None
         self.shm_pdo: shared_memory.SharedMemory | None = None
@@ -86,11 +100,13 @@ class EmulatorCore:
         )
 
     def _cleanup_shared_memory_name(self, name: str) -> None:
+        if len(name) + 1 > _POSIX_SHM_NAME_MAX:
+            return
         try:
             existing = shared_memory.SharedMemory(name=name)
             existing.close()
             existing.unlink()
-        except FileNotFoundError:
+        except (FileNotFoundError, OSError):
             return
 
     def _create_or_attach_shm(self, name: str, size: int) -> shared_memory.SharedMemory:
@@ -116,7 +132,6 @@ class EmulatorCore:
     def _init_shared_memory(self) -> None:
         # Remove legacy fixed framebuffer name left by older builds (Windows session-global).
         self._cleanup_shared_memory_name("shmpdi")
-        self._cleanup_shared_memory_name(self.shm_pdi_name)
         self._cleanup_shared_memory_name(self.shm_pdo_name)
         self.shm_pdi = shared_memory.SharedMemory(
             name=self.shm_pdi_name, create=True, size=128 * 160 * 3 + 1

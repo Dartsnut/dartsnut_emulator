@@ -146,17 +146,19 @@ describe("bundleForTemplateMode", () => {
     expect(bundle).not.toContain("widget creator template");
   });
 
-  it("for creation-intake mode bundles only dartsnut-skill", () => {
+  it("for creation-intake mode bundles only creation-intake skill", () => {
     const bundle = bundleForTemplateMode(SKILLS_DIR, "creation-intake");
-    const single = loadSkillBundle(path.join(SKILLS_DIR, "dartsnut-skill.md"));
+    const single = loadSkillBundle(path.join(SKILLS_DIR, "creation-intake.md"));
     expect(bundle).toBe(single);
+    expect(bundle).toContain("creation intake");
+    expect(bundle).not.toContain("update_frame_buffer");
   });
 });
 
 describe("deferred skill router", () => {
   it("allowedDeferredSkillIdsForMode matches bundle composition", () => {
     expect(allowedDeferredSkillIdsForMode("asset-applier")).toEqual(["dartsnut-skill", "asset-pipeline"]);
-    expect(allowedDeferredSkillIdsForMode("creation-intake")).toEqual(["dartsnut-skill"]);
+    expect(allowedDeferredSkillIdsForMode("creation-intake")).toEqual([]);
     expect(allowedDeferredSkillIdsForMode(null)).toEqual([
       "dartsnut-skill",
       "dartsnut-display-mapping",

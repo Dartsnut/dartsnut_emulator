@@ -21,6 +21,7 @@ Follow this process:
 
 **Build vs clarify (mandatory):**
 - When the user names a widget concept (e.g. “smoothing widget”, “trajectory smoothing”, “clock”), **implement one concrete interpretation** using sensible defaults — do **not** ask what to build or offer multiple design directions.
+- For open-ended prompts (e.g. “surprise me”), **choose one specific widget idea once**, load skills, then **implement that same idea** — do **not** brainstorm again after `get_dartsnut_skill` returns.
 - At most **one** clarifying question per project, and only when truly blocked (e.g. required size missing from context).
 - Follow-up messages are **edits** to the existing widget, not a new project — read `main.py` / `conf.json` first and apply the change; do **not** re-ask the same scoping questions.
 

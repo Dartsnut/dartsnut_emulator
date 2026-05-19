@@ -2,6 +2,8 @@ import { POST_INTAKE_BUILD_REQUEST_PREFIX } from "./postIntakeCreatorPrompt";
 
 export const IPCChannels = {
   bootstrapState: "agent:bootstrap-state",
+  /** Main → renderer: workspace/bootstrap changed (temp allocation, pick folder, new project). */
+  bootstrapStateChanged: "agent:bootstrap-state-changed",
   pickWorkspace: "agent:pick-workspace",
   /** Completes a blocking `dartsnut_ask_question` call for project type or widget size (chip row). */
   intakeSubmitQuestionAnswer: "agent:intake-submit-question-answer",

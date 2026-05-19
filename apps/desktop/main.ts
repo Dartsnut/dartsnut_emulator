@@ -71,6 +71,17 @@ import {
 import { AssetManager } from "./assetManager";
 import { DeployMachineSession } from "./deployMachine";
 
+// Packaged apps launched from Finder do not inherit shell env. MiMo/OpenAI-compatible
+// gateways often omit tool_calls when HTTP-streaming after `role: tool` messages; dev
+// sessions launched from a terminal may already set AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY=1.
+if (
+  app.isPackaged &&
+  (process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY === undefined ||
+    process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY === "")
+) {
+  process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY = "1";
+}
+
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
 /** Persisted unsaved temp workspace directory (under OS temp), or null. */
@@ -551,6 +562,10 @@ function getBootstrapState(): BootstrapState {
   };
 }
 
+function emitBootstrapStateToRenderer(): void {
+  sendToRenderer(IPCChannels.bootstrapStateChanged, getBootstrapState());
+}
+
 function isDirectoryEmpty(directoryPath: string): boolean {
   const entries = fs.readdirSync(directoryPath);
   return entries.length === 0;
@@ -701,6 +716,7 @@ function applyWorkspaceRoot(selectedPath: string): void {
   }
   assetManager.watch(selectedPath);
   startDeployConfWatcher(selectedPath);
+  emitBootstrapStateToRenderer();
 }
 
 function readWorkspaceConfIntakeSnapshot(
@@ -902,7 +918,7 @@ function buildCreationIntakeUserPrompt(
     "2. For **widget** display size: supported values are exactly **128x160**, **128x128**, **128x64**, **64x32**. If the user's message already includes one of those literals, call `set_widget_size` with it. Otherwise call **`dartsnut_ask_question`** with `question_id` **`widget_display_size`** — **never** assume a default, invent a size, or call `set_widget_size` or `read_workspace_conf` until they have answered (via chips or typed follow-up). If the user's message is **only** one of those four literals (no other words), treat it as their size choice for a widget: call `set_project_type` with `widget` then `set_widget_size` with that token, then continue.",
     "3. Call **`read_workspace_conf`** once type (and widget size if applicable) are resolved.",
     "4. Use `guidance_notes`, `deploy_eligibility`, and `conf_status` to ask **at most one** focused follow-up when the folder is not a blank slate or types disagree.",
-    "5. Close with a one- or two-sentence confirmation of what will be built next (no code, no file paths invented).",
+    "5. Close with **one short sentence** that confirms only **what was recorded** — project type, and (for widgets) the chosen display size — and that the creator phase will run next. **Do not** propose, name, brainstorm, or describe a specific widget/game concept. **Do not** offer alternatives. **Do not** end with a question. Any creative decision is the creator phase's job; if you name a concept here it becomes a conflicting second opinion.",
     "",
     "User request:",
     `${userRequest}${projectTypeLine}${pickerLine}`
@@ -1833,11 +1849,14 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  await createWindow();
-  pythonExec = await resolvePythonExecutable();
-  startPythonBridge();
+  // Resolve workspace before the renderer's first bootstrap fetch (packaged loadFile is
+  // slower than Vite dev, but both can mount before allocation when setup ran after createWindow).
   await maybeRecoverTrackedTempWorkspaceAtLaunch();
   ensureTemporaryWorkspaceRootAllocated();
+  pythonExec = await resolvePythonExecutable();
+  startPythonBridge();
+  await createWindow();
+  emitBootstrapStateToRenderer();
 });
 
 app.on("window-all-closed", () => {
@@ -2369,14 +2388,11 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         skillBundleMode: "creation-intake"
       });
       terminalAgentLifecycleLog("[agent] runPrompt creation-intake start");
-      await intakeSession.runPrompt(
-        buildCreationIntakeUserPrompt(req.prompt, {
-          widgetSizeFromPicker: req.intakeWidgetSizeChoice,
-          projectTypeFromPicker: req.intakeProjectTypeChoice
-        }),
-        emitAgent,
-        runAbort.signal
-      );
+      const intakeUserPrompt = buildCreationIntakeUserPrompt(req.prompt, {
+        widgetSizeFromPicker: req.intakeWidgetSizeChoice,
+        projectTypeFromPicker: req.intakeProjectTypeChoice
+      });
+      await intakeSession.runPrompt(intakeUserPrompt, emitAgent, runAbort.signal);
 
       const canChain =
         Boolean(workspaceRoot) &&
@@ -2385,7 +2401,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
           (intakeState.projectType === "widget" && intakeState.widgetSize));
 
       if (canChain && intakeState.projectType && workspaceRoot) {
-        const intent = req.agentSession?.intent ?? "auto";
+        const creatorWorkspace = intakeWorkspace;
         const templateMode =
           intakeState.projectType === "game" ? "game-creator" : "widget-creator";
         sessionRouting = {
@@ -2393,24 +2409,27 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
           projectType: intakeState.projectType,
           widgetSize: intakeState.projectType === "widget" ? intakeState.widgetSize : undefined
         };
-        const followUpPersistence = buildWorkspaceSessionPersistence(workspaceRoot);
-        if (intent === "fresh" && followUpPersistence) {
-          followUpPersistence.archiveOrResetSession("renderer-fresh");
+        const followUpPersistence = buildWorkspaceSessionPersistence(creatorWorkspace);
+        // Intake → creator is always a new scaffold: do not resume a half-finished creator
+        // transcript from a prior crash/relaunch in the same temp folder (common in packaged builds).
+        if (followUpPersistence) {
+          followUpPersistence.archiveOrResetSession("post-intake-creator-chain");
         }
-        const followUpInitial =
-          followUpPersistence && intent !== "fresh" ? followUpPersistence.readConversation() : [];
+        const followUpInitial: ChatMessage[] = [];
         const followUp = buildSession(templateMode, {
+          workspacePath: creatorWorkspace,
           completionTools: AGENT_TOOL_SCHEMAS,
           hostIntakeToolHandler: sharedIntakeHandler,
           sessionPersistence: followUpPersistence,
           initialConversation: followUpInitial
         });
+        const postIntakeUserPrompt = buildPostIntakeCreatorUserPrompt(req.prompt, { forceBuildAfterIntake: true });
         const routed = buildRoutedPrompt({
-          prompt: buildPostIntakeCreatorUserPrompt(req.prompt),
+          prompt: postIntakeUserPrompt,
           templateMode,
           projectType: intakeState.projectType,
           widgetSize: intakeState.widgetSize,
-          workspacePath: workspaceRoot
+          workspacePath: creatorWorkspace
         });
         terminalAgentLifecycleLog("[agent] runPrompt chained creator", { templateMode });
         await followUp.runPrompt(routed, emitAgent, runAbort.signal);

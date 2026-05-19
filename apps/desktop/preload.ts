@@ -95,6 +95,11 @@ const api = {
     ipcRenderer.on(IPCChannels.sessionReset, handler);
     return () => ipcRenderer.removeListener(IPCChannels.sessionReset, handler);
   },
+  onBootstrapStateChanged: (listener: (state: BootstrapState) => void) => {
+    const handler = (_: unknown, state: BootstrapState) => listener(state);
+    ipcRenderer.on(IPCChannels.bootstrapStateChanged, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.bootstrapStateChanged, handler);
+  },
   onPythonRuntimeStatus: (listener: (status: string | null) => void) => {
     const handler = (_: unknown, status: string | null) => listener(status);
     ipcRenderer.on(IPCChannels.subscribePythonRuntimeStatus, handler);

@@ -3,7 +3,7 @@ import { transcriptUserBubbleText } from "@dartsnut/shared-ipc";
 import type { ChatMessage } from "./providerClient";
 
 export const CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE =
-  "You replied without creating the required project files. Implement now using tools: create `conf.json` and `main.py` in the workspace (plus any required fonts or assets). Do not ask more scoping questions unless truly blocked. State any defaults you chose in one sentence in your final reply.";
+  "You replied without creating the required project files. Implement now using tools: call `write_file` / `copy_asset_file` (and `reload_emulator` after `conf.json`) — do not only describe the plan in prose. Create `conf.json` and `main.py` in the workspace (plus any required fonts). Do not switch to a different widget/game idea; finish the current one. Do not ask more scoping questions unless truly blocked. State any defaults you chose in one sentence in your final reply.";
 
 export function isCreatorTemplateMode(mode: string | null | undefined): boolean {
   return mode === "game-creator" || mode === "widget-creator";
@@ -65,6 +65,8 @@ export function hasSubstantiveCreatorUserRequest(
   return false;
 }
 
+export const CREATOR_INCOMPLETE_MAX_NUDGES = 4;
+
 export function shouldInjectCreatorIncompleteNudge(input: {
   templateMode: string | null | undefined;
   artifacts: { confJson: boolean; mainPy: boolean };
@@ -72,9 +74,11 @@ export function shouldInjectCreatorIncompleteNudge(input: {
   initialPrompt: string;
   messages: ChatMessage[];
   systemSlots: number;
-  nudgeAlreadyUsed: boolean;
+  nudgeCount: number;
+  maxNudges?: number;
 }): boolean {
-  if (input.nudgeAlreadyUsed) {
+  const maxNudges = input.maxNudges ?? CREATOR_INCOMPLETE_MAX_NUDGES;
+  if (input.nudgeCount >= maxNudges) {
     return false;
   }
   if (!isCreatorTemplateMode(input.templateMode)) {

@@ -1363,6 +1363,57 @@ function isPythonVersionSupportedSync(executable: string): boolean {
   return result.status === 0;
 }
 
+function compareVersionDirsDescending(a: string, b: string): number {
+  const parse = (s: string) =>
+    s.split(".").map((part) => {
+      const n = parseInt(part, 10);
+      return Number.isNaN(n) ? -1 : n;
+    });
+  const ap = parse(a);
+  const bp = parse(b);
+  const len = Math.max(ap.length, bp.length);
+  for (let i = 0; i < len; i++) {
+    const av = ap[i] ?? -1;
+    const bv = bp[i] ?? -1;
+    if (av !== bv) return bv - av;
+  }
+  return 0;
+}
+
+// Packaged macOS Electron apps inherit launchd's minimal PATH, which breaks
+// asdf/pyenv shims (they shell out to `asdf`/`pyenv` via PATH). Resolve real
+// interpreter binaries directly so the bootstrap step doesn't depend on shims.
+function listInstalledPythonBinaries(home: string): string[] {
+  const installRoots = [
+    path.join(home, ".asdf", "installs", "python"),
+    path.join(home, ".pyenv", "versions"),
+  ];
+  const result: string[] = [];
+  for (const root of installRoots) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    const versions = entries
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort(compareVersionDirsDescending);
+    for (const ver of versions) {
+      const binDir = path.join(root, ver, "bin");
+      for (const exe of ["python3.13", "python3.12", "python3.11", "python3.10", "python3"]) {
+        const p = path.join(binDir, exe);
+        if (fs.existsSync(p)) {
+          result.push(p);
+          break;
+        }
+      }
+    }
+  }
+  return result;
+}
+
 function pythonCandidates(): string[] {
   const home = app.getPath("home");
   const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
@@ -1398,6 +1449,7 @@ function pythonCandidates(): string[] {
     "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
     "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
     "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3",
+    ...listInstalledPythonBinaries(home),
     path.join(home, ".pyenv", "shims", "python3.12"),
     path.join(home, ".pyenv", "shims", "python3.11"),
     path.join(home, ".pyenv", "shims", "python3.10"),

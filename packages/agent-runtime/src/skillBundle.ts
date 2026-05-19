@@ -51,13 +51,15 @@ export interface SkillBundlePaths {
   dartsnutSkill: string;
   displayMapping: string;
   assetPipeline: string;
+  creationIntake: string;
 }
 
 export function resolveSkillBundlePaths(skillsDir: string): SkillBundlePaths {
   return {
     dartsnutSkill: path.join(skillsDir, "dartsnut-skill.md"),
     displayMapping: path.join(skillsDir, "dartsnut-display-mapping.md"),
-    assetPipeline: path.join(skillsDir, "asset-pipeline.md")
+    assetPipeline: path.join(skillsDir, "asset-pipeline.md"),
+    creationIntake: path.join(skillsDir, "creation-intake.md")
   };
 }
 
@@ -74,7 +76,7 @@ export function allowedDeferredSkillIdsForMode(mode?: SkillBundleMode | null): D
     return ["dartsnut-skill", "asset-pipeline"];
   }
   if (mode === "creation-intake") {
-    return ["dartsnut-skill"];
+    return [];
   }
   return ["dartsnut-skill", "dartsnut-display-mapping", "asset-pipeline"];
 }
@@ -101,7 +103,7 @@ export function resolveSkillRouterPrompt(
     "",
     `Skills directory (for your reasoning only; files are read via the tool): ${skillsDir}`,
     "",
-    "After skills are loaded, follow the user message and any creator template it contains. Obey the separate system message about native tool calling (no JSON/XML tool envelopes in assistant text)."
+    "After all required skills are loaded, **continue the plan you already started** — call `write_file` / `copy_asset_file` / `reload_emulator` next. Do **not** treat skill results as a cue to re-read the user request and brainstorm a different project. Obey the separate system message about native tool calling (no JSON/XML tool envelopes in assistant text)."
   ].join("\n");
 }
 
@@ -119,7 +121,7 @@ export function readDeferredSkillMarkdown(skillsDir: string, skillId: DeferredSk
  * - `asset-applier` — minimal: `dartsnut-skill` + `asset-pipeline` only.
  *   No display-mapping (apply mode does not touch layout/fonts) and no creator
  *   skills (apply mode forbids scaffolding).
- * - `creation-intake` — `dartsnut-skill` only (no file writes; host tools handle workspace setup).
+ * - `creation-intake` — intake-only skill (no file writes; host tools handle workspace setup).
  * - All other modes (game-creator, widget-creator, or unset) — full bundle:
  *   `dartsnut-skill` + `dartsnut-display-mapping` + `asset-pipeline`. Creator
  *   templates are still injected separately into the user prompt.
@@ -133,7 +135,7 @@ export function bundleForTemplateMode(
     return loadSkillBundle(paths.dartsnutSkill, paths.assetPipeline);
   }
   if (mode === "creation-intake") {
-    return loadSkillBundle(paths.dartsnutSkill);
+    return loadSkillBundle(paths.creationIntake);
   }
   return loadSkillBundle(paths.dartsnutSkill, paths.displayMapping, paths.assetPipeline);
 }

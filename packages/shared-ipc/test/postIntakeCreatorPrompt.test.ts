@@ -33,4 +33,13 @@ describe("buildPostIntakeCreatorUserPrompt", () => {
     expect(prompt).toContain("ask what they want");
     expect(prompt).not.toContain("**Build now (mandatory):**");
   });
+
+  it("forces build-now after intake when type/size were already chosen", () => {
+    const prompt = buildPostIntakeCreatorUserPrompt("surprise me", { forceBuildAfterIntake: true });
+    expect(prompt).toContain("**Build now (mandatory):**");
+    expect(prompt).toContain("same concept");
+    expect(prompt).toContain("do not re-interpret");
+    expect(prompt).not.toContain(POST_INTAKE_BUILD_REQUEST_PREFIX);
+    expect(prompt).not.toContain("ask what they want");
+  });
 });

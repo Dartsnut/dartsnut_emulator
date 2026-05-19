@@ -948,7 +948,7 @@ export class SessionEngine {
 
     const maxToolRounds = SessionEngine.resolveToolLoopMax();
     let filesWrittenThisTurn = 0;
-    let creatorNudgeUsed = false;
+    let creatorNudgeCount = 0;
 
     for (let step = 0; step < maxToolRounds; step += 1) {
       if (abortSignal?.aborted) {
@@ -1086,10 +1086,10 @@ export class SessionEngine {
             initialPrompt: prompt,
             messages,
             systemSlots,
-            nudgeAlreadyUsed: creatorNudgeUsed
+            nudgeCount: creatorNudgeCount
           })
         ) {
-          creatorNudgeUsed = true;
+          creatorNudgeCount += 1;
           this.emitTransaction({
             type: "creator.incomplete_turn",
             correlationId: turnCorrelationId,
@@ -1098,7 +1098,8 @@ export class SessionEngine {
             reasoningChars: reasoningTrimmed.length,
             filesWrittenThisTurn,
             workspaceHasConfJson: afterTextArtifacts.confJson,
-            workspaceHasMainPy: afterTextArtifacts.mainPy
+            workspaceHasMainPy: afterTextArtifacts.mainPy,
+            creatorNudgeCount
           });
           messages.push({
             role: "assistant",
@@ -1135,10 +1136,10 @@ export class SessionEngine {
             initialPrompt: prompt,
             messages,
             systemSlots,
-            nudgeAlreadyUsed: creatorNudgeUsed
+            nudgeCount: creatorNudgeCount
           })
         ) {
-          creatorNudgeUsed = true;
+          creatorNudgeCount += 1;
           this.emitTransaction({
             type: "creator.incomplete_turn",
             correlationId: turnCorrelationId,
@@ -1147,7 +1148,8 @@ export class SessionEngine {
             reasoningChars: reasoningTrimmed.length,
             filesWrittenThisTurn,
             workspaceHasConfJson: afterEnvelopeArtifacts.confJson,
-            workspaceHasMainPy: afterEnvelopeArtifacts.mainPy
+            workspaceHasMainPy: afterEnvelopeArtifacts.mainPy,
+            creatorNudgeCount
           });
           messages.push({
             role: "assistant",

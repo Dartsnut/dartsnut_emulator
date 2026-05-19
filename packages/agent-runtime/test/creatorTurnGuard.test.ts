@@ -15,7 +15,7 @@ describe("shouldInjectCreatorIncompleteNudge", () => {
         initialPrompt: ["TEMPLATE", "", "User request:", "Trajectory smoothing"].join("\n"),
         messages: [],
         systemSlots: 0,
-        nudgeAlreadyUsed: false
+        nudgeCount: 0
       })
     ).toBe(true);
   });
@@ -29,12 +29,12 @@ describe("shouldInjectCreatorIncompleteNudge", () => {
         initialPrompt: "Trajectory smoothing",
         messages: [],
         systemSlots: 0,
-        nudgeAlreadyUsed: false
+        nudgeCount: 0
       })
     ).toBe(false);
   });
 
-  it("returns false after nudge already used", () => {
+  it("returns false after max nudges", () => {
     expect(
       shouldInjectCreatorIncompleteNudge({
         templateMode: "widget-creator",
@@ -43,7 +43,7 @@ describe("shouldInjectCreatorIncompleteNudge", () => {
         initialPrompt: "Trajectory smoothing",
         messages: [],
         systemSlots: 0,
-        nudgeAlreadyUsed: true
+        nudgeCount: 4
       })
     ).toBe(false);
   });

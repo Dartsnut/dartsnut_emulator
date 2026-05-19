@@ -63,6 +63,7 @@ declare global {
       onMainProcessConsoleMirror: (listener: (payload: MainProcessConsoleMirrorPayload) => void) => () => void;
       onWindowChromeInsets: (listener: (insets: WindowChromeInsets) => void) => () => void;
       onSessionReset: (listener: () => void) => () => void;
+      onBootstrapStateChanged: (listener: (state: BootstrapState) => void) => () => void;
       onPythonRuntimeStatus: (listener: (status: string | null) => void) => () => void;
       sendEmulatorCommand: (command: EmulatorCommand) => Promise<{ ok: boolean }>;
       pickWidgetPath: () => Promise<{ path: string | null }>;

@@ -10,6 +10,25 @@ const BUILD_VERBS =
 const PRODUCT_OR_FEATURE =
   /\b(?:widget|game|clock|score|timer|smoothing|smooth|trajectory|counter|dart|display|animation|gradient|countdown|weather|temperature)\b/i;
 
+/** Open-ended creative prompts where the model must pick one concept and stick to it. */
+const OPEN_ENDED_CREATIVE =
+  /\b(?:surprise\s+me|surprise\s+us|surprise|anything|whatever|up to you|your choice|dealer'?s choice)\b/i;
+
+export function isOpenEndedCreativePrompt(originalUserPrompt: string): boolean {
+  const original = originalUserPrompt.trim();
+  if (original.length < 2) {
+    return false;
+  }
+  if (OPEN_ENDED_CREATIVE.test(original)) {
+    return true;
+  }
+  if (VAGUE_ONLY.test(original)) {
+    return true;
+  }
+  const words = original.split(/\s+/).filter(Boolean);
+  return words.length <= 2 && !BUILD_VERBS.test(original) && !PRODUCT_OR_FEATURE.test(original);
+}
+
 /**
  * True when the user's first composer message already names what to build
  * (post-intake should instruct the agent to implement, not ask).
@@ -29,23 +48,42 @@ export function postIntakeCreatorStatesBuildIntent(originalUserPrompt: string): 
   return words.length >= 3;
 }
 
+export interface BuildPostIntakeCreatorUserPromptOptions {
+  /**
+   * When true (default for host-chained intake → creator), always use the build-now
+   * instructions even if the first message was vague (e.g. "surprise me") — type and size
+   * were already chosen via intake.
+   */
+  forceBuildAfterIntake?: boolean;
+}
+
 /**
  * User message for the automatic creator run chained after creation intake.
  */
-export function buildPostIntakeCreatorUserPrompt(originalUserPrompt: string): string {
+export function buildPostIntakeCreatorUserPrompt(
+  originalUserPrompt: string,
+  options?: BuildPostIntakeCreatorUserPromptOptions
+): string {
   const original = originalUserPrompt.trim();
   const shared = [
     "Creation **intake just finished**: the empty workspace is selected and **Creation context** above already has project type and (for widgets) display size.",
     "Do **not** open with a generic **Hello / Welcome to Dartsnut Chat** or repeat product onboarding — the user already completed intake."
   ];
 
-  if (postIntakeCreatorStatesBuildIntent(originalUserPrompt)) {
+  if (options?.forceBuildAfterIntake || postIntakeCreatorStatesBuildIntent(originalUserPrompt)) {
+    const openEnded = isOpenEndedCreativePrompt(originalUserPrompt);
+    const buildNowLead = openEnded
+      ? "**Build now (mandatory):** The user asked for an open-ended surprise — **pick exactly one concrete widget/game concept** in your first reasoning pass (name it explicitly), load required skills with **`get_dartsnut_skill`**, then **implement that same concept** with tools. **Do not** run a second brainstorm after skill results return; skill loading is not a new scoping turn."
+      : "**Build now (mandatory):** The user's first message already states what to create. Load any required skills with **`get_dartsnut_skill`** if not already loaded in this session, then create runnable project files in the workspace using tools (`write_file`, `copy_asset_file`, and **`reload_emulator`** after `conf.json`).";
+    const buildRequestLine = openEnded
+      ? `Original vibe (already satisfied by intake — do not re-interpret as a new request after skills load): ${original || "surprise"}`
+      : `${POST_INTAKE_BUILD_REQUEST_PREFIX} ${original}`;
     return [
       ...shared,
       "",
-      "**Build now (mandatory):** The user's first message already states what to create. Load any required skills with **`get_dartsnut_skill`** if not already loaded in this session, then create runnable project files in the workspace using tools (`write_file`, `copy_asset_file`, and **`reload_emulator`** after `conf.json`).",
+      buildNowLead,
       "Pick sensible defaults for any ambiguous details and mention them briefly in your final reply — **do not** ask what to build or offer multiple design directions unless you are truly blocked (e.g. missing required size).",
-      `${POST_INTAKE_BUILD_REQUEST_PREFIX} ${original}`
+      buildRequestLine
     ].join("\n");
   }
 

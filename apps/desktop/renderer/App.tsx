@@ -852,6 +852,7 @@ export function App() {
       const message = error instanceof Error ? error.message : "Failed to load bootstrap state.";
       setRuntimeError(message);
     });
+    const unsubscribeBootstrap = api.onBootstrapStateChanged(setBootstrap);
     api.getProviderSettings().then(setProviderSettings).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Failed to load provider settings.";
       setProviderSettingsError(message);
@@ -1010,6 +1011,7 @@ export function App() {
     return () => {
       cancelStreamCoalesce();
       unsubscribe();
+      unsubscribeBootstrap();
       unsubscribePythonRuntime();
       unsubscribeEmulatorConsoleLog();
       unsubscribeMainConsoleMirror();

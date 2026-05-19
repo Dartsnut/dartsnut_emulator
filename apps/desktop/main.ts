@@ -16,6 +16,7 @@ import {
   type SaveTempWorkspaceResponse,
   isTemporaryWorkspaceForBootstrap,
   normalizeFsPathComparable,
+  workspaceNeedsCreationIntake,
   type DeployActionResponse,
   type DeployConnectRequest,
   type DeployConnectResponse,
@@ -439,6 +440,7 @@ async function discardTrackedTemporaryProject(): Promise<void> {
     writeTempWorkspaceRecordToDisk(null);
   }
   removeDirectoryBestEffort(toRemove);
+  ensureTemporaryWorkspaceRootAllocated();
 }
 
 async function runInteractiveSaveTemporaryWorkspace(): Promise<boolean> {
@@ -544,7 +546,8 @@ function getBootstrapState(): BootstrapState {
     workspaceRoot,
     providerStatus: providerStatus(),
     firstRunComplete,
-    isTemporaryWorkspace: isTemporaryWorkspaceActiveNow()
+    isTemporaryWorkspace: isTemporaryWorkspaceActiveNow(),
+    needsCreationIntake: computeNeedsCreationIntake()
   };
 }
 
@@ -646,8 +649,30 @@ function allocateTemporaryWorkspaceRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-chat-"));
 }
 
-function getIntakePlaceholderWorkspacePath(): string {
-  return path.join(repoRoot, ".dartsnut-chat-intake-placeholder");
+/** Allocate and select a temp workspace when none is active (eager allocation). */
+function ensureTemporaryWorkspaceRootAllocated(): string {
+  if (workspaceRoot) {
+    return workspaceRoot;
+  }
+  const root = allocateTemporaryWorkspaceRoot();
+  applyWorkspaceRoot(root);
+  markNewTemporaryWorkspaceAllocated(root);
+  return root;
+}
+
+function readWorkspaceConfJsonExists(absoluteWorkspacePath: string): boolean {
+  return fs.existsSync(path.join(absoluteWorkspacePath, "conf.json"));
+}
+
+function computeNeedsCreationIntake(): boolean {
+  // No active workspace yet (early-startup race before ensureTemporaryWorkspaceRootAllocated
+  // runs, or right after a cleanup): the next prompt will eagerly allocate a fresh temp dir
+  // which by definition has no conf.json, so intake is required. Reporting `true` here keeps
+  // the renderer's chip gate correct against a stale bootstrap snapshot.
+  if (!workspaceRoot) {
+    return true;
+  }
+  return workspaceNeedsCreationIntake(workspaceRoot, readWorkspaceConfJsonExists(workspaceRoot));
 }
 
 function applyWorkspaceRoot(selectedPath: string): void {
@@ -750,7 +775,7 @@ function readWorkspaceConfIntakeSnapshot(
 function nextAfterProjectType(pt: ProjectType): string {
   return pt === "widget"
     ? "Widget display size: if the user's message already names a supported WxH (128x160, 128x128, 128x64, 64x32), call set_widget_size with that value next. Otherwise call **dartsnut_ask_question** with question_id **widget_display_size** — do **not** pick a default, invent a size, or call set_widget_size or read_workspace_conf until they choose (or their next message is only one of those tokens — then call set_project_type with `widget` then set_widget_size with it)."
-    : "Call **read_workspace_conf** — the host selects an empty workspace directory under the system temp folder when none is set yet, then returns `conf.json` status.";
+    : "Call **read_workspace_conf** — returns `conf.json` status for the active workspace.";
 }
 
 async function intakeHostToolExecute(
@@ -794,26 +819,16 @@ async function intakeHostToolExecute(
     return JSON.stringify({
       ok: true,
       recorded: { widgetSize: state.widgetSize },
-      next: "Call **read_workspace_conf** — the host selects an empty workspace directory under the system temp folder when none is set yet, then returns `conf.json` status."
+      next: "Call **read_workspace_conf** — returns `conf.json` status for the active workspace."
     });
   }
   if (action === "read_workspace_conf") {
-    let root = workspaceRoot;
-    let allocated = false;
+    const root = workspaceRoot;
     if (!root) {
-      root = allocateTemporaryWorkspaceRoot();
-      applyWorkspaceRoot(root);
-      markNewTemporaryWorkspaceAllocated(root);
-      allocated = true;
+      return JSON.stringify({ ok: false, error: "No workspace is active." });
     }
     const snapshot = readWorkspaceConfIntakeSnapshot(root, state);
-    const payload: Record<string, unknown> = { ok: true, ...snapshot };
-    if (allocated) {
-      payload.workspace_selected = root;
-      payload.workspace_note =
-        "Host created this empty directory under the system temp folder for the new project.";
-    }
-    return JSON.stringify(payload);
+    return JSON.stringify({ ok: true, ...snapshot });
   }
   return JSON.stringify({ ok: false, error: `Unknown intake action: ${action}` });
 }
@@ -878,15 +893,14 @@ function buildCreationIntakeUserPrompt(
       : "";
   return [
     "## New project intake (mandatory tool use)",
-    "The user has **not** chosen a workspace folder in the shell yet. You cannot read or write project files until intake completes.",
+    "An empty workspace directory is already selected on disk. Complete intake before the creator phase writes `conf.json` and `main.py`.",
     "Use **only** these host tools via native `tool_calls`: **`dartsnut_ask_question`** and **`dartsnut_project_intake`**.",
     "**Blocking questions (`dartsnut_ask_question`):** Each call shows the matching desktop UI (Game/Widget chips or widget size chips) and **does not return** until the user answers. You **must** call this tool when you need that input and cannot take it reliably from the user's message alone — do **not** rely on hidden marker lines or prose-only prompts for those choices.",
     "Allowed `question_id` values: **`project_type`**, **`widget_display_size`** (only after `project_type` is `widget`).",
-    "**Workspace:** There is **no** folder picker. When you call **`read_workspace_conf`** and no workspace is set yet, the **host creates** an empty directory under the OS temp folder (e.g. `TMPDIR` / `%TEMP%`) and selects it automatically.",
     "Procedure:",
     "1. Infer **game** vs **widget** from the user's text when it is obvious, then call `set_project_type`. When it is **not** obvious, call **`dartsnut_ask_question`** with `question_id` **`project_type`** (then continue from the tool result).",
     "2. For **widget** display size: supported values are exactly **128x160**, **128x128**, **128x64**, **64x32**. If the user's message already includes one of those literals, call `set_widget_size` with it. Otherwise call **`dartsnut_ask_question`** with `question_id` **`widget_display_size`** — **never** assume a default, invent a size, or call `set_widget_size` or `read_workspace_conf` until they have answered (via chips or typed follow-up). If the user's message is **only** one of those four literals (no other words), treat it as their size choice for a widget: call `set_project_type` with `widget` then `set_widget_size` with that token, then continue.",
-    "3. Call **`read_workspace_conf`** once type (and widget size if applicable) are resolved. The response includes `workspace_selected` when the host just allocated the temp directory.",
+    "3. Call **`read_workspace_conf`** once type (and widget size if applicable) are resolved.",
     "4. Use `guidance_notes`, `deploy_eligibility`, and `conf_status` to ask **at most one** focused follow-up when the folder is not a blank slate or types disagree.",
     "5. Close with a one- or two-sentence confirmation of what will be built next (no code, no file paths invented).",
     "",
@@ -1682,10 +1696,6 @@ function shouldAttachAgentSessionPersistence(workspaceForSession: string | null 
   if (isAgentSessionPersistenceDisabledByEnv()) {
     return false;
   }
-  const normalized = path.resolve(workspaceForSession);
-  if (normalized === path.resolve(getIntakePlaceholderWorkspacePath())) {
-    return false;
-  }
   return true;
 }
 
@@ -1827,6 +1837,7 @@ app.whenReady().then(async () => {
   pythonExec = await resolvePythonExecutable();
   startPythonBridge();
   await maybeRecoverTrackedTempWorkspaceAtLaunch();
+  ensureTemporaryWorkspaceRootAllocated();
 });
 
 app.on("window-all-closed", () => {
@@ -2100,6 +2111,7 @@ ipcMain.handle(IPCChannels.startNewProject, async () => {
     return getBootstrapState();
   }
   performSessionCleanup({ clearWorkspace: true });
+  ensureTemporaryWorkspaceRootAllocated();
   return getBootstrapState();
 });
 
@@ -2199,7 +2211,7 @@ ipcMain.handle(
         JSON.stringify({
           ok: true,
           recorded: { widgetSize: body.value },
-          next: "Call **read_workspace_conf** — the host selects an empty workspace directory under the system temp folder when none is set yet, then returns `conf.json` status."
+          next: "Call **read_workspace_conf** — returns `conf.json` status for the active workspace."
         })
       );
       return { ok: true };
@@ -2322,15 +2334,20 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
   };
   try {
+    ensureTemporaryWorkspaceRootAllocated();
     agentEventEmitter = emitAgent;
     let sessionRouting: SendPromptResponse["sessionRouting"];
     const hostState: IntakeToolState = {};
     const sharedIntakeHandler = async (args: Record<string, unknown>) =>
       intakeHostToolExecute(args, hostState);
 
-    const shouldRunCreationIntake = Boolean(req.creationIntake && !workspaceRoot);
+    const shouldRunCreationIntake = Boolean(req.creationIntake && computeNeedsCreationIntake());
 
     if (shouldRunCreationIntake) {
+      const intakeWorkspace = workspaceRoot;
+      if (!intakeWorkspace) {
+        throw new Error("Workspace is not selected.");
+      }
       emitAgent({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
       emitAgent({ type: "intake_project_type_prompt", at: Date.now(), visible: false });
       const intakeState: IntakeToolState = {};
@@ -2344,14 +2361,11 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         intakeState.projectType = "widget";
         intakeState.widgetSize = req.intakeWidgetSizeChoice;
       }
-      const placeholder = getIntakePlaceholderWorkspacePath();
-      fs.mkdirSync(placeholder, { recursive: true });
       const intakeSession = buildSession(undefined, {
-        workspacePath: placeholder,
+        workspacePath: intakeWorkspace,
         completionTools: AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
         hostIntakeToolHandler: (args) => intakeHostToolExecute(args, intakeState),
         hostAskQuestionHandler: (args) => askQuestionHostExecute(args, intakeState),
-        skipInitialWorkspaceResolve: true,
         skillBundleMode: "creation-intake"
       });
       terminalAgentLifecycleLog("[agent] runPrompt creation-intake start");

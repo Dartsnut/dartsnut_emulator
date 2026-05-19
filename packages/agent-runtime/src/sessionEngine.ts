@@ -103,7 +103,7 @@ export interface SessionEngineOptions {
   hostIntakeToolHandler?: HostIntakeToolHandler;
   hostAskQuestionHandler?: HostAskQuestionHandler;
   hostReloadEmulatorHandler?: HostReloadEmulatorHandler;
-  /** Skip the initial `workspacePolicy.resolveWithinRoot(".")` probe (intake placeholder roots). */
+  /** Skip the initial `workspacePolicy.resolveWithinRoot(".")` probe (legacy; prefer a real workspace root). */
   skipInitialWorkspaceResolve?: boolean;
   /** When set, rolling chat (user/assistant/tool) is persisted under the workspace and replayed on resume. */
   sessionPersistence?: AgentSessionPersistence;
@@ -300,7 +300,7 @@ export class SessionEngine {
     ];
     if (hasIntake) {
       lines.push(
-        "Intake: **dartsnut_project_intake** is host-executed — use `set_project_type`, `set_widget_size`, and `read_workspace_conf` (the host allocates an empty temp workspace automatically the first time `read_workspace_conf` runs while no folder is selected)."
+        "Intake: **dartsnut_project_intake** is host-executed — use `set_project_type`, `set_widget_size`, and `read_workspace_conf` (returns `conf.json` status for the active workspace)."
       );
     }
     if (hasAskQuestion) {

@@ -1,7 +1,6 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   type AgentEvent,
-  type AgentSessionIntent,
   type AgentSessionTranscriptLine,
   type AssetManifest,
   type BootstrapState,
@@ -664,15 +663,7 @@ export function App() {
   const streamAutoscrollGateRef = useRef(0);
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
-  /** Next `sendPrompt` workspace-session intent (`fresh` is consumed once). */
-  const pendingAgentSessionIntentRef = useRef<AgentSessionIntent>("auto");
   const lastAgentSessionHydrateKeyRef = useRef<string>("");
-  /** Workspaces for which the continue/new-session prompt was already handled this app run. */
-  const persistedSessionPromptHandledRef = useRef<Set<string>>(new Set());
-  /** Workspace has on-disk agent session — show continue / new-session banner once per open. */
-  const [showPersistedAgentSessionBanner, setShowPersistedAgentSessionBanner] = useState(false);
-  /** Bumped after on-disk session reset so the hydrate effect can re-query the same workspace. */
-  const [agentSessionHydrateEpoch, setAgentSessionHydrateEpoch] = useState(0);
   /** Last no-workspace prompt text — used when the user picks a widget size from chips so the idea is not lost. */
   const creationIntakeBasePromptRef = useRef("");
   const timelineRef = useRef<HTMLElement | null>(null);
@@ -1095,23 +1086,16 @@ export function App() {
   }, [assetManifest, deployEligible, rightPaneTab]);
 
   useEffect(() => {
-    if (bootstrap?.workspaceRoot) {
+    if (!bootstrap?.needsCreationIntake) {
       setWidgetSizePicker({ visible: false, sizes: [] });
       setProjectTypePicker({ visible: false, types: [] });
     }
-  }, [bootstrap?.workspaceRoot]);
-
-  function dismissPersistedSessionPrompt(workspaceRoot: string) {
-    persistedSessionPromptHandledRef.current.add(workspaceRoot);
-    setShowPersistedAgentSessionBanner(false);
-  }
+  }, [bootstrap?.needsCreationIntake]);
 
   useEffect(() => {
     const ws = bootstrap?.workspaceRoot;
-    const isTemporaryWorkspace = bootstrap?.isTemporaryWorkspace === true;
     if (!api || !ws) {
       lastAgentSessionHydrateKeyRef.current = "";
-      setShowPersistedAgentSessionBanner(false);
       return;
     }
     if (lastAgentSessionHydrateKeyRef.current === ws) {
@@ -1125,7 +1109,6 @@ export function App() {
       }
       lastAgentSessionHydrateKeyRef.current = ws;
       if (!summary.hasPersistedSession || summary.transcriptTail.length === 0) {
-        dismissPersistedSessionPrompt(ws);
         setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT, streaming: false }]);
         return;
       }
@@ -1133,14 +1116,11 @@ export function App() {
         .map((line, idx) => transcriptLineToTimelineEntry(line, idx))
         .filter((entry): entry is TimelineEntry => entry != null);
       setEntries(hydrated);
-      const showPrompt =
-        isTemporaryWorkspace && !persistedSessionPromptHandledRef.current.has(ws);
-      setShowPersistedAgentSessionBanner(showPrompt);
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, bootstrap?.workspaceRoot, bootstrap?.isTemporaryWorkspace, agentSessionHydrateEpoch]);
+  }, [api, bootstrap?.workspaceRoot]);
 
   const chatDisabled = useMemo(() => {
     if (!bootstrap) {
@@ -1160,11 +1140,6 @@ export function App() {
       activeReasoningStreamEntryIdRef.current = null;
       eventSeqRef.current = 0;
       lastAgentSessionHydrateKeyRef.current = "";
-      if (bootstrap?.workspaceRoot) {
-        persistedSessionPromptHandledRef.current.add(bootstrap.workspaceRoot);
-      }
-      setShowPersistedAgentSessionBanner(false);
-      pendingAgentSessionIntentRef.current = "auto";
       setSessionTemplateMode(null);
       setSessionWidgetSize(null);
       setSessionProjectType(null);
@@ -1179,12 +1154,6 @@ export function App() {
 
   function postStatus(text: string) {
     setEntries((prev) => [...prev, { id: `status-${Date.now()}`, role: "status", text }]);
-  }
-
-  function takeAgentSessionIntentForNextPrompt(): AgentSessionIntent {
-    const intent = pendingAgentSessionIntentRef.current;
-    pendingAgentSessionIntentRef.current = "auto";
-    return intent;
   }
 
   async function submitPrompt(request: PromptRequest) {
@@ -1374,19 +1343,15 @@ export function App() {
     }
     const current = prompt.trim();
     setPrompt("");
-    if (bootstrap?.workspaceRoot) {
-      dismissPersistedSessionPrompt(bootstrap.workspaceRoot);
-    }
     setEntries((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", text: current }]);
 
-    if (bootstrap?.workspaceRoot) {
+    if (!bootstrap?.needsCreationIntake && bootstrap?.workspaceRoot) {
       await submitPrompt({
         prompt: current,
         workspacePath: bootstrap.workspaceRoot,
         templateMode: sessionTemplateMode ?? undefined,
         widgetSize: sessionWidgetSize ?? undefined,
-        projectType: sessionProjectType ?? undefined,
-        agentSession: { intent: takeAgentSessionIntentForNextPrompt() }
+        projectType: sessionProjectType ?? undefined
       });
       return;
     }
@@ -1435,9 +1400,9 @@ export function App() {
                 }
               >
                 <span className="block truncate">
-                  {bootstrap?.workspaceRoot
+                  {bootstrap?.workspaceRoot && !bootstrap.isTemporaryWorkspace
                     ? workspaceFolderBasename(bootstrap.workspaceRoot)
-                    : "Dartsnut Agent"}
+                    : "Dartsnut Chat"}
                 </span>
               </h1>
               <button
@@ -1591,55 +1556,6 @@ export function App() {
                   {pythonRuntimeStatus}
                 </div>
               ) : null}
-              {showPersistedAgentSessionBanner &&
-              bootstrap?.workspaceRoot &&
-              bootstrap.isTemporaryWorkspace ? (
-                <div
-                  className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 rounded-md border border-edge bg-page px-2.5 py-1.5 text-[11px]"
-                  role="region"
-                  aria-label="Saved agent session"
-                >
-                  <span className="font-medium text-fg-strong">Saved session</span>
-                  <span className="min-w-0 text-[var(--color-text-subtle)]">Continue or start fresh?</span>
-                  <div className="flex flex-wrap gap-1.5 sm:ml-auto">
-                    <button
-                      type="button"
-                      className="rounded border border-edge bg-[var(--color-app-btn-bg)] px-2 py-0.5 text-[11px] font-medium text-fg-strong hover:bg-[var(--color-app-btn-bg-hover)]"
-                      onClick={() => {
-                        pendingAgentSessionIntentRef.current = "resume";
-                        dismissPersistedSessionPrompt(bootstrap.workspaceRoot!);
-                      }}
-                    >
-                      Continue
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded border border-edge bg-transparent px-2 py-0.5 text-[11px] font-medium text-fg-strong hover:bg-[var(--color-app-btn-bg-hover)]"
-                      onClick={async () => {
-                        if (!api) {
-                          return;
-                        }
-                        const res = await api.resetWorkspaceSession();
-                        if (!res.ok) {
-                          postStatus(
-                            res.reason === "no_workspace"
-                              ? "No workspace selected."
-                              : "Session reset is disabled for this workspace."
-                          );
-                          return;
-                        }
-                        pendingAgentSessionIntentRef.current = "fresh";
-                        dismissPersistedSessionPrompt(bootstrap.workspaceRoot!);
-                        lastAgentSessionHydrateKeyRef.current = "";
-                        setAgentSessionHydrateEpoch((n) => n + 1);
-                        setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT, streaming: false }]);
-                      }}
-                    >
-                      New session
-                    </button>
-                  </div>
-                </div>
-              ) : null}
             </div>
           </div>
 
@@ -1687,7 +1603,7 @@ export function App() {
           </section>
 
           {/* Chip rows: host shows these while a blocking `dartsnut_ask_question` call is waiting. */}
-          {!bootstrap?.workspaceRoot &&
+          {bootstrap?.needsCreationIntake &&
           projectTypePicker.visible &&
           projectTypePicker.types.length > 0 ? (
             <div
@@ -1717,7 +1633,7 @@ export function App() {
             </div>
           ) : null}
 
-          {!bootstrap?.workspaceRoot &&
+          {bootstrap?.needsCreationIntake &&
           widgetSizePicker.visible &&
           widgetSizePicker.sizes.length > 0 ? (
             <div

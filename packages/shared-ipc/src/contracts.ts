@@ -82,6 +82,8 @@ export interface BootstrapState {
   firstRunComplete: boolean;
   /** True when `workspaceRoot` is the persisted unsaved temp project directory. */
   isTemporaryWorkspace: boolean;
+  /** True when the active workspace has no `conf.json` yet (run creation intake before creator tools). */
+  needsCreationIntake: boolean;
 }
 
 /** IPC return from `saveTempWorkspace`. */

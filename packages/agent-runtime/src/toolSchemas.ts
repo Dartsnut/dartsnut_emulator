@@ -240,7 +240,7 @@ export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
   DARTSNUT_PROJECT_INTAKE_TOOL
 ];
 
-/** Intake-only session: host tools only (no writes to the placeholder workspace). */
+/** Intake-only session: host tools only (no file writes until creator phase). */
 export const AGENT_CREATION_INTAKE_TOOL_SCHEMAS: ChatCompletionTool[] = [
   DARTSNUT_ASK_QUESTION_TOOL,
   DARTSNUT_PROJECT_INTAKE_TOOL

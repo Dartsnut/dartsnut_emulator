@@ -25,6 +25,20 @@ Once minimal `main.py` exists:
 4. **Assets:** at most **one** `copy_asset_file` per round; **next round** must `read_file` `main.py` and wire that asset with `replace_in_file`.
 5. Decide the **next** micro-step from what `read_file` returned — do not assume file contents from memory.
 
+## Verify run (mandatory)
+
+Reload to restart the widget; **`get_emulator_logs`** to confirm Python compiles and runs (scan for Traceback, SyntaxError, ModuleNotFoundError).
+
+| When | Tools |
+|------|-------|
+| After phase 1 (`conf.json`) | `reload_emulator` → `get_emulator_logs` |
+| After phase 2 (`main.py` stub created) | **`reload_emulator` → `get_emulator_logs`** (required) |
+| After phase 3 milestone (core behavior done) | `reload_emulator` → `get_emulator_logs` |
+| After phase 4 (if assets affect runtime) | `reload_emulator` → `get_emulator_logs` |
+| Logs show an error after an edit | fix with `read_file` + `replace_in_file`, then reload + logs again |
+
+Do **not** reload after every micro-edit — only at the boundaries above or when logs already show failure. A verify round may be **`reload_emulator` + `get_emulator_logs`** without a file edit.
+
 ## Anti-duplication (mandatory)
 
 - **Do not** paste full `conf.json`, `main.py`, or other file bodies in assistant text when you will write them with tools.
@@ -37,8 +51,8 @@ Once minimal `main.py` exists:
 | Phase | What | Tools |
 |-------|------|-------|
 | 0 | Lock **one** concept in ≤1 sentence (assistant text only) | none |
-| 1 | **`conf.json` only** — load `conf-contract` first | `write_file` → **`reload_emulator`** |
-| 2 | **Minimal `main.py`** — load `pydartsnut-core` + `pydartsnut-widget-loop` or `pydartsnut-game-io` | `write_file` |
+| 1 | **`conf.json` only** — load `conf-contract` first | `write_file` → **`reload_emulator`** → **`get_emulator_logs`** |
+| 2 | **Minimal `main.py`** — load `pydartsnut-core` + `pydartsnut-widget-loop` or `pydartsnut-game-io` | `write_file` → **`reload_emulator`** → **`get_emulator_logs`** |
 | 3+ | Core behavior | **`read_file`** then **`replace_in_file`** each round; load `dartsnut-display-mapping` when layout/fonts matter |
 | 4 | Fonts / art (only if needed) | one `copy_asset_file` per round, then read + wire in `main.py` |
 

@@ -78,6 +78,8 @@ describe.skipIf(!canRunLive)("flip-clock creator live e2e", () => {
           allowedIds: allowedDeferredSkillIdsForMode("widget-creator")
         },
         hostReloadEmulatorHandler: async () => "reload_emulator ok (e2e noop)",
+        hostGetEmulatorLogsHandler: async () =>
+          JSON.stringify({ ok: true, lines: [], emulator: { running: false, status: "Idle" } }),
         sessionPersistence: persistence,
         sessionTemplateMode: "widget-creator",
         sessionSection: "widget-creator"
@@ -111,6 +113,9 @@ describe.skipIf(!canRunLive)("flip-clock creator live e2e", () => {
       const toolNames = toolCallsFromTransactions(transactions);
       expect(toolNames).toContain("read_file");
       expect(toolNames).toContain("replace_in_file");
+      if (toolNames.includes("reload_emulator")) {
+        expect(toolNames).toContain("get_emulator_logs");
+      }
       expect(transactions.some((row) => row.type === "creator.stall_turn")).toBe(false);
       expect(transactions.some((row) => row.type === "creator.incomplete_turn")).toBe(false);
 

@@ -150,6 +150,8 @@ function formatCreatorRouterBody(skillsDir: string, allowed: readonly DeferredSk
     "",
     "**Iteration loop (after stub `main.py` exists):** Each round → `read_file` `main.py` first → at most one small `replace_in_file` (or one `copy_asset_file`, then read + wire next round). No tool-free build rounds until final done status.",
     "",
+    "**Verify run:** After `conf.json`, after `main.py` stub, and at phase milestones → `reload_emulator` then `get_emulator_logs` to confirm Python runs without errors.",
+    "",
     "**Load first** (parallel `get_dartsnut_skill` calls OK) before any `write_file` / `replace_in_file` / `copy_asset_file`:",
     ...always.map((id) => `- **${id}**`),
     "",

@@ -19,6 +19,8 @@ describe("formatCreatorBuildPlanMessage", () => {
     expect(msg).toContain("Phase 1");
     expect(msg).toContain("conf.json");
     expect(msg).toContain("reload_emulator");
+    expect(msg).toContain("get_emulator_logs");
+    expect(msg).toContain("Verify run");
     expect(msg).toContain("Phase 2");
     expect(msg).toContain("main.py");
   });
@@ -30,7 +32,7 @@ describe("formatCreatorBuildPlanMessage", () => {
       widgetSize: "128x128"
     });
     expect(msg).toContain("128x128");
-    expect(msg).toContain("Pillow blank frame");
+    expect(msg).toContain("blank frame runs");
   });
 });
 

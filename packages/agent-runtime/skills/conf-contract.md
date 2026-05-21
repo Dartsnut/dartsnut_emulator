@@ -43,4 +43,4 @@ Load this **before** `write_file` on root **`conf.json`**. Use **Creation contex
 
 For widgets, set `"type": "widget"` and `size` from context (e.g. `[128, 128]`).
 
-After creating or materially changing **`conf.json`**, call **`reload_emulator`** so the preview sees the new config.
+After creating or materially changing **`conf.json`**, call **`reload_emulator`** then **`get_emulator_logs`** so the preview sees the new config and Python started cleanly.

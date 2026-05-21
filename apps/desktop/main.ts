@@ -43,7 +43,9 @@ import {
   type IntakeSubmitQuestionAnswerRequest,
   type IntakeSubmitQuestionAnswerResponse,
   type AgentSessionWorkspaceSummary,
-  buildPostIntakeCreatorUserPrompt
+  buildPostIntakeCreatorUserPrompt,
+  formatCreatorBuildPlanMessage,
+  shouldIncludeCreatorBuildPlan
 } from "@dartsnut/shared-ipc";
 import {
   loadProviderConfig,
@@ -70,17 +72,6 @@ import {
 } from "@dartsnut/emulator-protocol";
 import { AssetManager } from "./assetManager";
 import { DeployMachineSession } from "./deployMachine";
-
-// Packaged apps launched from Finder do not inherit shell env. MiMo/OpenAI-compatible
-// gateways often omit tool_calls when HTTP-streaming after `role: tool` messages; dev
-// sessions launched from a terminal may already set AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY=1.
-if (
-  app.isPackaged &&
-  (process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY === undefined ||
-    process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY === "")
-) {
-  process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY = "1";
-}
 
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
@@ -1002,9 +993,29 @@ function buildRoutedPrompt(request: PromptRequest): string {
     widgetFontManifestPath: templateMode === "widget-creator" ? widgetFontManifestPath : undefined,
     availableWidgetFonts: templateMode === "widget-creator" ? availableWidgetFonts : undefined
   };
+  const confPath =
+    effectiveWorkspacePath && effectiveWorkspacePath.length > 0
+      ? path.join(effectiveWorkspacePath, "conf.json")
+      : "";
+  const confJsonExists = confPath.length > 0 && fs.existsSync(confPath);
+  const resolvedProjectType: ProjectType =
+    projectType === "game" || projectType === "widget" ? projectType : templateMode === "widget-creator" ? "widget" : "game";
+  const buildPlanBlock =
+    shouldIncludeCreatorBuildPlan(templateMode, confJsonExists) &&
+    (resolvedProjectType === "game" || resolvedProjectType === "widget")
+      ? [
+          formatCreatorBuildPlanMessage({
+            templateMode,
+            projectType: resolvedProjectType,
+            widgetSize: widgetSize as WidgetSize | undefined
+          }),
+          ""
+        ]
+      : [];
   return [
     template,
     "",
+    ...buildPlanBlock,
     "Creation context:",
     JSON.stringify(context, null, 2),
     "",

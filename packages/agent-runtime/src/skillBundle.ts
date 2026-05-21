@@ -3,29 +3,72 @@ import path from "node:path";
 
 const SKILL_SEPARATOR = "\n\n---\n\n";
 
-/** Skill documents exposed via `get_dartsnut_skill` (filenames under `skillsDir`). */
+/** Granular + legacy skill documents exposed via `get_dartsnut_skill`. */
 export const DEFERRED_SKILL_IDS = [
-  "dartsnut-skill",
+  "creator-incremental",
+  "conf-contract",
+  "pydartsnut-core",
+  "pydartsnut-game-io",
+  "pydartsnut-widget-loop",
+  "widget-fonts",
+  "game-dart-colors",
   "dartsnut-display-mapping",
-  "asset-pipeline"
+  "asset-pipeline",
+  "dartsnut-skill"
 ] as const;
 
 export type DeferredSkillId = (typeof DEFERRED_SKILL_IDS)[number];
 
 export const DEFERRED_SKILL_FILE: Record<DeferredSkillId, string> = {
-  "dartsnut-skill": "dartsnut-skill.md",
+  "creator-incremental": "creator-incremental.md",
+  "conf-contract": "conf-contract.md",
+  "pydartsnut-core": "pydartsnut-core.md",
+  "pydartsnut-game-io": "pydartsnut-game-io.md",
+  "pydartsnut-widget-loop": "pydartsnut-widget-loop.md",
+  "widget-fonts": "widget-fonts.md",
+  "game-dart-colors": "game-dart-colors.md",
   "dartsnut-display-mapping": "dartsnut-display-mapping.md",
-  "asset-pipeline": "asset-pipeline.md"
+  "asset-pipeline": "asset-pipeline.md",
+  "dartsnut-skill": "dartsnut-skill.md"
 };
 
 const SKILL_INDEX_BLURB: Record<DeferredSkillId, string> = {
-  "dartsnut-skill":
-    "`pydartsnut` / `Dartsnut()`, main loop, `update_frame_buffer`, strict deps, README / Chat run steps.",
+  "creator-incremental":
+    "Phased scaffold (conf → stub main → iterate); anti-prose duplication; one file per tool round when new.",
+  "conf-contract": "Root `conf.json` keys, defaults, size, `reload_emulator` after changes.",
+  "pydartsnut-core":
+    "`Dartsnut()`, loop guard, `update_frame_buffer`, deps boundary, Chat Start/Reload/Logs.",
+  "pydartsnut-game-io": "Game pygame loop, `get_dart_hits` / `get_button_events`, forbidden APIs.",
+  "pydartsnut-widget-loop": "Widget PIL loop, `widget_params`, no pygame.",
+  "widget-fonts": "`availableWidgetFonts`, `copy_asset_file` → `./fonts/`, load helper.",
+  "game-dart-colors": "Dart index % 4 color map and RGB table for game UI.",
   "dartsnut-display-mapping":
-    "Physical panels ↔ framebuffer merge, layout, fonts, dart-hit mapping, clipping.",
+    "Physical panels ↔ framebuffer merge, layout, fonts on canvas, clipping.",
   "asset-pipeline":
-    "`dartsnut.assets.json`, `assets_loader.py`, placeholders, art-bearing entities, apply mode."
+    "`dartsnut.assets.json`, `assets_loader.py`, placeholders, art-bearing entities, apply mode.",
+  "dartsnut-skill": "Legacy index — prefer granular ids above; expands to core + game + widget loops when loaded."
 };
+
+/** Legacy id `dartsnut-skill` returns concatenated granular bodies (for asset-applier and old sessions). */
+const LEGACY_SKILL_EXPANSION: Partial<Record<DeferredSkillId, readonly DeferredSkillId[]>> = {
+  "dartsnut-skill": ["pydartsnut-core", "pydartsnut-game-io", "pydartsnut-widget-loop"]
+};
+
+const CREATOR_ALWAYS_LOAD: readonly DeferredSkillId[] = [
+  "creator-incremental",
+  "conf-contract",
+  "pydartsnut-core"
+];
+
+const CREATOR_OPTIONAL_SKILLS: readonly DeferredSkillId[] = [
+  "pydartsnut-game-io",
+  "pydartsnut-widget-loop",
+  "widget-fonts",
+  "game-dart-colors",
+  "dartsnut-display-mapping",
+  "asset-pipeline",
+  "dartsnut-skill"
+];
 
 /** Template-mode-aware bundle selectors. Superset of `PromptRequest.templateMode`. */
 export type SkillBundleMode = "game-creator" | "widget-creator" | "asset-applier" | "creation-intake";
@@ -52,6 +95,7 @@ export interface SkillBundlePaths {
   displayMapping: string;
   assetPipeline: string;
   creationIntake: string;
+  pydartsnutCore: string;
 }
 
 export function resolveSkillBundlePaths(skillsDir: string): SkillBundlePaths {
@@ -59,12 +103,21 @@ export function resolveSkillBundlePaths(skillsDir: string): SkillBundlePaths {
     dartsnutSkill: path.join(skillsDir, "dartsnut-skill.md"),
     displayMapping: path.join(skillsDir, "dartsnut-display-mapping.md"),
     assetPipeline: path.join(skillsDir, "asset-pipeline.md"),
-    creationIntake: path.join(skillsDir, "creation-intake.md")
+    creationIntake: path.join(skillsDir, "creation-intake.md"),
+    pydartsnutCore: path.join(skillsDir, "pydartsnut-core.md")
   };
 }
 
 export function deferredSkillMarkdownPath(skillsDir: string, skillId: DeferredSkillId): string {
   return path.join(skillsDir, DEFERRED_SKILL_FILE[skillId]);
+}
+
+function readSkillFile(skillsDir: string, skillId: DeferredSkillId): string {
+  const filePath = deferredSkillMarkdownPath(skillsDir, skillId);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Skill file missing: ${filePath}`);
+  }
+  return fs.readFileSync(filePath, "utf-8");
 }
 
 /**
@@ -73,12 +126,51 @@ export function deferredSkillMarkdownPath(skillsDir: string, skillId: DeferredSk
  */
 export function allowedDeferredSkillIdsForMode(mode?: SkillBundleMode | null): DeferredSkillId[] {
   if (mode === "asset-applier") {
-    return ["dartsnut-skill", "asset-pipeline"];
+    return ["pydartsnut-core", "asset-pipeline", "dartsnut-skill"];
   }
   if (mode === "creation-intake") {
     return [];
   }
-  return ["dartsnut-skill", "dartsnut-display-mapping", "asset-pipeline"];
+  return [...CREATOR_ALWAYS_LOAD, ...CREATOR_OPTIONAL_SKILLS];
+}
+
+function formatSkillIndexLines(allowed: readonly DeferredSkillId[]): string[] {
+  return allowed.map((id) => `- **${id}** (${DEFERRED_SKILL_FILE[id]}) — ${SKILL_INDEX_BLURB[id]}`);
+}
+
+function formatCreatorRouterBody(skillsDir: string, allowed: readonly DeferredSkillId[]): string[] {
+  const always = CREATOR_ALWAYS_LOAD.filter((id) => allowed.includes(id));
+  const optional = CREATOR_OPTIONAL_SKILLS.filter((id) => allowed.includes(id));
+  return [
+    "You are the Dartsnut Chat coding agent for **games** and **widgets** on Dartsnut hardware (`pydartsnut`, `conf.json`).",
+    "",
+    "**Skill loading (just-in-time):** Use **`get_dartsnut_skill`** before the step that needs it. Do **not** load every skill up front. Follow the host **Build guidelines** in the user prompt when present.",
+    "",
+    "After required skills load, post **Agent steps** (5–12 bullets, no code) in the **assistant message**, then run tools for the current phase.",
+    "",
+    "**Load first** (parallel `get_dartsnut_skill` calls OK) before any `write_file` / `replace_in_file` / `copy_asset_file`:",
+    ...always.map((id) => `- **${id}**`),
+    "",
+    "**Load before use** (only when that step applies):",
+    ...optional.map((id) => `- **${id}** — ${SKILL_INDEX_BLURB[id]}`),
+    "",
+    `Skills directory (reasoning only; read via tool): ${skillsDir}`,
+    "",
+    "After skill results return, **continue Agent steps / Build guidelines** — do not re-brainstorm a different project. Do not paste full file bodies in assistant text or in thinking; write with tools. Obey the separate system message about native tool calling (no JSON/XML tool envelopes in assistant text)."
+  ];
+}
+
+function formatAssetApplierRouterBody(skillsDir: string, allowed: readonly DeferredSkillId[]): string[] {
+  return [
+    "You are the Dartsnut **asset apply** agent (bind user art to existing slots).",
+    "",
+    "**Skill loading:** Load **`pydartsnut-core`** and **`asset-pipeline`** with **`get_dartsnut_skill`** before editing files. Do not scaffold new projects.",
+    "",
+    "Skills available in this session:",
+    ...formatSkillIndexLines(allowed),
+    "",
+    `Skills directory: ${skillsDir}`
+  ];
 }
 
 /**
@@ -90,41 +182,28 @@ export function resolveSkillRouterPrompt(
   mode?: SkillBundleMode | null
 ): string {
   const allowed = allowedDeferredSkillIdsForMode(mode);
-  const indexLines = allowed.map(
-    (id) => `- **${id}** (${DEFERRED_SKILL_FILE[id]}) — ${SKILL_INDEX_BLURB[id]}`
-  );
-  return [
-    "You are the Dartsnut Chat coding agent for **games** and **widgets** on Dartsnut hardware (`pydartsnut`, `conf.json`).",
-    "",
-    "**Skill loading (mandatory before coding):** Do not call `write_file`, `replace_in_file`, or `copy_asset_file` until you have loaded **every** skill listed below for this session using **`get_dartsnut_skill`** (you may issue parallel tool calls). Treat returned `content` as authoritative procedure text.",
-    "",
-    "Skills available in this session:",
-    ...indexLines,
-    "",
-    `Skills directory (for your reasoning only; files are read via the tool): ${skillsDir}`,
-    "",
-    "After all required skills are loaded, **continue the plan you already started** — call `write_file` / `copy_asset_file` / `reload_emulator` next. Do **not** treat skill results as a cue to re-read the user request and brainstorm a different project. Obey the separate system message about native tool calling (no JSON/XML tool envelopes in assistant text)."
-  ].join("\n");
+  if (mode === "asset-applier") {
+    return formatAssetApplierRouterBody(skillsDir, allowed).join("\n");
+  }
+  return formatCreatorRouterBody(skillsDir, allowed).join("\n");
 }
 
 export function readDeferredSkillMarkdown(skillsDir: string, skillId: DeferredSkillId): string {
-  const filePath = deferredSkillMarkdownPath(skillsDir, skillId);
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`Skill file missing: ${filePath}`);
+  const expansion = LEGACY_SKILL_EXPANSION[skillId];
+  if (expansion) {
+    const header = readSkillFile(skillsDir, skillId);
+    const bodies = expansion.map((id) => readSkillFile(skillsDir, id));
+    return [header, ...bodies].join(SKILL_SEPARATOR);
   }
-  return fs.readFileSync(filePath, "utf-8");
+  return readSkillFile(skillsDir, skillId);
 }
 
 /**
  * Resolve the system-prompt skill bundle for a given template mode.
  *
- * - `asset-applier` — minimal: `dartsnut-skill` + `asset-pipeline` only.
- *   No display-mapping (apply mode does not touch layout/fonts) and no creator
- *   skills (apply mode forbids scaffolding).
+ * - `asset-applier` — minimal: `pydartsnut-core` + `asset-pipeline`.
  * - `creation-intake` — intake-only skill (no file writes; host tools handle workspace setup).
- * - All other modes (game-creator, widget-creator, or unset) — full bundle:
- *   `dartsnut-skill` + `dartsnut-display-mapping` + `asset-pipeline`. Creator
- *   templates are still injected separately into the user prompt.
+ * - Tests / legacy full bundle — concatenates core + display + asset files.
  */
 export function bundleForTemplateMode(
   skillsDir: string,
@@ -132,10 +211,10 @@ export function bundleForTemplateMode(
 ): string {
   const paths = resolveSkillBundlePaths(skillsDir);
   if (mode === "asset-applier") {
-    return loadSkillBundle(paths.dartsnutSkill, paths.assetPipeline);
+    return loadSkillBundle(paths.pydartsnutCore, paths.assetPipeline);
   }
   if (mode === "creation-intake") {
     return loadSkillBundle(paths.creationIntake);
   }
-  return loadSkillBundle(paths.dartsnutSkill, paths.displayMapping, paths.assetPipeline);
+  return loadSkillBundle(paths.pydartsnutCore, paths.displayMapping, paths.assetPipeline);
 }

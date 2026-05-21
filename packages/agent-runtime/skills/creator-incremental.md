@@ -22,7 +22,7 @@ Once minimal `main.py` exists:
 1. **`read_file` `main.py` first** every round (and `conf.json` when size/config matters) **before** any edit in that round.
 2. **One small change per round:** at most **one** primary `replace_in_file` (or `write_file` for a new path). Prefer hunks under ~40 lines.
 3. **No tool-free build rounds** after the stub — only the final round may be a one-sentence status with no tools. Skill-only or `reload_emulator`-only rounds are for phases 1–2 only.
-4. **Assets:** at most **one** `copy_asset_file` per round; **next round** must `read_file` `main.py` and wire that asset with `replace_in_file`.
+4. **Assets:** at most **one logical font/asset** per round (`copy_asset_file`); bitmap fonts need **both** `.pil` and `.pbm` — copy both in the **same** round, then **next round** `read_file` `main.py` and wire with `replace_in_file`.
 5. Decide the **next** micro-step from what `read_file` returned — do not assume file contents from memory.
 
 ## Verify run (mandatory)

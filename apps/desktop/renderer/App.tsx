@@ -21,6 +21,7 @@ import { applyStreamDeltaToEntryText } from "./applyStreamDelta";
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { isStructuredAgentEnvelopeText } from "../agentEventConsole";
 import { cn } from "./cn";
+import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
 import { DeployPanel } from "./DeployPanel";
 import { EmulatorPanel } from "./EmulatorPanel";
 import FileEditSummary from "./FileEditSummary";
@@ -86,6 +87,8 @@ type AppScreen = "main" | "settings";
 const STREAM_PREVIEW_LINES = 8;
 const DIFF_MAX_LINES = 220;
 const DIFF_CONTEXT_LINES = 4;
+/** Cap line count before O(n×m) LCS diff to avoid renderer beach ball on large files. */
+const DIFF_LCS_MAX_LINES_PER_SIDE = 400;
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
 /** While an agent message is streaming, cap how often we snap the timeline scroll to the bottom. */
 const STREAM_TIMELINE_AUTOSCROLL_MIN_MS = 72;
@@ -202,9 +205,17 @@ function decodeEscapedStreamingText(input: string): string {
     .replace(/\\r/g, "");
 }
 
+function capTextLinesForDiff(text: string, maxLines: number): string {
+  const lines = text.split(/\r?\n/);
+  if (lines.length <= maxLines) {
+    return text;
+  }
+  return lines.slice(-maxLines).join("\n");
+}
+
 function buildRawDiffLines(oldText: string, newText: string): DiffLine[] {
-  const oldLines = oldText.split(/\r?\n/);
-  const newLines = newText.split(/\r?\n/);
+  const oldLines = capTextLinesForDiff(oldText, DIFF_LCS_MAX_LINES_PER_SIDE).split(/\r?\n/);
+  const newLines = capTextLinesForDiff(newText, DIFF_LCS_MAX_LINES_PER_SIDE).split(/\r?\n/);
   const n = oldLines.length;
   const m = newLines.length;
   const lcs: number[][] = Array.from({ length: n + 1 }, () => Array<number>(m + 1).fill(0));
@@ -480,6 +491,21 @@ function parsePartialAgentMessage(text: string): FormattedAgentMessage {
   }
 
   return { narrative, response, actions };
+}
+
+const streamingPartialParseCache: {
+  text: string;
+  result: FormattedAgentMessage | null;
+} = { text: "", result: null };
+
+function parsePartialAgentMessageCached(text: string): FormattedAgentMessage {
+  if (text === streamingPartialParseCache.text && streamingPartialParseCache.result) {
+    return streamingPartialParseCache.result;
+  }
+  const result = parsePartialAgentMessage(text);
+  streamingPartialParseCache.text = text;
+  streamingPartialParseCache.result = result;
+  return result;
 }
 
 function formatAgentMessage(text: string): FormattedAgentMessage {
@@ -1010,25 +1036,19 @@ export function App() {
     const unsubscribePythonRuntime = api.onPythonRuntimeStatus((status) => {
       setPythonRuntimeStatus(status);
       if (status) {
-        console.info("[python-runtime]", status);
+        devLog.info("[python-runtime]", status);
       }
     });
-    const unsubscribeEmulatorConsoleLog = api.onEmulatorLog((entry) => {
-      if (entry.source === "stderr") {
-        console.warn(entry.text);
-      } else {
-        console.info(entry.text);
-      }
-    });
-    const unsubscribeMainConsoleMirror = api.onMainProcessConsoleMirror((payload) => {
-      printMainProcessMirrorToDevtools(payload);
-    });
+    const unsubscribeMainConsoleMirror = isDevLoggingEnabled()
+      ? api.onMainProcessConsoleMirror((payload) => {
+          printMainProcessMirrorToDevtools(payload);
+        })
+      : () => {};
     return () => {
       cancelStreamCoalesce();
       unsubscribe();
       unsubscribeBootstrap();
       unsubscribePythonRuntime();
-      unsubscribeEmulatorConsoleLog();
       unsubscribeMainConsoleMirror();
     };
   }, [api]);
@@ -1986,19 +2006,19 @@ function dedupeToolPlansLastWins(actions: ParsedAction[]): ParsedAction[] {
 }
 
 function printMainProcessMirrorToDevtools(payload: MainProcessConsoleMirrorPayload): void {
+  if (!isDevLoggingEnabled()) {
+    return;
+  }
   const { level, prefix, message } = payload;
-  const impl =
-    level === "error"
-      ? console.error.bind(console)
-      : level === "warn"
-        ? console.warn.bind(console)
-        : level === "debug"
-          ? console.debug.bind(console)
-          : console.log.bind(console);
-  if (prefix.trim().length > 0) {
-    impl(prefix, message);
+  const line = prefix.trim().length > 0 ? `${prefix} ${message}` : message;
+  if (level === "error") {
+    devLog.error(line);
+  } else if (level === "warn") {
+    devLog.warn(line);
+  } else if (level === "debug") {
+    devLog.debug(line);
   } else {
-    impl(message);
+    devLog.log(line);
   }
 }
 
@@ -2019,7 +2039,7 @@ function fileActionPathLabel(action: ParsedAction): string {
 function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   const displayText = stripIntakeUiMarkers(text);
   const liveFormatted = isStreaming
-    ? parsePartialAgentMessage(displayText)
+    ? parsePartialAgentMessageCached(displayText)
     : formatAgentMessage(displayText);
   const leadText = liveFormatted.response || liveFormatted.narrative || "";
   const fileActions = liveFormatted.actions.filter((action) => action.isFileWrite);

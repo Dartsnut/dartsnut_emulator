@@ -37,7 +37,9 @@ describe("streamingToolEnvelope", () => {
         argumentsJson: '{"path":"main.py","content":"next"}'
       }
     ];
-    const envelope = buildStreamingFileToolEnvelope(toolCalls, "", () => "old");
+    const envelope = buildStreamingFileToolEnvelope(toolCalls, "", () => "old", {
+      includePreviousContent: true
+    });
     expect(envelope).toBeDefined();
     const contentIdx = envelope!.indexOf('"content"');
     const previousIdx = envelope!.indexOf('"previousContent"');

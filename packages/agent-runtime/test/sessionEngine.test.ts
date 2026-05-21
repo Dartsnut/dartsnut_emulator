@@ -4,10 +4,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
 import type { ChatMessage, CompletionOptions, CompletionProvider, CompletionResult } from "../src/providerClient";
-import {
-  CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE,
-  CREATOR_STALL_NUDGE_USER_MESSAGE
-} from "../src/creatorTurnGuard";
 import { SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
@@ -730,7 +726,7 @@ describe("SessionEngine tool loop", () => {
     expect(fs.readFileSync(path.join(tempRoot, "ok.txt"), "utf-8")).toBe("kept");
   });
 
-  it("runs flip-clock creator flow on fresh workspace: scaffold then stall recovery via tools", async () => {
+  it("runs flip-clock creator flow with read then small replace per iteration", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     const provider = new FlipClockPhasedBuildProvider();
     const engine = new SessionEngine({
@@ -743,14 +739,15 @@ describe("SessionEngine tool loop", () => {
     const prompt = ["TEMPLATE", "", "User request:", "create 128x128 flipping clock widget"].join("\n");
     const response = await engine.runPrompt(prompt, () => {});
 
-    expect(provider.call).toBeGreaterThanOrEqual(4);
+    expect(provider.call).toBe(5);
     expect(provider.agentStepsPosted).toBe(true);
+    expect(provider.readBeforeEdit).toBe(true);
     expect(fs.existsSync(path.join(tempRoot, "conf.json"))).toBe(true);
     expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toContain("flip");
     expect(response).toContain("Clock widget ready.");
   });
 
-  it("injects creator stall nudge after scaffold when model dumps implementation in reasoning only", async () => {
+  it("does not inject host recovery messages when creator ends with reasoning only", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     fs.writeFileSync(path.join(tempRoot, "conf.json"), '{"type":"widget","size":[128,128]}', "utf-8");
     fs.writeFileSync(path.join(tempRoot, "main.py"), PHASE2_STUB_MAIN_PY, "utf-8");
@@ -763,18 +760,19 @@ describe("SessionEngine tool loop", () => {
     });
 
     const prompt = ["TEMPLATE", "", "User request:", "128x128 flipping clock widget"].join("\n");
-    const response = await engine.runPrompt(prompt, () => {});
+    await engine.runPrompt(prompt, () => {});
 
-    expect(provider.call).toBeGreaterThanOrEqual(3);
-    const stallSeen = provider.lastMessages.some(
-      (m) => m.role === "user" && m.content.includes(CREATOR_STALL_NUDGE_USER_MESSAGE.slice(0, 32))
+    expect(provider.call).toBe(1);
+    const injectedRecovery = provider.lastMessages.filter(
+      (m) =>
+        m.role === "user" &&
+        (m.content.includes("Phase 3+ is not implemented") ||
+          m.content.includes("You replied without creating the required project files"))
     );
-    expect(stallSeen).toBe(true);
-    expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toContain("# clock");
-    expect(response).toContain("Done with clock.");
+    expect(injectedRecovery).toHaveLength(0);
   });
 
-  it("injects creator incomplete nudge when widget-creator replies without project files", async () => {
+  it("finalizes tool-free creator reply when scaffold files are still missing", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     const provider = new CreatorClarifyThenBuildProvider();
     const engine = new SessionEngine({
@@ -787,10 +785,9 @@ describe("SessionEngine tool loop", () => {
     const prompt = ["TEMPLATE", "", "User request:", "Trajectory smoothing"].join("\n");
     const response = await engine.runPrompt(prompt, () => {});
 
-    expect(provider.call).toBe(3);
-    expect(response).toContain("Done.");
-    expect(fs.existsSync(path.join(tempRoot, "conf.json"))).toBe(true);
-    expect(fs.existsSync(path.join(tempRoot, "main.py"))).toBe(true);
+    expect(provider.call).toBe(1);
+    expect(response).toContain("Which visualization");
+    expect(fs.existsSync(path.join(tempRoot, "conf.json"))).toBe(false);
   });
 
   it("executes get_dartsnut_skill then write_file with skill content in thread", async () => {
@@ -840,6 +837,7 @@ def main():
 class FlipClockPhasedBuildProvider implements CompletionProvider {
   call = 0;
   agentStepsPosted = false;
+  readBeforeEdit = false;
   lastMessages: ChatMessage[] = [];
 
   async complete(messages: ChatMessage[]): Promise<CompletionResult> {
@@ -849,7 +847,7 @@ class FlipClockPhasedBuildProvider implements CompletionProvider {
       this.agentStepsPosted = true;
       return {
         content:
-          "**Agent steps**\n1. conf.json\n2. reload\n3. stub main.py\n4. flip digits\n5. fonts if needed",
+          "**Agent steps**\n1. conf.json\n2. reload\n3. stub main.py\n4. read main → flip digits\n5. copy font → read → wire",
         toolCalls: [
           {
             id: "call_conf",
@@ -881,18 +879,20 @@ class FlipClockPhasedBuildProvider implements CompletionProvider {
     }
     if (this.call === 3) {
       return {
-        content: "",
-        toolCalls: [],
-        reasoningContent: "```python\n" + "# flip clock\n".repeat(500) + "\n```"
+        content: "Reading main.py before edit.",
+        toolCalls: [
+          {
+            id: "call_read",
+            name: "read_file",
+            argumentsJson: JSON.stringify({ path: "main.py" })
+          }
+        ]
       };
     }
     if (this.call === 4) {
-      const stallSeen = messages.some(
-        (m) => m.role === "user" && m.content.includes(CREATOR_STALL_NUDGE_USER_MESSAGE.slice(0, 32))
-      );
-      expect(stallSeen).toBe(true);
+      this.readBeforeEdit = true;
       return {
-        content: "Phase 3 — implementing flip clock in main.py.",
+        content: "Small flip-clock edit.",
         toolCalls: [
           {
             id: "call_flip",
@@ -917,34 +917,11 @@ class ReasoningOnlyAfterScaffoldProvider implements CompletionProvider {
   async complete(messages: ChatMessage[]): Promise<CompletionResult> {
     this.call += 1;
     this.lastMessages = messages;
-    if (this.call === 1) {
-      return {
-        content: "",
-        toolCalls: [],
-        reasoningContent: "```python\n" + "flip_clock = True\n".repeat(400) + "\n```"
-      };
-    }
-    if (this.call === 2) {
-      const stallSeen = messages.some(
-        (m) => m.role === "user" && m.content.includes(CREATOR_STALL_NUDGE_USER_MESSAGE.slice(0, 32))
-      );
-      expect(stallSeen).toBe(true);
-      return {
-        content: "Applying clock logic via tools.",
-        toolCalls: [
-          {
-            id: "call_edit",
-            name: "replace_in_file",
-            argumentsJson: JSON.stringify({
-              path: "main.py",
-              find: "(0, 0, 0)",
-              replace: "(0, 0, 0)  # clock"
-            })
-          }
-        ]
-      };
-    }
-    return textOnly("Done with clock.");
+    return {
+      content: "",
+      toolCalls: [],
+      reasoningContent: "```python\n" + "flip_clock = True\n".repeat(400) + "\n```"
+    };
   }
 }
 
@@ -955,31 +932,7 @@ class CreatorClarifyThenBuildProvider implements CompletionProvider {
   async complete(messages: ChatMessage[]): Promise<CompletionResult> {
     this.call += 1;
     this.lastMessages = messages;
-    if (this.call === 1) {
-      return textOnly("Which visualization do you prefer?");
-    }
-    if (this.call === 2) {
-      const nudgeSeen = messages.some(
-        (m) => m.role === "user" && m.content.includes(CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE.slice(0, 32))
-      );
-      expect(nudgeSeen).toBe(true);
-      return {
-        content: "Creating project files.",
-        toolCalls: [
-          {
-            id: "call_conf",
-            name: "write_file",
-            argumentsJson: JSON.stringify({ path: "conf.json", content: "{}" })
-          },
-          {
-            id: "call_main",
-            name: "write_file",
-            argumentsJson: JSON.stringify({ path: "main.py", content: "print('ok')" })
-          }
-        ]
-      };
-    }
-    return textOnly("Done.");
+    return textOnly("Which visualization do you prefer?");
   }
 }
 

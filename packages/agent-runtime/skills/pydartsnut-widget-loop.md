@@ -16,6 +16,11 @@ Load when writing or editing **widget** `main.py`. Requires **`pydartsnut-core`*
 5. `dartsnut.update_frame_buffer(frame)` each iteration.
 6. Small **`time.sleep(...)`** to limit update rate.
 
+## Phase-2 stub (blank frame only)
+
+- **`Image.new` + solid background + loop only** — enough for preview to run.
+- **Do not** import `ImageDraw`, `ImageFont`, or font paths in the stub; add those in a later round when you use them (after `read_file`).
+
 ## Params
 
 Handle missing or ambiguous params with safe defaults. Keep setup, one render/update function, and `main()` clear.

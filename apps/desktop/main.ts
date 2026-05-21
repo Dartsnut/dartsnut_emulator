@@ -555,6 +555,18 @@ async function ensureTemporaryWorkspaceResolvedForGuard(reason: TempWorkspaceGua
   if (!isTemporaryWorkspaceActiveNow()) {
     return true;
   }
+  if (reason === "quit") {
+    const ws = workspaceRoot;
+    if (
+      ws &&
+      fs.existsSync(ws) &&
+      fs.statSync(ws).isDirectory() &&
+      isDirectoryEmpty(ws)
+    ) {
+      await discardTrackedTemporaryProject(reason);
+      return true;
+    }
+  }
   for (;;) {
     const choice = await promptSaveDiscardCancel(reason);
     if (choice === "cancel") {

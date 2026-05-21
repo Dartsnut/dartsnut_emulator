@@ -772,13 +772,13 @@ describe("SessionEngine tool loop", () => {
     expect(toolMessage?.tool_call_id).toBe("call_alpha");
     expect(toolMessage?.content).toContain("widget.py");
 
-    const finalEvents = events.filter(
-      (event): event is Extract<AgentEvent, { type: "final" }> => event.type === "final"
-    );
-    const envelopeFinal = finalEvents.find((event) => event.content.includes('"actions"'));
-    expect(envelopeFinal).toBeDefined();
-    expect(envelopeFinal!.content).toContain('"tool":"write_file"');
-    expect(envelopeFinal!.content).toContain('"path":"widget.py"');
+    const streamedEnvelope = events
+      .filter((event): event is Extract<AgentEvent, { type: "stream" }> => event.type === "stream")
+      .map((event) => event.delta)
+      .join("");
+    expect(streamedEnvelope).toContain('"actions"');
+    expect(streamedEnvelope).toContain('"tool":"write_file"');
+    expect(streamedEnvelope).toContain('"path":"widget.py"');
   });
 
   it("returns an error tool result for malformed tool_call arguments and continues", async () => {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { transcriptUserBubbleText, type AgentEvent } from "@dartsnut/shared-ipc";
 import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
@@ -23,9 +24,14 @@ import {
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import {
   buildStreamingFileToolEnvelope,
-  TOOL_ENVELOPE_STREAM_REPLACE
+  parsePartialFileToolArguments,
+  TOOL_ENVELOPE_STREAM_REPLACE,
+  type BuildStreamingFileToolEnvelopeOptions
 } from "./streamingToolEnvelope";
 import { WorkspacePolicy } from "./workspacePolicy";
+
+/** Cap read_file tool payloads to limit conversation growth and main-thread JSON work. */
+const MAX_READ_FILE_TOOL_CHARS = 48_000;
 
 function isDeferredSkillId(value: unknown): value is DeferredSkillId {
   return typeof value === "string" && (DEFERRED_SKILL_IDS as readonly string[]).includes(value);
@@ -144,11 +150,11 @@ export class SessionEngine {
     this.options.sessionPersistence?.appendTransaction({ at: Date.now(), ...record });
   }
 
-  private finalizeWorkspacePersistence(
+  private async finalizeWorkspacePersistence(
     messages: ChatMessage[],
     systemSlots: number,
     finalUserVisibleSummary: string
-  ): void {
+  ): Promise<void> {
     this.rollingConversation = messages.slice(systemSlots);
     const p = this.options.sessionPersistence;
     if (!p) {
@@ -180,6 +186,7 @@ export class SessionEngine {
       workspaceHasConfJson: endArtifacts.confJson,
       workspaceHasMainPy: endArtifacts.mainPy
     });
+    await p.flushWrites();
   }
 
   private normalizeAction(rawAction: unknown): ToolAction {
@@ -568,13 +575,13 @@ export class SessionEngine {
     return current;
   }
 
-  private listFiles(relativePath?: string): string[] {
+  private async listFiles(relativePath?: string): Promise<string[]> {
     const root = this.options.workspacePolicy.resolveWithinRoot(relativePath ?? ".");
     const output: string[] = [];
     const stack = [root];
     while (stack.length > 0 && output.length < 200) {
       const current = stack.pop()!;
-      const entries = fs.readdirSync(current, { withFileTypes: true });
+      const entries = await fsp.readdir(current, { withFileTypes: true });
       for (const entry of entries) {
         const absolute = path.join(current, entry.name);
         const rel = path.relative(this.options.workspacePolicy.resolveWithinRoot("."), absolute);
@@ -633,28 +640,34 @@ export class SessionEngine {
       return JSON.stringify({ ok: true, skill_id: action.skill_id, content });
     }
     if (action.tool === "list_files") {
-      const files = this.listFiles(action.path);
+      const files = await this.listFiles(action.path);
       return JSON.stringify({ ok: true, files });
     }
     if (action.tool === "read_file") {
       const filePath = this.options.workspacePolicy.resolveWithinRoot(action.path);
-      const content = fs.readFileSync(filePath, "utf-8");
-      return JSON.stringify({ ok: true, path: action.path, content });
+      let content = await fsp.readFile(filePath, "utf-8");
+      let truncated = false;
+      if (content.length > MAX_READ_FILE_TOOL_CHARS) {
+        const omitted = content.length - MAX_READ_FILE_TOOL_CHARS;
+        content = `${content.slice(0, MAX_READ_FILE_TOOL_CHARS)}\n\n[truncated ${omitted} characters; use targeted reads]`;
+        truncated = true;
+      }
+      return JSON.stringify({ ok: true, path: action.path, content, truncated });
     }
     if (action.tool === "write_file") {
       const filePath = this.options.workspacePolicy.resolveWithinRoot(action.path);
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, action.content, "utf-8");
+      await fsp.mkdir(path.dirname(filePath), { recursive: true });
+      await fsp.writeFile(filePath, action.content, "utf-8");
       return JSON.stringify({ ok: true, path: action.path, bytes: Buffer.byteLength(action.content) });
     }
     if (action.tool === "replace_in_file") {
       const filePath = this.options.workspacePolicy.resolveWithinRoot(action.path);
-      const original = fs.readFileSync(filePath, "utf-8");
+      const original = await fsp.readFile(filePath, "utf-8");
       if (!original.includes(action.find)) {
         throw new Error(`replace_in_file could not find target text in ${action.path}`);
       }
       const updated = original.replace(action.find, action.replace);
-      fs.writeFileSync(filePath, updated, "utf-8");
+      await fsp.writeFile(filePath, updated, "utf-8");
       return JSON.stringify({
         ok: true,
         path: action.path,
@@ -695,40 +708,35 @@ export class SessionEngine {
     const destCanonicalBase = SessionEngine.stripArtifactHashSuffixFromFileName(path.basename(action.path));
     const destRelative = path.join(destRelativeDir, destCanonicalBase);
     const outputPath = this.options.workspacePolicy.resolveWithinRoot(destRelative);
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    fs.copyFileSync(resolvedSourcePath, outputPath);
+    await fsp.mkdir(path.dirname(outputPath), { recursive: true });
+    await fsp.copyFile(resolvedSourcePath, outputPath);
+    const stat = await fsp.stat(outputPath);
     return JSON.stringify({
       ok: true,
       source: resolvedSourceKey,
       path: destRelative,
       requestedSource: action.source,
       requestedPath: action.path,
-      bytes: fs.statSync(outputPath).size
+      bytes: stat.size
     });
   }
 
-  private readPreviousContentForPath(relativePath: string): string | undefined {
+  private async readPreviousContentForPath(relativePath: string): Promise<string | undefined> {
     try {
       const filePath = this.options.workspacePolicy.resolveWithinRoot(relativePath);
-      if (!fs.existsSync(filePath)) {
-        return undefined;
-      }
-      return fs.readFileSync(filePath, "utf-8");
+      return await fsp.readFile(filePath, "utf-8");
     } catch {
       return undefined;
     }
   }
 
-  private readPreviousContent(action: ToolAction): string | undefined {
+  private async readPreviousContent(action: ToolAction): Promise<string | undefined> {
     if (action.tool !== "write_file") {
       return undefined;
     }
     try {
       const filePath = this.options.workspacePolicy.resolveWithinRoot(action.path);
-      if (!fs.existsSync(filePath)) {
-        return undefined;
-      }
-      return fs.readFileSync(filePath, "utf-8");
+      return await fsp.readFile(filePath, "utf-8");
     } catch {
       return undefined;
     }
@@ -811,20 +819,52 @@ export class SessionEngine {
     });
   }
 
-  private buildUiEnvelopeString(actions: ToolAction[], responseText: string): string | null {
+  private async buildFileToolEnvelopeJson(
+    toolCalls: ParsedToolCall[],
+    responseLead: string,
+    options: BuildStreamingFileToolEnvelopeOptions
+  ): Promise<string | null> {
+    if (!options.includePreviousContent) {
+      return buildStreamingFileToolEnvelope(toolCalls, responseLead);
+    }
+    const previousByPath = new Map<string, string>();
+    for (const toolCall of toolCalls) {
+      if (toolCall.name !== "write_file") {
+        continue;
+      }
+      const partial = parsePartialFileToolArguments(toolCall.name, toolCall.argumentsJson);
+      if (!partial?.path) {
+        continue;
+      }
+      const previous = await this.readPreviousContentForPath(partial.path);
+      if (previous !== undefined) {
+        previousByPath.set(partial.path, previous);
+      }
+    }
+    return buildStreamingFileToolEnvelope(
+      toolCalls,
+      responseLead,
+      (relativePath) => previousByPath.get(relativePath),
+      { includePreviousContent: true }
+    );
+  }
+
+  private async buildUiEnvelopeString(actions: ToolAction[], responseText: string): Promise<string | null> {
     const trimmedResponse = responseText.trim();
     if (actions.length === 0 && trimmedResponse.length === 0) {
       return null;
     }
-    const uiActions = actions.map((action) => {
-      if (action.tool !== "write_file") {
-        return action;
-      }
-      return {
-        ...action,
-        previousContent: this.readPreviousContent(action)
-      };
-    });
+    const uiActions = await Promise.all(
+      actions.map(async (action) => {
+        if (action.tool !== "write_file") {
+          return action;
+        }
+        return {
+          ...action,
+          previousContent: await this.readPreviousContent(action)
+        };
+      })
+    );
     const writeCount = actions.filter((action) => action.tool === "write_file").length;
     let uiResponse: string | undefined;
     if (trimmedResponse.length > 0) {
@@ -844,33 +884,31 @@ export class SessionEngine {
     );
   }
 
-  private emitUiEnvelope(
+  private async emitUiEnvelope(
     actions: ToolAction[],
     responseText: string,
     onEvent: (event: AgentEvent) => void
-  ): void {
-    const uiEnvelope = this.buildUiEnvelopeString(actions, responseText);
+  ): Promise<void> {
+    const uiEnvelope = await this.buildUiEnvelopeString(actions, responseText);
     if (!uiEnvelope) {
       return;
     }
     onEvent({ type: "final", content: uiEnvelope, at: Date.now() });
   }
 
-  private async streamNativeToolEnvelopePreview(
+  private streamNativeToolEnvelopePreview(
     leadContent: string,
     envelopeJson: string,
     onEvent: (event: AgentEvent) => void
-  ): Promise<void> {
+  ): void {
     const lead = leadContent.trimEnd();
     const tail = lead.length > 0 ? `\n\n${envelopeJson}` : envelopeJson;
-    const chunkSize = Math.max(32, Math.ceil(tail.length / 80));
-    const renderFrameMs = 20;
-    for (let i = 0; i < tail.length; i += chunkSize) {
-      onEvent({ type: "stream", delta: tail.slice(i, i + chunkSize), at: Date.now() });
-      await new Promise<void>((resolve) => setTimeout(resolve, renderFrameMs));
-    }
-    const finalContent = lead.length > 0 ? `${lead}\n\n${envelopeJson}` : envelopeJson;
-    onEvent({ type: "final", content: finalContent, at: Date.now() });
+    onEvent({
+      type: "stream",
+      delta: `${TOOL_ENVELOPE_STREAM_REPLACE}${tail}`,
+      at: Date.now()
+    });
+    onEvent({ type: "final", content: "", at: Date.now() });
   }
 
   private async finalizeNativeFileToolPreview(
@@ -889,15 +927,13 @@ export class SessionEngine {
       onEvent({ type: "final", content: "", at: Date.now() });
       return;
     }
-    const previewEnvelope = buildStreamingFileToolEnvelope(
-      completion.toolCalls,
-      completion.content,
-      (relativePath) => this.readPreviousContentForPath(relativePath)
-    );
+    const previewEnvelope = await this.buildFileToolEnvelopeJson(completion.toolCalls, completion.content, {
+      includePreviousContent: true
+    });
     if (!previewEnvelope) {
       return;
     }
-    await this.streamNativeToolEnvelopePreview(completion.content, previewEnvelope, onEvent);
+    this.streamNativeToolEnvelopePreview(completion.content, previewEnvelope, onEvent);
   }
 
   private emitLiveFileToolEnvelopeProgress(
@@ -906,9 +942,7 @@ export class SessionEngine {
     streamedChars: { count: number; lastTail?: string },
     onEvent: (event: AgentEvent) => void
   ): boolean {
-    const envelope = buildStreamingFileToolEnvelope(toolCalls, responseLead, (relativePath) =>
-      this.readPreviousContentForPath(relativePath)
-    );
+    const envelope = buildStreamingFileToolEnvelope(toolCalls, responseLead);
     if (!envelope) {
       return false;
     }
@@ -1117,12 +1151,12 @@ export class SessionEngine {
             filesWrittenThisCompletion += 1;
           }
         }
-        const envelope = this.buildUiEnvelopeString(successfulActions, completion.content);
+        const envelope = await this.buildUiEnvelopeString(successfulActions, completion.content);
         const hasFileWritePreview = successfulActions.some(
           (action) => action.tool === "write_file" || action.tool === "replace_in_file"
         );
         if (envelope && !hasFileWritePreview) {
-          await this.streamNativeToolEnvelopePreview(completion.content, envelope, onEvent);
+          this.streamNativeToolEnvelopePreview(completion.content, envelope, onEvent);
         }
         for (const outcome of outcomes) {
           this.emitTransaction({
@@ -1165,7 +1199,7 @@ export class SessionEngine {
 
       if (!merged) {
         onEvent({ type: "final", content: completion.content, at: Date.now() });
-        this.finalizeWorkspacePersistence(messages, systemSlots, completion.content);
+        await this.finalizeWorkspacePersistence(messages, systemSlots, completion.content);
         return completion.content;
       }
 
@@ -1181,11 +1215,11 @@ export class SessionEngine {
       if (actions.length === 0) {
         const finalText = merged.responseText || "Done.";
         onEvent({ type: "final", content: finalText, at: Date.now() });
-        this.finalizeWorkspacePersistence(messages, systemSlots, finalText);
+        await this.finalizeWorkspacePersistence(messages, systemSlots, finalText);
         return finalText;
       }
 
-      this.emitUiEnvelope(actions, merged.responseText, onEvent);
+      await this.emitUiEnvelope(actions, merged.responseText, onEvent);
 
       for (const action of actions) {
         if (isFileMutationToolName(action.tool)) {
@@ -1243,7 +1277,7 @@ export class SessionEngine {
 
     const fallback = "Tool loop limit reached before final response.";
     onEvent({ type: "error", message: fallback, at: Date.now() });
-    this.finalizeWorkspacePersistence(messages, systemSlots, fallback);
+    await this.finalizeWorkspacePersistence(messages, systemSlots, fallback);
     return fallback;
   }
 }

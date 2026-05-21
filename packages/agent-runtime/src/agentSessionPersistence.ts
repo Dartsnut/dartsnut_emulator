@@ -1,8 +1,12 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import type { ChatMessage } from "./providerClient";
 
 export const AGENT_SESSION_SCHEMA_VERSION = 1;
+
+/** Max bytes read from the end of transcript.jsonl when tailing (avoids loading huge files). */
+export const TRANSCRIPT_TAIL_READ_BYTES = 256 * 1024;
 
 /** Relative to workspace root: `.dartsnut/agent-session`. */
 export function resolveAgentSessionDir(workspaceRoot: string): string {
@@ -57,9 +61,19 @@ export function readJsonlRecords(filePath: string): unknown[] {
 
 export class AgentSessionPersistence {
   private readonly dir: string;
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor(workspaceRoot: string) {
     this.dir = resolveAgentSessionDir(workspaceRoot);
+  }
+
+  private enqueueWrite(_label: string, task: () => Promise<void>): void {
+    this.writeChain = this.writeChain.then(task).catch(() => undefined);
+  }
+
+  /** Wait for queued async writes (tests / shutdown). */
+  async flushWrites(): Promise<void> {
+    await this.writeChain;
   }
 
   getSessionDir(): string {
@@ -99,15 +113,21 @@ export class AgentSessionPersistence {
   }
 
   appendTranscript(record: TranscriptRecord): void {
-    this.ensureDir();
+    const line = `${JSON.stringify(record)}\n`;
     const target = path.join(this.dir, "transcript.jsonl");
-    fs.appendFileSync(target, `${JSON.stringify(record)}\n`, "utf-8");
+    this.enqueueWrite("appendTranscript", async () => {
+      this.ensureDir();
+      await fsp.appendFile(target, line, "utf-8");
+    });
   }
 
   appendTransaction(record: Record<string, unknown>): void {
-    this.ensureDir();
+    const line = `${JSON.stringify(record)}\n`;
     const target = path.join(this.dir, "transactions.jsonl");
-    fs.appendFileSync(target, `${JSON.stringify(record)}\n`, "utf-8");
+    this.enqueueWrite("appendTransaction", async () => {
+      this.ensureDir();
+      await fsp.appendFile(target, line, "utf-8");
+    });
   }
 
   readTranscriptTail(maxLines: number): TranscriptRecord[] {
@@ -115,18 +135,35 @@ export class AgentSessionPersistence {
     if (!fs.existsSync(target) || maxLines <= 0) {
       return [];
     }
-    const raw = fs.readFileSync(target, "utf-8");
-    const lines = raw.split("\n").filter((line) => line.trim().length > 0);
-    const tail = lines.slice(-maxLines);
-    const out: TranscriptRecord[] = [];
-    for (const line of tail) {
-      try {
-        out.push(JSON.parse(line) as TranscriptRecord);
-      } catch {
-        // skip bad line
+    const stat = fs.statSync(target);
+    const readStart =
+      stat.size > TRANSCRIPT_TAIL_READ_BYTES ? stat.size - TRANSCRIPT_TAIL_READ_BYTES : 0;
+    const length = stat.size - readStart;
+    const fd = fs.openSync(target, "r");
+    try {
+      const buf = Buffer.alloc(length);
+      fs.readSync(fd, buf, 0, length, readStart);
+      let raw = buf.toString("utf-8");
+      if (readStart > 0) {
+        const firstNewline = raw.indexOf("\n");
+        if (firstNewline >= 0) {
+          raw = raw.slice(firstNewline + 1);
+        }
       }
+      const lines = raw.split("\n").filter((line) => line.trim().length > 0);
+      const tail = lines.slice(-maxLines);
+      const out: TranscriptRecord[] = [];
+      for (const line of tail) {
+        try {
+          out.push(JSON.parse(line) as TranscriptRecord);
+        } catch {
+          // skip bad line
+        }
+      }
+      return out;
+    } finally {
+      fs.closeSync(fd);
     }
-    return out;
   }
 
   readConversation(): ChatMessage[] {
@@ -146,12 +183,15 @@ export class AgentSessionPersistence {
   }
 
   saveConversationAtomic(messages: ChatMessage[]): void {
-    this.ensureDir();
     const payload: ConversationFileV1 = { schemaVersion: AGENT_SESSION_SCHEMA_VERSION, messages };
     const target = path.join(this.dir, "conversation.json");
     const tmp = path.join(this.dir, `.conversation.${process.pid}.${Date.now()}.tmp`);
-    fs.writeFileSync(tmp, JSON.stringify(payload), "utf-8");
-    fs.renameSync(tmp, target);
+    const body = JSON.stringify(payload);
+    this.enqueueWrite("saveConversationAtomic", async () => {
+      this.ensureDir();
+      await fsp.writeFile(tmp, body, "utf-8");
+      await fsp.rename(tmp, target);
+    });
   }
 
   /**

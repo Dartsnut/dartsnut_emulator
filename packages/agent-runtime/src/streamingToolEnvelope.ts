@@ -138,11 +138,18 @@ export function parsePartialFileToolArguments(
   }
 }
 
+export type BuildStreamingFileToolEnvelopeOptions = {
+  /** When true, embed full prior file bodies (final UI only — expensive during live streaming). */
+  includePreviousContent?: boolean;
+};
+
 export function buildStreamingFileToolEnvelope(
   toolCalls: ParsedToolCall[],
   responseLead: string,
-  readPreviousContent?: (path: string) => string | undefined
+  readPreviousContent?: (path: string) => string | undefined,
+  options?: BuildStreamingFileToolEnvelopeOptions
 ): string | null {
+  const includePreviousContent = options?.includePreviousContent === true;
   const actions: Array<Record<string, unknown>> = [];
   for (const toolCall of toolCalls) {
     if (toolCall.name !== "write_file" && toolCall.name !== "replace_in_file") {
@@ -154,6 +161,7 @@ export function buildStreamingFileToolEnvelope(
     }
     const fields: Record<string, string> = { ...partial };
     if (
+      includePreviousContent &&
       toolCall.name === "write_file" &&
       typeof partial.path === "string" &&
       readPreviousContent

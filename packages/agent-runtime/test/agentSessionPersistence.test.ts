@@ -44,13 +44,14 @@ describe("AgentSessionPersistence", () => {
     expect(m?.templateMode).toBe("widget-creator");
   });
 
-  it("appendTransaction writes one JSON object per line", () => {
+  it("appendTransaction writes one JSON object per line", async () => {
     const root = path.join(mkTmp(), "ws");
     fs.mkdirSync(root, { recursive: true });
     const p = new AgentSessionPersistence(root);
     p.ensureDir();
     p.appendTransaction({ type: "test", at: 1, x: "a" });
     p.appendTransaction({ type: "test", at: 2, x: "b" });
+    await p.flushWrites();
     const txPath = path.join(resolveAgentSessionDir(root), "transactions.jsonl");
     const raw = fs.readFileSync(txPath, "utf-8");
     const lines = raw.trim().split("\n");
@@ -66,7 +67,7 @@ describe("AgentSessionPersistence", () => {
     expect(rows).toEqual([{ ok: true }]);
   });
 
-  it("saveConversationAtomic round-trips ChatMessage array", () => {
+  it("saveConversationAtomic round-trips ChatMessage array", async () => {
     const root = path.join(mkTmp(), "ws");
     fs.mkdirSync(root, { recursive: true });
     const p = new AgentSessionPersistence(root);
@@ -76,8 +77,34 @@ describe("AgentSessionPersistence", () => {
       { role: "assistant", content: "hello" }
     ];
     p.saveConversationAtomic(messages);
+    await p.flushWrites();
     const back = p.readConversation();
     expect(back).toEqual(messages);
+  });
+
+  it("readTranscriptTail returns only the last lines without reading from line 0", () => {
+    const root = path.join(mkTmp(), "ws");
+    fs.mkdirSync(root, { recursive: true });
+    const p = new AgentSessionPersistence(root);
+    p.ensureDir();
+    const target = path.join(resolveAgentSessionDir(root), "transcript.jsonl");
+    const head = JSON.stringify({ kind: "user", at: 1, text: "head" });
+    const tail = JSON.stringify({ kind: "assistant", at: 2, text: "tail" });
+    fs.writeFileSync(target, `${head}\n${tail}\n`, "utf-8");
+    const lines = p.readTranscriptTail(1);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.text).toBe("tail");
+  });
+
+  it("appendTranscript persists via async queue", async () => {
+    const root = path.join(mkTmp(), "ws");
+    fs.mkdirSync(root, { recursive: true });
+    const p = new AgentSessionPersistence(root);
+    p.ensureDir();
+    p.appendTranscript({ kind: "user", at: 1, text: "hello" });
+    await p.flushWrites();
+    const tail = p.readTranscriptTail(5);
+    expect(tail).toEqual([{ kind: "user", at: 1, text: "hello" }]);
   });
 
   it("archiveOrResetSession moves files into archives", () => {

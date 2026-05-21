@@ -5,6 +5,8 @@ import readline from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
 import type { MessageBoxOptions, OpenDialogOptions } from "electron";
+import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
+import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
 import {
   IPCChannels,
   type AgentEvent,
@@ -1165,17 +1167,29 @@ function sendToRenderer(channel: string, ...args: unknown[]) {
 }
 
 function mirrorMainProcessConsole(payload: MainProcessConsoleMirrorPayload): void {
+  if (!isDevLoggingEnabled()) {
+    return;
+  }
   sendToRenderer(IPCChannels.mainProcessConsoleMirror, payload);
 }
 
-/** Logs to the Electron terminal and mirrors the same line into renderer DevTools (no raw LLM payloads). */
+/** Logs to the Electron terminal and mirrors the same line into renderer DevTools (dev only). */
 function terminalAgentLifecycleLog(message: string, meta?: Record<string, unknown>): void {
+  if (!isDevLoggingEnabled()) {
+    return;
+  }
   const line = meta ? `${message} ${JSON.stringify(meta)}` : message;
-  console.log(line);
+  devLog.log(line);
   mirrorMainProcessConsole({ level: "log", prefix: "", message: line });
 }
 
 function logAgentEventToConsole(event: AgentEvent, mirrorToDevtools: boolean): void {
+  if (!isDevLoggingEnabled()) {
+    return;
+  }
+  if (event.type === "stream" || event.type === "reasoning_stream") {
+    return;
+  }
   const formatted = formatAgentEventForConsole(event);
   if (!formatted) {
     return;
@@ -1185,22 +1199,22 @@ function logAgentEventToConsole(event: AgentEvent, mirrorToDevtools: boolean): v
       continue;
     }
     if (formatted.level === "error") {
-      console.error("[agent]", line);
+      devLog.error("[agent]", line);
       if (mirrorToDevtools) {
         mirrorMainProcessConsole({ level: "error", prefix: "[agent]", message: line });
       }
     } else if (formatted.level === "warn") {
-      console.warn("[agent]", line);
+      devLog.warn("[agent]", line);
       if (mirrorToDevtools) {
         mirrorMainProcessConsole({ level: "warn", prefix: "[agent]", message: line });
       }
     } else if (formatted.level === "debug") {
-      console.debug("[agent]", line);
+      devLog.debug("[agent]", line);
       if (mirrorToDevtools) {
         mirrorMainProcessConsole({ level: "debug", prefix: "[agent]", message: line });
       }
     } else {
-      console.info("[agent]", line);
+      devLog.info("[agent]", line);
       if (mirrorToDevtools) {
         mirrorMainProcessConsole({ level: "info", prefix: "[agent]", message: line });
       }
@@ -1338,7 +1352,7 @@ function emitChromeInsetsAndPushStyles(): void {
       emitWindowChromeInsets();
     })
     .catch((err: unknown) => {
-      console.error("[dartsnut] window chrome insertCSS failed:", err);
+      devLog.error("[dartsnut] window chrome insertCSS failed:", err);
       emitWindowChromeInsets();
     });
 }
@@ -2502,10 +2516,12 @@ ipcMain.handle(
         projectType,
         promptChars: prompt.length
       });
-      await session.runPrompt(prompt, (agentEvent: AgentEvent) => {
-        logAgentEventToConsole(agentEvent, true);
-        sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
-      });
+      const assetEmit = createEmitAgentToRenderer();
+      try {
+        await session.runPrompt(prompt, (agentEvent: AgentEvent) => assetEmit.emit(agentEvent));
+      } finally {
+        assetEmit.flush();
+      }
       assetManager.clearPending(targetWorkspace, requestedSlots);
       // Re-emit a snapshot so the UI clears the pending badge.
       sendToRenderer(IPCChannels.assetsSubscribeManifest, assetManager.getSnapshot(targetWorkspace));
@@ -2519,14 +2535,25 @@ ipcMain.handle(
   }
 );
 
+function createEmitAgentToRenderer(): AgentEventBatcher & { dispose: () => void } {
+  const batcher = createAgentEventBatcher((agentEvent) => {
+    if (isDevLoggingEnabled()) {
+      logAgentEventToConsole(agentEvent, true);
+    }
+    sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
+  });
+  return {
+    ...batcher,
+    dispose: () => batcher.flush()
+  };
+}
+
 ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest): Promise<SendPromptResponse> => {
   sendPromptAbortController?.abort();
   const runAbort = new AbortController();
   sendPromptAbortController = runAbort;
-  const emitAgent = (agentEvent: AgentEvent) => {
-    logAgentEventToConsole(agentEvent, true);
-    sendToRenderer(IPCChannels.subscribeEvents, agentEvent);
-  };
+  const emitAgentSink = createEmitAgentToRenderer();
+  const emitAgent = (agentEvent: AgentEvent) => emitAgentSink.emit(agentEvent);
   try {
     ensureTemporaryWorkspaceRootAllocated();
     agentEventEmitter = emitAgent;
@@ -2639,6 +2666,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     sendToRenderer(IPCChannels.subscribeEvents, event);
     return { ok: false };
   } finally {
+    emitAgentSink.flush();
     cancelAllIntakeUserInputPending();
     agentEventEmitter = null;
     if (sendPromptAbortController === runAbort) {

@@ -17,6 +17,7 @@ import {
   transcriptUserBubbleText,
   type WidgetSize
 } from "@dartsnut/shared-ipc";
+import { applyStreamDeltaToEntryText } from "./applyStreamDelta";
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { isStructuredAgentEnvelopeText } from "../agentEventConsole";
 import { cn } from "./cn";
@@ -407,6 +408,14 @@ function parsePartialAgentMessage(text: string): FormattedAgentMessage {
             raw: ""
           });
         }
+      } else if (pathValue) {
+        actions.push({
+          tool: "write_file",
+          path: pathValue,
+          previousContent: previousContentValue,
+          isFileWrite: true,
+          raw: ""
+        });
       }
     }
 
@@ -422,27 +431,30 @@ function parsePartialAgentMessage(text: string): FormattedAgentMessage {
 
       const findKey = text.indexOf("\"find\"", toolKey);
       const replaceKey = text.indexOf("\"replace\"", toolKey);
-      if (findKey >= 0 && findKey < sectionEnd && replaceKey >= 0 && replaceKey < sectionEnd) {
+      let parsedFind: { value: string; closed: boolean } | undefined;
+      let parsedReplace: { value: string; closed: boolean } | undefined;
+      if (findKey >= 0 && findKey < sectionEnd) {
         const findQuote = text.indexOf("\"", text.indexOf(":", findKey));
-        const replaceQuote = text.indexOf("\"", text.indexOf(":", replaceKey));
-        if (
-          findQuote >= 0 &&
-          findQuote < sectionEnd &&
-          replaceQuote >= 0 &&
-          replaceQuote < sectionEnd
-        ) {
-          const parsedFind = parseJsonStringValue(text, findQuote);
-          const parsedReplace = parseJsonStringValue(text, replaceQuote);
-          actions.push({
-            tool: "replace_in_file",
-            path: pathValue,
-            content: parsedReplace.value,
-            contentClosed: parsedReplace.closed,
-            previousContent: parsedFind.value,
-            isFileWrite: true,
-            raw: ""
-          });
+        if (findQuote >= 0 && findQuote < sectionEnd) {
+          parsedFind = parseJsonStringValue(text, findQuote);
         }
+      }
+      if (replaceKey >= 0 && replaceKey < sectionEnd) {
+        const replaceQuote = text.indexOf("\"", text.indexOf(":", replaceKey));
+        if (replaceQuote >= 0 && replaceQuote < sectionEnd) {
+          parsedReplace = parseJsonStringValue(text, replaceQuote);
+        }
+      }
+      if (pathValue || parsedFind || parsedReplace) {
+        actions.push({
+          tool: "replace_in_file",
+          path: pathValue,
+          content: parsedReplace?.value ?? "",
+          contentClosed: parsedReplace?.closed,
+          previousContent: parsedFind?.value ?? "",
+          isFileWrite: true,
+          raw: ""
+        });
       }
     }
 
@@ -747,7 +759,9 @@ export function App() {
     }
     setEntries((prev) =>
       prev.map((entry) =>
-        entry.id === streamId ? { ...entry, text: entry.text + pending, streaming: true } : entry
+        entry.id === streamId
+          ? { ...entry, text: applyStreamDeltaToEntryText(entry.text, pending), streaming: true }
+          : entry
       )
     );
     if (streamPendingDeltaRef.current.length > 0) {
@@ -946,6 +960,7 @@ export function App() {
           const seq = eventSeqRef.current;
           eventSeqRef.current += 1;
           const entry = toEntry(event, seq);
+          entry.text = applyStreamDeltaToEntryText("", event.delta);
           activeStreamEntryIdRef.current = entry.id;
           setEntries((prev) => [...prev, entry]);
           return;
@@ -1996,9 +2011,16 @@ function AgentMarkdownBody({ source }: { source: string }) {
 }
 
 
+function fileActionPathLabel(action: ParsedAction): string {
+  const pathParts = action.path?.replace(/\\/g, "/").split("/");
+  return pathParts && pathParts.length > 0 ? pathParts[pathParts.length - 1]! : "file";
+}
+
 function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   const displayText = stripIntakeUiMarkers(text);
-  const liveFormatted = formatAgentMessage(displayText);
+  const liveFormatted = isStreaming
+    ? parsePartialAgentMessage(displayText)
+    : formatAgentMessage(displayText);
   const leadText = liveFormatted.response || liveFormatted.narrative || "";
   const fileActions = liveFormatted.actions.filter((action) => action.isFileWrite);
   const planActions = dedupeToolPlansLastWins(liveFormatted.actions);
@@ -2025,24 +2047,30 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
           ))}
         </div>
       ) : null}
-      {fileActions.map((action, idx) => (
+      {fileActions.map((action, idx) => {
+        const hasPreviewBody = typeof action.content === "string" && action.content.length > 0;
+        const showRollingPreview = isStreaming && (hasPreviewBody || Boolean(action.path));
+        const showFileSummary = !isStreaming && typeof action.content === "string";
+        return (
         <div
           key={`${action.tool}-${action.path ?? idx}`}
           className={`entry-action${
-            !isStreaming && typeof action.content === "string" ? " entry-action--file-summary" : ""
-          }${
-            isStreaming && typeof action.content === "string" && action.contentClosed !== true
-              ? " entry-action--rolling-preview"
-              : ""
-          }`}
+            showFileSummary ? " entry-action--file-summary" : ""
+          }${showRollingPreview ? " entry-action--rolling-preview" : ""}`}
         >
-          {isStreaming && typeof action.content === "string" && action.contentClosed !== true ? (
+          {showRollingPreview ? (
             <div className="rolling-preview">
-              <pre className="entry-json">
-                {getStreamingPreviewDiffLines(action)
-                  .lines.map((line) => `${line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}${line.text}`)
-                  .join("\n")}
-              </pre>
+              <span className="entry-action-meta">
+                {action.tool === "replace_in_file" ? "Editing" : "Writing"} {fileActionPathLabel(action)}
+                …
+              </span>
+              {hasPreviewBody ? (
+                <pre className="entry-json">
+                  {getStreamingPreviewDiffLines(action)
+                    .lines.map((line) => `${line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}${line.text}`)
+                    .join("\n")}
+                </pre>
+              ) : null}
             </div>
           ) : typeof action.content === "string" ? (
             (() => {
@@ -2053,13 +2081,10 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
               );
               const addCount = diff.lines.filter((l) => l.kind === "add").length;
               const removeCount = diff.lines.filter((l) => l.kind === "remove").length;
-              const pathParts = action.path?.replace(/\\/g, "/").split("/");
-              const fileLabel =
-                pathParts && pathParts.length > 0 ? pathParts[pathParts.length - 1]! : "file";
               return (
                 <FileEditSummary
                   addCount={addCount}
-                  fileLabel={fileLabel}
+                  fileLabel={fileActionPathLabel(action)}
                   isNewFile={isNewFileWrite(action)}
                   removeCount={removeCount}
                 />
@@ -2069,7 +2094,8 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
             <div className="entry-text">No file content provided.</div>
           )}
         </div>
-      ))}
+        );
+      })}
       {showRawMarkdownFallback ? <AgentMarkdownBody source={displayText} /> : null}
     </div>
   );

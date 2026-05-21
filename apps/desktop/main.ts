@@ -81,6 +81,8 @@ let trackedTempWorkspacePath: string | null = null;
 let allowWindowCloseWithoutTempPrompt = false;
 /** Set once app quit has been requested so the guarded close can resume quitting after save/discard. */
 let appQuitRequested = false;
+/** Temp dir to remove on `will-quit` after the bridge is killed (quit-time discard). */
+let pendingTempDirRemovalOnQuit: string | null = null;
 let firstRunComplete = false;
 let bridgeProcess: ReturnType<typeof spawn> | null = null;
 /** Interpreter used to spawn the current bridge (restart bridge when this changes). */
@@ -469,19 +471,42 @@ async function promptSaveDiscardCancel(reason: TempWorkspaceGuardReason): Promis
   return "cancel";
 }
 
-async function discardTrackedTemporaryProject(): Promise<void> {
+function stopPythonBridgeProcess(): void {
+  if (bridgeProcess) {
+    bridgeProcess.kill();
+    bridgeProcess = null;
+  }
+}
+
+function releaseWorkspaceFileHandles(): void {
+  stopPythonBridgeProcess();
+  assetManager.stop();
+  stopDeployConfWatcher();
+}
+
+async function discardTrackedTemporaryProject(reason?: TempWorkspaceGuardReason): Promise<void> {
   const tracked = trackedTempWorkspacePath;
   if (!tracked) {
     return;
   }
   const toRemove = path.resolve(tracked);
+  const discardingOnQuit = reason === "quit";
+  if (discardingOnQuit) {
+    pendingTempDirRemovalOnQuit = toRemove;
+  }
   if (workspaceRoot && path.resolve(workspaceRoot) === toRemove) {
     performSessionCleanup({ clearWorkspace: true });
   } else {
     writeTempWorkspaceRecordToDisk(null);
   }
+  if (discardingOnQuit) {
+    releaseWorkspaceFileHandles();
+    void disconnectDeployMachine();
+  }
   removeDirectoryBestEffort(toRemove);
-  ensureTemporaryWorkspaceRootAllocated();
+  if (!discardingOnQuit) {
+    ensureTemporaryWorkspaceRootAllocated();
+  }
 }
 
 async function runInteractiveSaveTemporaryWorkspace(): Promise<boolean> {
@@ -536,7 +561,7 @@ async function ensureTemporaryWorkspaceResolvedForGuard(reason: TempWorkspaceGua
       return false;
     }
     if (choice === "discard") {
-      await discardTrackedTemporaryProject();
+      await discardTrackedTemporaryProject(reason);
       return true;
     }
     const saved = await runInteractiveSaveTemporaryWorkspace();
@@ -1999,11 +2024,14 @@ app.on("before-quit", () => {
 });
 
 app.on("will-quit", () => {
-  if (bridgeProcess) {
-    bridgeProcess.kill();
-  }
+  stopPythonBridgeProcess();
   assetManager.stop();
   void disconnectDeployMachine();
+  const pending = pendingTempDirRemovalOnQuit;
+  pendingTempDirRemovalOnQuit = null;
+  if (pending) {
+    removeDirectoryBestEffort(pending);
+  }
 });
 
 ipcMain.handle(IPCChannels.windowChromeInsets, (): WindowChromeInsets => {

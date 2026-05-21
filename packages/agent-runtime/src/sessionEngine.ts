@@ -770,7 +770,8 @@ export class SessionEngine {
     return `Ran copy asset ${action.source} -> ${action.path}`;
   }
 
-  private static readonly DEFAULT_TOOL_LOOP_MAX = 32;
+  /** Widget/game creator flows need many read→edit→verify rounds (fonts, reload+logs). */
+  private static readonly DEFAULT_TOOL_LOOP_MAX = 128;
 
   private static resolveToolLoopMax(): number {
     const raw = process.env.AGENT_TOOL_LOOP_MAX;

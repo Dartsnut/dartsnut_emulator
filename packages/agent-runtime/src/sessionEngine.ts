@@ -16,12 +16,9 @@ import { DEFERRED_SKILL_IDS, readDeferredSkillMarkdown } from "./skillBundle";
 import type { AgentSessionPersistence } from "./agentSessionPersistence";
 import { AGENT_SESSION_SCHEMA_VERSION } from "./agentSessionPersistence";
 import {
-  CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE,
-  CREATOR_STALL_NUDGE_USER_MESSAGE,
+  isCreatorTemplateMode,
   isFileMutationToolName,
-  readCreatorArtifactStatus,
-  shouldInjectCreatorIncompleteNudge,
-  shouldInjectCreatorStallNudge
+  readCreatorArtifactStatus
 } from "./creatorTurnGuard";
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import { buildStreamingFileToolEnvelope } from "./streamingToolEnvelope";
@@ -302,6 +299,17 @@ export class SessionEngine {
       "7) Do not put implementable source code in reasoning/thinking — planning and tradeoffs only; write code with file tools.",
       "8) When you have nothing more to do, reply with a single short status sentence and no tool calls."
     ];
+    if (isCreatorTemplateMode(this.options.sessionTemplateMode)) {
+      lines[lines.length - 1] =
+        "8) Creator builds: finish only after `read_file` on `main.py` confirms the widget/game matches the request. Until then, each round after the phase-2 stub exists must use tools — see iteration rules below.";
+      lines.push(
+        "Creator iteration (mandatory after `main.py` exists):",
+        "9) Start each round with `read_file` on `main.py` (and `conf.json` when size/config matters) before any `replace_in_file` or `write_file` in that round.",
+        "10) At most one primary `replace_in_file` per round (small hunks, roughly ≤40 changed lines). Do not implement the whole feature in one thinking block.",
+        "11) Do not end a round with only skills, `reload_emulator`, or reasoning — include workspace file tools (`read_file` plus `replace_in_file`, `write_file`, or `copy_asset_file`) except the single final status round when done.",
+        "12) At most one `copy_asset_file` per round; the next round must `read_file` `main.py` and wire that asset with `replace_in_file`."
+      );
+    }
     if (hasIntake) {
       lines.push(
         "Intake: **dartsnut_project_intake** is host-executed — use `set_project_type`, `set_widget_size`, and `read_workspace_conf` (returns `conf.json` status for the active workspace)."
@@ -731,126 +739,6 @@ export class SessionEngine {
     );
   }
 
-  private readMainPyContent(): string {
-    try {
-      const filePath = this.options.workspacePolicy.resolveWithinRoot("main.py");
-      if (!fs.existsSync(filePath)) {
-        return "";
-      }
-      return fs.readFileSync(filePath, "utf-8");
-    } catch {
-      return "";
-    }
-  }
-
-  /**
-   * When a creator turn ends with no tool calls, inject stall or incomplete nudge and continue the loop.
-   */
-  private injectCreatorRecoveryNudgeIfNeeded(input: {
-    completion: CompletionResult;
-    reasoningTrimmed: string;
-    filesWrittenThisTurn: number;
-    initialPrompt: string;
-    messages: ChatMessage[];
-    systemSlots: number;
-    creatorIncompleteNudgeCount: number;
-    creatorStallNudgeCount: number;
-    turnCorrelationId: string;
-    step: number;
-  }): { continued: boolean; creatorIncompleteNudgeCount: number; creatorStallNudgeCount: number } {
-    const artifacts = this.readCreatorArtifacts();
-    const mainPyContent = this.readMainPyContent();
-    const shared = {
-      templateMode: this.options.sessionTemplateMode,
-      artifacts,
-      filesWrittenThisTurn: input.filesWrittenThisTurn,
-      toolCallCount: input.completion.toolCalls.length,
-      reasoningChars: input.reasoningTrimmed.length,
-      reasoningContent: input.completion.reasoningContent,
-      mainPyContent,
-      initialPrompt: input.initialPrompt,
-      messages: input.messages,
-      systemSlots: input.systemSlots
-    };
-
-    if (
-      shouldInjectCreatorStallNudge({
-        ...shared,
-        nudgeCount: input.creatorStallNudgeCount
-      })
-    ) {
-      const creatorStallNudgeCount = input.creatorStallNudgeCount + 1;
-      this.emitTransaction({
-        type: "creator.stall_turn",
-        correlationId: input.turnCorrelationId,
-        step: input.step,
-        toolCallCount: input.completion.toolCalls.length,
-        reasoningChars: input.reasoningTrimmed.length,
-        filesWrittenThisTurn: input.filesWrittenThisTurn,
-        workspaceHasConfJson: artifacts.confJson,
-        workspaceHasMainPy: artifacts.mainPy,
-        creatorStallNudgeCount
-      });
-      input.messages.push({
-        role: "assistant",
-        content: input.completion.content,
-        ...(input.completion.reasoningContent !== undefined
-          ? { reasoningContent: input.completion.reasoningContent }
-          : {})
-      });
-      input.messages.push({ role: "user", content: CREATOR_STALL_NUDGE_USER_MESSAGE });
-      return {
-        continued: true,
-        creatorIncompleteNudgeCount: input.creatorIncompleteNudgeCount,
-        creatorStallNudgeCount
-      };
-    }
-
-    if (
-      shouldInjectCreatorIncompleteNudge({
-        templateMode: shared.templateMode,
-        artifacts: shared.artifacts,
-        filesWrittenThisTurn: shared.filesWrittenThisTurn,
-        initialPrompt: shared.initialPrompt,
-        messages: shared.messages,
-        systemSlots: shared.systemSlots,
-        nudgeCount: input.creatorIncompleteNudgeCount
-      })
-    ) {
-      const creatorIncompleteNudgeCount = input.creatorIncompleteNudgeCount + 1;
-      this.emitTransaction({
-        type: "creator.incomplete_turn",
-        correlationId: input.turnCorrelationId,
-        step: input.step,
-        toolCallCount: input.completion.toolCalls.length,
-        reasoningChars: input.reasoningTrimmed.length,
-        filesWrittenThisTurn: input.filesWrittenThisTurn,
-        workspaceHasConfJson: artifacts.confJson,
-        workspaceHasMainPy: artifacts.mainPy,
-        creatorNudgeCount: creatorIncompleteNudgeCount
-      });
-      input.messages.push({
-        role: "assistant",
-        content: input.completion.content,
-        ...(input.completion.reasoningContent !== undefined
-          ? { reasoningContent: input.completion.reasoningContent }
-          : {})
-      });
-      input.messages.push({ role: "user", content: CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE });
-      return {
-        continued: true,
-        creatorIncompleteNudgeCount,
-        creatorStallNudgeCount: input.creatorStallNudgeCount
-      };
-    }
-
-    return {
-      continued: false,
-      creatorIncompleteNudgeCount: input.creatorIncompleteNudgeCount,
-      creatorStallNudgeCount: input.creatorStallNudgeCount
-    };
-  }
-
   private emitTurnCompletionStats(
     correlationId: string,
     step: number,
@@ -1071,8 +959,6 @@ export class SessionEngine {
     }
 
     const maxToolRounds = SessionEngine.resolveToolLoopMax();
-    let creatorIncompleteNudgeCount = 0;
-    let creatorStallNudgeCount = 0;
 
     for (let step = 0; step < maxToolRounds; step += 1) {
       let filesWrittenThisCompletion = 0;
@@ -1199,23 +1085,6 @@ export class SessionEngine {
       const merged = this.tryParseEnvelopesMerged(completion.content);
 
       if (!merged) {
-        const recovery = this.injectCreatorRecoveryNudgeIfNeeded({
-          completion,
-          reasoningTrimmed,
-          filesWrittenThisTurn: filesWrittenThisCompletion,
-          initialPrompt: prompt,
-          messages,
-          systemSlots,
-          creatorIncompleteNudgeCount,
-          creatorStallNudgeCount,
-          turnCorrelationId,
-          step
-        });
-        creatorIncompleteNudgeCount = recovery.creatorIncompleteNudgeCount;
-        creatorStallNudgeCount = recovery.creatorStallNudgeCount;
-        if (recovery.continued) {
-          continue;
-        }
         onEvent({ type: "final", content: completion.content, at: Date.now() });
         this.finalizeWorkspacePersistence(messages, systemSlots, completion.content);
         return completion.content;
@@ -1232,23 +1101,6 @@ export class SessionEngine {
 
       if (actions.length === 0) {
         const finalText = merged.responseText || "Done.";
-        const recovery = this.injectCreatorRecoveryNudgeIfNeeded({
-          completion,
-          reasoningTrimmed,
-          filesWrittenThisTurn: filesWrittenThisCompletion,
-          initialPrompt: prompt,
-          messages,
-          systemSlots,
-          creatorIncompleteNudgeCount,
-          creatorStallNudgeCount,
-          turnCorrelationId,
-          step
-        });
-        creatorIncompleteNudgeCount = recovery.creatorIncompleteNudgeCount;
-        creatorStallNudgeCount = recovery.creatorStallNudgeCount;
-        if (recovery.continued) {
-          continue;
-        }
         onEvent({ type: "final", content: finalText, at: Date.now() });
         this.finalizeWorkspacePersistence(messages, systemSlots, finalText);
         return finalText;

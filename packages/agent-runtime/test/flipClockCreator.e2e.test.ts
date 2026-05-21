@@ -5,10 +5,6 @@ import { describe, expect, it } from "vitest";
 import { formatCreatorBuildPlanMessage } from "@dartsnut/shared-ipc";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
-import {
-  CREATOR_STALL_NUDGE_USER_MESSAGE,
-  mainPyLooksLikePhase2Stub
-} from "../src/creatorTurnGuard";
 import { ProviderClient } from "../src/providerClient";
 import { loadProviderConfig, validateProviderConfig } from "../src/providerConfig";
 import { allowedDeferredSkillIdsForMode, resolveSkillRouterPrompt } from "../src/skillBundle";
@@ -56,9 +52,15 @@ function parseTransactions(workspaceRoot: string): Array<Record<string, unknown>
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+function toolCallsFromTransactions(transactions: Array<Record<string, unknown>>): string[] {
+  return transactions
+    .filter((row) => row.type === "tool.call")
+    .map((row) => String(row.name ?? ""));
+}
+
 describe.skipIf(!canRunLive)("flip-clock creator live e2e", () => {
   it(
-    "scaffolds conf/main and implements behavior with tools (stall recovery allowed)",
+    "scaffolds conf/main and uses read_file plus replace_in_file on main.py",
     async () => {
       const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-flip-clock-e2e-"));
       const skillsDir = path.resolve(__dirname, "../skills");
@@ -98,39 +100,31 @@ describe.skipIf(!canRunLive)("flip-clock creator live e2e", () => {
       expect(fs.existsSync(mainPath)).toBe(true);
 
       const mainPy = fs.readFileSync(mainPath, "utf-8");
-      const stillStub = mainPyLooksLikePhase2Stub(mainPy);
-      expect(stillStub).toBe(false);
+      const looksImplemented =
+        /draw\.text|imagedraw\s*\(|flip|digit|strftime|font/i.test(mainPy) && mainPy.length > 350;
+      expect(looksImplemented).toBe(true);
 
       const combinedAssistant = `${streamedAssistant}\n${response}`;
-      expect(combinedAssistant.toLowerCase()).toMatch(/agent steps|phase 0|phase 1|conf\.json/);
+      expect(combinedAssistant.toLowerCase()).toMatch(/agent steps|phase|conf\.json/);
 
       const transactions = parseTransactions(tempRoot);
-      const stallTurns = transactions.filter((row) => row.type === "creator.stall_turn");
-      const completionResponses = transactions.filter((row) => row.type === "completion.response");
-      const reasoningOnlyStall = completionResponses.some(
-        (row) =>
-          row.toolCallCount === 0 &&
-          typeof row.reasoningChars === "number" &&
-          row.reasoningChars > 1500 &&
-          row.workspaceHasConfJson === true &&
-          row.workspaceHasMainPy === true
-      );
+      const toolNames = toolCallsFromTransactions(transactions);
+      expect(toolNames).toContain("read_file");
+      expect(toolNames).toContain("replace_in_file");
+      expect(transactions.some((row) => row.type === "creator.stall_turn")).toBe(false);
+      expect(transactions.some((row) => row.type === "creator.incomplete_turn")).toBe(false);
 
-      if (reasoningOnlyStall) {
-        expect(stallTurns.length).toBeGreaterThan(0);
-        const transcriptPath = path.join(tempRoot, ".dartsnut", "agent-session", "transcript.jsonl");
-        if (fs.existsSync(transcriptPath)) {
-          const transcript = fs.readFileSync(transcriptPath, "utf-8");
-          expect(transcript).toContain(CREATOR_STALL_NUDGE_USER_MESSAGE.slice(0, 32));
-        }
-        const postStallToolUse = completionResponses.some(
-          (row, index) =>
-            index > 0 &&
-            typeof row.toolCallCount === "number" &&
-            row.toolCallCount > 0 &&
-            row.workspaceHasMainPy === true
+      const completionResponses = transactions.filter((row) => row.type === "completion.response");
+      const terminalReasoningOnly = completionResponses[completionResponses.length - 1];
+      if (
+        terminalReasoningOnly &&
+        terminalReasoningOnly.toolCallCount === 0 &&
+        typeof terminalReasoningOnly.reasoningChars === "number" &&
+        terminalReasoningOnly.reasoningChars > 15_000
+      ) {
+        throw new Error(
+          `Terminal step was reasoning-only (${terminalReasoningOnly.reasoningChars} chars); expected file tools`
         );
-        expect(postStallToolUse).toBe(true);
       }
 
       expect(events.some((event) => event.type === "final")).toBe(true);

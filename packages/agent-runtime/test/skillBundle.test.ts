@@ -192,6 +192,8 @@ describe("deferred skill router", () => {
     expect(router).toContain("creator-incremental");
     expect(router).toContain("conf-contract");
     expect(router).not.toContain("loaded **every** skill");
+    expect(router).toContain("Iteration loop");
+    expect(router).toContain("read_file");
   });
 
   it("resolveSkillRouterPrompt for asset-applier mentions pydartsnut-core", () => {

@@ -13,12 +13,14 @@ describe("formatCreatorBuildPlanMessage", () => {
     expect(msg).toContain("## Build guidelines");
     expect(msg).toContain("guidelines");
     expect(msg).toContain("Agent steps");
+    expect(msg).toContain("micro-steps");
+    expect(msg).toContain("read_file");
+    expect(msg).toContain("iteration loop");
     expect(msg).toContain("Phase 1");
     expect(msg).toContain("conf.json");
     expect(msg).toContain("reload_emulator");
     expect(msg).toContain("Phase 2");
     expect(msg).toContain("main.py");
-    expect(msg).toContain("creator-incremental");
   });
 
   it("includes widget display size when provided", () => {

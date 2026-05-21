@@ -26,17 +26,19 @@ export function formatCreatorBuildPlanMessage(options: FormatCreatorBuildPlanOpt
     "",
     "These five phases are **guidelines only**, not your full execution plan.",
     "",
-    "**Before phase 1 tools:** In the **assistant message** (visible in chat), post an **Agent steps** section: **5–12 numbered bullets** for what you will do next, derived from the user request and Creation context. **No code fences** in that message.",
+    "**Before phase 1 tools:** In the **assistant message** (visible in chat), post an **Agent steps** section: **8–15 numbered micro-steps** (each = one read → small edit round). **No code fences** in that message.",
     "",
     "**After each phase:** One short line in the assistant message marking the phase done, then start the next tool round. Do not re-brainstorm or rewrite the whole plan.",
+    "",
+    "**After phase 2 (iteration loop):** Every round: **`read_file` `main.py` first**, then at most **one** small **`replace_in_file`** (or one `copy_asset_file`, then read + wire next round). No tool-free rounds until a final one-sentence done status.",
     "",
     "Skill loading and tool rules live in the system router and `creator-incremental` — not repeated here.",
     "",
     `- [ ] **Phase 0:** One-sentence ${kind} concept (assistant text only; no code fences)`,
     "- [ ] **Phase 1:** `write_file` **`conf.json` only** → **`reload_emulator`**",
     `- [ ] **Phase 2:** Minimal **\`main.py\`** stub (preview runs; ${kind === "widget" ? "Pillow blank frame" : "pygame shell"})`,
-    "- [ ] **Phase 3:** Core behavior with **`read_file`** + **`replace_in_file`**",
-    "- [ ] **Phase 4:** Fonts / assets only if needed (`widget-fonts`, `asset-pipeline`, `copy_asset_file`)",
+    "- [ ] **Phase 3:** Core behavior — repeated **`read_file` `main.py`** + one small **`replace_in_file`** per round",
+    "- [ ] **Phase 4:** Fonts / assets — **one** `copy_asset_file` per round, then read `main.py` and wire",
     ""
   ];
   if (sizeLine) {

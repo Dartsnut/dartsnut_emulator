@@ -397,6 +397,29 @@ class SkillLoadThenWriteProvider {
   }
 }
 
+class GetEmulatorLogsNativeProvider {
+  private call = 0;
+  public readonly receivedMessages: ChatMessage[][] = [];
+
+  async complete(messages: ChatMessage[]): Promise<CompletionResult> {
+    this.call += 1;
+    this.receivedMessages.push(messages.map((m) => ({ ...m }) as ChatMessage));
+    if (this.call === 1) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "call_logs",
+            name: "get_emulator_logs",
+            argumentsJson: JSON.stringify({ max_lines: 12 })
+          }
+        ]
+      };
+    }
+    return { content: "Emulator logs look clean.", toolCalls: [] };
+  }
+}
+
 class LoadDeniedSkillProvider {
   private call = 0;
 
@@ -672,6 +695,43 @@ describe("SessionEngine tool loop", () => {
     expect(envelopeFinal?.content).toContain('"find": "old"');
     expect(envelopeFinal?.content).toContain('"replace": "new"');
     expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toBe("new");
+  });
+
+  it("executes get_emulator_logs via host handler with max_lines", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const events: AgentEvent[] = [];
+    const provider = new GetEmulatorLogsNativeProvider();
+    const mockPayload = JSON.stringify({
+      ok: true,
+      lines: [{ stream: "stdout", text: "widget started" }],
+      emulator: { running: true, status: "Running" }
+    });
+    let receivedMaxLines: number | undefined;
+    const engine = new SessionEngine({
+      provider,
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a widget creator.",
+      hostGetEmulatorLogsHandler: async (args) => {
+        receivedMaxLines = args.max_lines;
+        return mockPayload;
+      }
+    });
+
+    const response = await engine.runPrompt("check emulator logs", (event) => events.push(event));
+
+    expect(response).toContain("Emulator logs look clean.");
+    expect(receivedMaxLines).toBe(12);
+
+    const toolMessage = provider.receivedMessages[1]?.find(
+      (m): m is Extract<ChatMessage, { role: "tool" }> => m.role === "tool"
+    );
+    expect(toolMessage?.tool_call_id).toBe("call_logs");
+    expect(toolMessage?.content).toContain("widget started");
+
+    const statusMessages = events
+      .filter((event): event is Extract<AgentEvent, { type: "status" }> => event.type === "status")
+      .map((event) => event.message);
+    expect(statusMessages.some((m) => m.toLowerCase().includes("emulator log"))).toBe(true);
   });
 
   it("executes native tool_calls and threads tool_call_id through the conversation", async () => {

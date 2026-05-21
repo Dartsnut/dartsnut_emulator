@@ -10,9 +10,10 @@ Integration with the **Dartsnut machine** via **`pydartsnut`** — not generic P
 
 In README or final replies:
 
-1. **Start / Reload** in the emulator pane after the workspace is selected.
-2. **Logs** in the same pane for bridge/runtime output.
-3. Do **not** tell users to `cd` and `python main.py` unless they asked for CLI-only steps.
+1. **reload_emulator** — restarts the embedded preview and re-reads `conf.json`.
+2. **get_emulator_logs** — read recent Python stdout/stderr from the bridge (use after reload to confirm no Traceback/SyntaxError).
+3. The emulator pane also has **Logs** for the user; agents should use **`get_emulator_logs`**, not assume they can see the UI.
+4. Do **not** tell users to `cd` and `python main.py` unless they asked for CLI-only steps.
 
 ## Dependencies (hardware boundary)
 

@@ -173,6 +173,43 @@ function readDeployEligibilityFromWorkspace(): DeployEligibility {
   }
 }
 
+const EMULATOR_LOG_RING_MAX = 200;
+const EMULATOR_LOG_DEFAULT_TAIL = 80;
+const EMULATOR_LOG_MAX_REQUEST = 200;
+
+let emulatorLogRing: EmulatorLogEntry[] = [];
+
+function pushEmulatorLogRing(entry: EmulatorLogEntry): void {
+  emulatorLogRing.push(entry);
+  if (emulatorLogRing.length > EMULATOR_LOG_RING_MAX) {
+    emulatorLogRing = emulatorLogRing.slice(-EMULATOR_LOG_RING_MAX);
+  }
+}
+
+function clearEmulatorLogRing(): void {
+  emulatorLogRing = [];
+}
+
+/** Agent tool `get_emulator_logs`: tail of buffered Python bridge stdout/stderr + emulator status. */
+function executeHostGetEmulatorLogsForAgent(args?: { max_lines?: number }): string {
+  const requested =
+    typeof args?.max_lines === "number" && Number.isFinite(args.max_lines)
+      ? Math.min(EMULATOR_LOG_MAX_REQUEST, Math.max(1, Math.floor(args.max_lines)))
+      : EMULATOR_LOG_DEFAULT_TAIL;
+  const lines = emulatorLogRing.slice(-requested);
+  return JSON.stringify({
+    ok: true,
+    lines,
+    emulator: {
+      running: emulatorState.running,
+      status: emulatorState.status,
+      lastError: emulatorState.lastError ?? null,
+      widgetPath: emulatorState.widgetPath
+    },
+    hint: "Scan stderr and stdout for Traceback, SyntaxError, ModuleNotFoundError, and Error before continuing."
+  });
+}
+
 /** Agent tool `reload_emulator`: sync bridge path, reload widget (Python re-reads conf.json), refresh deploy UI. */
 async function executeHostReloadEmulatorForAgent(): Promise<string> {
   if (!workspaceRoot) {
@@ -202,7 +239,7 @@ async function executeHostReloadEmulatorForAgent(): Promise<string> {
   return JSON.stringify({
     ok: true,
     message:
-      "Emulator path re-applied and reload_widget sent; conf.json re-read on the Python side and deploy eligibility refreshed."
+      "Emulator path re-applied and reload_widget sent; conf.json re-read on the Python side and deploy eligibility refreshed. Call get_emulator_logs next to confirm the widget starts without errors."
   });
 }
 
@@ -1288,6 +1325,7 @@ function applyIdleEmulatorMainState(): void {
   emulatorState.running = false;
   emulatorState.lastError = undefined;
   emulatorState.status = "Idle";
+  clearEmulatorLogRing();
 }
 
 function performSessionCleanup(options: { clearWorkspace: boolean }): void {
@@ -1315,6 +1353,7 @@ function emitEmulatorFrame(frame: EmulatorFrame) {
 }
 
 function emitEmulatorLog(entry: EmulatorLogEntry) {
+  pushEmulatorLogRing(entry);
   sendToRenderer(EMULATOR_IPC_CHANNELS.emulatorLog, entry);
 }
 
@@ -1774,6 +1813,9 @@ function buildSession(
     hostIntakeToolHandler: extras?.hostIntakeToolHandler,
     hostAskQuestionHandler: extras?.hostAskQuestionHandler,
     hostReloadEmulatorHandler: intakeToolsOnly ? undefined : () => executeHostReloadEmulatorForAgent(),
+    hostGetEmulatorLogsHandler: intakeToolsOnly
+      ? undefined
+      : (args) => Promise.resolve(executeHostGetEmulatorLogsForAgent(args)),
     skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve,
     sessionPersistence: extras?.sessionPersistence,
     initialConversation: extras?.initialConversation,

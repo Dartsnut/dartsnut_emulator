@@ -222,10 +222,30 @@ const RELOAD_EMULATOR_TOOL: ChatCompletionTool = {
   function: {
     name: "reload_emulator",
     description:
-      "Host-executed: re-applies the current workspace path to the embedded emulator, **re-reads `conf.json` from disk**, restarts the widget/game process, and refreshes deploy eligibility in the UI. Call after creating or editing `conf.json` (especially when the workspace started empty), or when the preview is stale.",
+      "Host-executed: re-applies the current workspace path to the embedded emulator, **re-reads `conf.json` from disk**, restarts the widget/game process, and refreshes deploy eligibility in the UI. After reload, call **get_emulator_logs** to confirm the project starts without Python errors.",
     parameters: {
       type: "object",
       properties: {},
+      additionalProperties: false
+    },
+    strict: true
+  }
+};
+
+const GET_EMULATOR_LOGS_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "get_emulator_logs",
+    description:
+      "Host-executed: returns recent Python bridge **stdout/stderr** from the embedded emulator plus running/status/lastError. Use after **reload_emulator** (or when debugging) to verify the widget compiles and runs — scan for Traceback, SyntaxError, or ModuleNotFoundError before continuing.",
+    parameters: {
+      type: "object",
+      properties: {
+        max_lines: {
+          type: "number",
+          description: "Maximum log lines to return (default 80, max 200)."
+        }
+      },
       additionalProperties: false
     },
     strict: true
@@ -237,6 +257,7 @@ export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
   ...AGENT_FILE_TOOL_SCHEMAS,
   GET_DARTSNUT_SKILL_TOOL,
   RELOAD_EMULATOR_TOOL,
+  GET_EMULATOR_LOGS_TOOL,
   DARTSNUT_PROJECT_INTAKE_TOOL
 ];
 

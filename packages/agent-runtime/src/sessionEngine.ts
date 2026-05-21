@@ -65,6 +65,10 @@ type ToolAction =
     tool: "reload_emulator";
   }
   | {
+    tool: "get_emulator_logs";
+    max_lines?: number;
+  }
+  | {
     tool: "get_dartsnut_skill";
     skill_id: DeferredSkillId;
   };
@@ -82,6 +86,9 @@ export type HostAskQuestionHandler = (args: Record<string, unknown>) => Promise<
 
 /** Host (Electron main) reloads the embedded emulator; returns JSON text for the model. */
 export type HostReloadEmulatorHandler = () => Promise<string>;
+
+/** Host (Electron main) returns recent emulator Python logs; returns JSON text for the model. */
+export type HostGetEmulatorLogsHandler = (args: { max_lines?: number }) => Promise<string>;
 
 /** When set, `get_dartsnut_skill` reads markdown from `skillsDir` for ids in `allowedIds`. */
 export interface AgentSkillLibrary {
@@ -102,6 +109,7 @@ export interface SessionEngineOptions {
   hostIntakeToolHandler?: HostIntakeToolHandler;
   hostAskQuestionHandler?: HostAskQuestionHandler;
   hostReloadEmulatorHandler?: HostReloadEmulatorHandler;
+  hostGetEmulatorLogsHandler?: HostGetEmulatorLogsHandler;
   /** Skip the initial `workspacePolicy.resolveWithinRoot(".")` probe (legacy; prefer a real workspace root). */
   skipInitialWorkspaceResolve?: boolean;
   /** When set, rolling chat (user/assistant/tool) is persisted under the workspace and replayed on resume. */
@@ -276,6 +284,16 @@ export class SessionEngine {
     if (tool === "reload_emulator") {
       return { tool: "reload_emulator" };
     }
+    if (tool === "get_emulator_logs") {
+      const record = action as Record<string, unknown>;
+      const maxLines = record.max_lines;
+      return {
+        tool: "get_emulator_logs",
+        ...(typeof maxLines === "number" && Number.isFinite(maxLines)
+          ? { max_lines: maxLines }
+          : {})
+      };
+    }
     throw new Error(`Unsupported tool action: ${tool || "unknown"}`);
   }
 
@@ -306,8 +324,10 @@ export class SessionEngine {
         "Creator iteration (mandatory after `main.py` exists):",
         "9) Start each round with `read_file` on `main.py` (and `conf.json` when size/config matters) before any `replace_in_file` or `write_file` in that round.",
         "10) At most one primary `replace_in_file` per round (small hunks, roughly ≤40 changed lines). Do not implement the whole feature in one thinking block.",
-        "11) Do not end a round with only skills, `reload_emulator`, or reasoning — include workspace file tools (`read_file` plus `replace_in_file`, `write_file`, or `copy_asset_file`) except the single final status round when done.",
-        "12) At most one `copy_asset_file` per round; the next round must `read_file` `main.py` and wire that asset with `replace_in_file`."
+        "11) Do not end a round with only skills or reasoning — include workspace file tools (`read_file` plus `replace_in_file`, `write_file`, or `copy_asset_file`) except the single final status round when done, or a phase verify pair: `reload_emulator` then `get_emulator_logs`.",
+        "12) At most one `copy_asset_file` per round; the next round must `read_file` `main.py` and wire that asset with `replace_in_file`.",
+        "13) **Verify run:** after phase 1 (`conf.json`), after phase 2 (`main.py` stub), and when a phase milestone is done — call `reload_emulator` then `get_emulator_logs`; fix Traceback/SyntaxError before continuing.",
+        "14) If logs show runtime errors after an edit, fix with `read_file` + `replace_in_file`, then reload + logs again."
       );
     }
     if (hasIntake) {
@@ -322,7 +342,13 @@ export class SessionEngine {
     }
     if (hasReload) {
       lines.push(
-        "After creating or changing root `conf.json`, call **reload_emulator** so the preview and deploy panel see the new config (host re-reads conf and restarts the widget process)."
+        "After creating or changing root `conf.json`, call **reload_emulator** then **get_emulator_logs** so the preview and deploy panel see the new config and you can confirm Python started cleanly."
+      );
+    }
+    const hasEmulatorLogs = names.includes("get_emulator_logs");
+    if (hasEmulatorLogs && !isCreatorTemplateMode(this.options.sessionTemplateMode)) {
+      lines.push(
+        "Use **get_emulator_logs** after **reload_emulator** to read recent Python stdout/stderr from the embedded emulator."
       );
     }
     return lines.join("\n");
@@ -581,6 +607,14 @@ export class SessionEngine {
       }
       return this.options.hostReloadEmulatorHandler();
     }
+    if (action.tool === "get_emulator_logs") {
+      if (!this.options.hostGetEmulatorLogsHandler) {
+        throw new Error("get_emulator_logs is not enabled for this session.");
+      }
+      return this.options.hostGetEmulatorLogsHandler({
+        max_lines: action.max_lines
+      });
+    }
     if (action.tool === "get_dartsnut_skill") {
       const lib = this.options.skillLibrary;
       if (!lib) {
@@ -711,6 +745,9 @@ export class SessionEngine {
     }
     if (action.tool === "reload_emulator") {
       return "Reloaded emulator";
+    }
+    if (action.tool === "get_emulator_logs") {
+      return "Checked emulator logs";
     }
     if (action.tool === "get_dartsnut_skill") {
       return `Loaded skill ${action.skill_id}`;
@@ -896,6 +933,7 @@ export class SessionEngine {
           value.tool !== "dartsnut_project_intake" &&
           value.tool !== "dartsnut_ask_question" &&
           value.tool !== "reload_emulator" &&
+          value.tool !== "get_emulator_logs" &&
           value.tool !== "get_dartsnut_skill"
       );
 

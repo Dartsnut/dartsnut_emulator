@@ -19,21 +19,28 @@ describe("loadSkillBundle", () => {
     const templatePath = path.join(SKILLS_DIR, "game-creator.md");
     const content = loadSkillBundle(templatePath);
     expect(content).toContain("game creator template");
+    expect(content).toContain("creator-incremental");
+    expect(content).not.toContain('"id": "<game-slug>"');
   });
 
   it("loads the widget creator template", () => {
     const templatePath = path.join(SKILLS_DIR, "widget-creator.md");
     const content = loadSkillBundle(templatePath);
     expect(content).toContain("widget creator template");
-    expect(content).toContain("widget size");
+    expect(content).toContain("widget-fonts");
+    expect(content).not.toContain("load_widget_font");
   });
 
-  it("loads the dartsnut pydartsnut runtime skill", () => {
-    const templatePath = path.join(SKILLS_DIR, "dartsnut-skill.md");
-    const content = loadSkillBundle(templatePath);
-    expect(content).toContain("pydartsnut");
+  it("loads pydartsnut-core runtime skill", () => {
+    const content = loadSkillBundle(path.join(SKILLS_DIR, "pydartsnut-core.md"));
     expect(content).toContain("update_frame_buffer");
-    expect(content).toContain("Strict scope");
+    expect(content).toContain("Dartsnut()");
+  });
+
+  it("loads creator-incremental phased scaffold skill", () => {
+    const content = loadSkillBundle(path.join(SKILLS_DIR, "creator-incremental.md"));
+    expect(content).toContain("conf.json` only");
+    expect(content).toContain("paste full `conf.json`");
   });
 
   it("loads the dartsnut display mapping skill", () => {
@@ -45,10 +52,10 @@ describe("loadSkillBundle", () => {
   });
 
   it("concatenates multiple skills with a separator when given several paths", () => {
-    const corePath = path.join(SKILLS_DIR, "dartsnut-skill.md");
+    const corePath = path.join(SKILLS_DIR, "pydartsnut-core.md");
     const displayPath = path.join(SKILLS_DIR, "dartsnut-display-mapping.md");
     const combined = loadSkillBundle(corePath, displayPath);
-    expect(combined).toContain("pydartsnut");
+    expect(combined).toContain("update_frame_buffer");
     expect(combined).toContain("dartsnut-display-mapping");
     expect(combined).toContain("\n\n---\n\n");
   });
@@ -98,9 +105,10 @@ describe("creator skills reference asset-pipeline without duplicating rules", ()
     expect(widgetCreator).toContain("assets_loader.py");
   });
 
-  it("dartsnut-skill cross-references asset-pipeline without restating its rules", () => {
+  it("dartsnut-skill legacy index points at granular ids", () => {
     const dartsnutSkill = loadSkillBundle(path.join(SKILLS_DIR, "dartsnut-skill.md"));
-    expect(dartsnutSkill).toContain("asset-pipeline");
+    expect(dartsnutSkill).toContain("pydartsnut-core");
+    expect(dartsnutSkill).toContain("creator-incremental");
     expect(dartsnutSkill).not.toMatch(/```json[\s\S]*"slots"[\s\S]*```/);
   });
 
@@ -110,34 +118,41 @@ describe("creator skills reference asset-pipeline without duplicating rules", ()
     expect(gameCreator).not.toContain("class SlotRenderer");
     expect(widgetCreator).not.toContain("class SlotRenderer");
   });
+
+  it("game-dart-colors holds RGB table removed from game-creator template", () => {
+    const colors = loadSkillBundle(path.join(SKILLS_DIR, "game-dart-colors.md"));
+    expect(colors).toContain("(255, 0, 0)");
+    const gameCreator = loadSkillBundle(path.join(SKILLS_DIR, "game-creator.md"));
+    expect(gameCreator).not.toContain("(255, 0, 0)");
+  });
 });
 
 describe("bundleForTemplateMode", () => {
-  it("includes dartsnut-skill, display-mapping, and asset-pipeline for game-creator mode", () => {
+  it("includes pydartsnut-core, display-mapping, and asset-pipeline for game-creator mode", () => {
     const bundle = bundleForTemplateMode(SKILLS_DIR, "game-creator");
-    expect(bundle).toContain("pydartsnut");
+    expect(bundle).toContain("update_frame_buffer");
     expect(bundle).toContain("dartsnut-display-mapping");
     expect(bundle).toContain("dartsnut.assets.json");
     expect(bundle).toContain("load_slot");
   });
 
-  it("includes dartsnut-skill, display-mapping, and asset-pipeline for widget-creator mode", () => {
+  it("includes pydartsnut-core, display-mapping, and asset-pipeline for widget-creator mode", () => {
     const bundle = bundleForTemplateMode(SKILLS_DIR, "widget-creator");
-    expect(bundle).toContain("pydartsnut");
+    expect(bundle).toContain("update_frame_buffer");
     expect(bundle).toContain("dartsnut-display-mapping");
     expect(bundle).toContain("dartsnut.assets.json");
   });
 
   it("includes the full bundle when no mode is specified (default behavior preserved)", () => {
     const bundle = bundleForTemplateMode(SKILLS_DIR);
-    expect(bundle).toContain("pydartsnut");
+    expect(bundle).toContain("update_frame_buffer");
     expect(bundle).toContain("dartsnut-display-mapping");
     expect(bundle).toContain("dartsnut.assets.json");
   });
 
-  it("for asset-applier mode bundles only dartsnut-skill + asset-pipeline (no display-mapping, no creator skills)", () => {
+  it("for asset-applier mode bundles only pydartsnut-core + asset-pipeline", () => {
     const bundle = bundleForTemplateMode(SKILLS_DIR, "asset-applier");
-    expect(bundle).toContain("pydartsnut");
+    expect(bundle).toContain("update_frame_buffer");
     expect(bundle).toContain("dartsnut.assets.json");
     expect(bundle).toContain("Apply mode");
     expect(bundle).not.toContain("Firmware coordinate note");
@@ -156,26 +171,46 @@ describe("bundleForTemplateMode", () => {
 });
 
 describe("deferred skill router", () => {
-  it("allowedDeferredSkillIdsForMode matches bundle composition", () => {
-    expect(allowedDeferredSkillIdsForMode("asset-applier")).toEqual(["dartsnut-skill", "asset-pipeline"]);
-    expect(allowedDeferredSkillIdsForMode("creation-intake")).toEqual([]);
-    expect(allowedDeferredSkillIdsForMode(null)).toEqual([
-      "dartsnut-skill",
-      "dartsnut-display-mapping",
-      "asset-pipeline"
+  it("allowedDeferredSkillIdsForMode lists creator granular skills and asset-applier subset", () => {
+    expect(allowedDeferredSkillIdsForMode("asset-applier")).toEqual([
+      "pydartsnut-core",
+      "asset-pipeline",
+      "dartsnut-skill"
     ]);
+    expect(allowedDeferredSkillIdsForMode("creation-intake")).toEqual([]);
+    const creatorIds = allowedDeferredSkillIdsForMode("game-creator");
+    expect(creatorIds).toContain("creator-incremental");
+    expect(creatorIds).toContain("conf-contract");
+    expect(creatorIds).toContain("pydartsnut-core");
+    expect(creatorIds).toContain("dartsnut-display-mapping");
   });
 
-  it("resolveSkillRouterPrompt lists only allowed skills and mentions get_dartsnut_skill", () => {
+  it("resolveSkillRouterPrompt uses just-in-time loading for creators", () => {
+    const router = resolveSkillRouterPrompt(SKILLS_DIR, "widget-creator");
+    expect(router).toContain("just-in-time");
+    expect(router).toContain("Load first");
+    expect(router).toContain("creator-incremental");
+    expect(router).toContain("conf-contract");
+    expect(router).not.toContain("loaded **every** skill");
+  });
+
+  it("resolveSkillRouterPrompt for asset-applier mentions pydartsnut-core", () => {
     const router = resolveSkillRouterPrompt(SKILLS_DIR, "asset-applier");
-    expect(router).toContain("get_dartsnut_skill");
-    expect(router).toContain("dartsnut-skill");
+    expect(router).toContain("pydartsnut-core");
     expect(router).toContain("asset-pipeline");
     expect(router).not.toContain("dartsnut-display-mapping");
   });
 
-  it("readDeferredSkillMarkdown returns file body", () => {
+  it("readDeferredSkillMarkdown expands legacy dartsnut-skill", () => {
     const body = readDeferredSkillMarkdown(SKILLS_DIR, "dartsnut-skill");
-    expect(body).toContain("pydartsnut");
+    expect(body).toContain("legacy index");
+    expect(body).toContain("update_frame_buffer");
+    expect(body).toContain("get_dart_hits");
+  });
+
+  it("readDeferredSkillMarkdown returns conf-contract body", () => {
+    const body = readDeferredSkillMarkdown(SKILLS_DIR, "conf-contract");
+    expect(body).toContain("conf.json contract");
+    expect(body).toContain("reload_emulator");
   });
 });

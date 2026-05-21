@@ -23,6 +23,9 @@ describe("buildPostIntakeCreatorUserPrompt", () => {
   it("instructs build-now when intent is clear", () => {
     const prompt = buildPostIntakeCreatorUserPrompt("create a smoothing widget for me");
     expect(prompt).toContain("**Build now (mandatory):**");
+    expect(prompt).toContain("Agent steps");
+    expect(prompt).toContain("Build guidelines");
+    expect(prompt).toContain("creator-incremental");
     expect(prompt).toContain(POST_INTAKE_BUILD_REQUEST_PREFIX);
     expect(prompt).toContain("create a smoothing widget for me");
     expect(prompt).not.toContain("ask what they want");
@@ -37,7 +40,7 @@ describe("buildPostIntakeCreatorUserPrompt", () => {
   it("forces build-now after intake when type/size were already chosen", () => {
     const prompt = buildPostIntakeCreatorUserPrompt("surprise me", { forceBuildAfterIntake: true });
     expect(prompt).toContain("**Build now (mandatory):**");
-    expect(prompt).toContain("same concept");
+    expect(prompt).toContain("one concrete");
     expect(prompt).toContain("do not re-interpret");
     expect(prompt).not.toContain(POST_INTAKE_BUILD_REQUEST_PREFIX);
     expect(prompt).not.toContain("ask what they want");

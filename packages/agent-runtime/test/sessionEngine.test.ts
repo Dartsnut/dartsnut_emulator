@@ -4,7 +4,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
 import type { ChatMessage, CompletionOptions, CompletionProvider, CompletionResult } from "../src/providerClient";
-import { CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE } from "../src/creatorTurnGuard";
+import {
+  CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE,
+  CREATOR_STALL_NUDGE_USER_MESSAGE
+} from "../src/creatorTurnGuard";
 import { SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
@@ -580,6 +583,29 @@ describe("SessionEngine tool loop", () => {
     expect(events.some((event) => event.type === "status")).toBe(true);
   });
 
+  it("streams write_file envelope during tool progress even when assistant content streamed first", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const events: AgentEvent[] = [];
+    const engine = new SessionEngine({
+      provider: new AtomicNativeWriteWithContentProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant."
+    });
+
+    await engine.runPrompt("build widget", (event) => events.push(event));
+
+    const streamEvents = events.filter(
+      (event): event is Extract<AgentEvent, { type: "stream" }> => event.type === "stream"
+    );
+    const combined = streamEvents.map((event) => event.delta).join("");
+    expect(combined).toContain('"tool":"write_file"');
+    expect(combined).toContain("widget.py");
+    const progressBeforeFinal =
+      streamEvents.length > 0 &&
+      events.findIndex((e) => e.type === "final") > streamEvents.findIndex((e) => e.type === "stream");
+    expect(progressBeforeFinal).toBe(true);
+  });
+
   it("finalizes write_file preview in one final when live tool progress already streamed", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     const events: AgentEvent[] = [];
@@ -704,6 +730,50 @@ describe("SessionEngine tool loop", () => {
     expect(fs.readFileSync(path.join(tempRoot, "ok.txt"), "utf-8")).toBe("kept");
   });
 
+  it("runs flip-clock creator flow on fresh workspace: scaffold then stall recovery via tools", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const provider = new FlipClockPhasedBuildProvider();
+    const engine = new SessionEngine({
+      provider,
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a widget creator.",
+      sessionTemplateMode: "widget-creator"
+    });
+
+    const prompt = ["TEMPLATE", "", "User request:", "create 128x128 flipping clock widget"].join("\n");
+    const response = await engine.runPrompt(prompt, () => {});
+
+    expect(provider.call).toBeGreaterThanOrEqual(4);
+    expect(provider.agentStepsPosted).toBe(true);
+    expect(fs.existsSync(path.join(tempRoot, "conf.json"))).toBe(true);
+    expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toContain("flip");
+    expect(response).toContain("Clock widget ready.");
+  });
+
+  it("injects creator stall nudge after scaffold when model dumps implementation in reasoning only", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    fs.writeFileSync(path.join(tempRoot, "conf.json"), '{"type":"widget","size":[128,128]}', "utf-8");
+    fs.writeFileSync(path.join(tempRoot, "main.py"), PHASE2_STUB_MAIN_PY, "utf-8");
+    const provider = new ReasoningOnlyAfterScaffoldProvider();
+    const engine = new SessionEngine({
+      provider,
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a widget creator.",
+      sessionTemplateMode: "widget-creator"
+    });
+
+    const prompt = ["TEMPLATE", "", "User request:", "128x128 flipping clock widget"].join("\n");
+    const response = await engine.runPrompt(prompt, () => {});
+
+    expect(provider.call).toBeGreaterThanOrEqual(3);
+    const stallSeen = provider.lastMessages.some(
+      (m) => m.role === "user" && m.content.includes(CREATOR_STALL_NUDGE_USER_MESSAGE.slice(0, 32))
+    );
+    expect(stallSeen).toBe(true);
+    expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toContain("# clock");
+    expect(response).toContain("Done with clock.");
+  });
+
   it("injects creator incomplete nudge when widget-creator replies without project files", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     const provider = new CreatorClarifyThenBuildProvider();
@@ -752,7 +822,7 @@ describe("SessionEngine tool loop", () => {
       skillPrompt: "Asset applier style: two skills only.",
       skillLibrary: {
         skillsDir,
-        allowedIds: ["dartsnut-skill", "asset-pipeline"]
+        allowedIds: ["pydartsnut-core", "asset-pipeline", "dartsnut-skill"]
       }
     });
 
@@ -760,6 +830,123 @@ describe("SessionEngine tool loop", () => {
     expect(response).toContain("Noted denial.");
   });
 });
+
+const PHASE2_STUB_MAIN_PY = `from PIL import Image
+
+def main():
+    frame = Image.new("RGB", (128, 128), (0, 0, 0))
+`;
+
+class FlipClockPhasedBuildProvider implements CompletionProvider {
+  call = 0;
+  agentStepsPosted = false;
+  lastMessages: ChatMessage[] = [];
+
+  async complete(messages: ChatMessage[]): Promise<CompletionResult> {
+    this.call += 1;
+    this.lastMessages = messages;
+    if (this.call === 1) {
+      this.agentStepsPosted = true;
+      return {
+        content:
+          "**Agent steps**\n1. conf.json\n2. reload\n3. stub main.py\n4. flip digits\n5. fonts if needed",
+        toolCalls: [
+          {
+            id: "call_conf",
+            name: "write_file",
+            argumentsJson: JSON.stringify({
+              path: "conf.json",
+              content: '{"type":"widget","size":[128,128]}'
+            })
+          },
+          {
+            id: "call_reload",
+            name: "reload_emulator",
+            argumentsJson: "{}"
+          }
+        ]
+      };
+    }
+    if (this.call === 2) {
+      return {
+        content: "Phase 2 done — stub main.py.",
+        toolCalls: [
+          {
+            id: "call_main",
+            name: "write_file",
+            argumentsJson: JSON.stringify({ path: "main.py", content: PHASE2_STUB_MAIN_PY })
+          }
+        ]
+      };
+    }
+    if (this.call === 3) {
+      return {
+        content: "",
+        toolCalls: [],
+        reasoningContent: "```python\n" + "# flip clock\n".repeat(500) + "\n```"
+      };
+    }
+    if (this.call === 4) {
+      const stallSeen = messages.some(
+        (m) => m.role === "user" && m.content.includes(CREATOR_STALL_NUDGE_USER_MESSAGE.slice(0, 32))
+      );
+      expect(stallSeen).toBe(true);
+      return {
+        content: "Phase 3 — implementing flip clock in main.py.",
+        toolCalls: [
+          {
+            id: "call_flip",
+            name: "replace_in_file",
+            argumentsJson: JSON.stringify({
+              path: "main.py",
+              find: "(0, 0, 0)",
+              replace: "(0, 0, 0)\n# flip clock digits"
+            })
+          }
+        ]
+      };
+    }
+    return textOnly("Clock widget ready.");
+  }
+}
+
+class ReasoningOnlyAfterScaffoldProvider implements CompletionProvider {
+  call = 0;
+  lastMessages: ChatMessage[] = [];
+
+  async complete(messages: ChatMessage[]): Promise<CompletionResult> {
+    this.call += 1;
+    this.lastMessages = messages;
+    if (this.call === 1) {
+      return {
+        content: "",
+        toolCalls: [],
+        reasoningContent: "```python\n" + "flip_clock = True\n".repeat(400) + "\n```"
+      };
+    }
+    if (this.call === 2) {
+      const stallSeen = messages.some(
+        (m) => m.role === "user" && m.content.includes(CREATOR_STALL_NUDGE_USER_MESSAGE.slice(0, 32))
+      );
+      expect(stallSeen).toBe(true);
+      return {
+        content: "Applying clock logic via tools.",
+        toolCalls: [
+          {
+            id: "call_edit",
+            name: "replace_in_file",
+            argumentsJson: JSON.stringify({
+              path: "main.py",
+              find: "(0, 0, 0)",
+              replace: "(0, 0, 0)  # clock"
+            })
+          }
+        ]
+      };
+    }
+    return textOnly("Done with clock.");
+  }
+}
 
 class CreatorClarifyThenBuildProvider implements CompletionProvider {
   call = 0;

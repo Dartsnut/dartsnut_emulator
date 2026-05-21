@@ -131,10 +131,9 @@ const DEFAULT_CHAT_COMPLETION_TIMEOUT_MS = 180_000;
  * "The reasoning_content in the thinking mode must be passed back to the API."). We
  * accumulate and replay it through `ChatMessage.reasoningContent` / wire `reasoning_content`.
  *
- * **Tool history + HTTP streaming:** By default we use `stream: true` even when `role: "tool"`
- * messages are present, so `reasoning_content` / content arrive incrementally (rolling Thought UI).
- * Some gateways reject that combination; set **`AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY=1`** to fall back to
- * `stream: false` for those rounds (single-shot `onChunk` / `onReasoningChunk` flush).
+ * **HTTP streaming:** Uses `stream: true` whenever `onChunk`, `onReasoningChunk`, or `onToolCallProgress` is provided,
+ * including after `role: "tool"` messages, so `reasoning_content` / content arrive incrementally.
+ * Callers without stream callbacks get a one-shot `stream: false` completion.
  */
 export class ProviderClient implements CompletionProvider {
   private readonly openai: OpenAI;
@@ -158,12 +157,7 @@ export class ProviderClient implements CompletionProvider {
     const signal = AbortSignal.timeout(timeoutMs);
     const requestMessages = ProviderClient.toWireMessages(messages);
 
-    const disableStreamWithToolHistory =
-      process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY === "1" ||
-      process.env.AGENT_DISABLE_STREAM_WITH_TOOL_HISTORY?.toLowerCase() === "true";
-    const hasToolHistory = messages.some((m) => m.role === "tool");
-    const useStreaming =
-      Boolean(onChunk || onReasoningChunk) && (!hasToolHistory || !disableStreamWithToolHistory);
+    const useStreaming = Boolean(onChunk || onReasoningChunk || onToolCallProgress);
 
     const common = {
       model: this.model,

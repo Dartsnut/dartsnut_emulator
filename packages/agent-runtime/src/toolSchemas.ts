@@ -13,9 +13,9 @@ const GET_DARTSNUT_SKILL_TOOL: ChatCompletionTool = {
   function: {
     name: "get_dartsnut_skill",
     description: [
-      "Load the full markdown text for a **Dartsnut house skill** (runtime, display mapping, or asset pipeline).",
-      "Call **before** write_file / replace_in_file / copy_asset_file when the router system prompt lists this skill for the session.",
-      "Do not use for workspace project files — use read_file. Returns JSON with `content` (the skill body) when `ok` is true."
+      "Load markdown for a **Dartsnut house skill** (incremental scaffold, conf contract, pydartsnut runtime, display mapping, assets, etc.).",
+      "Load **just-in-time** per the router: always `creator-incremental`, `conf-contract`, `pydartsnut-core` first for new projects; other ids only when that step needs them.",
+      "Call before write_file / replace_in_file / copy_asset_file for the step you are on. Not for workspace files — use read_file. Returns JSON with `content` when `ok` is true."
     ].join(" "),
     parameters: {
       type: "object",

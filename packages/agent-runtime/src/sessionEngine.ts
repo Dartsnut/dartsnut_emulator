@@ -17,9 +17,11 @@ import type { AgentSessionPersistence } from "./agentSessionPersistence";
 import { AGENT_SESSION_SCHEMA_VERSION } from "./agentSessionPersistence";
 import {
   CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE,
+  CREATOR_STALL_NUDGE_USER_MESSAGE,
   isFileMutationToolName,
   readCreatorArtifactStatus,
-  shouldInjectCreatorIncompleteNudge
+  shouldInjectCreatorIncompleteNudge,
+  shouldInjectCreatorStallNudge
 } from "./creatorTurnGuard";
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import { buildStreamingFileToolEnvelope } from "./streamingToolEnvelope";
@@ -296,7 +298,9 @@ export class SessionEngine {
       "3) Use write_file only when creating a new file or when replace_in_file cannot express the change.",
       "4) Use copy_asset_file for binary assets (fonts/images) instead of read_file/write_file.",
       "5) copy_asset_file strips a trailing -<8 hex> hash before the file extension on both source lookup and destination filenames (e.g. big_digits-ab12cd34.pil -> big_digits.pil).",
-      "6) When you have nothing more to do, reply with a single short status sentence and no tool calls."
+      "6) Do not paste full file contents in assistant messages when you will create or edit those files with tools — use tools only.",
+      "7) Do not put implementable source code in reasoning/thinking — planning and tradeoffs only; write code with file tools.",
+      "8) When you have nothing more to do, reply with a single short status sentence and no tool calls."
     ];
     if (hasIntake) {
       lines.push(
@@ -727,6 +731,126 @@ export class SessionEngine {
     );
   }
 
+  private readMainPyContent(): string {
+    try {
+      const filePath = this.options.workspacePolicy.resolveWithinRoot("main.py");
+      if (!fs.existsSync(filePath)) {
+        return "";
+      }
+      return fs.readFileSync(filePath, "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * When a creator turn ends with no tool calls, inject stall or incomplete nudge and continue the loop.
+   */
+  private injectCreatorRecoveryNudgeIfNeeded(input: {
+    completion: CompletionResult;
+    reasoningTrimmed: string;
+    filesWrittenThisTurn: number;
+    initialPrompt: string;
+    messages: ChatMessage[];
+    systemSlots: number;
+    creatorIncompleteNudgeCount: number;
+    creatorStallNudgeCount: number;
+    turnCorrelationId: string;
+    step: number;
+  }): { continued: boolean; creatorIncompleteNudgeCount: number; creatorStallNudgeCount: number } {
+    const artifacts = this.readCreatorArtifacts();
+    const mainPyContent = this.readMainPyContent();
+    const shared = {
+      templateMode: this.options.sessionTemplateMode,
+      artifacts,
+      filesWrittenThisTurn: input.filesWrittenThisTurn,
+      toolCallCount: input.completion.toolCalls.length,
+      reasoningChars: input.reasoningTrimmed.length,
+      reasoningContent: input.completion.reasoningContent,
+      mainPyContent,
+      initialPrompt: input.initialPrompt,
+      messages: input.messages,
+      systemSlots: input.systemSlots
+    };
+
+    if (
+      shouldInjectCreatorStallNudge({
+        ...shared,
+        nudgeCount: input.creatorStallNudgeCount
+      })
+    ) {
+      const creatorStallNudgeCount = input.creatorStallNudgeCount + 1;
+      this.emitTransaction({
+        type: "creator.stall_turn",
+        correlationId: input.turnCorrelationId,
+        step: input.step,
+        toolCallCount: input.completion.toolCalls.length,
+        reasoningChars: input.reasoningTrimmed.length,
+        filesWrittenThisTurn: input.filesWrittenThisTurn,
+        workspaceHasConfJson: artifacts.confJson,
+        workspaceHasMainPy: artifacts.mainPy,
+        creatorStallNudgeCount
+      });
+      input.messages.push({
+        role: "assistant",
+        content: input.completion.content,
+        ...(input.completion.reasoningContent !== undefined
+          ? { reasoningContent: input.completion.reasoningContent }
+          : {})
+      });
+      input.messages.push({ role: "user", content: CREATOR_STALL_NUDGE_USER_MESSAGE });
+      return {
+        continued: true,
+        creatorIncompleteNudgeCount: input.creatorIncompleteNudgeCount,
+        creatorStallNudgeCount
+      };
+    }
+
+    if (
+      shouldInjectCreatorIncompleteNudge({
+        templateMode: shared.templateMode,
+        artifacts: shared.artifacts,
+        filesWrittenThisTurn: shared.filesWrittenThisTurn,
+        initialPrompt: shared.initialPrompt,
+        messages: shared.messages,
+        systemSlots: shared.systemSlots,
+        nudgeCount: input.creatorIncompleteNudgeCount
+      })
+    ) {
+      const creatorIncompleteNudgeCount = input.creatorIncompleteNudgeCount + 1;
+      this.emitTransaction({
+        type: "creator.incomplete_turn",
+        correlationId: input.turnCorrelationId,
+        step: input.step,
+        toolCallCount: input.completion.toolCalls.length,
+        reasoningChars: input.reasoningTrimmed.length,
+        filesWrittenThisTurn: input.filesWrittenThisTurn,
+        workspaceHasConfJson: artifacts.confJson,
+        workspaceHasMainPy: artifacts.mainPy,
+        creatorNudgeCount: creatorIncompleteNudgeCount
+      });
+      input.messages.push({
+        role: "assistant",
+        content: input.completion.content,
+        ...(input.completion.reasoningContent !== undefined
+          ? { reasoningContent: input.completion.reasoningContent }
+          : {})
+      });
+      input.messages.push({ role: "user", content: CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE });
+      return {
+        continued: true,
+        creatorIncompleteNudgeCount,
+        creatorStallNudgeCount: input.creatorStallNudgeCount
+      };
+    }
+
+    return {
+      continued: false,
+      creatorIncompleteNudgeCount: input.creatorIncompleteNudgeCount,
+      creatorStallNudgeCount: input.creatorStallNudgeCount
+    };
+  }
+
   private emitTurnCompletionStats(
     correlationId: string,
     step: number,
@@ -947,10 +1071,11 @@ export class SessionEngine {
     }
 
     const maxToolRounds = SessionEngine.resolveToolLoopMax();
-    let filesWrittenThisTurn = 0;
-    let creatorNudgeCount = 0;
+    let creatorIncompleteNudgeCount = 0;
+    let creatorStallNudgeCount = 0;
 
     for (let step = 0; step < maxToolRounds; step += 1) {
+      let filesWrittenThisCompletion = 0;
       if (abortSignal?.aborted) {
         throw new Error("Agent stopped.");
       }
@@ -963,11 +1088,9 @@ export class SessionEngine {
 
       let reasoningChunkEvents = 0;
       const liveToolEnvelopeStreamed = { count: 0 };
-      let assistantContentStreamed = false;
       const completion = await this.options.provider.complete(messages, {
         tools: completionTools,
         onChunk: (delta) => {
-          assistantContentStreamed = true;
           onEvent({ type: "stream", delta, at: Date.now() });
         },
         onReasoningChunk: (delta) => {
@@ -977,9 +1100,7 @@ export class SessionEngine {
           onEvent({ type: "reasoning_stream", delta, at: Date.now() });
         },
         onToolCallProgress: (toolCalls) => {
-          if (!assistantContentStreamed) {
-            this.emitLiveFileToolEnvelopeProgress(toolCalls, "", liveToolEnvelopeStreamed, onEvent);
-          }
+          this.emitLiveFileToolEnvelopeProgress(toolCalls, "", liveToolEnvelopeStreamed, onEvent);
         }
       });
 
@@ -1003,14 +1124,14 @@ export class SessionEngine {
         reasoningChars: reasoningTrimmed.length,
         reasoningChunkEvents,
         reasoningHttpStream: completion.usedHttpStream === true,
-        filesWrittenThisTurn,
+        filesWrittenThisTurn: filesWrittenThisCompletion,
         workspaceHasConfJson: artifactStatus.confJson,
         workspaceHasMainPy: artifactStatus.mainPy
       });
       this.emitTurnCompletionStats(turnCorrelationId, step, {
         toolCallCount: completion.toolCalls.length,
         reasoningChars: reasoningTrimmed.length,
-        filesWrittenThisTurn,
+        filesWrittenThisTurn: filesWrittenThisCompletion,
         workspaceHasConfJson: artifactStatus.confJson,
         workspaceHasMainPy: artifactStatus.mainPy
       });
@@ -1020,7 +1141,7 @@ export class SessionEngine {
           await this.processNativeToolCalls(completion);
         for (const outcome of outcomes) {
           if (outcome.action && isFileMutationToolName(outcome.toolCall.name)) {
-            filesWrittenThisTurn += 1;
+            filesWrittenThisCompletion += 1;
           }
         }
         const envelope = this.buildUiEnvelopeString(successfulActions, completion.content);
@@ -1054,15 +1175,16 @@ export class SessionEngine {
             resultChars: outcome.result.length
           });
           if (outcome.action) {
+            const statusMessage = this.describeStatusAction(outcome.action);
             onEvent({
               type: "status",
-              message: this.describeStatusAction(outcome.action),
+              message: statusMessage,
               at: Date.now()
             });
             p?.appendTranscript({
               kind: "tool_status",
               at: Date.now(),
-              text: this.describeStatusAction(outcome.action),
+              text: statusMessage,
               toolName: outcome.toolCall.name
             });
           }
@@ -1077,38 +1199,21 @@ export class SessionEngine {
       const merged = this.tryParseEnvelopesMerged(completion.content);
 
       if (!merged) {
-        const afterTextArtifacts = this.readCreatorArtifacts();
-        if (
-          shouldInjectCreatorIncompleteNudge({
-            templateMode: this.options.sessionTemplateMode,
-            artifacts: afterTextArtifacts,
-            filesWrittenThisTurn,
-            initialPrompt: prompt,
-            messages,
-            systemSlots,
-            nudgeCount: creatorNudgeCount
-          })
-        ) {
-          creatorNudgeCount += 1;
-          this.emitTransaction({
-            type: "creator.incomplete_turn",
-            correlationId: turnCorrelationId,
-            step,
-            toolCallCount: completion.toolCalls.length,
-            reasoningChars: reasoningTrimmed.length,
-            filesWrittenThisTurn,
-            workspaceHasConfJson: afterTextArtifacts.confJson,
-            workspaceHasMainPy: afterTextArtifacts.mainPy,
-            creatorNudgeCount
-          });
-          messages.push({
-            role: "assistant",
-            content: completion.content,
-            ...(completion.reasoningContent !== undefined
-              ? { reasoningContent: completion.reasoningContent }
-              : {})
-          });
-          messages.push({ role: "user", content: CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE });
+        const recovery = this.injectCreatorRecoveryNudgeIfNeeded({
+          completion,
+          reasoningTrimmed,
+          filesWrittenThisTurn: filesWrittenThisCompletion,
+          initialPrompt: prompt,
+          messages,
+          systemSlots,
+          creatorIncompleteNudgeCount,
+          creatorStallNudgeCount,
+          turnCorrelationId,
+          step
+        });
+        creatorIncompleteNudgeCount = recovery.creatorIncompleteNudgeCount;
+        creatorStallNudgeCount = recovery.creatorStallNudgeCount;
+        if (recovery.continued) {
           continue;
         }
         onEvent({ type: "final", content: completion.content, at: Date.now() });
@@ -1127,38 +1232,21 @@ export class SessionEngine {
 
       if (actions.length === 0) {
         const finalText = merged.responseText || "Done.";
-        const afterEnvelopeArtifacts = this.readCreatorArtifacts();
-        if (
-          shouldInjectCreatorIncompleteNudge({
-            templateMode: this.options.sessionTemplateMode,
-            artifacts: afterEnvelopeArtifacts,
-            filesWrittenThisTurn,
-            initialPrompt: prompt,
-            messages,
-            systemSlots,
-            nudgeCount: creatorNudgeCount
-          })
-        ) {
-          creatorNudgeCount += 1;
-          this.emitTransaction({
-            type: "creator.incomplete_turn",
-            correlationId: turnCorrelationId,
-            step,
-            toolCallCount: 0,
-            reasoningChars: reasoningTrimmed.length,
-            filesWrittenThisTurn,
-            workspaceHasConfJson: afterEnvelopeArtifacts.confJson,
-            workspaceHasMainPy: afterEnvelopeArtifacts.mainPy,
-            creatorNudgeCount
-          });
-          messages.push({
-            role: "assistant",
-            content: completion.content,
-            ...(completion.reasoningContent !== undefined
-              ? { reasoningContent: completion.reasoningContent }
-              : {})
-          });
-          messages.push({ role: "user", content: CREATOR_INCOMPLETE_NUDGE_USER_MESSAGE });
+        const recovery = this.injectCreatorRecoveryNudgeIfNeeded({
+          completion,
+          reasoningTrimmed,
+          filesWrittenThisTurn: filesWrittenThisCompletion,
+          initialPrompt: prompt,
+          messages,
+          systemSlots,
+          creatorIncompleteNudgeCount,
+          creatorStallNudgeCount,
+          turnCorrelationId,
+          step
+        });
+        creatorIncompleteNudgeCount = recovery.creatorIncompleteNudgeCount;
+        creatorStallNudgeCount = recovery.creatorStallNudgeCount;
+        if (recovery.continued) {
           continue;
         }
         onEvent({ type: "final", content: finalText, at: Date.now() });
@@ -1170,7 +1258,7 @@ export class SessionEngine {
 
       for (const action of actions) {
         if (isFileMutationToolName(action.tool)) {
-          filesWrittenThisTurn += 1;
+          filesWrittenThisCompletion += 1;
         }
         onEvent({
           type: "status",

@@ -83,6 +83,8 @@ let allowWindowCloseWithoutTempPrompt = false;
 let appQuitRequested = false;
 let firstRunComplete = false;
 let bridgeProcess: ReturnType<typeof spawn> | null = null;
+/** Interpreter used to spawn the current bridge (restart bridge when this changes). */
+let bridgePythonExec: string | null = null;
 const repoRoot = app.isPackaged
   ? process.resourcesPath
   : path.resolve(__dirname, "../../..");
@@ -1551,6 +1553,50 @@ function venvPythonPath(venvDir: string): string {
   return path.join(venvDir, "bin", "python");
 }
 
+function repoVenvPythonCandidates(): string[] {
+  const venvDir = path.join(repoRoot, ".venv");
+  if (process.platform === "win32") {
+    return [
+      venvPythonPath(venvDir),
+      path.join(venvDir, "Scripts", "python3.12.exe"),
+      path.join(venvDir, "Scripts", "python3.11.exe"),
+      path.join(venvDir, "Scripts", "python3.10.exe")
+    ];
+  }
+  return [
+    venvPythonPath(venvDir),
+    path.join(venvDir, "bin", "python3.12"),
+    path.join(venvDir, "bin", "python3.11"),
+    path.join(venvDir, "bin", "python3.10")
+  ];
+}
+
+function pythonProcessEnv(executable: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, PYTHONUNBUFFERED: "1" };
+  const venvDir = path.join(repoRoot, ".venv");
+  for (const venvPython of repoVenvPythonCandidates()) {
+    if (path.resolve(executable) === path.resolve(venvPython)) {
+      env.VIRTUAL_ENV = venvDir;
+      const binDir = path.dirname(venvPython);
+      env.PATH = `${binDir}${path.delimiter}${env.PATH ?? ""}`;
+      break;
+    }
+  }
+  return env;
+}
+
+function firstRunnablePython(candidates: string[]): string | null {
+  for (const candidate of candidates) {
+    if (
+      canRunEmulatorDeps(candidate) &&
+      isPythonVersionSupportedSync(candidate)
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 async function canRunEmulatorDepsAsync(executable: string): Promise<boolean> {
   return runCommandOkAsync(executable, ["-c", "import pydartsnut, pygame, PIL; print('ok')"], repoRoot);
 }
@@ -1627,50 +1673,82 @@ async function ensurePackagedPythonRuntime(preferredPython?: string | null): Pro
 }
 
 async function resolvePythonExecutable(): Promise<string> {
-  if (process.env.DARTSNUT_PYTHON) {
-    return process.env.DARTSNUT_PYTHON;
+  const envOverride = process.env.DARTSNUT_PYTHON?.trim();
+  if (envOverride) {
+    if (canRunEmulatorDeps(envOverride) && isPythonVersionSupportedSync(envOverride)) {
+      return envOverride;
+    }
+    setPythonRuntimeStatus(
+      "DARTSNUT_PYTHON is set but missing emulator deps (pydartsnut/pygame-ce/Pillow)."
+    );
   }
   const selectedPythonPath = readSelectedPythonPath();
-  if (
-    selectedPythonPath &&
-    canRunEmulatorDeps(selectedPythonPath) &&
-    isPythonVersionSupportedSync(selectedPythonPath)
-  ) {
-    return selectedPythonPath;
-  }
-  const packagedRuntimePython = await ensurePackagedPythonRuntime(selectedPythonPath);
+  const packagedRuntimePython = app.isPackaged
+    ? await ensurePackagedPythonRuntime(selectedPythonPath)
+    : null;
   if (packagedRuntimePython) {
+    setPythonRuntimeStatus(null);
     return packagedRuntimePython;
   }
-  const bundledVenvPython = venvPythonPath(path.join(repoRoot, ".venv"));
-  const bundledVenvPython312 =
-    process.platform === "win32"
-      ? path.join(repoRoot, ".venv", "Scripts", "python3.12.exe")
-      : path.join(repoRoot, ".venv", "bin", "python3.12");
-  const candidates = [bundledVenvPython, bundledVenvPython312, ...pythonCandidates()];
-  for (const candidate of candidates) {
-    if (
-      canRunEmulatorDeps(candidate) &&
-      isPythonVersionSupportedSync(candidate)
-    ) {
-      return candidate;
+
+  const searchLists: string[][] = app.isPackaged
+    ? [
+        ...(selectedPythonPath ? [[selectedPythonPath]] : []),
+        repoVenvPythonCandidates(),
+        pythonCandidates()
+      ]
+    : [
+        repoVenvPythonCandidates(),
+        ...(selectedPythonPath ? [[selectedPythonPath]] : []),
+        pythonCandidates()
+      ];
+
+  for (const group of searchLists) {
+    const found = firstRunnablePython(group);
+    if (found) {
+      setPythonRuntimeStatus(null);
+      return found;
     }
   }
-  emulatorState.status = "Missing Python 3.10+ or emulator deps (pydartsnut/pygame-ce/Pillow). Run: pnpm setup:python";
+
+  const setupHint = app.isPackaged
+    ? "Python 3.10+ with pydartsnut/pygame-ce/Pillow is required. Restart the app after setup completes."
+    : "Missing Python 3.10+ or emulator deps (pydartsnut/pygame-ce/Pillow). Run: pnpm setup:python";
+  setPythonRuntimeStatus(setupHint);
+  emulatorState.status = setupHint;
   emitEmulatorState();
-  return "python3";
+  const venvFallback = repoVenvPythonCandidates().find((candidate) => fs.existsSync(candidate));
+  return venvFallback ?? (process.platform === "win32" ? "python" : "python3");
+}
+
+function stopPythonBridge(): void {
+  if (bridgeProcess) {
+    bridgeProcess.kill();
+    bridgeProcess = null;
+    bridgePythonExec = null;
+  }
 }
 
 function startPythonBridge() {
-  if (bridgeProcess) {
+  if (!canRunEmulatorDeps(pythonExec) || !isPythonVersionSupportedSync(pythonExec)) {
+    emulatorState.status =
+      pythonRuntimeStatus ??
+      "Python runtime is not ready (pydartsnut/pygame-ce/Pillow). Run: pnpm setup:python";
+    emulatorState.running = false;
+    emitEmulatorState();
     return;
   }
+  if (bridgeProcess && bridgePythonExec === pythonExec) {
+    return;
+  }
+  stopPythonBridge();
   const bridgePath = path.join(repoRoot, "services", "emulator-core", "bridge_service.py");
   bridgeProcess = spawn(pythonExec, [bridgePath], {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: repoRoot,
-    env: { ...process.env, PYTHONUNBUFFERED: "1" },
+    env: pythonProcessEnv(pythonExec),
   });
+  bridgePythonExec = pythonExec;
   emulatorState.status = `Bridge starting with ${pythonExec}`;
   emitEmulatorState();
 
@@ -1749,6 +1827,7 @@ function startPythonBridge() {
 
   bridgeProcess.on("close", () => {
     bridgeProcess = null;
+    bridgePythonExec = null;
     emulatorState.running = false;
     emulatorState.status = "Bridge stopped";
     emitEmulatorState();
@@ -1902,11 +1981,10 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  // Resolve workspace before the renderer's first bootstrap fetch (packaged loadFile is
-  // slower than Vite dev, but both can mount before allocation when setup ran after createWindow).
+  // Resolve Python before workspace recovery — recovery can start the bridge via applyWorkspaceRoot.
+  pythonExec = await resolvePythonExecutable();
   await maybeRecoverTrackedTempWorkspaceAtLaunch();
   ensureTemporaryWorkspaceRootAllocated();
-  pythonExec = await resolvePythonExecutable();
   startPythonBridge();
   await createWindow();
   emitBootstrapStateToRenderer();
@@ -2164,13 +2242,17 @@ ipcMain.handle(IPCChannels.pickPythonPath, async () => {
       error: "Python 3.10+ is required."
     };
   }
+  if (!canRunEmulatorDeps(selectedPath)) {
+    return {
+      accepted: false,
+      selectedPath,
+      error: "That Python is missing emulator deps (pydartsnut, pygame-ce, Pillow)."
+    };
+  }
   const persistedPath = writeSelectedPythonPath(selectedPath);
   pythonExec = await resolvePythonExecutable();
-  if (bridgeProcess) {
-    bridgeProcess.kill();
-  } else {
-    startPythonBridge();
-  }
+  stopPythonBridge();
+  startPythonBridge();
   return {
     accepted: true,
     selectedPath: persistedPath

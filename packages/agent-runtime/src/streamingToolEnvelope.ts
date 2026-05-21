@@ -1,4 +1,32 @@
+import { TOOL_ENVELOPE_STREAM_REPLACE } from "@dartsnut/shared-ipc";
 import type { ParsedToolCall } from "./providerClient";
+
+export { TOOL_ENVELOPE_STREAM_REPLACE };
+
+function orderFileToolActionFields(
+  toolName: string,
+  partial: Record<string, string>
+): Record<string, unknown> {
+  const ordered: Record<string, unknown> = { tool: toolName };
+  if (partial.path !== undefined) {
+    ordered.path = partial.path;
+  }
+  if (partial.previousContent !== undefined) {
+    ordered.previousContent = partial.previousContent;
+  }
+  if (toolName === "write_file" && partial.content !== undefined) {
+    ordered.content = partial.content;
+  }
+  if (toolName === "replace_in_file") {
+    if (partial.find !== undefined) {
+      ordered.find = partial.find;
+    }
+    if (partial.replace !== undefined) {
+      ordered.replace = partial.replace;
+    }
+  }
+  return ordered;
+}
 
 function decodeEscapedStreamingText(input: string): string {
   return input
@@ -124,7 +152,7 @@ export function buildStreamingFileToolEnvelope(
     if (!partial) {
       continue;
     }
-    const action: Record<string, unknown> = { tool: toolCall.name, ...partial };
+    const fields: Record<string, string> = { ...partial };
     if (
       toolCall.name === "write_file" &&
       typeof partial.path === "string" &&
@@ -132,10 +160,10 @@ export function buildStreamingFileToolEnvelope(
     ) {
       const previousContent = readPreviousContent(partial.path);
       if (previousContent !== undefined) {
-        action.previousContent = previousContent;
+        fields.previousContent = previousContent;
       }
     }
-    actions.push(action);
+    actions.push(orderFileToolActionFields(toolCall.name, fields));
   }
   if (actions.length === 0) {
     return null;

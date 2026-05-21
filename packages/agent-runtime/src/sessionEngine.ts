@@ -21,7 +21,10 @@ import {
   readCreatorArtifactStatus
 } from "./creatorTurnGuard";
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
-import { buildStreamingFileToolEnvelope } from "./streamingToolEnvelope";
+import {
+  buildStreamingFileToolEnvelope,
+  TOOL_ENVELOPE_STREAM_REPLACE
+} from "./streamingToolEnvelope";
 import { WorkspacePolicy } from "./workspacePolicy";
 
 function isDeferredSkillId(value: unknown): value is DeferredSkillId {
@@ -704,6 +707,18 @@ export class SessionEngine {
     });
   }
 
+  private readPreviousContentForPath(relativePath: string): string | undefined {
+    try {
+      const filePath = this.options.workspacePolicy.resolveWithinRoot(relativePath);
+      if (!fs.existsSync(filePath)) {
+        return undefined;
+      }
+      return fs.readFileSync(filePath, "utf-8");
+    } catch {
+      return undefined;
+    }
+  }
+
   private readPreviousContent(action: ToolAction): string | undefined {
     if (action.tool !== "write_file") {
       return undefined;
@@ -857,32 +872,57 @@ export class SessionEngine {
     onEvent({ type: "final", content: finalContent, at: Date.now() });
   }
 
+  private async finalizeNativeFileToolPreview(
+    completion: CompletionResult,
+    liveToolEnvelopeStreamed: { count: number; lastTail?: string },
+    onEvent: (event: AgentEvent) => void
+  ): Promise<void> {
+    const hasFileMutation = completion.toolCalls.some(
+      (toolCall) => toolCall.name === "write_file" || toolCall.name === "replace_in_file"
+    );
+    if (!hasFileMutation) {
+      return;
+    }
+    if (liveToolEnvelopeStreamed.count > 0) {
+      // Renderer already has the streamed envelope; end streaming without replacing text.
+      onEvent({ type: "final", content: "", at: Date.now() });
+      return;
+    }
+    const previewEnvelope = buildStreamingFileToolEnvelope(
+      completion.toolCalls,
+      completion.content,
+      (relativePath) => this.readPreviousContentForPath(relativePath)
+    );
+    if (!previewEnvelope) {
+      return;
+    }
+    await this.streamNativeToolEnvelopePreview(completion.content, previewEnvelope, onEvent);
+  }
+
   private emitLiveFileToolEnvelopeProgress(
     toolCalls: ParsedToolCall[],
     responseLead: string,
-    streamedChars: { count: number },
+    streamedChars: { count: number; lastTail?: string },
     onEvent: (event: AgentEvent) => void
   ): boolean {
-    const envelope = buildStreamingFileToolEnvelope(toolCalls, responseLead, (relativePath) => {
-      try {
-        const filePath = this.options.workspacePolicy.resolveWithinRoot(relativePath);
-        if (!fs.existsSync(filePath)) {
-          return undefined;
-        }
-        return fs.readFileSync(filePath, "utf-8");
-      } catch {
-        return undefined;
-      }
-    });
+    const envelope = buildStreamingFileToolEnvelope(toolCalls, responseLead, (relativePath) =>
+      this.readPreviousContentForPath(relativePath)
+    );
     if (!envelope) {
       return false;
     }
-    const delta = envelope.slice(streamedChars.count);
-    if (delta.length === 0) {
-      return streamedChars.count > 0;
+    const trimmedLead = responseLead.trimEnd();
+    const tail = trimmedLead.length > 0 ? `\n\n${envelope}` : envelope;
+    if (streamedChars.count > 0 && streamedChars.lastTail === tail) {
+      return true;
     }
-    onEvent({ type: "stream", delta, at: Date.now() });
+    onEvent({
+      type: "stream",
+      delta: `${TOOL_ENVELOPE_STREAM_REPLACE}${tail}`,
+      at: Date.now()
+    });
     streamedChars.count = envelope.length;
+    streamedChars.lastTail = tail;
     return true;
   }
 
@@ -1011,10 +1051,12 @@ export class SessionEngine {
       });
 
       let reasoningChunkEvents = 0;
-      const liveToolEnvelopeStreamed = { count: 0 };
+      const liveToolEnvelopeStreamed: { count: number; lastTail?: string } = { count: 0 };
+      let assistantStreamContent = "";
       const completion = await this.options.provider.complete(messages, {
         tools: completionTools,
         onChunk: (delta) => {
+          assistantStreamContent += delta;
           onEvent({ type: "stream", delta, at: Date.now() });
         },
         onReasoningChunk: (delta) => {
@@ -1024,7 +1066,12 @@ export class SessionEngine {
           onEvent({ type: "reasoning_stream", delta, at: Date.now() });
         },
         onToolCallProgress: (toolCalls) => {
-          this.emitLiveFileToolEnvelopeProgress(toolCalls, "", liveToolEnvelopeStreamed, onEvent);
+          this.emitLiveFileToolEnvelopeProgress(
+            toolCalls,
+            assistantStreamContent,
+            liveToolEnvelopeStreamed,
+            onEvent
+          );
         }
       });
 
@@ -1061,6 +1108,7 @@ export class SessionEngine {
       });
 
       if (completion.toolCalls.length > 0) {
+        await this.finalizeNativeFileToolPreview(completion, liveToolEnvelopeStreamed, onEvent);
         const { assistantMessage, toolMessages, successfulActions, outcomes } =
           await this.processNativeToolCalls(completion);
         for (const outcome of outcomes) {
@@ -1072,15 +1120,7 @@ export class SessionEngine {
         const hasFileWritePreview = successfulActions.some(
           (action) => action.tool === "write_file" || action.tool === "replace_in_file"
         );
-        if (envelope && hasFileWritePreview) {
-          if (liveToolEnvelopeStreamed.count > 0) {
-            const trimmedLead = completion.content.trim();
-            const finalContent = trimmedLead.length > 0 ? `${trimmedLead}\n\n${envelope}` : envelope;
-            onEvent({ type: "final", content: finalContent, at: Date.now() });
-          } else {
-            await this.streamNativeToolEnvelopePreview(completion.content, envelope, onEvent);
-          }
-        } else if (envelope) {
+        if (envelope && !hasFileWritePreview) {
           await this.streamNativeToolEnvelopePreview(completion.content, envelope, onEvent);
         }
         for (const outcome of outcomes) {

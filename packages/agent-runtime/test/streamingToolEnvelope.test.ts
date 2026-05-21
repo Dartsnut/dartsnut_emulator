@@ -28,4 +28,20 @@ describe("streamingToolEnvelope", () => {
     expect(envelope).toContain('"content":"hello"');
     expect(envelope).toContain("Writing file");
   });
+
+  it("orders previousContent before content for stable streaming tails", () => {
+    const toolCalls: ParsedToolCall[] = [
+      {
+        id: "call_1",
+        name: "write_file",
+        argumentsJson: '{"path":"main.py","content":"next"}'
+      }
+    ];
+    const envelope = buildStreamingFileToolEnvelope(toolCalls, "", () => "old");
+    expect(envelope).toBeDefined();
+    const contentIdx = envelope!.indexOf('"content"');
+    const previousIdx = envelope!.indexOf('"previousContent"');
+    expect(previousIdx).toBeGreaterThanOrEqual(0);
+    expect(previousIdx).toBeLessThan(contentIdx);
+  });
 });

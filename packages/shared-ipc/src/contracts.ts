@@ -281,6 +281,9 @@ export interface SaveProviderSettingsRequest {
   model: string;
 }
 
+/** Prefix on `stream` deltas that replace the tool-envelope JSON tail (lead text before `{` is kept). */
+export const TOOL_ENVELOPE_STREAM_REPLACE = "@@DARTSNUT_TOOL_ENVELOPE@@";
+
 export type AgentEvent =
   | {
     type: "stream";

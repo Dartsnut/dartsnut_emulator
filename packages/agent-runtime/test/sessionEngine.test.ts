@@ -625,7 +625,7 @@ describe("SessionEngine tool loop", () => {
     expect(progressBeforeFinal).toBe(true);
   });
 
-  it("finalizes write_file preview in one final when live tool progress already streamed", async () => {
+  it("finalizes write_file preview before tool execution when live tool progress streamed", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     const events: AgentEvent[] = [];
     const engine = new SessionEngine({
@@ -640,17 +640,20 @@ describe("SessionEngine tool loop", () => {
       (event): event is Extract<AgentEvent, { type: "stream" }> => event.type === "stream"
     );
     expect(streamEvents.length).toBeGreaterThan(0);
+    const combinedStream = streamEvents.map((event) => event.delta).join("");
+    expect(combinedStream).toContain("Planning the widget layout.");
+    expect(combinedStream).toContain('"tool":"write_file"');
+    expect(combinedStream).toContain("widget.py");
+
     const finals = events.filter(
       (event): event is Extract<AgentEvent, { type: "final" }> => event.type === "final"
     );
-    expect(finals.some((event) => event.content === "")).toBe(false);
-    const combinedFinal = finals.find(
-      (event) =>
-        event.content.includes("Planning the widget layout.") &&
-        event.content.includes('"tool": "write_file"')
-    );
-    expect(combinedFinal).toBeDefined();
-    expect(combinedFinal?.content).toContain("widget.py");
+    const previewFinal = finals.find((event) => event.content === "");
+    expect(previewFinal).toBeDefined();
+
+    const firstStatusIdx = events.findIndex((event) => event.type === "status");
+    const previewFinalIdx = events.findIndex((event) => event === previewFinal);
+    expect(firstStatusIdx).toBeGreaterThan(previewFinalIdx);
   });
 
   it("streams write_file envelope deltas during native tool argument progress", async () => {
@@ -674,7 +677,7 @@ describe("SessionEngine tool loop", () => {
     expect(combined).toContain("print(");
   });
 
-  it("keeps replace_in_file preview content in the final envelope after live tool progress", async () => {
+  it("keeps replace_in_file preview in stream and finalizes before tool execution", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     fs.writeFileSync(path.join(tempRoot, "main.py"), "old", "utf-8");
     const events: AgentEvent[] = [];
@@ -686,14 +689,20 @@ describe("SessionEngine tool loop", () => {
 
     await engine.runPrompt("edit main.py", (event) => events.push(event));
 
-    const finals = events.filter(
-      (event): event is Extract<AgentEvent, { type: "final" }> => event.type === "final"
+    const combinedStream = events
+      .filter((event): event is Extract<AgentEvent, { type: "stream" }> => event.type === "stream")
+      .map((event) => event.delta)
+      .join("");
+    expect(combinedStream).toContain('"tool":"replace_in_file"');
+    expect(combinedStream).toContain('"find":"old"');
+    expect(combinedStream).toContain('"replace":"new"');
+
+    const previewFinalIdx = events.findIndex(
+      (event) => event.type === "final" && event.content === ""
     );
-    expect(finals.some((event) => event.content === "")).toBe(false);
-    const envelopeFinal = finals.find((event) => event.content.includes('"tool": "replace_in_file"'));
-    expect(envelopeFinal).toBeDefined();
-    expect(envelopeFinal?.content).toContain('"find": "old"');
-    expect(envelopeFinal?.content).toContain('"replace": "new"');
+    const firstStatusIdx = events.findIndex((event) => event.type === "status");
+    expect(previewFinalIdx).toBeGreaterThanOrEqual(0);
+    expect(firstStatusIdx).toBeGreaterThan(previewFinalIdx);
     expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toBe("new");
   });
 
@@ -768,8 +777,8 @@ describe("SessionEngine tool loop", () => {
     );
     const envelopeFinal = finalEvents.find((event) => event.content.includes('"actions"'));
     expect(envelopeFinal).toBeDefined();
-    expect(envelopeFinal!.content).toContain('"tool": "write_file"');
-    expect(envelopeFinal!.content).toContain('"path": "widget.py"');
+    expect(envelopeFinal!.content).toContain('"tool":"write_file"');
+    expect(envelopeFinal!.content).toContain('"path":"widget.py"');
   });
 
   it("returns an error tool result for malformed tool_call arguments and continues", async () => {

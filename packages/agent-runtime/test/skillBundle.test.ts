@@ -96,6 +96,15 @@ describe("asset-pipeline skill", () => {
     expect(content).toMatch(/forbidden|Forbidden/);
     expect(content).toContain("scaffold");
   });
+
+  it("directs user image offers to Assets pane bind, not chat paste", () => {
+    const content = loadSkillBundle(assetPipelinePath);
+    expect(content).toContain("我来给你一个皮卡丘的图片");
+    expect(content).toContain("Do not");
+    expect(content).toContain("paste");
+    expect(content).toContain("Assets");
+    expect(content).toContain("Choose File");
+  });
 });
 
 describe("creator skills reference asset-pipeline without duplicating rules", () => {
@@ -198,6 +207,11 @@ describe("deferred skill router", () => {
   it("resolveSkillRouterPrompt uses just-in-time loading for creators", () => {
     const router = resolveSkillRouterPrompt(SKILLS_DIR, "widget-creator");
     expect(router).toContain("just-in-time");
+    expect(router).toContain("Simplified Chinese");
+    expect(router).toContain("meaning");
+    expect(router).toContain("我来给你一个");
+    expect(router).toContain("Assets pane");
+    expect(router).toContain("never ask to paste");
     expect(router).toContain("Load first");
     expect(router).toContain("creator-incremental");
     expect(router).toContain("conf-contract");

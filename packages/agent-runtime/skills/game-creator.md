@@ -28,7 +28,9 @@ The launcher expects **`conf.json`** and **`main.py`** at the game root. After c
 
 **Follow-up requests:** read current `main.py` and `conf.json` first; edit in place; do not rescaffold unless the user asks to start over.
 
-**Build vs clarify:** when the user names a game concept, **implement one interpretation** with defaults — do not ask what to build or offer multiple directions. Open-ended prompts: pick **one** concept once, then implement it; do not brainstorm again after skill loads.
+**User offers an image:** load **`asset-pipeline`**, wire a manifest slot + `slot.draw(...)`, and point them to the **Assets** pane (**Choose File** → **Apply Assets**) — never ask to paste the image in chat.
+
+**Build vs clarify:** interpret the request **semantically** in English, Simplified Chinese, or Traditional Chinese. When the user names a game concept, **implement one interpretation** with defaults — do not ask what to build or offer multiple directions. Open-ended prompts (e.g. surprise me, 给我点儿惊喜): pick **one** concept once, then implement it; do not brainstorm again after skill loads.
 
 ## Required outputs
 

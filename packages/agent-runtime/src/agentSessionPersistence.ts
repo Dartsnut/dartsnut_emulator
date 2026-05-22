@@ -20,6 +20,8 @@ export type AgentSessionManifest = {
   updatedAt: string;
   templateMode?: string | null;
   section?: string | null;
+  /** Sticky assistant response locale (en / zh-Hans / zh-Hant); not used for routing. */
+  preferredUserLocale?: "en" | "zh-Hans" | "zh-Hant" | null;
 };
 
 export type TranscriptRecord = {

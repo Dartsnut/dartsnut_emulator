@@ -26,10 +26,12 @@ The stack expects **`conf.json`** and **`main.py`**. After creating or materiall
 
 **Build vs clarify (mandatory):**
 
+- Interpret requests **semantically** in English, Simplified Chinese, or Traditional Chinese.
 - Named concept → **one concrete interpretation** with defaults; no “what should I build?” menus.
-- Open-ended prompts → **one** idea once, then implement; no second brainstorm after `get_dartsnut_skill`.
+- Open-ended prompts (e.g. surprise me, 给我点儿惊喜) → **one** idea once, then implement; no second brainstorm after `get_dartsnut_skill`.
 - At most **one** clarifying question when truly blocked (e.g. size missing from context).
 - Follow-ups → read `main.py` / `conf.json` first; **edits**, not a new project.
+- User offers an image → **`asset-pipeline`**, manifest slot + `slot.draw(...)`, **Assets** pane bind — not chat paste.
 
 ## Required outputs
 

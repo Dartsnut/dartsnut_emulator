@@ -22,13 +22,15 @@ Stub shape lives in **`pydartsnut-widget-loop`** / **`pydartsnut-game-io`** — 
 
 ## JIT skills
 
-| When | Load |
+Decide from **intent** in any supported language (English, zh-Hans, zh-Hant) — examples below are illustrative, not keyword rules.
+
+| Intent | Load |
 |------|------|
-| Before `conf.json` | `conf-contract` |
-| Before `main.py` | `pydartsnut-core` + widget or game loop skill |
+| Need root config / `conf.json` | `conf-contract` |
+| Need runnable `main.py` / loop | `pydartsnut-core` + widget or game loop skill |
 | Layout / fonts on canvas | `dartsnut-display-mapping`, `widget-fonts` |
 | Game I/O beyond stub | `pydartsnut-game-io` |
-| Art slots | `asset-pipeline` |
+| Art slots, sprites, user will supply/replace images (e.g. 我将提供素材, 我来给你一个…图片) | `asset-pipeline` — bind via **Assets** pane, not chat paste |
 
 ## Reasoning / thinking
 

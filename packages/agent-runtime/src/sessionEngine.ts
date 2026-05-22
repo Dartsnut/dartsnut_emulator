@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { transcriptUserBubbleText, type AgentEvent } from "@dartsnut/shared-ipc";
+import {
+  buildLanguageSystemPrompt,
+  transcriptUserBubbleText,
+  type AgentEvent,
+  type UserLocale
+} from "@dartsnut/shared-ipc";
 import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
 import {
   AGENT_STOPPED_MESSAGE,
@@ -135,6 +140,8 @@ export interface SessionEngineOptions {
   sessionSection?: string | null;
   /** Prior turns loaded from disk (or empty); excluded from system prompts. */
   initialConversation?: ChatMessage[];
+  /** Sticky response locale for user-visible prose (not routing). */
+  preferredUserLocale?: UserLocale | null;
 }
 
 export class SessionEngine {
@@ -149,7 +156,10 @@ export class SessionEngine {
     return [
       { role: "system", content: this.options.skillPrompt },
       { role: "system", content: this.buildToolPrompt() },
-      { role: "system", content: SessionEngine.userLanguageMirrorSystemPrompt }
+      {
+        role: "system",
+        content: buildLanguageSystemPrompt(this.options.preferredUserLocale ?? null)
+      }
     ];
   }
 
@@ -177,7 +187,8 @@ export class SessionEngine {
       createdAt,
       updatedAt: nowIso,
       templateMode: this.options.sessionTemplateMode ?? null,
-      section: this.options.sessionSection ?? null
+      section: this.options.sessionSection ?? null,
+      preferredUserLocale: this.options.preferredUserLocale ?? null
     });
     p.saveConversationAtomic(this.rollingConversation);
     const trimmed =
@@ -342,7 +353,8 @@ export class SessionEngine {
         "9) `read_file` `main.py` (and `conf.json` when size/config matters) before edits when those files exist.",
         "10) Do not put implementable source code in reasoning — use file tools.",
         "11) Do not end creator work with only skills or reasoning when files still need changes — use file tools or reload+logs to verify. Final round may be a one-sentence status only.",
-        "12) **Verify run:** after material `conf.json` or `main.py` changes, before declaring done, or when logs show errors — `reload_emulator` then `get_emulator_logs`; fix Traceback/SyntaxError before continuing."
+        "12) **Verify run:** after material `conf.json` or `main.py` changes, before declaring done, or when logs show errors — `reload_emulator` then `get_emulator_logs`; fix Traceback/SyntaxError before continuing.",
+        "13) **User-provided images:** when the user offers to give/send/provide a picture or sprite (any language), load **`asset-pipeline`**, add or update manifest slots + `slot.draw(...)` as needed, and direct them to the desktop **Assets** pane (**Choose File** → **Apply Assets**) — do **not** ask them to paste the image in chat."
       );
     }
     if (hasIntake) {
@@ -368,10 +380,6 @@ export class SessionEngine {
     }
     return lines.join("\n");
   }
-
-  /** Per-turn: mirror the user's natural language in assistant-visible prose. */
-  private static readonly userLanguageMirrorSystemPrompt =
-    "Language: In explanations, status text, and questions to the user, try to match the natural language of the user's latest message. If it is mostly English or too short to tell, use English. Do not translate code, file paths, JSON keys, or conventional API or library names.";
 
   /** Extract top-level `{ ... }` spans (possibly multiple JSON objects in one reply). */
   private extractTopLevelJsonObjects(raw: string): string[] {

@@ -46,6 +46,8 @@ import {
   type IntakeSubmitQuestionAnswerResponse,
   type AgentSessionWorkspaceSummary,
   buildPostIntakeCreatorUserPrompt,
+  resolveSessionUserLocale,
+  type UserLocale,
   formatCreatorBuildPlanMessage,
   shouldIncludeCreatorBuildPlan,
   parseWidgetFontCatalogFromManifest,
@@ -986,8 +988,8 @@ function buildCreationIntakeUserPrompt(
     "**Blocking questions (`dartsnut_ask_question`):** Each call shows the matching desktop UI (Game/Widget chips or widget size chips) and **does not return** until the user answers. You **must** call this tool when you need that input and cannot take it reliably from the user's message alone — do **not** rely on hidden marker lines or prose-only prompts for those choices.",
     "Allowed `question_id` values: **`project_type`**, **`widget_display_size`** (only after `project_type` is `widget`).",
     "Procedure:",
-    "1. Infer **game** vs **widget** from the user's text when it is obvious, then call `set_project_type`. When it is **not** obvious, call **`dartsnut_ask_question`** with `question_id` **`project_type`** (then continue from the tool result).",
-    "2. For **widget** display size: supported values are exactly **128x160**, **128x128**, **128x64**, **64x32**. If the user's message already includes one of those literals, call `set_widget_size` with it. Otherwise call **`dartsnut_ask_question`** with `question_id` **`widget_display_size`** — **never** assume a default, invent a size, or call `set_widget_size` or `read_workspace_conf` until they have answered (via chips or typed follow-up). If the user's message is **only** one of those four literals (no other words), treat it as their size choice for a widget: call `set_project_type` with `widget` then `set_widget_size` with that token, then continue.",
+    "1. Infer **game** vs **widget** from the user's text **by meaning** in any supported language (English, Simplified Chinese, Traditional Chinese), then call `set_project_type`. Examples (non-exhaustive): game / 游戏 / 遊戲; widget / 小组件 / 小組件 / 組件. When intent is **not** clear, call **`dartsnut_ask_question`** with `question_id` **`project_type`** (then continue from the tool result).",
+    "2. For **widget** display size: supported values are exactly **128x160**, **128x128**, **128x64**, **64x32**. If the message includes one of those WxH literals, call `set_widget_size` with it. If the user describes dimensions in Chinese (or other wording) and the meaning maps unambiguously to one supported token, use that token. Otherwise call **`dartsnut_ask_question`** with `question_id` **`widget_display_size`** — **never** assume a default, invent a size, or call `set_widget_size` or `read_workspace_conf` until they have answered (via chips or typed follow-up). If the message is **only** one of those four literals (no other words), treat it as their size choice for a widget: call `set_project_type` with `widget` then `set_widget_size` with that token, then continue.",
     "3. Call **`read_workspace_conf`** once type (and widget size if applicable) are resolved.",
     "4. Use `guidance_notes`, `deploy_eligibility`, and `conf_status` to ask **at most one** focused follow-up when the folder is not a blank slate or types disagree.",
     "5. Close with **one short sentence** that confirms only **what was recorded** — project type, and (for widgets) the chosen display size — and that the creator phase will run next. **Do not** propose, name, brainstorm, or describe a specific widget/game concept. **Do not** offer alternatives. **Do not** end with a question. Any creative decision is the creator phase's job; if you name a concept here it becomes a conflicting second opinion.",
@@ -1904,6 +1906,14 @@ function buildWorkspaceSessionPersistence(
   return new AgentSessionPersistence(workspaceForSession!);
 }
 
+function resolvePreferredUserLocaleForSession(
+  latestUserText: string,
+  persistence?: AgentSessionPersistence
+): UserLocale {
+  const persisted = persistence?.readManifest()?.preferredUserLocale ?? null;
+  return resolveSessionUserLocale(persisted, latestUserText);
+}
+
 function buildSession(
   templateMode: PromptRequest["templateMode"] | undefined,
   extras?: {
@@ -1915,6 +1925,8 @@ function buildSession(
     skillBundleMode?: PromptRequest["templateMode"] | "creation-intake" | null;
     sessionPersistence?: AgentSessionPersistence;
     initialConversation?: ChatMessage[];
+    preferredUserLocale?: UserLocale | null;
+    latestUserTextForLocale?: string;
   }
 ): SessionEngine {
   const workspacePath = extras?.workspacePath ?? workspaceRoot;
@@ -1931,11 +1943,17 @@ function buildSession(
     extras?.skillBundleMode !== undefined ? extras.skillBundleMode : templateMode ?? null;
   const { skillPrompt, skillLibrary } = resolveSkillSessionContext(skillBundleMode);
   const intakeToolsOnly = extras?.completionTools === AGENT_CREATION_INTAKE_TOOL_SCHEMAS;
+  const preferredUserLocale =
+    extras?.preferredUserLocale ??
+    (extras?.latestUserTextForLocale != null
+      ? resolvePreferredUserLocaleForSession(extras.latestUserTextForLocale, extras.sessionPersistence)
+      : null);
   return new SessionEngine({
     provider: new ProviderClient(config),
     workspacePolicy: new WorkspacePolicy(workspacePath),
     skillPrompt,
     skillLibrary,
+    preferredUserLocale,
     assetRoots: {
       widgetFonts: path.join(repoRoot, "assets", "fonts", "widgets")
     },
@@ -2590,7 +2608,8 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         completionTools: AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
         hostIntakeToolHandler: (args) => intakeHostToolExecute(args, intakeState),
         hostAskQuestionHandler: (args) => askQuestionHostExecute(args, intakeState),
-        skillBundleMode: "creation-intake"
+        skillBundleMode: "creation-intake",
+        latestUserTextForLocale: req.prompt
       });
       terminalAgentLifecycleLog("[agent] runPrompt creation-intake start");
       const intakeUserPrompt = buildCreationIntakeUserPrompt(req.prompt, {
@@ -2626,7 +2645,8 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
           completionTools: AGENT_TOOL_SCHEMAS,
           hostIntakeToolHandler: sharedIntakeHandler,
           sessionPersistence: followUpPersistence,
-          initialConversation: followUpInitial
+          initialConversation: followUpInitial,
+          latestUserTextForLocale: req.prompt
         });
         const postIntakeUserPrompt = buildPostIntakeCreatorUserPrompt(req.prompt, { forceBuildAfterIntake: true });
         const routed = buildRoutedPrompt({
@@ -2651,7 +2671,8 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         completionTools: AGENT_TOOL_SCHEMAS,
         hostIntakeToolHandler: sharedIntakeHandler,
         sessionPersistence: persistence,
-        initialConversation
+        initialConversation,
+        latestUserTextForLocale: req.prompt
       });
       const prompt = buildRoutedPrompt(req);
       terminalAgentLifecycleLog("[agent] runPrompt start", { promptChars: prompt.length });

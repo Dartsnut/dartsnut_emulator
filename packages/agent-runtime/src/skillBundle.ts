@@ -53,6 +53,37 @@ const SKILL_INDEX_BLURB: Record<DeferredSkillId, string> = {
   "dartsnut-skill": "Legacy index — prefer granular ids above; expands to core + game + widget loops when loaded."
 };
 
+/** Illustrative user intents (any language) — not keyword matchers. */
+const SKILL_INTENT_HINT: Partial<Record<DeferredSkillId, string>> = {
+  "karpathy-guidelines":
+    "Intent: plan + verify before/while editing. Examples: how should we approach this, 先做再验证.",
+  "creator-incremental":
+    "Intent: new project scaffold order. Examples: build from scratch, 从零开始做, 新建專案.",
+  "conf-contract":
+    "Intent: create/fix `conf.json`. Examples: set up config, 配置檔, 配置文件.",
+  "pydartsnut-core":
+    "Intent: `main.py` loop / emulator run. Examples: run on device, 跑起来, 啟動模擬.",
+  "pydartsnut-game-io":
+    "Intent: dart hits, buttons, pygame game loop. Examples: read darts, 读飞镖, 讀飛鏢.",
+  "pydartsnut-widget-loop":
+    "Intent: widget PIL loop. Examples: widget main loop, 小组件主循环, 小組件主循環.",
+  "widget-fonts":
+    "Intent: custom fonts on widget. Examples: use this font, 用这个字体, 用這個字體.",
+  "game-dart-colors":
+    "Intent: color darts by player index. Examples: dart colors, 飞镖颜色, 飛鏢顏色.",
+  "dartsnut-display-mapping":
+    "Intent: layout across panels / framebuffer. Examples: split screen, 分屏布局, 分屏佈局.",
+  "asset-pipeline":
+    "Intent: sprites/icons/animations or user will supply/replace art (incl. 我来给你一个…图片 / I'll give you a picture). Use Assets pane bind + Apply — never ask to paste images in chat.",
+  "dartsnut-skill": "Intent: broad runtime overview — prefer granular ids above."
+};
+
+function formatOptionalSkillLine(id: DeferredSkillId): string {
+  const hint = SKILL_INTENT_HINT[id];
+  const blurb = SKILL_INDEX_BLURB[id];
+  return hint ? `- **${id}** — ${blurb} ${hint}` : `- **${id}** — ${blurb}`;
+}
+
 /** Legacy id `dartsnut-skill` returns concatenated granular bodies (for asset-applier and old sessions). */
 const LEGACY_SKILL_EXPANSION: Partial<Record<DeferredSkillId, readonly DeferredSkillId[]>> = {
   "dartsnut-skill": ["pydartsnut-core", "pydartsnut-game-io", "pydartsnut-widget-loop"]
@@ -149,6 +180,8 @@ function formatCreatorRouterBody(skillsDir: string, allowed: readonly DeferredSk
   return [
     "You are the Dartsnut Chat coding agent for **games** and **widgets** on Dartsnut hardware (`pydartsnut`, `conf.json`).",
     "",
+    "**Language:** Users may write in **English**, **Simplified Chinese (zh-Hans)**, or **Traditional Chinese (zh-Hant)**. Decide which **`get_dartsnut_skill`** ids to load from **meaning**, not exact keywords. Skill ids and tool names stay English.",
+    "",
     "**Skill loading (just-in-time):** Use **`get_dartsnut_skill`** before the step that needs it. Follow host **Success criteria** in the user prompt when present.",
     "",
     "**Goal-driven execution:** Load **`karpathy-guidelines`** and plan with brief steps + verify checks (optional ≤5 lines in assistant text when non-trivial). Otherwise go **tool-first** — minimal chat, no mandatory Agent-steps lists or phase announcements.",
@@ -160,8 +193,8 @@ function formatCreatorRouterBody(skillsDir: string, allowed: readonly DeferredSk
     "**Load first** (parallel `get_dartsnut_skill` calls OK) before scaffolding files:",
     ...always.map((id) => `- **${id}**`),
     "",
-    "**Load before use** (only when that step applies):",
-    ...optional.map((id) => `- **${id}** — ${SKILL_INDEX_BLURB[id]}`),
+    "**Load before use** (only when that step applies — intent examples are illustrative, not matchers):",
+    ...optional.map((id) => formatOptionalSkillLine(id)),
     "",
     `Skills directory (reasoning only; read via tool): ${skillsDir}`,
     "",
@@ -172,6 +205,8 @@ function formatCreatorRouterBody(skillsDir: string, allowed: readonly DeferredSk
 function formatAssetApplierRouterBody(skillsDir: string, allowed: readonly DeferredSkillId[]): string[] {
   return [
     "You are the Dartsnut **asset apply** agent (bind user art to existing slots).",
+    "",
+    "**Language:** Respond in the user's language (English, zh-Hans, or zh-Hant). Interpret requests by meaning; skill ids stay English.",
     "",
     "**Skill loading:** Load **`pydartsnut-core`** and **`asset-pipeline`** with **`get_dartsnut_skill`** before editing files. Do not scaffold new projects.",
     "",

@@ -633,6 +633,14 @@ function workspaceFolderBasename(workspaceRoot: string): string {
   return segments.length > 0 ? segments[segments.length - 1]! : workspaceRoot;
 }
 
+/** User Stop — no timeline bubble; abort is silent in the chat UI. */
+function isAgentStopTimelineNoise(event: AgentEvent): boolean {
+  return (
+    (event.type === "error" && event.message === "Agent stopped.") ||
+    (event.type === "status" && /^Stopping agent/i.test(event.message))
+  );
+}
+
 function toEntry(event: AgentEvent, seq: number): TimelineEntry {
   if (event.type === "intake_widget_size_prompt" || event.type === "intake_project_type_prompt") {
     throw new Error("intake_* events are handled in onAgentEvent, not the timeline");
@@ -1053,9 +1061,16 @@ export function App() {
         cancelStreamCoalesce();
         activeStreamEntryIdRef.current = null;
         activeReasoningStreamEntryIdRef.current = null;
+        if (isAgentStopTimelineNoise(event)) {
+          return;
+        }
         const seq = eventSeqRef.current;
         eventSeqRef.current += 1;
         setEntries((prev) => [...prev, toEntry(event, seq)]);
+        return;
+      }
+
+      if (isAgentStopTimelineNoise(event)) {
         return;
       }
 

@@ -64,6 +64,7 @@ import {
   AGENT_TOOL_SCHEMAS,
   AgentSessionPersistence,
   isAgentSessionPersistenceDisabledByEnv,
+  AGENT_STOPPED_MESSAGE,
   type ChatMessage
 } from "@dartsnut/agent-runtime";
 import { formatAgentEventForConsole } from "./agentEventConsole";
@@ -2002,7 +2003,8 @@ async function createWindow() {
       return;
     }
     event.preventDefault();
-    const shouldResumeQuit = appQuitRequested;
+    // `close` can run before `before-quit` on macOS; mark quit intent now so one Cmd+Q finishes after the guard.
+    appQuitRequested = true;
     void (async () => {
       const proceed = await ensureTemporaryWorkspaceResolvedForGuard("quit");
       if (!proceed) {
@@ -2010,11 +2012,13 @@ async function createWindow() {
         return;
       }
       allowWindowCloseWithoutTempPrompt = true;
-      if (shouldResumeQuit) {
+      const windowRef = win;
+      if (!windowRef || windowRef.isDestroyed()) {
         app.quit();
         return;
       }
-      win?.close();
+      // Close the window (do not call app.quit here — the first quit was aborted by preventDefault).
+      windowRef.close();
     })();
   });
   win.on("closed", () => {
@@ -2660,9 +2664,11 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     return { ok: true, sessionRouting };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown prompt error";
-    const event: AgentEvent = { type: "error", message, at: Date.now() };
-    logAgentEventToConsole(event, true);
-    sendToRenderer(IPCChannels.subscribeEvents, event);
+    if (message !== AGENT_STOPPED_MESSAGE) {
+      const event: AgentEvent = { type: "error", message, at: Date.now() };
+      logAgentEventToConsole(event, true);
+      sendToRenderer(IPCChannels.subscribeEvents, event);
+    }
     return { ok: false };
   } finally {
     emitAgentSink.flush();
@@ -2677,7 +2683,6 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
 ipcMain.handle(IPCChannels.cancelAgent, () => {
   cancelAllIntakeUserInputPending();
   sendPromptAbortController?.abort();
-  agentEventEmitter?.({ type: "status", message: "Stopping agent…", at: Date.now() });
   return { ok: true };
 });
 

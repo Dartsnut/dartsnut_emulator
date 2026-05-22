@@ -9,7 +9,7 @@ export interface FormatCreatorBuildPlanOptions {
 }
 
 /**
- * Markdown checklist injected into creator prompts (visible in chat transcript).
+ * Markdown success criteria injected into creator prompts (visible in chat transcript).
  */
 export function formatCreatorBuildPlanMessage(options: FormatCreatorBuildPlanOptions): string {
   const { templateMode, projectType, widgetSize } = options;
@@ -22,25 +22,18 @@ export function formatCreatorBuildPlanMessage(options: FormatCreatorBuildPlanOpt
         : "";
 
   const lines = [
-    "## Build guidelines (milestones — expand into your own steps)",
+    "## Success criteria",
     "",
-    "These five phases are **guidelines only**, not your full execution plan.",
+    "Plan and execute using **`get_dartsnut_skill`** (`karpathy-guidelines`, `creator-incremental`, domain skills). The host does **not** prescribe step order or phase numbers.",
     "",
-    "**Before phase 1 tools:** In the **assistant message** (visible in chat), post an **Agent steps** section: **8–15 numbered micro-steps** (each = one read → small edit round). **No code fences** in that message.",
+    `- [ ] **\`conf.json\`** valid for this ${kind} (type, size, required keys)`,
+    `- [ ] **\`main.py\`** runs in the emulator (reload + logs without Traceback / SyntaxError)`,
+    `- [ ] Behavior matches the user request (confirm with \`read_file\` and emulator behavior)`,
+    `- [ ] Logs clean before you declare done`,
     "",
-    "**After each phase:** One short line in the assistant message marking the phase done, then start the next tool round. Do not re-brainstorm or rewrite the whole plan.",
+    "**Verify:** After material changes to **`conf.json`** or **`main.py`**, or before declaring done — **`reload_emulator`** then **`get_emulator_logs`**.",
     "",
-    "**After phase 2 (iteration loop):** Every round: **`read_file` `main.py` first**, then at most **one** small **`replace_in_file`** (or one `copy_asset_file`, then read + wire next round). No tool-free rounds until a final one-sentence done status.",
-    "",
-    "**Verify run:** After phase 1, after **`main.py` stub** (phase 2), and when a phase milestone is done — **`reload_emulator`** then **`get_emulator_logs`**; fix Python errors before continuing.",
-    "",
-    "Skill loading and tool rules live in the system router and `creator-incremental` — not repeated here.",
-    "",
-    `- [ ] **Phase 0:** One-sentence ${kind} concept (assistant text only; no code fences)`,
-    "- [ ] **Phase 1:** `write_file` **`conf.json` only** → **`reload_emulator`** → **`get_emulator_logs`**",
-    `- [ ] **Phase 2:** Minimal **\`main.py\`** stub → **\`reload_emulator\`** → **\`get_emulator_logs\`** (${kind === "widget" ? "blank frame runs" : "pygame shell runs"})`,
-    "- [ ] **Phase 3:** Core behavior — repeated **`read_file` `main.py`** + one small **`replace_in_file`** per round",
-    "- [ ] **Phase 4:** Fonts / assets — **one** `copy_asset_file` per round, then read `main.py` and wire",
+    "Skill loading and editing rules live in the system router and deferred skills — not repeated here.",
     ""
   ];
   if (sizeLine) {

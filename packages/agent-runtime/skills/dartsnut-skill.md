@@ -10,7 +10,8 @@ This id is kept for **backward compatibility**. For new work, load granular skil
 | **`pydartsnut-widget-loop`** | Widget `main.py` (Pillow, no pygame) |
 | **`pydartsnut-game-io`** | Game `main.py` with hits/buttons and pygame loop |
 | **`conf-contract`** | Before `conf.json` |
-| **`creator-incremental`** | Every new creator scaffold (phased build) |
+| **`karpathy-guidelines`** | Creator execution style (goals, verify, simplicity) |
+| **`creator-incremental`** | Every new creator scaffold (constraints + verify run) |
 
 ## Also see
 

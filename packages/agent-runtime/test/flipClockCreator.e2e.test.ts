@@ -107,7 +107,7 @@ describe.skipIf(!canRunLive)("flip-clock creator live e2e", () => {
       expect(looksImplemented).toBe(true);
 
       const combinedAssistant = `${streamedAssistant}\n${response}`;
-      expect(combinedAssistant.toLowerCase()).toMatch(/agent steps|phase|conf\.json/);
+      expect(combinedAssistant.toLowerCase()).toMatch(/conf\.json|widget|clock|flip|done|ready/);
 
       const transactions = parseTransactions(tempRoot);
       const toolNames = toolCallsFromTransactions(transactions);

@@ -4,25 +4,19 @@ Load **before** `copy_asset_file` for fonts or when `main.py` loads widget fonts
 
 ## Authoritative list
 
-Use **`availableWidgetFonts`** from Creation context JSON (matches `assets/fonts/widgets/`).
+Use **`availableWidgetFonts`** from Creation context JSON: each entry has **`file`** (basename) and **`glyphWidth`** / **`glyphHeight`** (nominal glyph size in pixels; from the `WxH` in names like `10x20.pil`, or manifest bounds for fonts without that pattern).
 
 - Do **not** `read_file` on `font_manifest.json` or repo paths outside the widget workspace.
-- Requested font → exact basename from **`availableWidgetFonts`** (no invented `*-541a345d` suffixes in code paths).
-
-## Role-based defaults
-
-- Body text, labels, metadata → normal UI fonts from the list.
-- **`big_digits`** only for a **primary numeric hero** readout (full-width clock, giant countdown) — not because the widget shows time strings or colons on a label line.
-- **`date_digits`** only for a **small date stamp** in digit style — not every datetime string.
-- Paired **`colon`** font only in hero-digit layouts when present in the list.
+- Copy using the exact **`file`** basename from the catalog (no invented `*-541a345d` suffixes in code paths).
+- **You choose** which font fits the layout, widget `conf.json` size, and what you are drawing (time strings, labels, hero numbers, etc.). Do **not** default to `big_digits` just because the widget shows a clock.
 
 ## Copy convention
 
 - `copy_asset_file` → **`./fonts/`** in the widget directory (tool strips trailing `-<8 hex>` from filenames).
-- Bitmap fonts: copy **both** `.pil` and matching `.pbm`.
+- Bitmap fonts: copy **both** `.pil` and matching `.pbm` when both exist in the catalog.
 - Load from `Path(__file__).parent / "fonts"` in `main.py`.
 
-## Helper (default unless user overrides)
+## Helper (optional)
 
 ```python
 from pathlib import Path
@@ -39,4 +33,4 @@ def load_widget_font(name: str, size: int | None = None):
     return ImageFont.truetype(str(font_path), size)
 ```
 
-If a font is missing from the list, pick the closest available option and note it briefly in the final reply.
+If a font is missing from the catalog, pick the closest size match and note it briefly in the final reply.

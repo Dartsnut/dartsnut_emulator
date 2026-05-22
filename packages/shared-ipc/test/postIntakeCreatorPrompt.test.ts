@@ -23,10 +23,10 @@ describe("buildPostIntakeCreatorUserPrompt", () => {
   it("instructs build-now when intent is clear", () => {
     const prompt = buildPostIntakeCreatorUserPrompt("create a smoothing widget for me");
     expect(prompt).toContain("**Build now (mandatory):**");
-    expect(prompt).toContain("Agent steps");
-    expect(prompt).toContain("Build guidelines");
-    expect(prompt).toContain("read_file");
+    expect(prompt).toContain("karpathy-guidelines");
+    expect(prompt).toContain("Success criteria");
     expect(prompt).toContain("main.py");
+    expect(prompt).toContain("Tool-first");
     expect(prompt).toContain("creator-incremental");
     expect(prompt).toContain(POST_INTAKE_BUILD_REQUEST_PREFIX);
     expect(prompt).toContain("create a smoothing widget for me");

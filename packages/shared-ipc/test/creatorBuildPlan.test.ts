@@ -5,24 +5,21 @@ import {
 } from "../src/creatorBuildPlan";
 
 describe("formatCreatorBuildPlanMessage", () => {
-  it("includes phased guidelines and Agent steps for game creator", () => {
+  it("includes success criteria for game creator", () => {
     const msg = formatCreatorBuildPlanMessage({
       templateMode: "game-creator",
       projectType: "game"
     });
-    expect(msg).toContain("## Build guidelines");
-    expect(msg).toContain("guidelines");
-    expect(msg).toContain("Agent steps");
-    expect(msg).toContain("micro-steps");
-    expect(msg).toContain("read_file");
-    expect(msg).toContain("iteration loop");
-    expect(msg).toContain("Phase 1");
+    expect(msg).toContain("## Success criteria");
+    expect(msg).toContain("karpathy-guidelines");
+    expect(msg).toContain("creator-incremental");
+    expect(msg).toContain("does **not** prescribe step order");
     expect(msg).toContain("conf.json");
+    expect(msg).toContain("main.py");
     expect(msg).toContain("reload_emulator");
     expect(msg).toContain("get_emulator_logs");
-    expect(msg).toContain("Verify run");
-    expect(msg).toContain("Phase 2");
-    expect(msg).toContain("main.py");
+    expect(msg).not.toContain("Agent steps");
+    expect(msg).not.toContain("Phase 1");
   });
 
   it("includes widget display size when provided", () => {
@@ -32,7 +29,7 @@ describe("formatCreatorBuildPlanMessage", () => {
       widgetSize: "128x128"
     });
     expect(msg).toContain("128x128");
-    expect(msg).toContain("blank frame runs");
+    expect(msg).toContain("Success criteria");
   });
 });
 

@@ -322,22 +322,20 @@ export class SessionEngine {
       "2) For existing files, prefer replace_in_file over write_file to keep payloads small and fast.",
       "3) Use write_file only when creating a new file or when replace_in_file cannot express the change.",
       "4) Use copy_asset_file for binary assets (fonts/images) instead of read_file/write_file.",
-      "5) copy_asset_file strips a trailing -<8 hex> hash before the file extension on both source lookup and destination filenames (e.g. big_digits-ab12cd34.pil -> big_digits.pil).",
+      "5) copy_asset_file strips a trailing -<8 hex> hash before the file extension on both source lookup and destination filenames (e.g. 10x20-ab12cd34.pil -> 10x20.pil).",
       "6) Do not paste full file contents in assistant messages when you will create or edit those files with tools — use tools only.",
       "7) Do not put implementable source code in reasoning/thinking — planning and tradeoffs only; write code with file tools.",
       "8) When you have nothing more to do, reply with a single short status sentence and no tool calls."
     ];
     if (isCreatorTemplateMode(this.options.sessionTemplateMode)) {
       lines[lines.length - 1] =
-        "8) Creator builds: finish only after `read_file` on `main.py` confirms the widget/game matches the request. Until then, each round after the phase-2 stub exists must use tools — see iteration rules below.";
+        "8) Creator builds: finish only after `read_file` on `main.py` confirms the widget/game matches the request.";
       lines.push(
-        "Creator iteration (mandatory after `main.py` exists):",
-        "9) Start each round with `read_file` on `main.py` (and `conf.json` when size/config matters) before any `replace_in_file` or `write_file` in that round.",
-        "10) At most one primary `replace_in_file` per round (small hunks, roughly ≤40 changed lines). Do not implement the whole feature in one thinking block.",
-        "11) Do not end a round with only skills or reasoning — include workspace file tools (`read_file` plus `replace_in_file`, `write_file`, or `copy_asset_file`) except the single final status round when done, or a phase verify pair: `reload_emulator` then `get_emulator_logs`.",
-        "12) At most one `copy_asset_file` per round; the next round must `read_file` `main.py` and wire that asset with `replace_in_file`.",
-        "13) **Verify run:** after phase 1 (`conf.json`), after phase 2 (`main.py` stub), and when a phase milestone is done — call `reload_emulator` then `get_emulator_logs`; fix Traceback/SyntaxError before continuing.",
-        "14) If logs show runtime errors after an edit, fix with `read_file` + `replace_in_file`, then reload + logs again."
+        "Creator editing:",
+        "9) `read_file` `main.py` (and `conf.json` when size/config matters) before edits when those files exist.",
+        "10) Do not put implementable source code in reasoning — use file tools.",
+        "11) Do not end creator work with only skills or reasoning when files still need changes — use file tools or reload+logs to verify. Final round may be a one-sentence status only.",
+        "12) **Verify run:** after material `conf.json` or `main.py` changes, before declaring done, or when logs show errors — `reload_emulator` then `get_emulator_logs`; fix Traceback/SyntaxError before continuing."
       );
     }
     if (hasIntake) {

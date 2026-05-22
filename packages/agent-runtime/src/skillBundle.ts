@@ -5,6 +5,7 @@ const SKILL_SEPARATOR = "\n\n---\n\n";
 
 /** Granular + legacy skill documents exposed via `get_dartsnut_skill`. */
 export const DEFERRED_SKILL_IDS = [
+  "karpathy-guidelines",
   "creator-incremental",
   "conf-contract",
   "pydartsnut-core",
@@ -20,6 +21,7 @@ export const DEFERRED_SKILL_IDS = [
 export type DeferredSkillId = (typeof DEFERRED_SKILL_IDS)[number];
 
 export const DEFERRED_SKILL_FILE: Record<DeferredSkillId, string> = {
+  "karpathy-guidelines": "karpathy-guidelines.md",
   "creator-incremental": "creator-incremental.md",
   "conf-contract": "conf-contract.md",
   "pydartsnut-core": "pydartsnut-core.md",
@@ -33,14 +35,16 @@ export const DEFERRED_SKILL_FILE: Record<DeferredSkillId, string> = {
 };
 
 const SKILL_INDEX_BLURB: Record<DeferredSkillId, string> = {
+  "karpathy-guidelines":
+    "Goal-driven execution, simplicity, surgical edits; brief plan + verify checks; tool-first creator turns.",
   "creator-incremental":
-    "Phased scaffold (conf → stub main → iterate); anti-prose duplication; one file per tool round when new.",
+    "Dartsnut scaffold constraints (conf → stub → iterate); verify run; anti-prose duplication.",
   "conf-contract": "Root `conf.json` keys, defaults, size, `reload_emulator` after changes.",
   "pydartsnut-core":
     "`Dartsnut()`, loop guard, `update_frame_buffer`, deps boundary, Chat Start/Reload/Logs.",
   "pydartsnut-game-io": "Game pygame loop, `get_dart_hits` / `get_button_events`, forbidden APIs.",
   "pydartsnut-widget-loop": "Widget PIL loop, `widget_params`, no pygame.",
-  "widget-fonts": "`availableWidgetFonts`, `copy_asset_file` → `./fonts/`, load helper.",
+  "widget-fonts": "`availableWidgetFonts` (file + glyph size), `copy_asset_file` → `./fonts/`.",
   "game-dart-colors": "Dart index % 4 color map and RGB table for game UI.",
   "dartsnut-display-mapping":
     "Physical panels ↔ framebuffer merge, layout, fonts on canvas, clipping.",
@@ -55,6 +59,7 @@ const LEGACY_SKILL_EXPANSION: Partial<Record<DeferredSkillId, readonly DeferredS
 };
 
 const CREATOR_ALWAYS_LOAD: readonly DeferredSkillId[] = [
+  "karpathy-guidelines",
   "creator-incremental",
   "conf-contract",
   "pydartsnut-core"
@@ -144,15 +149,15 @@ function formatCreatorRouterBody(skillsDir: string, allowed: readonly DeferredSk
   return [
     "You are the Dartsnut Chat coding agent for **games** and **widgets** on Dartsnut hardware (`pydartsnut`, `conf.json`).",
     "",
-    "**Skill loading (just-in-time):** Use **`get_dartsnut_skill`** before the step that needs it. Do **not** load every skill up front. Follow the host **Build guidelines** in the user prompt when present.",
+    "**Skill loading (just-in-time):** Use **`get_dartsnut_skill`** before the step that needs it. Follow host **Success criteria** in the user prompt when present.",
     "",
-    "After required skills load, post **Agent steps** (8–15 micro-step bullets, no code) in the **assistant message**, then run tools for the current phase.",
+    "**Goal-driven execution:** Load **`karpathy-guidelines`** and plan with brief steps + verify checks (optional ≤5 lines in assistant text when non-trivial). Otherwise go **tool-first** — minimal chat, no mandatory Agent-steps lists or phase announcements.",
     "",
-    "**Iteration loop (after stub `main.py` exists):** Each round → `read_file` `main.py` first → at most one small `replace_in_file` (or one `copy_asset_file`, then read + wire next round). No tool-free build rounds until final done status.",
+    "**Editing:** `read_file` workspace files before edits. You decide batch size; prefer smaller hunks when risk is high. Do not end creator work with only prose when files still need changes.",
     "",
-    "**Verify run:** After `conf.json`, after `main.py` stub, and at phase milestones → `reload_emulator` then `get_emulator_logs` to confirm Python runs without errors.",
+    "**Verify run:** After material `conf.json` / `main.py` changes or before declaring done → `reload_emulator` then `get_emulator_logs`. Fix Traceback / SyntaxError before continuing.",
     "",
-    "**Load first** (parallel `get_dartsnut_skill` calls OK) before any `write_file` / `replace_in_file` / `copy_asset_file`:",
+    "**Load first** (parallel `get_dartsnut_skill` calls OK) before scaffolding files:",
     ...always.map((id) => `- **${id}**`),
     "",
     "**Load before use** (only when that step applies):",
@@ -160,7 +165,7 @@ function formatCreatorRouterBody(skillsDir: string, allowed: readonly DeferredSk
     "",
     `Skills directory (reasoning only; read via tool): ${skillsDir}`,
     "",
-    "After skill results return, **continue Agent steps / Build guidelines** — do not re-brainstorm a different project. Do not paste full file bodies in assistant text or in thinking; write with tools. Obey the separate system message about native tool calling (no JSON/XML tool envelopes in assistant text)."
+    "After skill results return, **continue the same concept** toward Success criteria — do not re-brainstorm a different project. Do not paste full file bodies in assistant text or in thinking; write with tools. Obey the separate system message about native tool calling (no JSON/XML tool envelopes in assistant text)."
   ];
 }
 

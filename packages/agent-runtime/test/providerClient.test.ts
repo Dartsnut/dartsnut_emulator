@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "../src/providerClient";
-import { ProviderClient } from "../src/providerClient";
+import { AGENT_STOPPED_MESSAGE, ProviderClient } from "../src/providerClient";
 
 interface CapturedRequest {
   body: {
@@ -427,5 +427,43 @@ describe("ProviderClient wire format", () => {
     expect(last?.[0]?.name).toBe("write_file");
     expect(last?.[0]?.argumentsJson).toBe('{"path":"a.txt","content":"hello"}');
     expect(result.toolCalls[0]?.argumentsJson).toBe('{"path":"a.txt","content":"hello"}');
+  });
+
+  it("aborts an in-flight streaming completion when abortSignal fires", async () => {
+    const abort = new AbortController();
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          return;
+        }
+        if (signal.aborted) {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          },
+          { once: true }
+        );
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new ProviderClient({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "test-model",
+      fetchImpl
+    });
+
+    const promise = client.complete([{ role: "user", content: "hi" }], {
+      onChunk: vi.fn(),
+      abortSignal: abort.signal
+    });
+    const rejection = expect(promise).rejects.toThrow(AGENT_STOPPED_MESSAGE);
+    abort.abort();
+    await rejection;
   });
 });

@@ -775,6 +775,36 @@ export function App() {
     reasoningPendingDeltaRef.current = "";
   }
 
+  /** End in-flight assistant/reasoning streams after Stop (pending RAF deltas are applied first). */
+  function finalizeActiveStreamingEntries() {
+    const streamId = activeStreamEntryIdRef.current;
+    const streamPending = streamPendingDeltaRef.current;
+    const reasoningId = activeReasoningStreamEntryIdRef.current;
+    const reasoningPending = reasoningPendingDeltaRef.current;
+    cancelStreamCoalesce();
+    activeStreamEntryIdRef.current = null;
+    activeReasoningStreamEntryIdRef.current = null;
+    if (!streamId && !reasoningId) {
+      return;
+    }
+    setEntries((prev) =>
+      prev.map((entry) => {
+        if (entry.id === streamId) {
+          const text =
+            streamPending.length > 0
+              ? applyStreamDeltaToEntryText(entry.text, streamPending)
+              : entry.text;
+          return { ...entry, text, streaming: false };
+        }
+        if (entry.id === reasoningId) {
+          const text = reasoningPending.length > 0 ? entry.text + reasoningPending : entry.text;
+          return { ...entry, text, streaming: false, collapsed: true };
+        }
+        return entry;
+      })
+    );
+  }
+
   function flushPendingStreamDeltas() {
     streamFlushRafRef.current = null;
     const streamId = activeStreamEntryIdRef.current;
@@ -1400,6 +1430,10 @@ export function App() {
     if (!api || !sending) {
       return;
     }
+    finalizeActiveStreamingEntries();
+    setWidgetSizePicker({ visible: false, sizes: [] });
+    setProjectTypePicker({ visible: false, types: [] });
+    setSending(false);
     try {
       await api.cancelAgent();
     } catch {

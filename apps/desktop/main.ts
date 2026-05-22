@@ -2677,6 +2677,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
 ipcMain.handle(IPCChannels.cancelAgent, () => {
   cancelAllIntakeUserInputPending();
   sendPromptAbortController?.abort();
+  agentEventEmitter?.({ type: "status", message: "Stopping agent…", at: Date.now() });
   return { ok: true };
 });
 

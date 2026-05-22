@@ -1,6 +1,6 @@
 # pydartsnut game I/O (pygame path)
 
-Load when **`main.py`** needs dart hits, buttons, or a full game loop beyond the phase-2 stub.
+Load when **`main.py`** needs dart hits, buttons, or a full game loop beyond the minimal stub.
 
 Requires **`pydartsnut-core`** and **`conf-contract`** already applied.
 

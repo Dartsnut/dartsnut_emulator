@@ -809,7 +809,7 @@ describe("SessionEngine tool loop", () => {
     const response = await engine.runPrompt(prompt, () => {});
 
     expect(provider.call).toBe(5);
-    expect(provider.agentStepsPosted).toBe(true);
+    expect(provider.toolFirstTurn).toBe(true);
     expect(provider.readBeforeEdit).toBe(true);
     expect(fs.existsSync(path.join(tempRoot, "conf.json"))).toBe(true);
     expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toContain("flip");
@@ -905,7 +905,7 @@ def main():
 
 class FlipClockPhasedBuildProvider implements CompletionProvider {
   call = 0;
-  agentStepsPosted = false;
+  toolFirstTurn = false;
   readBeforeEdit = false;
   lastMessages: ChatMessage[] = [];
 
@@ -913,10 +913,9 @@ class FlipClockPhasedBuildProvider implements CompletionProvider {
     this.call += 1;
     this.lastMessages = messages;
     if (this.call === 1) {
-      this.agentStepsPosted = true;
+      this.toolFirstTurn = true;
       return {
-        content:
-          "**Agent steps**\n1. conf.json\n2. reload\n3. stub main.py\n4. read main → flip digits\n5. copy font → read → wire",
+        content: "Scaffolding conf.json.",
         toolCalls: [
           {
             id: "call_conf",
@@ -936,7 +935,7 @@ class FlipClockPhasedBuildProvider implements CompletionProvider {
     }
     if (this.call === 2) {
       return {
-        content: "Phase 2 done — stub main.py.",
+        content: "Stub main.py.",
         toolCalls: [
           {
             id: "call_main",

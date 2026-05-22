@@ -37,12 +37,18 @@ describe("loadSkillBundle", () => {
     expect(content).toContain("Dartsnut()");
   });
 
-  it("loads creator-incremental phased scaffold skill", () => {
+  it("loads creator-incremental scaffold constraints skill", () => {
     const content = loadSkillBundle(path.join(SKILLS_DIR, "creator-incremental.md"));
-    expect(content).toContain("conf.json` only");
+    expect(content).toContain("Success criteria");
     expect(content).toContain("paste full `conf.json`");
     expect(content).toContain("Verify run");
     expect(content).toContain("get_emulator_logs");
+  });
+
+  it("loads karpathy-guidelines skill", () => {
+    const content = loadSkillBundle(path.join(SKILLS_DIR, "karpathy-guidelines.md"));
+    expect(content).toContain("Goal-Driven Execution");
+    expect(content).toContain("Dartsnut creator overlay");
   });
 
   it("loads the dartsnut display mapping skill", () => {
@@ -110,6 +116,7 @@ describe("creator skills reference asset-pipeline without duplicating rules", ()
   it("dartsnut-skill legacy index points at granular ids", () => {
     const dartsnutSkill = loadSkillBundle(path.join(SKILLS_DIR, "dartsnut-skill.md"));
     expect(dartsnutSkill).toContain("pydartsnut-core");
+    expect(dartsnutSkill).toContain("karpathy-guidelines");
     expect(dartsnutSkill).toContain("creator-incremental");
     expect(dartsnutSkill).not.toMatch(/```json[\s\S]*"slots"[\s\S]*```/);
   });
@@ -181,6 +188,7 @@ describe("deferred skill router", () => {
     ]);
     expect(allowedDeferredSkillIdsForMode("creation-intake")).toEqual([]);
     const creatorIds = allowedDeferredSkillIdsForMode("game-creator");
+    expect(creatorIds).toContain("karpathy-guidelines");
     expect(creatorIds).toContain("creator-incremental");
     expect(creatorIds).toContain("conf-contract");
     expect(creatorIds).toContain("pydartsnut-core");
@@ -194,7 +202,9 @@ describe("deferred skill router", () => {
     expect(router).toContain("creator-incremental");
     expect(router).toContain("conf-contract");
     expect(router).not.toContain("loaded **every** skill");
-    expect(router).toContain("Iteration loop");
+    expect(router).not.toContain("Agent steps");
+    expect(router).toContain("karpathy-guidelines");
+    expect(router).toContain("Goal-driven");
     expect(router).toContain("read_file");
     expect(router).toContain("Verify run");
     expect(router).toContain("get_emulator_logs");

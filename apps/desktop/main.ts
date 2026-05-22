@@ -47,7 +47,9 @@ import {
   type AgentSessionWorkspaceSummary,
   buildPostIntakeCreatorUserPrompt,
   formatCreatorBuildPlanMessage,
-  shouldIncludeCreatorBuildPlan
+  shouldIncludeCreatorBuildPlan,
+  parseWidgetFontCatalogFromManifest,
+  type WidgetFontCatalogEntry
 } from "@dartsnut/shared-ipc";
 import {
   loadProviderConfig,
@@ -1050,16 +1052,13 @@ function buildRoutedPrompt(request: PromptRequest): string {
   const templatePath = resolveCreatorTemplatePath(templateMode);
   const template = fs.readFileSync(templatePath, "utf-8");
   const widgetFontManifestPath = path.join(repoRoot, widgetFontManifestRelativePath);
-  let availableWidgetFonts: string[] = [];
+  let availableWidgetFonts: WidgetFontCatalogEntry[] = [];
   if (templateMode === "widget-creator" && fs.existsSync(widgetFontManifestPath)) {
     try {
-      const manifest = JSON.parse(fs.readFileSync(widgetFontManifestPath, "utf-8")) as {
-        fonts?: Array<{ fileName?: string }>;
-      };
-      availableWidgetFonts = (manifest.fonts ?? [])
-        .map((font) => font.fileName)
-        .filter((name): name is string => typeof name === "string")
-        .sort((a, b) => a.localeCompare(b));
+      const manifest = JSON.parse(fs.readFileSync(widgetFontManifestPath, "utf-8")) as Parameters<
+        typeof parseWidgetFontCatalogFromManifest
+      >[0];
+      availableWidgetFonts = parseWidgetFontCatalogFromManifest(manifest);
     } catch {
       availableWidgetFonts = [];
     }

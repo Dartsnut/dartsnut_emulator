@@ -4,13 +4,14 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { transcriptUserBubbleText, type AgentEvent } from "@dartsnut/shared-ipc";
 import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
-import type {
-  ChatMessage,
-  CompletionOptions,
-  CompletionProvider,
-  CompletionResult,
-  ParsedToolCall,
-  ToolCallEnvelope
+import {
+  AGENT_STOPPED_MESSAGE,
+  type ChatMessage,
+  type CompletionOptions,
+  type CompletionProvider,
+  type CompletionResult,
+  type ParsedToolCall,
+  type ToolCallEnvelope
 } from "./providerClient";
 import type { DeferredSkillId } from "./skillBundle";
 import { DEFERRED_SKILL_IDS, readDeferredSkillMarkdown } from "./skillBundle";
@@ -32,6 +33,12 @@ import { WorkspacePolicy } from "./workspacePolicy";
 
 /** Cap read_file tool payloads to limit conversation growth and main-thread JSON work. */
 const MAX_READ_FILE_TOOL_CHARS = 48_000;
+
+function throwIfAborted(abortSignal?: AbortSignal): void {
+  if (abortSignal?.aborted) {
+    throw new Error(AGENT_STOPPED_MESSAGE);
+  }
+}
 
 function isDeferredSkillId(value: unknown): value is DeferredSkillId {
   return typeof value === "string" && (DEFERRED_SKILL_IDS as readonly string[]).includes(value);
@@ -968,7 +975,10 @@ export class SessionEngine {
     return { tool: toolCall.name, ...(parsedArgs as Record<string, unknown>) };
   }
 
-  private async processNativeToolCalls(completion: CompletionResult): Promise<{
+  private async processNativeToolCalls(
+    completion: CompletionResult,
+    abortSignal?: AbortSignal
+  ): Promise<{
     assistantMessage: ChatMessage;
     toolMessages: ChatMessage[];
     successfulActions: ToolAction[];
@@ -985,6 +995,7 @@ export class SessionEngine {
     }> = [];
 
     for (const toolCall of completion.toolCalls) {
+      throwIfAborted(abortSignal);
       let action: ToolAction | null = null;
       let result: string;
       try {
@@ -992,6 +1003,9 @@ export class SessionEngine {
         action = this.normalizeAction(rawAction);
         result = await this.executeAction(action);
       } catch (error) {
+        if (error instanceof Error && error.message === AGENT_STOPPED_MESSAGE) {
+          throw error;
+        }
         const message = error instanceof Error ? error.message : "Unknown tool error";
         result = JSON.stringify({ ok: false, error: message });
       }
@@ -1073,9 +1087,7 @@ export class SessionEngine {
 
     for (let step = 0; step < maxToolRounds; step += 1) {
       let filesWrittenThisCompletion = 0;
-      if (abortSignal?.aborted) {
-        throw new Error("Agent stopped.");
-      }
+      throwIfAborted(abortSignal);
       this.emitTransaction({
         type: "completion.request",
         correlationId: turnCorrelationId,
@@ -1088,6 +1100,7 @@ export class SessionEngine {
       let assistantStreamContent = "";
       const completion = await this.options.provider.complete(messages, {
         tools: completionTools,
+        abortSignal,
         onChunk: (delta) => {
           assistantStreamContent += delta;
           onEvent({ type: "stream", delta, at: Date.now() });
@@ -1141,9 +1154,10 @@ export class SessionEngine {
       });
 
       if (completion.toolCalls.length > 0) {
+        throwIfAborted(abortSignal);
         await this.finalizeNativeFileToolPreview(completion, liveToolEnvelopeStreamed, onEvent);
         const { assistantMessage, toolMessages, successfulActions, outcomes } =
-          await this.processNativeToolCalls(completion);
+          await this.processNativeToolCalls(completion, abortSignal);
         for (const outcome of outcomes) {
           if (outcome.action && isFileMutationToolName(outcome.toolCall.name)) {
             filesWrittenThisCompletion += 1;
@@ -1217,6 +1231,7 @@ export class SessionEngine {
         return finalText;
       }
 
+      throwIfAborted(abortSignal);
       await this.emitUiEnvelope(actions, merged.responseText, onEvent);
 
       for (const action of actions) {
@@ -1243,16 +1258,19 @@ export class SessionEngine {
         });
       }
 
-      const toolResults = await Promise.all(
-        actions.map(async (action) => {
-          try {
-            return { action, result: await this.executeAction(action) };
-          } catch (error) {
-            const message = error instanceof Error ? error.message : "Unknown tool error";
-            return { action, result: JSON.stringify({ ok: false, error: message }) };
+      const toolResults: Array<{ action: ToolAction; result: string }> = [];
+      for (const action of actions) {
+        throwIfAborted(abortSignal);
+        try {
+          toolResults.push({ action, result: await this.executeAction(action) });
+        } catch (error) {
+          if (error instanceof Error && error.message === AGENT_STOPPED_MESSAGE) {
+            throw error;
           }
-        })
-      );
+          const message = error instanceof Error ? error.message : "Unknown tool error";
+          toolResults.push({ action, result: JSON.stringify({ ok: false, error: message }) });
+        }
+      }
 
       for (const row of toolResults) {
         this.emitTransaction({

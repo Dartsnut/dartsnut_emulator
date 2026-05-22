@@ -3,7 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
-import type { ChatMessage, CompletionOptions, CompletionProvider, CompletionResult } from "../src/providerClient";
+import {
+  AGENT_STOPPED_MESSAGE,
+  type ChatMessage,
+  type CompletionOptions,
+  type CompletionProvider,
+  type CompletionResult
+} from "../src/providerClient";
 import { SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
@@ -1014,6 +1020,53 @@ class CountingTextProvider implements CompletionProvider {
     return textOnly(`Reply ${this.calls}`);
   }
 }
+
+class BlockingUntilAbortProvider implements CompletionProvider {
+  calls = 0;
+
+  async complete(_messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult> {
+    this.calls += 1;
+    const signal = options?.abortSignal;
+    await new Promise<CompletionResult>((_resolve, reject) => {
+      if (!signal) {
+        reject(new Error("expected abortSignal"));
+        return;
+      }
+      if (signal.aborted) {
+        reject(new Error(AGENT_STOPPED_MESSAGE));
+        return;
+      }
+      signal.addEventListener(
+        "abort",
+        () => {
+          reject(new Error(AGENT_STOPPED_MESSAGE));
+        },
+        { once: true }
+      );
+    });
+    return textOnly("never");
+  }
+}
+
+describe("SessionEngine abort", () => {
+  it("stops runPrompt when abortSignal fires during provider.complete", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-abort-"));
+    const abort = new AbortController();
+    const provider = new BlockingUntilAbortProvider();
+    const engine = new SessionEngine({
+      provider,
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant.",
+      skipInitialWorkspaceResolve: true
+    });
+
+    const run = engine.runPrompt("stop me", () => {}, abort.signal);
+    const rejection = expect(run).rejects.toThrow(AGENT_STOPPED_MESSAGE);
+    abort.abort();
+    await rejection;
+    expect(provider.calls).toBe(1);
+  });
+});
 
 describe("SessionEngine workspace persistence", () => {
   it("sends prior user turns on the next runPrompt when persistence is enabled", async () => {

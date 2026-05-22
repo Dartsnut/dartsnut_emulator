@@ -49,8 +49,13 @@ export interface CompletionResult {
   usedHttpStream?: boolean;
 }
 
+/** Thrown when the desktop Stop control aborts an in-flight completion. */
+export const AGENT_STOPPED_MESSAGE = "Agent stopped.";
+
 export interface CompletionOptions {
   tools?: ChatCompletionTool[];
+  /** User Stop — combined with the request timeout; aborts the OpenAI HTTP call when fired. */
+  abortSignal?: AbortSignal;
   onChunk?: (delta: string) => void;
   /** Thinking-mode: stream wire `reasoning_content` deltas (and one-shot flush in non-streaming path). */
   onReasoningChunk?: (delta: string) => void;
@@ -122,6 +127,27 @@ function readReasoningDelta(delta: unknown): string {
 /** Default cap so a hung provider does not leave the UI stuck forever. */
 const DEFAULT_CHAT_COMPLETION_TIMEOUT_MS = 180_000;
 
+function resolveRequestSignal(userAbort: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  if (!userAbort) {
+    return timeout;
+  }
+  return AbortSignal.any([timeout, userAbort]);
+}
+
+function throwIfUserAborted(userAbort: AbortSignal | undefined): void {
+  if (userAbort?.aborted) {
+    throw new Error(AGENT_STOPPED_MESSAGE);
+  }
+}
+
+function rethrowCompletionError(error: unknown, userAbort: AbortSignal | undefined): never {
+  if (userAbort?.aborted) {
+    throw new Error(AGENT_STOPPED_MESSAGE);
+  }
+  throw error;
+}
+
 /**
  * OpenAI Chat Completions client (official `openai` SDK). Compatible with OpenAI and
  * OpenAI-compatible gateways (e.g. Xiaomi MiMo token plan).
@@ -152,9 +178,9 @@ export class ProviderClient implements CompletionProvider {
   }
 
   async complete(messages: ChatMessage[], options: CompletionOptions = {}): Promise<CompletionResult> {
-    const { tools, onChunk, onReasoningChunk, onToolCallProgress } = options;
+    const { tools, onChunk, onReasoningChunk, onToolCallProgress, abortSignal: userAbort } = options;
     const timeoutMs = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS) || DEFAULT_CHAT_COMPLETION_TIMEOUT_MS;
-    const signal = AbortSignal.timeout(timeoutMs);
+    const signal = resolveRequestSignal(userAbort, timeoutMs);
     const requestMessages = ProviderClient.toWireMessages(messages);
 
     const useStreaming = Boolean(onChunk || onReasoningChunk || onToolCallProgress);
@@ -166,88 +192,93 @@ export class ProviderClient implements CompletionProvider {
       ...(tools && tools.length > 0 ? { tools, tool_choice: "auto" as const } : {})
     };
 
-    if (!useStreaming) {
-      const response = await this.openai.chat.completions.create({ ...common, stream: false }, { signal });
-      const message = response.choices[0]?.message;
-      const content = typeof message?.content === "string" ? message.content : "";
-      const toolCalls = ProviderClient.normalizeToolCallsMessage(
-        message?.tool_calls as OpenAIToolCallMessage[] | undefined
-      );
-      const trimmed = content.trim();
-      const reasoningContent = readReasoningContent(message);
-      if (onReasoningChunk && reasoningContent !== undefined && reasoningContent.length > 0) {
-        onReasoningChunk(reasoningContent);
-      }
-      if (onChunk && trimmed.length > 0) {
-        onChunk(trimmed);
-      }
-      return {
-        content: trimmed,
-        toolCalls,
-        usedHttpStream: false,
-        ...(reasoningContent !== undefined ? { reasoningContent } : {})
-      };
-    }
-
-    const notifyChunk = onChunk ?? ((_delta: string) => {});
-    const notifyReasoning = onReasoningChunk;
-    const stream = await this.openai.chat.completions.create({ ...common, stream: true }, { signal });
-    let fullText = "";
-    let fullReasoning = "";
-    const toolCallAccumulators = new Map<number, StreamingToolCallAccumulator>();
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
-      if (!delta) {
-        continue;
-      }
-      const contentDelta = delta.content ?? "";
-      if (contentDelta) {
-        fullText += contentDelta;
-        notifyChunk(contentDelta);
-      }
-      const reasoningDelta = readReasoningDelta(delta);
-      if (reasoningDelta) {
-        fullReasoning += reasoningDelta;
-        if (notifyReasoning) {
-          notifyReasoning(reasoningDelta);
+    try {
+      if (!useStreaming) {
+        const response = await this.openai.chat.completions.create({ ...common, stream: false }, { signal });
+        const message = response.choices[0]?.message;
+        const content = typeof message?.content === "string" ? message.content : "";
+        const toolCalls = ProviderClient.normalizeToolCallsMessage(
+          message?.tool_calls as OpenAIToolCallMessage[] | undefined
+        );
+        const trimmed = content.trim();
+        const reasoningContent = readReasoningContent(message);
+        if (onReasoningChunk && reasoningContent !== undefined && reasoningContent.length > 0) {
+          onReasoningChunk(reasoningContent);
         }
+        if (onChunk && trimmed.length > 0) {
+          onChunk(trimmed);
+        }
+        return {
+          content: trimmed,
+          toolCalls,
+          usedHttpStream: false,
+          ...(reasoningContent !== undefined ? { reasoningContent } : {})
+        };
       }
-      if (Array.isArray(delta.tool_calls)) {
-        ProviderClient.mergeToolCallDeltas(toolCallAccumulators, delta.tool_calls as OpenAIToolCallDelta[]);
-        if (onToolCallProgress) {
-          const orderedIndices = Array.from(toolCallAccumulators.keys()).sort((a, b) => a - b);
-          const progressCalls: ParsedToolCall[] = orderedIndices
-            .map((index) => toolCallAccumulators.get(index)!)
-            .filter((entry) => entry.name.length > 0)
-            .map((entry, position) => ({
-              id: entry.id || `call_${position}`,
-              name: entry.name,
-              argumentsJson: entry.argumentsJson
-            }));
-          if (progressCalls.length > 0) {
-            onToolCallProgress(progressCalls);
+
+      const notifyChunk = onChunk ?? ((_delta: string) => {});
+      const notifyReasoning = onReasoningChunk;
+      const stream = await this.openai.chat.completions.create({ ...common, stream: true }, { signal });
+      let fullText = "";
+      let fullReasoning = "";
+      const toolCallAccumulators = new Map<number, StreamingToolCallAccumulator>();
+      for await (const chunk of stream) {
+        throwIfUserAborted(userAbort);
+        const delta = chunk.choices[0]?.delta;
+        if (!delta) {
+          continue;
+        }
+        const contentDelta = delta.content ?? "";
+        if (contentDelta) {
+          fullText += contentDelta;
+          notifyChunk(contentDelta);
+        }
+        const reasoningDelta = readReasoningDelta(delta);
+        if (reasoningDelta) {
+          fullReasoning += reasoningDelta;
+          if (notifyReasoning) {
+            notifyReasoning(reasoningDelta);
+          }
+        }
+        if (Array.isArray(delta.tool_calls)) {
+          ProviderClient.mergeToolCallDeltas(toolCallAccumulators, delta.tool_calls as OpenAIToolCallDelta[]);
+          if (onToolCallProgress) {
+            const orderedIndices = Array.from(toolCallAccumulators.keys()).sort((a, b) => a - b);
+            const progressCalls: ParsedToolCall[] = orderedIndices
+              .map((index) => toolCallAccumulators.get(index)!)
+              .filter((entry) => entry.name.length > 0)
+              .map((entry, position) => ({
+                id: entry.id || `call_${position}`,
+                name: entry.name,
+                argumentsJson: entry.argumentsJson
+              }));
+            if (progressCalls.length > 0) {
+              onToolCallProgress(progressCalls);
+            }
           }
         }
       }
+
+      const orderedIndices = Array.from(toolCallAccumulators.keys()).sort((a, b) => a - b);
+      const toolCalls: ParsedToolCall[] = orderedIndices
+        .map((index) => toolCallAccumulators.get(index)!)
+        .filter((entry) => entry.name.length > 0)
+        .map((entry, position) => ({
+          id: entry.id || `call_${position}`,
+          name: entry.name,
+          argumentsJson: entry.argumentsJson
+        }));
+
+      const trimmed = fullText.trim();
+      return {
+        content: trimmed,
+        toolCalls,
+        usedHttpStream: true,
+        ...(fullReasoning.length > 0 ? { reasoningContent: fullReasoning } : {})
+      };
+    } catch (error) {
+      rethrowCompletionError(error, userAbort);
     }
-
-    const orderedIndices = Array.from(toolCallAccumulators.keys()).sort((a, b) => a - b);
-    const toolCalls: ParsedToolCall[] = orderedIndices
-      .map((index) => toolCallAccumulators.get(index)!)
-      .filter((entry) => entry.name.length > 0)
-      .map((entry, position) => ({
-        id: entry.id || `call_${position}`,
-        name: entry.name,
-        argumentsJson: entry.argumentsJson
-      }));
-
-    const trimmed = fullText.trim();
-    return {
-      content: trimmed,
-      toolCalls,
-      usedHttpStream: true,
-      ...(fullReasoning.length > 0 ? { reasoningContent: fullReasoning } : {})
-    };
   }
 
   private static toWireMessages(messages: ChatMessage[]): ChatCompletionMessageParam[] {

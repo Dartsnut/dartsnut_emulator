@@ -1,5 +1,5 @@
 # dartsnut_emulator
-The dartsnut_emulator module allows developers to create and test widgets and games on Windows, simulating the environment of Dartsnut hardware. This tool streamlines development and debugging before deploying to actual devices.
+The dartsnut_emulator module allows developers to create and test widgets and games on macOS, Linux, or Windows, simulating the environment of Dartsnut hardware. This tool streamlines development and debugging before deploying to actual devices.
 
 ## Installation
 
@@ -56,4 +56,3 @@ python emulator.py --path "example/simple_clock_128_128" --params '{\"city\":\"c
 python emulator.py --path "example/simple_weather_128_160" --params '{\"city\":\"chicago\"}'
 ```
 ![Alt text](example/simple_weather_demo_image.png)
-

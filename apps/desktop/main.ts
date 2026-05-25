@@ -201,6 +201,12 @@ function clearEmulatorLogRing(): void {
   emulatorLogRing = [];
 }
 
+/** Clear agent log ring and emulator panel logs before each widget reload. */
+function clearEmulatorLogsForReload(): void {
+  clearEmulatorLogRing();
+  sendToRenderer(EMULATOR_IPC_CHANNELS.emulatorLogsClear);
+}
+
 /** Agent tool `get_emulator_logs`: tail of buffered Python bridge stdout/stderr + emulator status. */
 function executeHostGetEmulatorLogsForAgent(args?: { max_lines?: number }): string {
   const requested =
@@ -243,6 +249,7 @@ async function executeHostReloadEmulatorForAgent(): Promise<string> {
   const setPath: EmulatorCommand = { type: "set_path", path: selectedPath };
   const reload: EmulatorCommand = { type: "reload_widget" };
   bridgeProcess.stdin.write(`${JSON.stringify({ command: setPath })}\n`);
+  clearEmulatorLogsForReload();
   bridgeProcess.stdin.write(`${JSON.stringify({ command: reload })}\n`);
   lastWidgetDir = selectedPath;
   writeEmulatorState();
@@ -782,6 +789,7 @@ function applyWorkspaceRoot(selectedPath: string): void {
     bridgeProcess.stdin.write(
       `${JSON.stringify({ command: { type: "set_path", path: selectedPath } satisfies EmulatorCommand })}\n`,
     );
+    clearEmulatorLogsForReload();
     bridgeProcess.stdin.write(
       `${JSON.stringify({ command: { type: "reload_widget" } satisfies EmulatorCommand })}\n`,
     );
@@ -2724,6 +2732,9 @@ ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorCommand, async (_event, command: Em
       commandToSend = { type: "set_path", path: selectedPath };
       lastWidgetDir = selectedPath;
       writeEmulatorState();
+    }
+    if (commandToSend.type === "reload_widget") {
+      clearEmulatorLogsForReload();
     }
     bridgeProcess.stdin.write(`${JSON.stringify({ command: commandToSend })}\n`);
   } else {

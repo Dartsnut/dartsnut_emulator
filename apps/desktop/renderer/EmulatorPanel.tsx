@@ -365,10 +365,17 @@ export function EmulatorPanel({
   }, [logsPaused]);
 
   useEffect(() => {
-    return window.dartsnutApi.onSessionReset(() => {
+    const stopSessionReset = window.dartsnutApi.onSessionReset(() => {
       setEmulatorLogs([]);
       wipePreviewCanvas();
     });
+    const stopLogsClear = window.dartsnutApi.onEmulatorLogsClear?.(() => {
+      setEmulatorLogs([]);
+    });
+    return () => {
+      stopSessionReset();
+      stopLogsClear?.();
+    };
   }, []);
 
   useEffect(() => {

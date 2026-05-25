@@ -128,6 +128,11 @@ const api = {
     ipcRenderer.on(EMULATOR_IPC_CHANNELS.emulatorLog, handler);
     return () => ipcRenderer.removeListener(EMULATOR_IPC_CHANNELS.emulatorLog, handler);
   },
+  onEmulatorLogsClear: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on(EMULATOR_IPC_CHANNELS.emulatorLogsClear, handler);
+    return () => ipcRenderer.removeListener(EMULATOR_IPC_CHANNELS.emulatorLogsClear, handler);
+  },
   deployGetEligibility: () =>
     ipcRenderer.invoke(IPCChannels.deployGetEligibility) as Promise<DeployEligibility>,
   onDeployEligibility: (listener: (eligibility: DeployEligibility) => void) => {

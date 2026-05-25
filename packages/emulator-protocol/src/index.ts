@@ -6,6 +6,8 @@ export const EMULATOR_IPC_CHANNELS = {
   emulatorState: "emulator:state",
   emulatorFrame: "emulator:frame",
   emulatorLog: "emulator:log",
+  /** Main → renderer: clear buffered log UI before a widget reload. */
+  emulatorLogsClear: "emulator:logs-clear",
 } as const;
 
 export type EmulatorCommand =

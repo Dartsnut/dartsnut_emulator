@@ -72,6 +72,7 @@ declare global {
       onEmulatorState: (listener: (state: EmulatorStateSnapshot) => void) => () => void;
       onEmulatorFrame: (listener: (frame: EmulatorFrame) => void) => () => void;
       onEmulatorLog: (listener: (entry: EmulatorLogEntry) => void) => () => void;
+      onEmulatorLogsClear: (listener: () => void) => () => void;
       deployGetEligibility: () => Promise<DeployEligibility>;
       onDeployEligibility: (listener: (eligibility: DeployEligibility) => void) => () => void;
       deployConnect: (request: DeployConnectRequest) => Promise<DeployConnectResponse>;

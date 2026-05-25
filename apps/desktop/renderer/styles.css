@@ -173,6 +173,70 @@ body {
   overflow-x: hidden;
 }
 
+/* write_file / replace_in_file streaming tail — bottom-anchored like thought preview */
+.file-rolling-preview.rolling-preview {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: calc(1.5lh * 8);
+  overflow: hidden;
+  background: var(--color-rolling-bg);
+  border: 1px solid var(--color-rolling-border);
+  border-radius: 8px;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.file-rolling-preview__body {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 0;
+}
+
+.file-rolling-preview__line {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 6px;
+  align-items: start;
+  padding: 1px 8px 1px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.file-rolling-preview__line--add {
+  background: var(--color-diff-line-add-bg);
+}
+
+.file-rolling-preview__line--remove {
+  background: var(--color-diff-line-remove-bg);
+}
+
+.file-rolling-preview__line--context {
+  background: var(--color-diff-line-context-bg);
+}
+
+.file-rolling-preview__prefix {
+  text-align: center;
+  opacity: 0.9;
+  user-select: none;
+}
+
+.file-rolling-preview__line--add .file-rolling-preview__prefix {
+  color: var(--color-diff-add);
+}
+
+.file-rolling-preview__line--remove .file-rolling-preview__prefix {
+  color: var(--color-diff-remove);
+}
+
+.file-rolling-preview__code {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--color-entry-json-text);
+}
+
 .entry-action--file-summary {
   border: none;
   background: transparent;

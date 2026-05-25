@@ -949,13 +949,49 @@ export class SessionEngine {
     this.streamNativeToolEnvelopePreview(completion.content, previewEnvelope, onEvent);
   }
 
+  /** Max prior file size embedded in live write_file preview envelopes. */
+  private static readonly LIVE_PREVIOUS_CONTENT_MAX_BYTES = 256 * 1024;
+
+  private cacheLivePreviousContentForToolCalls(
+    toolCalls: ParsedToolCall[],
+    cache: Map<string, string>
+  ): void {
+    for (const toolCall of toolCalls) {
+      if (toolCall.name !== "write_file") {
+        continue;
+      }
+      const partial = parsePartialFileToolArguments(toolCall.name, toolCall.argumentsJson);
+      if (!partial?.path || cache.has(partial.path)) {
+        continue;
+      }
+      try {
+        const filePath = this.options.workspacePolicy.resolveWithinRoot(partial.path);
+        const stat = fs.statSync(filePath);
+        if (!stat.isFile() || stat.size > SessionEngine.LIVE_PREVIOUS_CONTENT_MAX_BYTES) {
+          continue;
+        }
+        cache.set(partial.path, fs.readFileSync(filePath, "utf-8"));
+      } catch {
+        // New file or unreadable path — no previousContent for preview.
+      }
+    }
+  }
+
   private emitLiveFileToolEnvelopeProgress(
     toolCalls: ParsedToolCall[],
     responseLead: string,
     streamedChars: { count: number; lastTail?: string },
+    livePreviousByPath: Map<string, string>,
     onEvent: (event: AgentEvent) => void
   ): boolean {
-    const envelope = buildStreamingFileToolEnvelope(toolCalls, responseLead);
+    const envelopeOptions: BuildStreamingFileToolEnvelopeOptions | undefined =
+      livePreviousByPath.size > 0 ? { includePreviousContent: true } : undefined;
+    const envelope = buildStreamingFileToolEnvelope(
+      toolCalls,
+      responseLead,
+      (relativePath) => livePreviousByPath.get(relativePath),
+      envelopeOptions
+    );
     if (!envelope) {
       return false;
     }
@@ -1105,6 +1141,7 @@ export class SessionEngine {
 
       let reasoningChunkEvents = 0;
       const liveToolEnvelopeStreamed: { count: number; lastTail?: string } = { count: 0 };
+      const livePreviousByPath = new Map<string, string>();
       let assistantStreamContent = "";
       const completion = await this.options.provider.complete(messages, {
         tools: completionTools,
@@ -1120,10 +1157,12 @@ export class SessionEngine {
           onEvent({ type: "reasoning_stream", delta, at: Date.now() });
         },
         onToolCallProgress: (toolCalls) => {
+          this.cacheLivePreviousContentForToolCalls(toolCalls, livePreviousByPath);
           this.emitLiveFileToolEnvelopeProgress(
             toolCalls,
             assistantStreamContent,
             liveToolEnvelopeStreamed,
+            livePreviousByPath,
             onEvent
           );
         }

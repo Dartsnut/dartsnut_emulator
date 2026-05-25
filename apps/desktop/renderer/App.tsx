@@ -15,9 +15,17 @@ import {
   type MainProcessConsoleMirrorPayload,
   stripIntakeUiMarkers,
   transcriptUserBubbleText,
-  type WidgetSize
+  type WidgetSize,
+  TOOL_ENVELOPE_STREAM_REPLACE
 } from "@dartsnut/shared-ipc";
 import { applyStreamDeltaToEntryText } from "./applyStreamDelta";
+import {
+  entryTextHasFileWriteActions,
+  mergeAgentStreamEntryOnFinal,
+  shouldClearFileWritePreviewOnStatus,
+  shouldShowFileEditSummary,
+  shouldShowRollingFilePreview
+} from "./fileWritePreviewPhase";
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { isStructuredAgentEnvelopeText } from "../agentEventConsole";
 import { cn } from "./cn";
@@ -52,6 +60,8 @@ interface TimelineEntry {
   role: "user" | "agent" | "status" | "error" | "thinking";
   text: string;
   streaming?: boolean;
+  /** Keep write_file / replace_in_file rolling preview after stream ends until tool status. */
+  fileWritePreview?: boolean;
   /** Thinking blocks: when true, body is hidden unless streaming. */
   collapsed?: boolean;
 }
@@ -568,6 +578,54 @@ function formatAgentMessage(text: string): FormattedAgentMessage {
   return parsePartialAgentMessage(text);
 }
 
+function diffLinePrefix(kind: DiffLine["kind"]): string {
+  if (kind === "add") {
+    return "+";
+  }
+  if (kind === "remove") {
+    return "-";
+  }
+  return " ";
+}
+
+function FileRollingPreview(props: { lines: DiffLine[] }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const peakHeightRef = useRef(0);
+  const [minHeightPx, setMinHeightPx] = useState<number | undefined>(undefined);
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) {
+      return;
+    }
+    const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight);
+    const capPx = Number.isFinite(lineHeight) ? lineHeight * STREAM_PREVIEW_LINES : el.scrollHeight;
+    const measured = Math.min(el.scrollHeight, capPx);
+    if (measured > peakHeightRef.current) {
+      peakHeightRef.current = measured;
+      setMinHeightPx(measured);
+    }
+  }, [props.lines]);
+
+  const style: CSSProperties | undefined =
+    minHeightPx !== undefined ? { minHeight: minHeightPx } : undefined;
+
+  return (
+    <div ref={containerRef} className="file-rolling-preview rolling-preview" style={style}>
+      <div className="file-rolling-preview__body">
+        {props.lines.map((line, idx) => (
+          <div key={idx} className={`file-rolling-preview__line file-rolling-preview__line--${line.kind}`}>
+            <span className="file-rolling-preview__prefix" aria-hidden>
+              {diffLinePrefix(line.kind)}
+            </span>
+            <code className="file-rolling-preview__code">{line.text}</code>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ThinkingRollingPreview(props: { source: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const peakHeightRef = useRef(0);
@@ -707,6 +765,7 @@ export function App() {
   const reasoningPendingDeltaRef = useRef("");
   const reasoningStreamFlushRafRef = useRef<number | null>(null);
   const streamAutoscrollGateRef = useRef(0);
+  const fileWritePreviewClearRafRef = useRef<number | null>(null);
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
   const lastAgentSessionHydrateKeyRef = useRef<string>("");
@@ -770,12 +829,19 @@ export function App() {
     timeline.scrollTop = timeline.scrollHeight;
   }
 
-  function cancelStreamCoalesce() {
+  /** Take queued stream deltas (cancels RAF) without discarding unapplied content. */
+  function takeStreamPendingDeltas(): string {
     if (streamFlushRafRef.current !== null) {
       cancelAnimationFrame(streamFlushRafRef.current);
       streamFlushRafRef.current = null;
     }
+    const pending = streamPendingDeltaRef.current;
     streamPendingDeltaRef.current = "";
+    return pending;
+  }
+
+  function cancelStreamCoalesce() {
+    takeStreamPendingDeltas();
     if (reasoningStreamFlushRafRef.current !== null) {
       cancelAnimationFrame(reasoningStreamFlushRafRef.current);
       reasoningStreamFlushRafRef.current = null;
@@ -786,10 +852,14 @@ export function App() {
   /** End in-flight assistant/reasoning streams after Stop (pending RAF deltas are applied first). */
   function finalizeActiveStreamingEntries() {
     const streamId = activeStreamEntryIdRef.current;
-    const streamPending = streamPendingDeltaRef.current;
+    const streamPending = takeStreamPendingDeltas();
     const reasoningId = activeReasoningStreamEntryIdRef.current;
     const reasoningPending = reasoningPendingDeltaRef.current;
-    cancelStreamCoalesce();
+    if (reasoningStreamFlushRafRef.current !== null) {
+      cancelAnimationFrame(reasoningStreamFlushRafRef.current);
+      reasoningStreamFlushRafRef.current = null;
+    }
+    reasoningPendingDeltaRef.current = "";
     activeStreamEntryIdRef.current = null;
     activeReasoningStreamEntryIdRef.current = null;
     if (!streamId && !reasoningId) {
@@ -798,11 +868,13 @@ export function App() {
     setEntries((prev) =>
       prev.map((entry) => {
         if (entry.id === streamId) {
-          const text =
-            streamPending.length > 0
-              ? applyStreamDeltaToEntryText(entry.text, streamPending)
-              : entry.text;
-          return { ...entry, text, streaming: false };
+          const merged = mergeAgentStreamEntryOnFinal(entry.text, streamPending, "");
+          return {
+            ...entry,
+            text: merged.text,
+            streaming: false,
+            fileWritePreview: false
+          };
         }
         if (entry.id === reasoningId) {
           const text = reasoningPending.length > 0 ? entry.text + reasoningPending : entry.text;
@@ -811,6 +883,14 @@ export function App() {
         return entry;
       })
     );
+  }
+
+  function patchAgentStreamEntry(entry: TimelineEntry, newText: string): TimelineEntry {
+    const next: TimelineEntry = { ...entry, text: newText, streaming: true };
+    if (entryTextHasFileWriteActions(newText)) {
+      next.fileWritePreview = true;
+    }
+    return next;
   }
 
   function flushPendingStreamDeltas() {
@@ -823,9 +903,7 @@ export function App() {
     }
     setEntries((prev) =>
       prev.map((entry) =>
-        entry.id === streamId
-          ? { ...entry, text: applyStreamDeltaToEntryText(entry.text, pending), streaming: true }
-          : entry
+        entry.id === streamId ? patchAgentStreamEntry(entry, applyStreamDeltaToEntryText(entry.text, pending)) : entry
       )
     );
     if (streamPendingDeltaRef.current.length > 0) {
@@ -1024,34 +1102,40 @@ export function App() {
           const seq = eventSeqRef.current;
           eventSeqRef.current += 1;
           const entry = toEntry(event, seq);
-          entry.text = applyStreamDeltaToEntryText("", event.delta);
-          activeStreamEntryIdRef.current = entry.id;
-          setEntries((prev) => [...prev, entry]);
+          const text = applyStreamDeltaToEntryText("", event.delta);
+          const next: TimelineEntry = { ...entry, text };
+          if (entryTextHasFileWriteActions(text)) {
+            next.fileWritePreview = true;
+          }
+          activeStreamEntryIdRef.current = next.id;
+          setEntries((prev) => [...prev, next]);
           return;
         }
         streamPendingDeltaRef.current += event.delta;
-        scheduleStreamFlush();
+        if (event.delta.includes(TOOL_ENVELOPE_STREAM_REPLACE)) {
+          flushPendingStreamDeltas();
+        } else {
+          scheduleStreamFlush();
+        }
         return;
       }
 
       if (event.type === "final" && activeStreamEntryIdRef.current) {
         const streamId = activeStreamEntryIdRef.current;
         activeStreamEntryIdRef.current = null;
-        cancelStreamCoalesce();
+        const pending = takeStreamPendingDeltas();
         setEntries((prev) =>
           prev.map((entry) => {
             if (entry.id !== streamId) {
               return entry;
             }
-            // Transitional empty final must not wipe an in-flight file-tool envelope preview.
-            if (
-              event.content === "" &&
-              entry.text.trim().length > 0 &&
-              isStructuredAgentEnvelopeText(entry.text)
-            ) {
-              return { ...entry, streaming: false };
-            }
-            return { ...entry, text: event.content, streaming: false };
+            const merged = mergeAgentStreamEntryOnFinal(entry.text, pending, event.content);
+            return {
+              ...entry,
+              text: merged.text,
+              streaming: false,
+              ...(merged.fileWritePreview ? { fileWritePreview: true } : { fileWritePreview: false })
+            };
           })
         );
         return;
@@ -1074,6 +1158,29 @@ export function App() {
         return;
       }
 
+      if (event.type === "status" && shouldClearFileWritePreviewOnStatus(event.message)) {
+        const seq = eventSeqRef.current;
+        eventSeqRef.current += 1;
+        const statusEntry = toEntry(event, seq);
+        setEntries((prev) => [...prev, statusEntry]);
+        if (fileWritePreviewClearRafRef.current !== null) {
+          cancelAnimationFrame(fileWritePreviewClearRafRef.current);
+        }
+        fileWritePreviewClearRafRef.current = requestAnimationFrame(() => {
+          fileWritePreviewClearRafRef.current = requestAnimationFrame(() => {
+            fileWritePreviewClearRafRef.current = null;
+            setEntries((prev) =>
+              prev.map((entry) =>
+                entry.role === "agent" && entry.fileWritePreview
+                  ? { ...entry, fileWritePreview: false }
+                  : entry
+              )
+            );
+          });
+        });
+        return;
+      }
+
       const seq = eventSeqRef.current;
       eventSeqRef.current += 1;
       setEntries((prev) => [...prev, toEntry(event, seq)]);
@@ -1090,6 +1197,10 @@ export function App() {
         })
       : () => {};
     return () => {
+      if (fileWritePreviewClearRafRef.current !== null) {
+        cancelAnimationFrame(fileWritePreviewClearRafRef.current);
+        fileWritePreviewClearRafRef.current = null;
+      }
       cancelStreamCoalesce();
       unsubscribe();
       unsubscribeBootstrap();
@@ -1667,7 +1778,11 @@ export function App() {
             {entries.map((entry) => (
               <div key={entry.id} className={cn("entry", entry.role)}>
                 {entry.role === "agent" ? (
-                  <AgentEntryContent text={entry.text} isStreaming={Boolean(entry.streaming)} />
+                  <AgentEntryContent
+                    text={entry.text}
+                    isStreaming={Boolean(entry.streaming)}
+                    fileWritePreview={Boolean(entry.fileWritePreview)}
+                  />
                 ) : entry.role === "thinking" ? (
                   <ThinkingTimelineEntry
                     entry={entry}
@@ -2085,11 +2200,20 @@ function fileActionPathLabel(action: ParsedAction): string {
   return pathParts && pathParts.length > 0 ? pathParts[pathParts.length - 1]! : "file";
 }
 
-function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
+function AgentEntryContent({
+  text,
+  isStreaming,
+  fileWritePreview
+}: {
+  text: string;
+  isStreaming: boolean;
+  fileWritePreview: boolean;
+}) {
   const displayText = stripIntakeUiMarkers(text);
-  const liveFormatted = isStreaming
-    ? parsePartialAgentMessageCached(displayText)
-    : formatAgentMessage(displayText);
+  const liveFormatted =
+    isStreaming || fileWritePreview
+      ? parsePartialAgentMessageCached(displayText)
+      : formatAgentMessage(displayText);
   const leadText = liveFormatted.response || liveFormatted.narrative || "";
   const fileActions = liveFormatted.actions.filter((action) => action.isFileWrite);
   const planActions = dedupeToolPlansLastWins(liveFormatted.actions);
@@ -2118,8 +2242,18 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
       ) : null}
       {fileActions.map((action, idx) => {
         const hasPreviewBody = typeof action.content === "string" && action.content.length > 0;
-        const showRollingPreview = isStreaming && (hasPreviewBody || Boolean(action.path));
-        const showFileSummary = !isStreaming && typeof action.content === "string";
+        const hasPath = Boolean(action.path);
+        const showRollingPreview = shouldShowRollingFilePreview({
+          isStreaming,
+          fileWritePreview,
+          hasPreviewBody,
+          hasPath
+        });
+        const showFileSummary = shouldShowFileEditSummary({
+          isStreaming,
+          fileWritePreview,
+          hasContent: typeof action.content === "string"
+        });
         return (
         <div
           key={`${action.tool}-${action.path ?? idx}`}
@@ -2134,11 +2268,7 @@ function AgentEntryContent({ text, isStreaming }: { text: string; isStreaming: b
                 …
               </span>
               {hasPreviewBody ? (
-                <pre className="entry-json">
-                  {getStreamingPreviewDiffLines(action)
-                    .lines.map((line) => `${line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}${line.text}`)
-                    .join("\n")}
-                </pre>
+                <FileRollingPreview lines={getStreamingPreviewDiffLines(action).lines} />
               ) : null}
             </div>
           ) : typeof action.content === "string" ? (

@@ -259,6 +259,33 @@ class StreamingNativeWriteProvider {
   }
 }
 
+class StreamingNativeWriteHelloProvider {
+  async complete(_messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult> {
+    const args = '{"path":"hello.txt","content":"aft';
+    options?.onToolCallProgress?.([
+      { id: "call_hello", name: "write_file", argumentsJson: args }
+    ]);
+    options?.onToolCallProgress?.([
+      {
+        id: "call_hello",
+        name: "write_file",
+        argumentsJson: `${args}er"}`
+      }
+    ]);
+    return {
+      content: "",
+      toolCalls: [
+        {
+          id: "call_hello",
+          name: "write_file",
+          argumentsJson: JSON.stringify({ path: "hello.txt", content: "after" })
+        }
+      ],
+      usedHttpStream: true
+    };
+  }
+}
+
 class StreamingNativeReplaceInFileProvider {
   async complete(_messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult> {
     const args = '{"path":"main.py","find":"old","replace":"new';
@@ -710,6 +737,33 @@ describe("SessionEngine tool loop", () => {
     expect(previewFinalIdx).toBeGreaterThanOrEqual(0);
     expect(firstStatusIdx).toBeGreaterThan(previewFinalIdx);
     expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toBe("new");
+  });
+
+  it("includes previousContent in live write_file envelope when file already exists", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    fs.writeFileSync(path.join(tempRoot, "hello.txt"), "before", "utf-8");
+    const events: AgentEvent[] = [];
+    const engine = new SessionEngine({
+      provider: new StreamingNativeWriteHelloProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant."
+    });
+
+    await engine.runPrompt("update hello.txt", (event) => events.push(event));
+
+    const streamDeltas = events
+      .filter((event): event is Extract<AgentEvent, { type: "stream" }> => event.type === "stream")
+      .map((event) => event.delta);
+    const withPrevious = streamDeltas.filter((delta) => delta.includes('"previousContent":"before"'));
+    expect(withPrevious.length).toBeGreaterThan(0);
+    const lastWithPrevious = withPrevious.at(-1)!;
+    expect(lastWithPrevious).toContain('"path":"hello.txt"');
+    expect(lastWithPrevious).toContain('"content":"after"');
+    const previousIdx = lastWithPrevious.indexOf('"previousContent"');
+    const contentIdx = lastWithPrevious.indexOf('"content"');
+    expect(previousIdx).toBeGreaterThanOrEqual(0);
+    expect(previousIdx).toBeLessThan(contentIdx);
+    expect(fs.readFileSync(path.join(tempRoot, "hello.txt"), "utf-8")).toBe("after");
   });
 
   it("executes get_emulator_logs via host handler with max_lines", async () => {

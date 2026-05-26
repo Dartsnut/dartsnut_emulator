@@ -27,7 +27,8 @@ import type {
   DeployLaunchRequest,
   WindowChromeInsets,
   type ShellUiTheme,
-  type MainProcessConsoleMirrorPayload
+  type MainProcessConsoleMirrorPayload,
+  type PrepareWorkspaceForProviderSwitchResponse
 } from "@dartsnut/shared-ipc";
 import type {
   EmulatorCommand,
@@ -44,6 +45,7 @@ declare global {
       resetWorkspaceSession: () => Promise<
         { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" }
       >;
+      prepareWorkspaceForProviderSwitch: () => Promise<PrepareWorkspaceForProviderSwitchResponse>;
       getWindowChromeInsets: () => Promise<WindowChromeInsets>;
       setShellUiTheme: (theme: ShellUiTheme) => Promise<void>;
       startNewProject: () => Promise<BootstrapState>;

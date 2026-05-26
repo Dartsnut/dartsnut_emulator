@@ -1,6 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
+import dotenv from "dotenv";
 import readline from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
@@ -27,12 +28,15 @@ import {
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
+  type PrepareWorkspaceForProviderSwitchResponse,
   type ProjectType,
   type PromptRequest,
+  type LlmProviderId,
   type ProviderSettings,
   type ReadPreviewRequest,
   type ReadPreviewResponse,
   type SaveProviderSettingsRequest,
+  type UserDefineProviderSettings,
   type UnbindSlotRequest,
   type UnbindSlotResponse,
   validateDeployWorkspaceConf,
@@ -97,6 +101,11 @@ let bridgePythonExec: string | null = null;
 const repoRoot = app.isPackaged
   ? process.resourcesPath
   : path.resolve(__dirname, "../../..");
+process.env.DARTSNUT_REPO_ROOT = repoRoot;
+const repoEnvPath = path.join(repoRoot, ".env");
+if (fs.existsSync(repoEnvPath)) {
+  dotenv.config({ path: repoEnvPath });
+}
 let pythonExec = process.env.DARTSNUT_PYTHON || "python3";
 let pythonRuntimeStatus: string | null = null;
 
@@ -274,11 +283,80 @@ const emulatorStatePath = () => path.join(app.getPath("userData"), "emulator-sta
 const providerSettingsPath = () => path.join(app.getPath("userData"), "provider-settings.json");
 const pythonSettingsPath = () => path.join(app.getPath("userData"), "python-settings.json");
 
-function normalizeProviderSettings(input?: Partial<ProviderSettings> | null): ProviderSettings {
+const LLM_PROVIDER_IDS: readonly LlmProviderId[] = ["gpt", "gemini", "xiaomi", "claude", "user-define"];
+
+function isLlmProviderId(value: unknown): value is LlmProviderId {
+  return typeof value === "string" && (LLM_PROVIDER_IDS as readonly string[]).includes(value);
+}
+
+function normalizeUserDefineSettings(input?: Partial<UserDefineProviderSettings> | null): UserDefineProviderSettings {
   return {
     baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl.trim() : "",
     apiKey: typeof input?.apiKey === "string" ? input.apiKey.trim() : "",
     model: typeof input?.model === "string" ? input.model.trim() : ""
+  };
+}
+
+type LegacyProviderSettingsFile = Partial<ProviderSettings> & {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+};
+
+function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): ProviderSettings {
+  const legacyFlat =
+    input != null &&
+    (typeof input.baseUrl === "string" ||
+      typeof input.apiKey === "string" ||
+      typeof input.model === "string") &&
+    input.userDefine == null;
+
+  if (legacyFlat) {
+    const userDefine = normalizeUserDefineSettings({
+      baseUrl: input.baseUrl,
+      apiKey: input.apiKey,
+      model: input.model
+    });
+    const hasLegacyCredentials = Boolean(userDefine.apiKey || userDefine.model || userDefine.baseUrl);
+    return {
+      activeProvider: hasLegacyCredentials ? "user-define" : "gpt",
+      userDefine
+    };
+  }
+
+  const userDefine = normalizeUserDefineSettings(input?.userDefine);
+  const hasUserDefineCredentials = Boolean(userDefine.apiKey || userDefine.model || userDefine.baseUrl);
+  const activeProvider = isLlmProviderId(input?.activeProvider)
+    ? input.activeProvider
+    : hasUserDefineCredentials
+      ? "user-define"
+      : "gpt";
+
+  return { activeProvider, userDefine };
+}
+
+function maskApiKeyForPreview(value: string): string {
+  if (!value) {
+    return "";
+  }
+  if (value.length <= 8) {
+    return "••••••••";
+  }
+  return `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+function enrichProviderSettingsForRenderer(stored: ProviderSettings): ProviderSettings {
+  if (stored.activeProvider === "user-define") {
+    return stored;
+  }
+  const config = loadProviderConfig({ activeProvider: stored.activeProvider });
+  return {
+    ...stored,
+    resolvedPreview: {
+      baseUrl: config.baseUrl,
+      apiKeyMasked: maskApiKeyForPreview(config.apiKey),
+      model: config.model
+    }
   };
 }
 
@@ -288,7 +366,7 @@ function readProviderSettings(): ProviderSettings {
     return normalizeProviderSettings();
   }
   try {
-    const content = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<ProviderSettings>;
+    const content = JSON.parse(fs.readFileSync(file, "utf-8")) as LegacyProviderSettingsFile;
     return normalizeProviderSettings(content);
   } catch {
     return normalizeProviderSettings();
@@ -297,15 +375,22 @@ function readProviderSettings(): ProviderSettings {
 
 function validateProviderSettingsInput(input: SaveProviderSettingsRequest): { ok: true } | { ok: false; error: string } {
   const normalized = normalizeProviderSettings(input);
-  if (!normalized.apiKey) {
+  if (!isLlmProviderId(normalized.activeProvider)) {
+    return { ok: false, error: "Invalid provider selection." };
+  }
+  if (normalized.activeProvider !== "user-define") {
+    return { ok: true };
+  }
+  const ud = normalized.userDefine;
+  if (!ud.apiKey) {
     return { ok: false, error: "API key is required." };
   }
-  if (!normalized.model) {
+  if (!ud.model) {
     return { ok: false, error: "Model is required." };
   }
-  if (normalized.baseUrl) {
+  if (ud.baseUrl) {
     try {
-      new URL(normalized.baseUrl);
+      new URL(ud.baseUrl);
     } catch {
       return { ok: false, error: "Endpoint must be a valid URL." };
     }
@@ -321,7 +406,7 @@ function writeProviderSettings(input: SaveProviderSettingsRequest): ProviderSett
   const normalized = normalizeProviderSettings(input);
   fs.mkdirSync(path.dirname(providerSettingsPath()), { recursive: true });
   fs.writeFileSync(providerSettingsPath(), JSON.stringify(normalized, null, 2));
-  return normalized;
+  return enrichProviderSettingsForRenderer(normalized);
 }
 
 function readSelectedPythonPath(): string | null {
@@ -581,7 +666,7 @@ async function ensureTemporaryWorkspaceResolvedForGuard(reason: TempWorkspaceGua
       return true;
     }
   }
-  for (;;) {
+  for (; ;) {
     const choice = await promptSaveDiscardCancel(reason);
     if (choice === "cancel") {
       return false;
@@ -629,7 +714,12 @@ async function maybeRecoverTrackedTempWorkspaceAtLaunch(): Promise<void> {
 }
 
 function providerStatus(): BootstrapState["providerStatus"] {
-  const validation = validateProviderConfig(loadProviderConfig(readProviderSettings()));
+  const stored = readProviderSettings();
+  const config = loadProviderConfig({
+    activeProvider: stored.activeProvider,
+    userDefine: stored.userDefine
+  });
+  const validation = validateProviderConfig(config, stored.activeProvider);
   return validation.ok ? "ready" : "missing_config";
 }
 
@@ -1090,15 +1180,15 @@ function buildRoutedPrompt(request: PromptRequest): string {
     projectType === "game" || projectType === "widget" ? projectType : templateMode === "widget-creator" ? "widget" : "game";
   const buildPlanBlock =
     shouldIncludeCreatorBuildPlan(templateMode, confJsonExists) &&
-    (resolvedProjectType === "game" || resolvedProjectType === "widget")
+      (resolvedProjectType === "game" || resolvedProjectType === "widget")
       ? [
-          formatCreatorBuildPlanMessage({
-            templateMode,
-            projectType: resolvedProjectType,
-            widgetSize: widgetSize as WidgetSize | undefined
-          }),
-          ""
-        ]
+        formatCreatorBuildPlanMessage({
+          templateMode,
+          projectType: resolvedProjectType,
+          widgetSize: widgetSize as WidgetSize | undefined
+        }),
+        ""
+      ]
       : [];
   return [
     template,
@@ -1754,15 +1844,15 @@ async function resolvePythonExecutable(): Promise<string> {
 
   const searchLists: string[][] = app.isPackaged
     ? [
-        ...(selectedPythonPath ? [[selectedPythonPath]] : []),
-        repoVenvPythonCandidates(),
-        pythonCandidates()
-      ]
+      ...(selectedPythonPath ? [[selectedPythonPath]] : []),
+      repoVenvPythonCandidates(),
+      pythonCandidates()
+    ]
     : [
-        repoVenvPythonCandidates(),
-        ...(selectedPythonPath ? [[selectedPythonPath]] : []),
-        pythonCandidates()
-      ];
+      repoVenvPythonCandidates(),
+      ...(selectedPythonPath ? [[selectedPythonPath]] : []),
+      pythonCandidates()
+    ];
 
   for (const group of searchLists) {
     const found = firstRunnablePython(group);
@@ -1942,8 +2032,11 @@ function buildSession(
     throw new Error("Workspace is not selected.");
   }
   const providerSettings = readProviderSettings();
-  const config = loadProviderConfig(providerSettings);
-  const validation = validateProviderConfig(config);
+  const config = loadProviderConfig({
+    activeProvider: providerSettings.activeProvider,
+    userDefine: providerSettings.userDefine
+  });
+  const validation = validateProviderConfig(config, providerSettings.activeProvider);
   if (!validation.ok) {
     throw new Error(validation.error);
   }
@@ -2142,6 +2235,26 @@ ipcMain.handle(
   }
 );
 
+ipcMain.handle(
+  IPCChannels.prepareWorkspaceForProviderSwitch,
+  async (): Promise<PrepareWorkspaceForProviderSwitchResponse> => {
+    if (isTemporaryWorkspaceActiveNow()) {
+      await discardTrackedTemporaryProject();
+      return { ok: true, state: getBootstrapState() };
+    }
+    const ws = workspaceRoot;
+    if (!ws) {
+      return { ok: false, reason: "no_workspace" };
+    }
+    const persistence = buildWorkspaceSessionPersistence(ws);
+    if (!persistence) {
+      return { ok: false, reason: "persistence_disabled" };
+    }
+    persistence.archiveOrResetSession("provider-switch");
+    return { ok: true, state: getBootstrapState() };
+  }
+);
+
 ipcMain.handle(IPCChannels.deployGetEligibility, (): DeployEligibility => readDeployEligibilityFromWorkspace());
 
 function parseDeployWidgetParamsJson(raw: string | undefined): Record<string, unknown> {
@@ -2298,7 +2411,9 @@ ipcMain.handle(IPCChannels.deployStop, async (): Promise<DeployActionResponse> =
     return { ok: false, error: message };
   }
 });
-ipcMain.handle(IPCChannels.getProviderSettings, () => readProviderSettings());
+ipcMain.handle(IPCChannels.getProviderSettings, () =>
+  enrichProviderSettingsForRenderer(readProviderSettings())
+);
 ipcMain.handle(IPCChannels.getPythonRuntimeStatus, () => pythonRuntimeStatus);
 ipcMain.handle(IPCChannels.getSelectedPythonPath, () => readSelectedPythonPath());
 ipcMain.handle(IPCChannels.saveProviderSettings, (_event: unknown, request: SaveProviderSettingsRequest) =>

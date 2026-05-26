@@ -12,6 +12,7 @@ import {
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
+  type PrepareWorkspaceForProviderSwitchResponse,
   type IntakeSubmitQuestionAnswerRequest,
   type IntakeSubmitQuestionAnswerResponse,
   type PromptRequest,
@@ -47,6 +48,10 @@ const api = {
     ipcRenderer.invoke(IPCChannels.resetWorkspaceSession) as Promise<
       { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" }
     >,
+  prepareWorkspaceForProviderSwitch: () =>
+    ipcRenderer.invoke(
+      IPCChannels.prepareWorkspaceForProviderSwitch
+    ) as Promise<PrepareWorkspaceForProviderSwitchResponse>,
   getWindowChromeInsets: () =>
     ipcRenderer.invoke(IPCChannels.windowChromeInsets) as Promise<WindowChromeInsets>,
   setShellUiTheme: (theme: ShellUiTheme) =>

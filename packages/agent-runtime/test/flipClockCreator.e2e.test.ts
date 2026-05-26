@@ -11,8 +11,8 @@ import { allowedDeferredSkillIdsForMode, resolveSkillRouterPrompt } from "../src
 import { SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
 
-const config = loadProviderConfig();
-const canRunLive = validateProviderConfig(config).ok;
+const config = loadProviderConfig({ activeProvider: "gpt" });
+const canRunLive = validateProviderConfig(config, "gpt").ok;
 
 function buildFlipClockRoutedPrompt(workspacePath: string): string {
   const skillsDir = path.resolve(__dirname, "../skills");

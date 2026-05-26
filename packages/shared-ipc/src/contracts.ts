@@ -18,6 +18,8 @@ export const IPCChannels = {
   subscribeEvents: "agent:subscribe-events",
   getWorkspaceSessionSummary: "agent:get-workspace-session-summary",
   resetWorkspaceSession: "agent:reset-workspace-session",
+  /** Wipe unsaved temp project or archive agent session when switching LLM provider. */
+  prepareWorkspaceForProviderSwitch: "agent:prepare-workspace-for-provider-switch",
   getProviderSettings: "agent:get-provider-settings",
   saveProviderSettings: "agent:save-provider-settings",
   getPythonRuntimeStatus: "agent:get-python-runtime-status",
@@ -92,15 +94,20 @@ export interface BootstrapState {
 export type SaveTempWorkspaceResponse =
   | { ok: true; state: BootstrapState }
   | {
-      ok: false;
-      reason:
-        | "not_temporary"
-        | "cancelled"
-        | "non_empty_destination"
-        | "copy_failed"
-        | "missing_workspace";
-      message?: string;
-    };
+    ok: false;
+    reason:
+    | "not_temporary"
+    | "cancelled"
+    | "non_empty_destination"
+    | "copy_failed"
+    | "missing_workspace";
+    message?: string;
+  };
+
+/** IPC return from `prepareWorkspaceForProviderSwitch`. */
+export type PrepareWorkspaceForProviderSwitchResponse =
+  | { ok: true; state: BootstrapState }
+  | { ok: false; reason: "no_workspace" | "persistence_disabled" };
 
 export type AgentSessionIntent = "auto" | "resume" | "fresh";
 
@@ -269,16 +276,31 @@ export interface PickWorkspaceResponse {
   reason?: "cancelled" | "non_empty";
 }
 
-export interface ProviderSettings {
+export type LlmProviderId = "gpt" | "gemini" | "xiaomi" | "claude" | "user-define";
+
+export interface UserDefineProviderSettings {
   baseUrl: string;
   apiKey: string;
   model: string;
 }
 
-export interface SaveProviderSettingsRequest {
+/** Env-resolved credentials for built-in presets (API key is masked for renderer). */
+export interface ProviderEnvPreview {
   baseUrl: string;
-  apiKey: string;
+  apiKeyMasked: string;
   model: string;
+}
+
+export interface ProviderSettings {
+  activeProvider: LlmProviderId;
+  userDefine: UserDefineProviderSettings;
+  /** Present when `activeProvider` is not `user-define`. */
+  resolvedPreview?: ProviderEnvPreview;
+}
+
+export interface SaveProviderSettingsRequest {
+  activeProvider: LlmProviderId;
+  userDefine: UserDefineProviderSettings;
 }
 
 /** Prefix on `stream` deltas that replace the tool-envelope JSON tail (lead text before `{` is kept). */

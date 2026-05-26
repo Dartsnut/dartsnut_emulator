@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
+import type { LlmProviderId, UserDefineProviderSettings } from "@dartsnut/shared-ipc";
+
+export type { LlmProviderId, UserDefineProviderSettings };
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -17,8 +20,24 @@ export interface ProviderConfigOverrides {
   fetchImpl?: typeof fetch;
 }
 
+export interface LoadProviderConfigInput {
+  activeProvider: LlmProviderId;
+  userDefine?: UserDefineProviderSettings;
+  fetchImpl?: typeof fetch;
+}
+
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_GPT_MODEL = "gpt-4.1-mini";
+const DEFAULT_XIAOMI_MODEL = "mimo-v2.5-pro";
+
 type ProcessWithResourcesPath = NodeJS.Process & { resourcesPath?: string };
+
+const PROVIDER_ENV_PREFIX: Record<Exclude<LlmProviderId, "user-define">, string> = {
+  gpt: "GPT",
+  gemini: "GEMINI",
+  xiaomi: "XIAOMI",
+  claude: "CLAUDE"
+};
 
 /**
  * Ensure base URL joins SDK paths like `/chat/completions` as `.../v1/chat/completions`.
@@ -41,14 +60,20 @@ export function normalizeProviderBaseUrl(baseUrl: string): string {
 }
 
 export function findEnvFile(cwd: string = process.cwd()): string | undefined {
-  const candidates = [
+  const candidates: string[] = [];
+  const repoRoot = process.env.DARTSNUT_REPO_ROOT?.trim();
+  if (repoRoot) {
+    candidates.push(path.join(repoRoot, ".env"));
+  }
+  candidates.push(
     path.join(cwd, ".env"),
     path.join(cwd, "..", ".env"),
-    path.join(cwd, "..", "..", ".env")
-  ];
+    path.join(cwd, "..", "..", ".env"),
+    path.join(cwd, "..", "..", "..", ".env")
+  );
   const resourcesPath = (process as ProcessWithResourcesPath).resourcesPath;
   if (typeof resourcesPath === "string" && resourcesPath.trim()) {
-    candidates.unshift(path.join(resourcesPath, ".env"));
+    candidates.push(path.join(resourcesPath, ".env"));
   }
   return candidates.find((candidate) => fs.existsSync(candidate));
 }
@@ -61,35 +86,132 @@ function loadEnvFromDisk() {
   dotenv.config({ path: envPath });
 }
 
-export function resolveProviderConfig(overrides?: ProviderConfigOverrides): ProviderConfig {
-  const baseConfig: ProviderConfig = {
-    baseUrl: normalizeProviderBaseUrl(process.env.OPENAI_BASE_URL ?? DEFAULT_OPENAI_BASE_URL),
-    apiKey: process.env.OPENAI_API_KEY ?? "",
-    model: process.env.OPENAI_MODEL ?? "mimo-v2.5-pro"
+function readEnvTriple(
+  prefix: string,
+  defaults?: { baseUrl?: string; model?: string }
+): { baseUrl: string; apiKey: string; model: string } {
+  const baseUrl = process.env[`${prefix}_BASE_URL`]?.trim() ?? defaults?.baseUrl ?? "";
+  const apiKey = process.env[`${prefix}_API_KEY`]?.trim() ?? "";
+  const model = process.env[`${prefix}_MODEL`]?.trim() ?? defaults?.model ?? "";
+  return { baseUrl, apiKey, model };
+}
+
+function resolveGptEnvTriple(): { baseUrl: string; apiKey: string; model: string } {
+  const gpt = readEnvTriple("GPT", {
+    baseUrl: DEFAULT_OPENAI_BASE_URL,
+    model: DEFAULT_GPT_MODEL
+  });
+  const hasGpt =
+    Boolean(process.env.GPT_BASE_URL?.trim()) ||
+    Boolean(process.env.GPT_API_KEY?.trim()) ||
+    Boolean(process.env.GPT_MODEL?.trim());
+  if (hasGpt) {
+    return gpt;
+  }
+  const legacy = readEnvTriple("OPENAI", {
+    baseUrl: DEFAULT_OPENAI_BASE_URL,
+    model: gpt.model || DEFAULT_GPT_MODEL
+  });
+  return {
+    baseUrl: legacy.baseUrl || gpt.baseUrl,
+    apiKey: legacy.apiKey || gpt.apiKey,
+    model: legacy.model || gpt.model
   };
-  const mergedBase = overrides?.baseUrl?.trim() || baseConfig.baseUrl;
+}
+
+export function resolveProviderConfigForProvider(
+  providerId: LlmProviderId,
+  userDefine?: UserDefineProviderSettings
+): ProviderConfig {
+  if (providerId === "user-define") {
+    const ud = userDefine ?? { baseUrl: "", apiKey: "", model: "" };
+    return {
+      baseUrl: normalizeProviderBaseUrl(ud.baseUrl),
+      apiKey: ud.apiKey.trim(),
+      model: ud.model.trim()
+    };
+  }
+
+  let triple: { baseUrl: string; apiKey: string; model: string };
+  if (providerId === "gpt") {
+    triple = resolveGptEnvTriple();
+  } else if (providerId === "xiaomi") {
+    triple = readEnvTriple("XIAOMI", { model: DEFAULT_XIAOMI_MODEL });
+  } else {
+    const prefix = PROVIDER_ENV_PREFIX[providerId];
+    triple = readEnvTriple(prefix);
+  }
+
+  return {
+    baseUrl: normalizeProviderBaseUrl(triple.baseUrl || DEFAULT_OPENAI_BASE_URL),
+    apiKey: triple.apiKey,
+    model: triple.model
+  };
+}
+
+/** @deprecated Use {@link resolveProviderConfigForProvider} with an explicit provider id. */
+export function resolveProviderConfig(overrides?: ProviderConfigOverrides): ProviderConfig {
+  const base = resolveProviderConfigForProvider("gpt");
+  const mergedBase = overrides?.baseUrl?.trim() || base.baseUrl;
   return {
     baseUrl: normalizeProviderBaseUrl(mergedBase),
-    apiKey: overrides?.apiKey?.trim() || baseConfig.apiKey,
-    model: overrides?.model?.trim() || baseConfig.model,
-    fetchImpl: overrides?.fetchImpl ?? baseConfig.fetchImpl
+    apiKey: overrides?.apiKey?.trim() || base.apiKey,
+    model: overrides?.model?.trim() || base.model,
+    fetchImpl: overrides?.fetchImpl
   };
 }
 
-export function loadProviderConfig(overrides?: ProviderConfigOverrides): ProviderConfig {
+export function loadProviderConfig(input?: LoadProviderConfigInput | ProviderConfigOverrides): ProviderConfig {
   loadEnvFromDisk();
-  return resolveProviderConfig(overrides);
+  if (input && "activeProvider" in input) {
+    return {
+      ...resolveProviderConfigForProvider(input.activeProvider, input.userDefine),
+      fetchImpl: input.fetchImpl
+    };
+  }
+  return resolveProviderConfig(input);
 }
 
-export function validateProviderConfig(config: ProviderConfig): {
+function apiKeyEnvLabel(providerId: LlmProviderId): string {
+  if (providerId === "user-define") {
+    return "User define API key";
+  }
+  if (providerId === "gpt") {
+    const hasGpt =
+      Boolean(process.env.GPT_API_KEY?.trim()) ||
+      Boolean(process.env.GPT_BASE_URL?.trim()) ||
+      Boolean(process.env.GPT_MODEL?.trim());
+    return hasGpt ? "GPT_API_KEY" : "OPENAI_API_KEY";
+  }
+  return `${PROVIDER_ENV_PREFIX[providerId]}_API_KEY`;
+}
+
+function modelEnvLabel(providerId: LlmProviderId): string {
+  if (providerId === "user-define") {
+    return "User define model";
+  }
+  if (providerId === "gpt") {
+    const hasGpt =
+      Boolean(process.env.GPT_API_KEY?.trim()) ||
+      Boolean(process.env.GPT_BASE_URL?.trim()) ||
+      Boolean(process.env.GPT_MODEL?.trim());
+    return hasGpt ? "GPT_MODEL" : "OPENAI_MODEL";
+  }
+  return `${PROVIDER_ENV_PREFIX[providerId]}_MODEL`;
+}
+
+export function validateProviderConfig(
+  config: ProviderConfig,
+  activeProvider: LlmProviderId = "gpt"
+): {
   ok: boolean;
   error?: string;
 } {
   if (!config.apiKey) {
-    return { ok: false, error: "OPENAI_API_KEY is not set." };
+    return { ok: false, error: `${apiKeyEnvLabel(activeProvider)} is not set.` };
   }
   if (!config.model) {
-    return { ok: false, error: "OPENAI_MODEL is not set." };
+    return { ok: false, error: `${modelEnvLabel(activeProvider)} is not set.` };
   }
   return { ok: true };
 }

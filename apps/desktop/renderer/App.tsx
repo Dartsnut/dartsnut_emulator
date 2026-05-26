@@ -7,8 +7,10 @@ import {
   type DeployEligibility,
   getIntakePromptTimelineText,
   type ManifestSnapshot,
+  type LlmProviderId,
   type ProviderSettings,
   type ProjectType,
+  type UserDefineProviderSettings,
   type PromptRequest,
   type SendPromptResponse,
   type SaveTempWorkspaceResponse,
@@ -108,6 +110,20 @@ const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 const COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX = 52;
 const GREETING_TEXT =
   "What are we making today? Share your idea and I'll help turn it into a Dartsnut widget or game.";
+
+const EMPTY_USER_DEFINE: UserDefineProviderSettings = {
+  baseUrl: "",
+  apiKey: "",
+  model: ""
+};
+
+const LLM_PROVIDER_OPTIONS: { id: LlmProviderId; label: string }[] = [
+  { id: "gpt", label: "GPT" },
+  { id: "gemini", label: "Gemini" },
+  { id: "xiaomi", label: "Xiaomi" },
+  { id: "claude", label: "Claude" },
+  { id: "user-define", label: "User define" }
+];
 
 function transcriptLineToTimelineEntry(line: AgentSessionTranscriptLine, seq: number): TimelineEntry | null {
   const id = `persisted-${line.at}-${seq}`;
@@ -775,14 +791,14 @@ export function App() {
   const composerPillRef = useRef<HTMLDivElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>({
-    baseUrl: "",
-    apiKey: "",
-    model: ""
+    activeProvider: "gpt",
+    userDefine: EMPTY_USER_DEFINE
   });
   const [selectedPythonPath, setSelectedPythonPath] = useState<string | null>(null);
   const [providerSettingsError, setProviderSettingsError] = useState<string | null>(null);
   const [providerSettingsNotice, setProviderSettingsNotice] = useState<string | null>(null);
   const [savingProviderSettings, setSavingProviderSettings] = useState(false);
+  const [switchingProvider, setSwitchingProvider] = useState(false);
   const [assetManifest, setAssetManifest] = useState<AssetManifest | null>(null);
   const [pendingChangeSlotIds, setPendingChangeSlotIds] = useState<string[]>([]);
   const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>("emulator");
@@ -1327,23 +1343,49 @@ export function App() {
       return;
     }
     return api.onSessionReset(() => {
-      discardAgentEventsRef.current = true;
-      cancelStreamCoalesce();
-      activeStreamEntryIdRef.current = null;
-      activeReasoningStreamEntryIdRef.current = null;
-      eventSeqRef.current = 0;
-      lastAgentSessionHydrateKeyRef.current = "";
-      setSessionTemplateMode(null);
-      setSessionWidgetSize(null);
-      setSessionProjectType(null);
-      setWidgetSizePicker({ visible: false, sizes: [] });
-      setProjectTypePicker({ visible: false, types: [] });
-      creationIntakeBasePromptRef.current = "";
-      setPrompt("");
-      setRuntimeError(null);
-      setEntries([{ id: `greeting-${Date.now()}`, role: "agent", text: GREETING_TEXT, streaming: false }]);
+      resetChatSessionUi();
     });
   }, [api]);
+
+  function resetChatSessionUi() {
+    discardAgentEventsRef.current = true;
+    cancelStreamCoalesce();
+    activeStreamEntryIdRef.current = null;
+    activeReasoningStreamEntryIdRef.current = null;
+    eventSeqRef.current = 0;
+    lastAgentSessionHydrateKeyRef.current = "";
+    setSessionTemplateMode(null);
+    setSessionWidgetSize(null);
+    setSessionProjectType(null);
+    setWidgetSizePicker({ visible: false, sizes: [] });
+    setProjectTypePicker({ visible: false, types: [] });
+    creationIntakeBasePromptRef.current = "";
+    setPrompt("");
+    setRuntimeError(null);
+    setEntries([{ id: `greeting-${Date.now()}`, role: "agent", text: GREETING_TEXT, streaming: false }]);
+  }
+
+  async function isChatSectionNonEmpty(): Promise<boolean> {
+    const hasUserMessage = entries.some((entry) => entry.role === "user");
+    const hasNonGreetingAgent = entries.some(
+      (entry) =>
+        entry.role === "agent" &&
+        entry.id !== "greeting-initial" &&
+        !entry.id.startsWith("greeting-")
+    );
+    if (hasUserMessage || hasNonGreetingAgent) {
+      return true;
+    }
+    if (!api) {
+      return false;
+    }
+    try {
+      const summary = await api.getWorkspaceSessionSummary();
+      return summary.transcriptTail.length > 0;
+    } catch {
+      return false;
+    }
+  }
 
   function postStatus(text: string) {
     setEntries((prev) => [...prev, { id: `status-${Date.now()}`, role: "status", text }]);
@@ -1433,24 +1475,89 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  async function handleProviderChange(nextId: LlmProviderId) {
+    if (!api || nextId === providerSettings.activeProvider || switchingProvider) {
+      return;
+    }
+    setProviderSettingsError(null);
+    setProviderSettingsNotice(null);
+    const isTempWorkspace = Boolean(bootstrap?.isTemporaryWorkspace);
+    const nonEmpty = await isChatSectionNonEmpty();
+    if (isTempWorkspace || nonEmpty) {
+      const confirmed = window.confirm(
+        isTempWorkspace
+          ? "Switch LLM provider?\n\n" +
+              "This wipes your unsaved temporary project, clears chat, and opens a fresh temporary workspace."
+          : "Switch LLM provider?\n\n" +
+              "This clears the current chat history for this workspace. Your project files on disk are not deleted."
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+    setSwitchingProvider(true);
+    try {
+      if (sending) {
+        await api.cancelAgent();
+        setSending(false);
+      }
+      const prep = await api.prepareWorkspaceForProviderSwitch();
+      if (!prep.ok) {
+        if (prep.reason === "persistence_disabled") {
+          resetChatSessionUi();
+        } else {
+          setProviderSettingsError("No workspace is open. Open or create a project, then switch provider again.");
+          return;
+        }
+      } else {
+        setBootstrap(prep.state);
+        if (!isTempWorkspace) {
+          resetChatSessionUi();
+        }
+      }
+      const saved = await api.saveProviderSettings({
+        activeProvider: nextId,
+        userDefine: providerSettings.userDefine
+      });
+      setProviderSettings(saved);
+      setProviderSettingsNotice(
+        nextId === "user-define"
+          ? "Switched to User define. Save API credentials below when ready."
+          : `Switched to ${LLM_PROVIDER_OPTIONS.find((o) => o.id === nextId)?.label ?? nextId}. Credentials come from .env.`
+      );
+      const refreshed = await api.getBootstrapState();
+      setBootstrap(refreshed);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to switch provider.";
+      setProviderSettingsError(message);
+    } finally {
+      setSwitchingProvider(false);
+    }
+  }
+
   async function handleSaveProviderSettings() {
     if (!api) {
       setProviderSettingsError("Desktop bridge is unavailable.");
       return;
     }
+    if (providerSettings.activeProvider !== "user-define") {
+      setProviderSettingsError("Built-in providers use .env credentials. Select User define to save custom API settings.");
+      return;
+    }
     setProviderSettingsError(null);
     setProviderSettingsNotice(null);
-    if (!providerSettings.apiKey.trim()) {
+    const ud = providerSettings.userDefine;
+    if (!ud.apiKey.trim()) {
       setProviderSettingsError("API key is required.");
       return;
     }
-    if (!providerSettings.model.trim()) {
+    if (!ud.model.trim()) {
       setProviderSettingsError("Model is required.");
       return;
     }
-    if (providerSettings.baseUrl.trim()) {
+    if (ud.baseUrl.trim()) {
       try {
-        new URL(providerSettings.baseUrl.trim());
+        new URL(ud.baseUrl.trim());
       } catch {
         setProviderSettingsError("Endpoint must be a valid URL.");
         return;
@@ -1459,9 +1566,12 @@ export function App() {
     setSavingProviderSettings(true);
     try {
       const saved = await api.saveProviderSettings({
-        baseUrl: providerSettings.baseUrl,
-        apiKey: providerSettings.apiKey,
-        model: providerSettings.model
+        activeProvider: "user-define",
+        userDefine: {
+          baseUrl: ud.baseUrl,
+          apiKey: ud.apiKey,
+          model: ud.model
+        }
       });
       setProviderSettings(saved);
       setProviderSettingsNotice("Settings saved. New LLM calls will use these values.");
@@ -1979,13 +2089,43 @@ export function App() {
             </nav>
             <div className="flex min-h-0 flex-col gap-3 overflow-auto p-4 text-[13px]">
               <label className="flex flex-col gap-1.5">
+                <span>Provider</span>
+                <select
+                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)]"
+                  value={providerSettings.activeProvider}
+                  disabled={switchingProvider || savingProviderSettings}
+                  onChange={(event) => void handleProviderChange(event.target.value as LlmProviderId)}
+                >
+                  {LLM_PROVIDER_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {providerSettings.activeProvider !== "user-define" ? (
+                <p className="m-0 text-xs text-fg-muted">
+                  Credentials for this provider are read from <code className="text-[12px]">.env</code> (
+                  {providerSettings.activeProvider === "gpt" ? "GPT_* or OPENAI_*" : `${providerSettings.activeProvider.toUpperCase()}_*`}
+                  ).
+                </p>
+              ) : null}
+              <label className="flex flex-col gap-1.5">
                 <span>API endpoint</span>
                 <input
                   type="url"
-                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)]"
-                  value={providerSettings.baseUrl}
+                  readOnly={providerSettings.activeProvider !== "user-define"}
+                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)] disabled:opacity-80"
+                  value={
+                    providerSettings.activeProvider === "user-define"
+                      ? providerSettings.userDefine.baseUrl
+                      : (providerSettings.resolvedPreview?.baseUrl ?? "")
+                  }
                   onChange={(event) =>
-                    setProviderSettings((prev) => ({ ...prev, baseUrl: event.target.value }))
+                    setProviderSettings((prev) => ({
+                      ...prev,
+                      userDefine: { ...prev.userDefine, baseUrl: event.target.value }
+                    }))
                   }
                   placeholder="https://api.openai.com/v1"
                 />
@@ -1993,40 +2133,60 @@ export function App() {
               <label className="flex flex-col gap-1.5">
                 <span>API key</span>
                 <input
-                  type="password"
-                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)]"
-                  value={providerSettings.apiKey}
+                  type={providerSettings.activeProvider === "user-define" ? "password" : "text"}
+                  readOnly={providerSettings.activeProvider !== "user-define"}
+                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)] disabled:opacity-80"
+                  value={
+                    providerSettings.activeProvider === "user-define"
+                      ? providerSettings.userDefine.apiKey
+                      : (providerSettings.resolvedPreview?.apiKeyMasked ?? "")
+                  }
                   onChange={(event) =>
-                    setProviderSettings((prev) => ({ ...prev, apiKey: event.target.value }))
+                    setProviderSettings((prev) => ({
+                      ...prev,
+                      userDefine: { ...prev.userDefine, apiKey: event.target.value }
+                    }))
                   }
                   placeholder="sk-..."
                 />
               </label>
-              <div className="text-xs text-fg-muted">
-                Stored key preview: {maskApiKey(providerSettings.apiKey) || "(empty)"}
-              </div>
+              {providerSettings.activeProvider === "user-define" ? (
+                <div className="text-xs text-fg-muted">
+                  Stored key preview: {maskApiKey(providerSettings.userDefine.apiKey) || "(empty)"}
+                </div>
+              ) : null}
               <label className="flex flex-col gap-1.5">
                 <span>Model</span>
                 <input
                   type="text"
-                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)]"
-                  value={providerSettings.model}
+                  readOnly={providerSettings.activeProvider !== "user-define"}
+                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)] disabled:opacity-80"
+                  value={
+                    providerSettings.activeProvider === "user-define"
+                      ? providerSettings.userDefine.model
+                      : (providerSettings.resolvedPreview?.model ?? "")
+                  }
                   onChange={(event) =>
-                    setProviderSettings((prev) => ({ ...prev, model: event.target.value }))
+                    setProviderSettings((prev) => ({
+                      ...prev,
+                      userDefine: { ...prev.userDefine, model: event.target.value }
+                    }))
                   }
                   placeholder="gpt-4.1-mini"
                 />
               </label>
-              <div className="flex justify-start">
-                <button
-                  type="button"
-                  className="mt-0 cursor-pointer rounded-lg border-0 bg-[var(--color-btn-default-bg)] px-3.5 py-2 text-sm font-semibold text-white hover:enabled:bg-[var(--color-btn-default-hover)] disabled:cursor-not-allowed disabled:opacity-55"
-                  onClick={() => void handleSaveProviderSettings()}
-                  disabled={savingProviderSettings}
-                >
-                  {savingProviderSettings ? "Saving..." : "Save"}
-                </button>
-              </div>
+              {providerSettings.activeProvider === "user-define" ? (
+                <div className="flex justify-start">
+                  <button
+                    type="button"
+                    className="mt-0 cursor-pointer rounded-lg border-0 bg-[var(--color-btn-default-bg)] px-3.5 py-2 text-sm font-semibold text-white hover:enabled:bg-[var(--color-btn-default-hover)] disabled:cursor-not-allowed disabled:opacity-55"
+                    onClick={() => void handleSaveProviderSettings()}
+                    disabled={savingProviderSettings || switchingProvider}
+                  >
+                    {savingProviderSettings ? "Saving..." : "Save"}
+                  </button>
+                </div>
+              ) : null}
               <div className="flex flex-col gap-1.5">
                 <span>Python executable</span>
                 <div className="text-xs text-fg-muted">{selectedPythonPath ?? "(auto detect)"}</div>

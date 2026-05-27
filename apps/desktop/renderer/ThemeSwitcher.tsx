@@ -10,8 +10,7 @@ const themeSelectChevronStyle: CSSProperties = {
   backgroundRepeat: "no-repeat"
 };
 
-const themeIconBtnClass =
-  "inline-flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border-0 bg-transparent p-0 text-fg hover:enabled:bg-[var(--color-app-btn-bg-hover)] focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:outline-none [app-region:no-drag] [-webkit-app-region:no-drag]";
+const themeIconBtnClass = "ui-chrome-btn text-fg";
 
 interface ThemeSwitcherProps {
   value: ThemeId;

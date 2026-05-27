@@ -22,10 +22,9 @@ const DART_COLORS = Array.from({ length: 12 }, (_, idx) => {
   return "#ffd800";
 });
 
-const emuToolbarBtn =
-  "box-border inline-flex shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] px-3 py-2 text-sm text-[var(--color-emulator-toolbar-label)]";
+const emuToolbarBtn = "ui-toolbar-btn";
 
-const emuToolbarIconBtn = cn(emuToolbarBtn, "size-7 p-0");
+const emuToolbarIconBtn = cn(emuToolbarBtn, "ui-toolbar-icon-btn");
 
 const BRIDGE_DEBUG_PREFIX = "[bridge]";
 
@@ -526,10 +525,11 @@ export function EmulatorPanel({
       ) : null}
       <div className="relative flex min-h-0 flex-1 flex-col items-stretch justify-start gap-0 overflow-hidden p-0 text-[var(--color-emulator-canvas-hint)]">
         <div className="box-border flex min-h-0 min-w-0 w-full flex-1 flex-row items-center justify-center gap-2 overflow-hidden p-0">
-          <div className="flex shrink-0 flex-col items-center gap-1.5">
+          <div className="flex shrink-0 flex-col items-center gap-2 p-2">
+            <div className="ui-canvas-bezel p-1.5">
             <canvas
               ref={canvasRef}
-              className="block h-[400px] w-[294px] shrink-0 border-0 bg-transparent [image-rendering:pixelated]"
+              className="block h-[400px] w-[294px] shrink-0 rounded-[var(--radius-md)] border-0 bg-transparent [image-rendering:pixelated]"
               width={CANVAS_BASE_WIDTH}
               height={CANVAS_BASE_HEIGHT}
               onContextMenu={(e) => e.preventDefault()}
@@ -577,7 +577,8 @@ export function EmulatorPanel({
                 }
               }}
             />
-            <div className="box-border m-0 flex w-full max-w-[294px] shrink-0 flex-row items-center justify-center gap-2.5 self-stretch px-2 pb-2 pt-1.5 text-center text-xs text-[var(--color-state-line)]">
+            </div>
+            <div className="box-border m-0 flex w-full max-w-[310px] shrink-0 flex-row items-center justify-center gap-2.5 self-stretch px-1 pb-1 pt-0.5 text-center text-[11px] tabular-nums text-[var(--color-state-line)]">
               {state.running ? (
                 <span>Running</span>
               ) : stoppedWithError ? (

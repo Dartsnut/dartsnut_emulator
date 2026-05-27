@@ -4,8 +4,7 @@ import { cn } from "./cn";
 import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
-const toolbarBtn =
-  "box-border inline-flex shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] px-3 py-2 text-sm font-medium text-[var(--color-emulator-toolbar-label)] enabled:hover:bg-[var(--color-emulator-toolbar-bg-hover)] disabled:cursor-not-allowed disabled:opacity-45";
+const toolbarBtn = "ui-toolbar-btn";
 
 export type DeployPanelProps = {
   showWidgetParams: boolean;
@@ -157,12 +156,13 @@ export function DeployPanel({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
-      <label className="flex shrink-0 flex-col gap-1 text-[13px]">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
+      <h2 className="ui-panel-title">Deploy</h2>
+      <label className="flex shrink-0 flex-col gap-1.5 text-[13px]">
         <span className="text-[var(--color-text-subtle)]">Device IP or hostname</span>
         <input
           type="text"
-          className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2 font-mono text-[13px] text-[var(--color-input-text)] outline-none focus:border-[var(--color-input-focus-border)]"
+          className="ui-input font-mono"
           placeholder="192.168.x.x"
           value={host}
           disabled={busyAction !== null || connected}
@@ -211,7 +211,7 @@ export function DeployPanel({
       <div className="flex shrink-0 flex-wrap gap-2">
         <button
           type="button"
-          className={cn(toolbarBtn, "bg-[var(--color-btn-default-bg)] text-white")}
+          className="ui-btn-primary"
           disabled={busyAction !== null || !connected}
           onClick={() => void run("run")}
         >

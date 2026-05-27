@@ -8,6 +8,12 @@
   --color-fg-strong: var(--color-text-strong);
   --color-fg-muted: var(--color-text-muted);
   --color-edge: var(--color-border);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --font-mono: var(--font-mono);
+  --radius-ui-sm: var(--radius-sm);
+  --radius-ui-md: var(--radius-md);
+  --radius-ui-lg: var(--radius-lg);
 }
 
 @source ".";

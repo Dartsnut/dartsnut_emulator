@@ -118,9 +118,10 @@ const EMPTY_USER_DEFINE: UserDefineProviderSettings = {
 };
 
 const LLM_PROVIDER_OPTIONS: { id: LlmProviderId; label: string }[] = [
-  { id: "gpt", label: "GPT" },
-  { id: "gemini", label: "Gemini" },
-  { id: "xiaomi", label: "Xiaomi" },
+  { id: "gpt", label: "GPT 5.5" },
+  { id: "gemini", label: "Gemini 3 Flash" },
+  { id: "xiaomi", label: "Mimo V2.5 Pro" },
+  { id: "claude", label: "Claude Sonnet 4" },
   { id: "user-define", label: "User define" }
 ];
 

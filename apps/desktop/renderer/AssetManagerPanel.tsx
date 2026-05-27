@@ -209,10 +209,10 @@ export function AssetManagerPanel({
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-4">
       <header className="flex items-center justify-between gap-3">
-        <h2 className="m-0 text-[15px] font-semibold tracking-wide text-[var(--color-tab-active-text)]">Assets</h2>
+        <h2 className="ui-panel-title">Assets</h2>
         <button
           type="button"
-          className="cursor-pointer rounded-lg border border-[var(--color-accent-purple)] bg-[var(--color-accent-purple)] px-3.5 py-2 text-xs font-semibold tracking-wide text-[var(--color-badge-text)] [font:inherit] hover:enabled:brightness-110 disabled:cursor-not-allowed disabled:border-[var(--color-border-dashed)] disabled:bg-[var(--color-accent-btn-disabled-bg)] disabled:text-[var(--color-text-subtle)] disabled:opacity-100"
+          className="ui-btn-primary"
           onClick={() => void handleApplyAssets()}
           disabled={!hasPendingChanges || inFlight.applying}
           title={
@@ -255,7 +255,7 @@ export function AssetManagerPanel({
             <li
               key={slot.id}
               className={cn(
-                "grid grid-cols-[60px_1fr_auto] items-center gap-3 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-2.5 transition-[border-color,background] duration-100 ease-out",
+                "grid grid-cols-[60px_1fr_auto] items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-2.5 shadow-[var(--shadow-sm)] transition-[border-color,background,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]",
                 busy && "opacity-70",
                 pending && "border-[var(--color-border-accent-soft)]",
                 dragOverSlot === slot.id && "border-[var(--color-border-accent)] bg-[var(--color-surface-elevated-hover)]"
@@ -321,7 +321,7 @@ export function AssetManagerPanel({
               <div className="flex flex-col items-stretch gap-1.5">
                 <button
                   type="button"
-                  className="cursor-pointer whitespace-nowrap rounded-md border border-[var(--color-border-dashed)] bg-[var(--color-slot-action-bg)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-slot-action-text)] [font:inherit] hover:enabled:bg-[var(--color-slot-action-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="ui-btn-secondary whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => pickFileForSlot(slot.id)}
                   disabled={busy}
                 >
@@ -330,7 +330,7 @@ export function AssetManagerPanel({
                 {slot.binding ? (
                   <button
                     type="button"
-                    className="cursor-pointer whitespace-nowrap rounded-md border border-[var(--color-border-dashed)] bg-transparent px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-subtle)] [font:inherit] hover:enabled:bg-[var(--color-slot-action-bg)] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="ui-btn-secondary border-transparent bg-transparent text-[var(--color-text-subtle)] hover:enabled:bg-[var(--color-slot-action-bg)] disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={() => void handleUnbind(slot.id)}
                     disabled={busy}
                   >

@@ -149,8 +149,7 @@ function transcriptLineToTimelineEntry(line: AgentSessionTranscriptLine, seq: nu
   return { id, role: "status", text: `${tool}${line.text}` };
 }
 
-const chromeIconBtnClass =
-  "inline-flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border-0 bg-transparent p-0 text-[var(--color-app-btn-text)] [app-region:no-drag] [-webkit-app-region:no-drag] hover:enabled:bg-[var(--color-app-btn-bg-hover)] hover:enabled:text-[var(--color-app-btn-text-hover)] focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45";
+const chromeIconBtnClass = "ui-chrome-btn";
 
 function hasPrimaryShortcutModifier(event: { metaKey: boolean; ctrlKey: boolean }): boolean {
   const isMac = navigator.platform.toLowerCase().includes("mac");
@@ -1686,7 +1685,7 @@ export function App() {
       )}
     >
       <header
-        className="col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),38px)] items-center gap-1.5 border-b border-edge bg-page [app-region:no-drag] [-webkit-app-region:no-drag]"
+        className="col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),40px)] items-center gap-2 border-b border-edge bg-[var(--gradient-app-bar)] shadow-[var(--shadow-app-bar-divider)] [app-region:no-drag] [-webkit-app-region:no-drag]"
         style={{
           paddingLeft: "calc(6px + var(--chrome-margin-inline-start))",
           paddingRight: "calc(6px + var(--chrome-margin-inline-end))",
@@ -1699,7 +1698,7 @@ export function App() {
           <>
             <div className="flex min-w-0 shrink-0 items-center gap-1.5">
               <h1
-                className="m-0 min-w-0 p-0 text-[13px] font-semibold leading-snug tracking-tight text-fg-strong"
+                className="m-0 min-w-0 p-0 font-[family-name:var(--font-display)] text-[13px] font-semibold leading-snug tracking-tight text-fg-strong"
                 title={
                   bootstrap?.workspaceRoot ??
                   "Embedded assistant for pygame + pydartsnut"
@@ -1821,7 +1820,7 @@ export function App() {
                   />
                 </svg>
               </button>
-              <h1 className="m-0 min-w-0 flex-[0_1_auto] p-0 text-[13px] font-semibold leading-snug tracking-tight text-fg-strong">
+              <h1 className="m-0 min-w-0 flex-[0_1_auto] p-0 font-[family-name:var(--font-display)] text-[13px] font-semibold leading-snug tracking-tight text-fg-strong">
                 <span className="block truncate">Settings</span>
               </h1>
             </div>
@@ -1885,13 +1884,27 @@ export function App() {
             }}
           >
             {entries.map((entry) => (
-              <div key={entry.id} className={cn("entry", entry.role)}>
+              <div
+                key={entry.id}
+                className={cn(
+                  "entry",
+                  entry.role,
+                  entry.id.startsWith("greeting") && entry.role === "agent" && "greeting-entry"
+                )}
+              >
                 {entry.role === "agent" ? (
+                  entry.id.startsWith("greeting") ? (
+                    <div className="greeting-card" role="status">
+                      <p className="greeting-card__title">Dartsnut Chat</p>
+                      <p className="greeting-card__body">{entry.text}</p>
+                    </div>
+                  ) : (
                   <AgentEntryContent
                     text={entry.text}
                     isStreaming={Boolean(entry.streaming)}
                     fileWritePreview={Boolean(entry.fileWritePreview)}
                   />
+                  )
                 ) : entry.role === "thinking" ? (
                   <ThinkingTimelineEntry
                     entry={entry}
@@ -1929,11 +1942,7 @@ export function App() {
                   <button
                     key={pt}
                     type="button"
-                    className={cn(
-                      "cursor-pointer rounded-full border border-[var(--color-chip-border)] bg-[var(--color-chip-bg)] px-3 py-1.5 text-[12px] font-medium text-[var(--color-chip-text)] [font:inherit]",
-                      "hover:enabled:border-[var(--color-chip-hover-border)] hover:enabled:bg-[var(--color-chip-hover-bg)]",
-                      "focus-visible:border-[var(--color-chip-focus-border)] focus-visible:shadow-[var(--shadow-chip-focus)] focus-visible:outline-none"
-                    )}
+                    className="ui-chip"
                     onClick={() => void handleProjectTypeChip(pt)}
                   >
                     {projectTypeChipLabel(pt)}
@@ -1959,11 +1968,7 @@ export function App() {
                   <button
                     key={sz}
                     type="button"
-                    className={cn(
-                      "cursor-pointer rounded-full border border-[var(--color-chip-border)] bg-[var(--color-chip-bg)] px-3 py-1.5 text-[12px] font-medium tabular-nums text-[var(--color-chip-text)] [font:inherit]",
-                      "hover:enabled:border-[var(--color-chip-hover-border)] hover:enabled:bg-[var(--color-chip-hover-bg)]",
-                      "focus-visible:border-[var(--color-chip-focus-border)] focus-visible:shadow-[var(--shadow-chip-focus)] focus-visible:outline-none"
-                    )}
+                    className="ui-chip tabular-nums"
                     onClick={() => void handleWidgetSizeChip(sz)}
                   >
                     {sz}
@@ -1974,13 +1979,7 @@ export function App() {
           ) : null}
 
           <section className="flex flex-col gap-3 border-0 bg-transparent p-0">
-            <div
-              ref={composerPillRef}
-              className={cn(
-                "flex min-h-[38px] items-end gap-2 rounded-full border border-[var(--color-composer-pill-border)] bg-[var(--color-composer-pill-bg)] py-1 pl-2.5 pr-2 shadow-[var(--shadow-composer-inset)] transition-[border-radius,padding] duration-[180ms] ease-out",
-                "data-[expanded=true]:items-end data-[expanded=true]:rounded-[18px] data-[expanded=true]:px-2.5 data-[expanded=true]:pb-2.5 data-[expanded=true]:pt-2 data-[expanded=true]:pl-3"
-              )}
-            >
+            <div ref={composerPillRef} className="ui-composer">
               <textarea
                 ref={promptInputRef}
                 className="m-0 max-h-[200px] min-h-[26px] min-w-0 flex-1 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-0.5 text-[13px] leading-snug text-[var(--color-composer-input)] shadow-none outline-none [font:inherit] placeholder:text-[var(--color-composer-placeholder)] focus:border-0 focus:shadow-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
@@ -2077,20 +2076,20 @@ export function App() {
               ) : null}
             </div>
           </div>
-          <section className="grid min-h-0 grid-cols-[220px_1fr] overflow-hidden rounded-[10px] border border-[var(--color-settings-layout-border)] bg-[var(--color-settings-layout-bg)]">
+          <section className="grid min-h-0 grid-cols-[220px_1fr] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-settings-layout-border)] bg-[var(--color-settings-layout-bg)] shadow-[var(--shadow-sm)]">
             <nav className="flex flex-col gap-2 border-r border-[var(--color-settings-layout-border)] p-3" aria-label="Settings menu">
               <button
                 type="button"
-                className="w-full rounded-md border-0 bg-[var(--color-settings-menu-active)] px-3 py-2 text-left text-[13px] text-fg [app-region:no-drag] [-webkit-app-region:no-drag]"
+                className="w-full rounded-[var(--radius-md)] border-0 bg-[var(--color-settings-menu-active)] px-3 py-2 text-left text-[13px] font-medium text-fg [app-region:no-drag] [-webkit-app-region:no-drag]"
               >
                 OpenAI key configure
               </button>
             </nav>
             <div className="flex min-h-0 flex-col gap-3 overflow-auto p-4 text-[13px]">
               <label className="flex flex-col gap-1.5">
-                <span>Provider</span>
+                <span className="text-[var(--color-text-subtle)]">Provider</span>
                 <select
-                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)]"
+                  className="ui-input [font:inherit]"
                   value={providerSettings.activeProvider}
                   disabled={switchingProvider || savingProviderSettings}
                   onChange={(event) => void handleProviderChange(event.target.value as LlmProviderId)}
@@ -2110,11 +2109,11 @@ export function App() {
                 </p>
               ) : null}
               <label className="flex flex-col gap-1.5">
-                <span>API endpoint</span>
+                <span className="text-[var(--color-text-subtle)]">API endpoint</span>
                 <input
                   type="url"
                   readOnly={providerSettings.activeProvider !== "user-define"}
-                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)] disabled:opacity-80"
+                  className="ui-input disabled:opacity-80"
                   value={
                     providerSettings.activeProvider === "user-define"
                       ? providerSettings.userDefine.baseUrl
@@ -2130,11 +2129,11 @@ export function App() {
                 />
               </label>
               <label className="flex flex-col gap-1.5">
-                <span>API key</span>
+                <span className="text-[var(--color-text-subtle)]">API key</span>
                 <input
                   type={providerSettings.activeProvider === "user-define" ? "password" : "text"}
                   readOnly={providerSettings.activeProvider !== "user-define"}
-                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)] disabled:opacity-80"
+                  className="ui-input disabled:opacity-80"
                   value={
                     providerSettings.activeProvider === "user-define"
                       ? providerSettings.userDefine.apiKey
@@ -2155,11 +2154,11 @@ export function App() {
                 </div>
               ) : null}
               <label className="flex flex-col gap-1.5">
-                <span>Model</span>
+                <span className="text-[var(--color-text-subtle)]">Model</span>
                 <input
                   type="text"
                   readOnly={providerSettings.activeProvider !== "user-define"}
-                  className="rounded-lg border border-[var(--color-input-border)] bg-[var(--color-input-bg)] px-2.5 py-2.5 text-[13px] leading-snug text-[var(--color-input-text)] [font:inherit] outline-none focus:border-[var(--color-input-focus-border)] focus:shadow-[0_0_0_1px_var(--color-input-focus-border)] disabled:opacity-80"
+                  className="ui-input disabled:opacity-80"
                   value={
                     providerSettings.activeProvider === "user-define"
                       ? providerSettings.userDefine.model
@@ -2178,7 +2177,7 @@ export function App() {
                 <div className="flex justify-start">
                   <button
                     type="button"
-                    className="mt-0 cursor-pointer rounded-lg border-0 bg-[var(--color-btn-default-bg)] px-3.5 py-2 text-sm font-semibold text-white hover:enabled:bg-[var(--color-btn-default-hover)] disabled:cursor-not-allowed disabled:opacity-55"
+                    className="ui-btn-primary mt-0 disabled:cursor-not-allowed disabled:opacity-55"
                     onClick={() => void handleSaveProviderSettings()}
                     disabled={savingProviderSettings || switchingProvider}
                   >
@@ -2192,7 +2191,7 @@ export function App() {
                 <div className="flex justify-start">
                   <button
                     type="button"
-                    className="mt-0 cursor-pointer rounded-lg border-0 bg-[var(--color-btn-default-bg)] px-3.5 py-2 text-sm font-semibold text-white hover:enabled:bg-[var(--color-btn-default-hover)] disabled:cursor-not-allowed disabled:opacity-55"
+                    className="ui-btn-secondary mt-0 disabled:cursor-not-allowed disabled:opacity-55"
                     onClick={() => void handlePickPythonPath()}
                   >
                     Choose Python
@@ -2210,14 +2209,10 @@ export function App() {
         )}
       >
         {assetManifest || deployEligible ? (
-          <div className="flex gap-1.5 border-b border-edge px-4 pb-0 pt-2.5" role="tablist" aria-label="Right pane view">
+          <div className="flex gap-0.5 border-b border-edge px-3 pb-0 pt-2" role="tablist" aria-label="Right pane view">
             <button
               type="button"
-              className={cn(
-                "-mb-px inline-flex cursor-pointer items-center gap-2 rounded-t-lg border border-transparent border-b-0 px-3.5 pb-2.5 pt-2 text-[13px] font-medium tracking-wide text-[var(--color-text-subtle)] [font:inherit] hover:text-[var(--color-slot-action-text)]",
-                rightPaneTab === "emulator" &&
-                  "border-edge bg-[var(--color-surface-elevated)] text-[var(--color-tab-active-text)]"
-              )}
+              className={cn("ui-tab", rightPaneTab === "emulator" && "ui-tab--active")}
               role="tab"
               aria-selected={rightPaneTab === "emulator"}
               onClick={() => setRightPaneTab("emulator")}
@@ -2227,11 +2222,7 @@ export function App() {
             {deployEligible ? (
               <button
                 type="button"
-                className={cn(
-                  "-mb-px inline-flex cursor-pointer items-center gap-2 rounded-t-lg border border-transparent border-b-0 px-3.5 pb-2.5 pt-2 text-[13px] font-medium tracking-wide text-[var(--color-text-subtle)] [font:inherit] hover:text-[var(--color-slot-action-text)]",
-                  rightPaneTab === "deploy" &&
-                    "border-edge bg-[var(--color-surface-elevated)] text-[var(--color-tab-active-text)]"
-                )}
+                className={cn("ui-tab", rightPaneTab === "deploy" && "ui-tab--active")}
                 role="tab"
                 aria-selected={rightPaneTab === "deploy"}
                 onClick={() => setRightPaneTab("deploy")}
@@ -2242,11 +2233,7 @@ export function App() {
             {assetManifest ? (
               <button
                 type="button"
-                className={cn(
-                  "-mb-px inline-flex cursor-pointer items-center gap-2 rounded-t-lg border border-transparent border-b-0 px-3.5 pb-2.5 pt-2 text-[13px] font-medium tracking-wide text-[var(--color-text-subtle)] [font:inherit] hover:text-[var(--color-slot-action-text)]",
-                  rightPaneTab === "assets" &&
-                    "border-edge bg-[var(--color-surface-elevated)] text-[var(--color-tab-active-text)]"
-                )}
+                className={cn("ui-tab", rightPaneTab === "assets" && "ui-tab--active")}
                 role="tab"
                 aria-selected={rightPaneTab === "assets"}
                 onClick={() => setRightPaneTab("assets")}
@@ -2254,7 +2241,7 @@ export function App() {
                 Assets
                 {pendingChangeSlotIds.length > 0 ? (
                   <span
-                    className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-accent-purple)] px-1.5 text-[11px] font-semibold text-white"
+                    className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-badge-bg)] px-1.5 text-[11px] font-semibold text-[var(--color-badge-text)]"
                     aria-label={`${pendingChangeSlotIds.length} pending`}
                   >
                     {pendingChangeSlotIds.length}

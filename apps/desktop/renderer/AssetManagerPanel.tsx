@@ -212,7 +212,7 @@ export function AssetManagerPanel({
         <h2 className="m-0 text-[15px] font-semibold tracking-wide text-[var(--color-tab-active-text)]">Assets</h2>
         <button
           type="button"
-          className="cursor-pointer rounded-lg border border-[var(--color-accent-purple-ring)] bg-[var(--gradient-accent-btn)] px-3.5 py-2 text-xs font-semibold tracking-wide text-[var(--color-badge-text)] [font:inherit] hover:enabled:brightness-110 disabled:cursor-not-allowed disabled:border-[var(--color-border-dashed)] disabled:bg-[var(--color-border-dashed)] disabled:opacity-45"
+          className="cursor-pointer rounded-lg border border-[var(--color-accent-purple)] bg-[var(--color-accent-purple)] px-3.5 py-2 text-xs font-semibold tracking-wide text-[var(--color-badge-text)] [font:inherit] hover:enabled:brightness-110 disabled:cursor-not-allowed disabled:border-[var(--color-border-dashed)] disabled:bg-[var(--color-accent-btn-disabled-bg)] disabled:text-[var(--color-text-subtle)] disabled:opacity-100"
           onClick={() => void handleApplyAssets()}
           disabled={!hasPendingChanges || inFlight.applying}
           title={

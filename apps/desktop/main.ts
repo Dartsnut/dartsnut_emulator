@@ -49,6 +49,7 @@ import {
   type IntakeSubmitQuestionAnswerRequest,
   type IntakeSubmitQuestionAnswerResponse,
   type AgentSessionWorkspaceSummary,
+  buildCreationIntakeUserPrompt,
   buildPostIntakeCreatorUserPrompt,
   resolveSessionUserLocale,
   type UserLocale,
@@ -71,6 +72,12 @@ import {
   AgentSessionPersistence,
   isAgentSessionPersistenceDisabledByEnv,
   AGENT_STOPPED_MESSAGE,
+  executeIntakeHostTool,
+  isIntakeStateReady,
+  nextAfterProjectType,
+  parseConfWidgetSize,
+  precheckAskQuestion,
+  type IntakeToolState,
   type ChatMessage
 } from "@dartsnut/agent-runtime";
 import { formatAgentEventForConsole } from "./agentEventConsole";
@@ -285,8 +292,16 @@ const pythonSettingsPath = () => path.join(app.getPath("userData"), "python-sett
 
 const LLM_PROVIDER_IDS: readonly LlmProviderId[] = ["gpt", "gemini", "xiaomi", "claude", "user-define"];
 
+/** Hidden from settings UI and remapped on load until Claude tool streaming is stable. */
+const UI_DISABLED_LLM_PROVIDERS = new Set<LlmProviderId>(["claude"]);
+const UI_FALLBACK_LLM_PROVIDER: LlmProviderId = "gpt";
+
 function isLlmProviderId(value: unknown): value is LlmProviderId {
   return typeof value === "string" && (LLM_PROVIDER_IDS as readonly string[]).includes(value);
+}
+
+function resolveUiSelectableProvider(id: LlmProviderId): LlmProviderId {
+  return UI_DISABLED_LLM_PROVIDERS.has(id) ? UI_FALLBACK_LLM_PROVIDER : id;
 }
 
 function normalizeUserDefineSettings(input?: Partial<UserDefineProviderSettings> | null): UserDefineProviderSettings {
@@ -326,13 +341,13 @@ function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): P
 
   const userDefine = normalizeUserDefineSettings(input?.userDefine);
   const hasUserDefineCredentials = Boolean(userDefine.apiKey || userDefine.model || userDefine.baseUrl);
-  const activeProvider = isLlmProviderId(input?.activeProvider)
+  const rawProvider = isLlmProviderId(input?.activeProvider)
     ? input.activeProvider
     : hasUserDefineCredentials
       ? "user-define"
       : "gpt";
 
-  return { activeProvider, userDefine };
+  return { activeProvider: resolveUiSelectableProvider(rawProvider), userDefine };
 }
 
 function maskApiKeyForPreview(value: string): string {
@@ -367,7 +382,11 @@ function readProviderSettings(): ProviderSettings {
   }
   try {
     const content = JSON.parse(fs.readFileSync(file, "utf-8")) as LegacyProviderSettingsFile;
-    return normalizeProviderSettings(content);
+    const normalized = normalizeProviderSettings(content);
+    if (isLlmProviderId(content.activeProvider) && UI_DISABLED_LLM_PROVIDERS.has(content.activeProvider)) {
+      writeProviderSettings(normalized);
+    }
+    return normalized;
   } catch {
     return normalizeProviderSettings();
   }
@@ -377,6 +396,9 @@ function validateProviderSettingsInput(input: SaveProviderSettingsRequest): { ok
   const normalized = normalizeProviderSettings(input);
   if (!isLlmProviderId(normalized.activeProvider)) {
     return { ok: false, error: "Invalid provider selection." };
+  }
+  if (UI_DISABLED_LLM_PROVIDERS.has(input.activeProvider)) {
+    return { ok: false, error: "Claude is not available in the app right now." };
   }
   if (normalized.activeProvider !== "user-define") {
     return { ok: true };
@@ -748,19 +770,6 @@ function resolveCreatorTemplatePath(templateMode: CreatorTemplateMode): string {
   return path.join(repoRoot, creatorTemplatePaths[templateMode]);
 }
 
-function parseConfWidgetSize(size: unknown): WidgetSize | undefined {
-  if (!Array.isArray(size) || size.length !== 2) {
-    return undefined;
-  }
-  const w = Number(size[0]);
-  const h = Number(size[1]);
-  if (!Number.isFinite(w) || !Number.isFinite(h)) {
-    return undefined;
-  }
-  const key = `${w}x${h}` as WidgetSize;
-  return WIDGET_DISPLAY_SIZES.includes(key) ? key : undefined;
-}
-
 function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
   templateMode: CreatorTemplateMode;
   projectType: ProjectType;
@@ -792,11 +801,6 @@ function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
     return null;
   }
   return null;
-}
-
-interface IntakeToolState {
-  projectType?: ProjectType;
-  widgetSize?: WidgetSize;
 }
 
 /** Cleared in `sendPrompt` finally so an in-flight deferred chip question cannot strand the agent. */
@@ -891,140 +895,25 @@ function applyWorkspaceRoot(selectedPath: string): void {
   emitBootstrapStateToRenderer();
 }
 
-function readWorkspaceConfIntakeSnapshot(
-  absoluteWorkspacePath: string,
-  intent?: IntakeToolState
-): Record<string, unknown> {
-  const confPath = path.join(absoluteWorkspacePath, "conf.json");
-  let entries: string[] = [];
-  try {
-    entries = fs.readdirSync(absoluteWorkspacePath);
-  } catch {
-    entries = [];
-  }
-  const base: Record<string, unknown> = {
-    workspacePath: absoluteWorkspacePath,
-    directoryEntryCount: entries.length,
-    confPath
-  };
-  if (!fs.existsSync(confPath)) {
-    return {
-      ...base,
-      conf_status: "missing",
-      guidance:
-        "No conf.json yet — safe for a brand-new scaffold. Confirm the user's goal in one sentence, then the next agent phase can create conf.json + main.py."
-    };
-  }
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(confPath, "utf-8"));
-  } catch {
-    return {
-      ...base,
-      conf_status: "invalid_json",
-      guidance:
-        "conf.json exists but is not valid JSON. Ask whether to repair/replace it or pick a different empty folder."
-    };
-  }
-  const deploy = validateDeployWorkspaceConf(raw);
-  const hints = readWorkspaceCreatorHints(absoluteWorkspacePath);
-  const conf = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  const size = conf.size;
-  const parsedSize = parseConfWidgetSize(size);
-  const notes: string[] = [];
-  if (intent?.projectType && deploy.ok && deploy.projectType !== intent.projectType) {
-    notes.push(
-      `User chose "${intent.projectType}" but conf.json declares "${deploy.projectType}". Ask one question: extend the existing project or use another folder.`
-    );
-  }
-  if (
-    intent?.projectType === "widget" &&
-    intent.widgetSize &&
-    parsedSize &&
-    parsedSize !== intent.widgetSize
-  ) {
-    notes.push(
-      `User chose widget size ${intent.widgetSize} but conf.json size maps to ${parsedSize}. Ask which size to follow.`
-    );
-  }
-  if (deploy.ok && entries.some((n) => n === "main.py")) {
-    notes.push("main.py is already present — confirm whether to modify it or start fresh.");
-  }
-  return {
-    ...base,
-    conf_status: deploy.ok ? "valid" : "invalid",
-    deploy_eligibility: deploy,
-    creator_hints: hints,
-    conf_size_parsed: parsedSize ?? null,
-    guidance_notes: notes
-  };
-}
-
-function nextAfterProjectType(pt: ProjectType): string {
-  return pt === "widget"
-    ? "Widget display size: if the user's message already names a supported WxH (128x160, 128x128, 128x64, 64x32), call set_widget_size with that value next. Otherwise call **dartsnut_ask_question** with question_id **widget_display_size** — do **not** pick a default, invent a size, or call set_widget_size or read_workspace_conf until they choose (or their next message is only one of those tokens — then call set_project_type with `widget` then set_widget_size with it)."
-    : "Call **read_workspace_conf** — returns `conf.json` status for the active workspace.";
-}
-
 async function intakeHostToolExecute(
   args: Record<string, unknown>,
   state: IntakeToolState
 ): Promise<string> {
-  const action = args.action;
-  if (typeof action !== "string") {
-    return JSON.stringify({ ok: false, error: "action is required" });
+  const root = workspaceRoot;
+  if (!root) {
+    return JSON.stringify({ ok: false, error: "No workspace is active." });
   }
-  if (action === "set_project_type") {
-    const pt = args.project_type;
-    if (pt !== "game" && pt !== "widget") {
-      return JSON.stringify({ ok: false, error: "project_type must be \"game\" or \"widget\"." });
-    }
-    state.projectType = pt;
-    if (pt === "game") {
-      state.widgetSize = undefined;
-    }
-    return JSON.stringify({
-      ok: true,
-      recorded: { projectType: pt },
-      next: nextAfterProjectType(pt)
-    });
-  }
-  if (action === "set_widget_size") {
-    if (state.projectType !== "widget") {
-      return JSON.stringify({
-        ok: false,
-        error: "set_widget_size requires project_type widget (call set_project_type first)."
-      });
-    }
-    const sz = args.widget_size;
-    if (typeof sz !== "string" || !WIDGET_DISPLAY_SIZES.includes(sz as WidgetSize)) {
-      return JSON.stringify({
-        ok: false,
-        error: `widget_size must be one of: ${WIDGET_DISPLAY_SIZES.join(", ")}.`
-      });
-    }
-    state.widgetSize = sz as WidgetSize;
-    return JSON.stringify({
-      ok: true,
-      recorded: { widgetSize: state.widgetSize },
-      next: "Call **read_workspace_conf** — returns `conf.json` status for the active workspace."
-    });
-  }
-  if (action === "read_workspace_conf") {
-    const root = workspaceRoot;
-    if (!root) {
-      return JSON.stringify({ ok: false, error: "No workspace is active." });
-    }
-    const snapshot = readWorkspaceConfIntakeSnapshot(root, state);
-    return JSON.stringify({ ok: true, ...snapshot });
-  }
-  return JSON.stringify({ ok: false, error: `Unknown intake action: ${action}` });
+  return executeIntakeHostTool(args, state, root);
 }
 
 async function askQuestionHostExecute(
   args: Record<string, unknown>,
   state: IntakeToolState
 ): Promise<string> {
+  const precheck = precheckAskQuestion(args, state);
+  if (precheck.handled && precheck.response !== undefined) {
+    return precheck.response;
+  }
   const questionId = args.question_id;
   if (typeof questionId !== "string") {
     return JSON.stringify({ ok: false, error: "question_id is required" });
@@ -1047,13 +936,6 @@ async function askQuestionHostExecute(
     });
   }
   if (questionId === "widget_display_size") {
-    if (state.projectType !== "widget") {
-      return JSON.stringify({
-        ok: false,
-        error:
-          "widget_display_size requires project_type widget (call set_project_type or ask project_type first)."
-      });
-    }
     agentEventEmitter?.({
       type: "intake_widget_size_prompt",
       at: Date.now(),
@@ -1065,36 +947,6 @@ async function askQuestionHostExecute(
     });
   }
   return JSON.stringify({ ok: false, error: `Unknown question_id: ${questionId}` });
-}
-
-function buildCreationIntakeUserPrompt(
-  userRequest: string,
-  opts?: { widgetSizeFromPicker?: WidgetSize; projectTypeFromPicker?: ProjectType }
-): string {
-  const projectTypeLine =
-    opts?.projectTypeFromPicker != null
-      ? `\n\n[UI] User chose project type **${opts.projectTypeFromPicker}** from the in-app **Game / Widget** chip row. Call \`set_project_type\` with that exact \`project_type\` value, then continue intake per the procedure (widget size if \`widget\`, then \`read_workspace_conf\`). Do not ask game vs widget again.`
-      : "";
-  const pickerLine =
-    opts?.widgetSizeFromPicker != null
-      ? `\n\n[UI] User chose widget display size **${opts.widgetSizeFromPicker}** from the in-app size chip row. Call \`set_project_type\` with \`widget\` then \`set_widget_size\` with exactly that WxH token, then continue intake (\`read_workspace_conf\`). Do not ask for size again.`
-      : "";
-  return [
-    "## New project intake (mandatory tool use)",
-    "An empty workspace directory is already selected on disk. Complete intake before the creator phase writes `conf.json` and `main.py`.",
-    "Use **only** these host tools via native `tool_calls`: **`dartsnut_ask_question`** and **`dartsnut_project_intake`**.",
-    "**Blocking questions (`dartsnut_ask_question`):** Each call shows the matching desktop UI (Game/Widget chips or widget size chips) and **does not return** until the user answers. You **must** call this tool when you need that input and cannot take it reliably from the user's message alone — do **not** rely on hidden marker lines or prose-only prompts for those choices.",
-    "Allowed `question_id` values: **`project_type`**, **`widget_display_size`** (only after `project_type` is `widget`).",
-    "Procedure:",
-    "1. Infer **game** vs **widget** from the user's text **by meaning** in any supported language (English, Simplified Chinese, Traditional Chinese), then call `set_project_type`. Examples (non-exhaustive): game / 游戏 / 遊戲; widget / 小组件 / 小組件 / 組件. When intent is **not** clear, call **`dartsnut_ask_question`** with `question_id` **`project_type`** (then continue from the tool result).",
-    "2. For **widget** display size: supported values are exactly **128x160**, **128x128**, **128x64**, **64x32**. If the message includes one of those WxH literals, call `set_widget_size` with it. If the user describes dimensions in Chinese (or other wording) and the meaning maps unambiguously to one supported token, use that token. Otherwise call **`dartsnut_ask_question`** with `question_id` **`widget_display_size`** — **never** assume a default, invent a size, or call `set_widget_size` or `read_workspace_conf` until they have answered (via chips or typed follow-up). If the message is **only** one of those four literals (no other words), treat it as their size choice for a widget: call `set_project_type` with `widget` then `set_widget_size` with that token, then continue.",
-    "3. Call **`read_workspace_conf`** once type (and widget size if applicable) are resolved.",
-    "4. Use `guidance_notes`, `deploy_eligibility`, and `conf_status` to ask **at most one** focused follow-up when the folder is not a blank slate or types disagree.",
-    "5. Close with **one short sentence** that confirms only **what was recorded** — project type, and (for widgets) the chosen display size — and that the creator phase will run next. **Do not** propose, name, brainstorm, or describe a specific widget/game concept. **Do not** offer alternatives. **Do not** end with a question. Any creative decision is the creator phase's job; if you name a concept here it becomes a conflicting second opinion.",
-    "",
-    "User request:",
-    `${userRequest}${projectTypeLine}${pickerLine}`
-  ].join("\n");
 }
 
 function buildAssetApplierPrompt(request: PromptRequest): string {
@@ -2019,6 +1871,7 @@ function buildSession(
     completionTools?: typeof AGENT_TOOL_SCHEMAS | typeof AGENT_CREATION_INTAKE_TOOL_SCHEMAS;
     hostIntakeToolHandler?: (args: Record<string, unknown>) => Promise<string>;
     hostAskQuestionHandler?: (args: Record<string, unknown>) => Promise<string>;
+    hostIntakeReadyToFinish?: () => boolean;
     skipInitialWorkspaceResolve?: boolean;
     skillBundleMode?: PromptRequest["templateMode"] | "creation-intake" | null;
     sessionPersistence?: AgentSessionPersistence;
@@ -2061,6 +1914,7 @@ function buildSession(
     completionTools: extras?.completionTools,
     hostIntakeToolHandler: extras?.hostIntakeToolHandler,
     hostAskQuestionHandler: extras?.hostAskQuestionHandler,
+    hostIntakeReadyToFinish: extras?.hostIntakeReadyToFinish,
     hostReloadEmulatorHandler: intakeToolsOnly ? undefined : () => executeHostReloadEmulatorForAgent(),
     hostGetEmulatorLogsHandler: intakeToolsOnly
       ? undefined
@@ -2726,11 +2580,19 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         intakeState.projectType = "widget";
         intakeState.widgetSize = req.intakeWidgetSizeChoice;
       }
+      let intakeReadWorkspaceConfDone = false;
       const intakeSession = buildSession(undefined, {
         workspacePath: intakeWorkspace,
         completionTools: AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
-        hostIntakeToolHandler: (args) => intakeHostToolExecute(args, intakeState),
+        hostIntakeToolHandler: async (args) => {
+          if (args.action === "read_workspace_conf") {
+            intakeReadWorkspaceConfDone = true;
+          }
+          return intakeHostToolExecute(args, intakeState);
+        },
         hostAskQuestionHandler: (args) => askQuestionHostExecute(args, intakeState),
+        hostIntakeReadyToFinish: () =>
+          isIntakeStateReady(intakeState) && intakeReadWorkspaceConfDone,
         skillBundleMode: "creation-intake",
         latestUserTextForLocale: req.prompt
       });

@@ -1,0 +1,33 @@
+{
+  "hostIntakeActions": [
+    "set_project_type",
+    "set_widget_size",
+    "read_workspace_conf"
+  ],
+  "askQuestions": [
+    "widget_display_size"
+  ],
+  "intakeToolNames": [
+    "dartsnut_project_intake",
+    "dartsnut_ask_question",
+    "dartsnut_project_intake"
+  ],
+  "creatorToolNames": [
+    "get_dartsnut_skill",
+    "write_file",
+    "reload_emulator",
+    "get_emulator_logs",
+    "read_file",
+    "replace_in_file",
+    "reload_emulator",
+    "get_emulator_logs",
+    "read_file"
+  ],
+  "requiredEventTypes": [
+    "status",
+    "stream",
+    "final"
+  ],
+  "minReasoningChars": 4946,
+  "requireReasoningStream": true
+}

@@ -121,7 +121,6 @@ const LLM_PROVIDER_OPTIONS: { id: LlmProviderId; label: string }[] = [
   { id: "gpt", label: "GPT" },
   { id: "gemini", label: "Gemini" },
   { id: "xiaomi", label: "Xiaomi" },
-  { id: "claude", label: "Claude" },
   { id: "user-define", label: "User define" }
 ];
 

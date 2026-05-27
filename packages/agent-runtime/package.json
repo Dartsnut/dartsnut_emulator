@@ -6,7 +6,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run --exclude '**/*.e2e.test.ts'",
+    "test:e2e": "vitest run '**/*.e2e.test.ts'"
   },
   "dependencies": {
     "@dartsnut/shared-ipc": "workspace:*",

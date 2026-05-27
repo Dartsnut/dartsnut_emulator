@@ -292,16 +292,8 @@ const pythonSettingsPath = () => path.join(app.getPath("userData"), "python-sett
 
 const LLM_PROVIDER_IDS: readonly LlmProviderId[] = ["gpt", "gemini", "xiaomi", "claude", "user-define"];
 
-/** Hidden from settings UI and remapped on load until Claude tool streaming is stable. */
-const UI_DISABLED_LLM_PROVIDERS = new Set<LlmProviderId>(["claude"]);
-const UI_FALLBACK_LLM_PROVIDER: LlmProviderId = "gpt";
-
 function isLlmProviderId(value: unknown): value is LlmProviderId {
   return typeof value === "string" && (LLM_PROVIDER_IDS as readonly string[]).includes(value);
-}
-
-function resolveUiSelectableProvider(id: LlmProviderId): LlmProviderId {
-  return UI_DISABLED_LLM_PROVIDERS.has(id) ? UI_FALLBACK_LLM_PROVIDER : id;
 }
 
 function normalizeUserDefineSettings(input?: Partial<UserDefineProviderSettings> | null): UserDefineProviderSettings {
@@ -347,7 +339,7 @@ function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): P
       ? "user-define"
       : "gpt";
 
-  return { activeProvider: resolveUiSelectableProvider(rawProvider), userDefine };
+  return { activeProvider: rawProvider, userDefine };
 }
 
 function maskApiKeyForPreview(value: string): string {
@@ -382,11 +374,7 @@ function readProviderSettings(): ProviderSettings {
   }
   try {
     const content = JSON.parse(fs.readFileSync(file, "utf-8")) as LegacyProviderSettingsFile;
-    const normalized = normalizeProviderSettings(content);
-    if (isLlmProviderId(content.activeProvider) && UI_DISABLED_LLM_PROVIDERS.has(content.activeProvider)) {
-      writeProviderSettings(normalized);
-    }
-    return normalized;
+    return normalizeProviderSettings(content);
   } catch {
     return normalizeProviderSettings();
   }
@@ -396,9 +384,6 @@ function validateProviderSettingsInput(input: SaveProviderSettingsRequest): { ok
   const normalized = normalizeProviderSettings(input);
   if (!isLlmProviderId(normalized.activeProvider)) {
     return { ok: false, error: "Invalid provider selection." };
-  }
-  if (UI_DISABLED_LLM_PROVIDERS.has(input.activeProvider)) {
-    return { ok: false, error: "Claude is not available in the app right now." };
   }
   if (normalized.activeProvider !== "user-define") {
     return { ok: true };

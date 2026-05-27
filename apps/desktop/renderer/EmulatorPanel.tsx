@@ -139,6 +139,12 @@ export function EmulatorPanel({
     }
   }
 
+  /** Paint black under PixelDarts.png so transparent screen holes keep the asset's rounded corners. */
+  function paintCanvasBlackBase(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, width, height);
+  }
+
   function drawBackgroundOnly(
     canvas: HTMLCanvasElement | null,
     frameMeta: { width: number; height: number } | null = null,
@@ -148,9 +154,10 @@ export function EmulatorPanel({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    paintCanvasBlackBase(ctx, canvas.width, canvas.height);
     if (backgroundRef.current) {
       ctx.drawImage(backgroundRef.current, 0, 0, canvas.width, canvas.height);
+      return;
     }
     fillEmulatorScreenBlack(ctx, frameMeta, scaleMultiplier);
   }
@@ -220,7 +227,7 @@ export function EmulatorPanel({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    paintCanvasBlackBase(ctx, canvas.width, canvas.height);
     const sx = scaleMultiplier;
     if (frame.width === 128 && frame.height === 160) {
       ctx.drawImage(bitmap, 0, 0, 128, 128, 38 * sx, 38 * sx, 512 * sx, 512 * sx);
@@ -526,10 +533,10 @@ export function EmulatorPanel({
       <div className="relative flex min-h-0 flex-1 flex-col items-stretch justify-start gap-0 overflow-hidden p-0 text-[var(--color-emulator-canvas-hint)]">
         <div className="box-border flex min-h-0 min-w-0 w-full flex-1 flex-row items-center justify-center gap-2 overflow-hidden p-0">
           <div className="flex shrink-0 flex-col items-center gap-2 p-2">
-            <div className="ui-canvas-bezel p-1.5">
+            <div className="emulator-canvas-frame">
             <canvas
               ref={canvasRef}
-              className="block h-[400px] w-[294px] shrink-0 rounded-[var(--radius-md)] border-0 bg-transparent [image-rendering:pixelated]"
+              className="block h-[400px] w-[294px] shrink-0 border-0 bg-black [image-rendering:pixelated]"
               width={CANVAS_BASE_WIDTH}
               height={CANVAS_BASE_HEIGHT}
               onContextMenu={(e) => e.preventDefault()}

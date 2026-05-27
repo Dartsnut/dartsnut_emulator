@@ -1685,7 +1685,7 @@ export function App() {
       )}
     >
       <header
-        className="col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),40px)] items-center gap-2 border-b border-edge bg-[var(--gradient-app-bar)] shadow-[var(--shadow-app-bar-divider)] [app-region:no-drag] [-webkit-app-region:no-drag]"
+        className="app-header col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),40px)] items-center gap-2 border-b border-edge bg-[var(--gradient-app-bar)] shadow-[var(--shadow-app-bar-divider)] [app-region:no-drag] [-webkit-app-region:no-drag]"
         style={{
           paddingLeft: "calc(6px + var(--chrome-margin-inline-start))",
           paddingRight: "calc(6px + var(--chrome-margin-inline-end))",
@@ -1895,6 +1895,7 @@ export function App() {
                 {entry.role === "agent" ? (
                   entry.id.startsWith("greeting") ? (
                     <div className="greeting-card" role="status">
+                      <p className="greeting-card__eyebrow">Neon Pit · ready</p>
                       <p className="greeting-card__title">Dartsnut Chat</p>
                       <p className="greeting-card__body">{entry.text}</p>
                     </div>

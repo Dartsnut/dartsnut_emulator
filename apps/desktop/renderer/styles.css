@@ -14,6 +14,61 @@ body {
   overflow: visible;
 }
 
+.app-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+/* Subtle arcade scanlines + grain (Neon Pit atmosphere) */
+.app-shell::before {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  opacity: 0.035;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.35) 2px,
+    rgba(0, 0, 0, 0.35) 4px
+  );
+}
+
+[data-theme="light"] .app-shell::before {
+  opacity: 0.02;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3px,
+    rgba(45, 32, 24, 0.06) 3px,
+    rgba(45, 32, 24, 0.06) 6px
+  );
+}
+
+.app-header {
+  position: relative;
+}
+
+.app-header::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--color-neon-coral) 20%,
+    var(--color-neon-mint) 80%,
+    transparent 100%
+  );
+  opacity: 0.55;
+}
+
 body {
   margin: 0;
   font-family: var(--font-body);
@@ -103,22 +158,48 @@ kbd,
 }
 
 .greeting-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 16px 18px;
-  border-radius: var(--radius-xl);
+  padding: 18px 20px 18px 22px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--color-greeting-border);
   background: var(--color-greeting-bg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  animation: greeting-rise 0.55s var(--ease-out) both;
+}
+
+.greeting-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: linear-gradient(180deg, var(--color-neon-coral), var(--color-neon-mint));
+}
+
+.greeting-card__eyebrow {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-greeting-eyebrow);
+  animation: neon-pulse 3s ease-in-out infinite;
 }
 
 .greeting-card__title {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.03em;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1.15;
   color: var(--color-text-strong);
 }
 
@@ -776,7 +857,7 @@ kbd,
   }
 }
 
-/* —— Shared UI primitives (refined instrument panel) —— */
+/* —— Shared UI primitives (Neon Pit) —— */
 
 .ui-chrome-btn {
   display: inline-flex;
@@ -840,9 +921,10 @@ kbd,
 }
 
 .ui-tab--active {
-  border-color: var(--color-border);
+  border-color: var(--color-tab-active-border);
   color: var(--color-tab-active-text);
   background: var(--color-tab-active-bg);
+  box-shadow: inset 0 -2px 0 var(--color-neon-coral);
 }
 
 .ui-chip {
@@ -862,8 +944,9 @@ kbd,
 }
 
 .ui-chip:hover:enabled {
-  border-color: var(--color-chip-hover-border);
-  background: var(--color-chip-hover-bg);
+  border-color: var(--color-neon-mint-dim);
+  background: rgba(46, 242, 160, 0.08);
+  box-shadow: 0 0 12px var(--color-neon-mint-dim);
 }
 
 .ui-chip:focus-visible {
@@ -888,11 +971,16 @@ kbd,
     box-shadow var(--duration-normal) var(--ease-out);
 }
 
+.ui-composer:focus-within {
+  border-color: var(--color-neon-mint-dim);
+}
+
 .ui-composer[data-expanded="true"] {
   align-items: flex-end;
   border-radius: var(--radius-xl);
   padding: 10px 12px 12px 14px;
   box-shadow: var(--shadow-composer-elevated);
+  border-color: var(--color-neon-mint-dim);
 }
 
 .ui-btn-primary {
@@ -910,7 +998,8 @@ kbd,
 }
 
 .ui-btn-primary:hover:enabled {
-  filter: brightness(1.06);
+  filter: brightness(1.08);
+  box-shadow: 0 0 20px var(--color-neon-coral-dim);
 }
 
 .ui-btn-primary:disabled {
@@ -1003,13 +1092,20 @@ kbd,
   color: var(--color-tab-active-text);
 }
 
+/* Outer shell clip radius at default preview scale */
+.emulator-canvas-frame {
+  display: inline-block;
+  border-radius: 13px;
+  overflow: hidden;
+  line-height: 0;
+  box-shadow: var(--color-canvas-bezel-glow), var(--shadow-md);
+}
+
 .ui-canvas-bezel {
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   border: 1px solid var(--color-canvas-bezel-border);
   background: var(--color-canvas-bezel);
-  box-shadow:
-    var(--shadow-md),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  box-shadow: var(--color-canvas-bezel-glow), var(--shadow-md), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
 .left-rail {
@@ -1021,6 +1117,7 @@ kbd,
   pointer-events: none;
   position: absolute;
   inset: 0;
-  opacity: 0.35;
-  background-image: radial-gradient(circle at 20% 0%, rgba(91, 108, 255, 0.07), transparent 45%);
+  opacity: 1;
+  background-image: radial-gradient(circle at 8% 0%, var(--color-neon-coral-dim), transparent 42%),
+    radial-gradient(circle at 92% 30%, var(--color-neon-mint-dim), transparent 38%);
 }

@@ -11,6 +11,7 @@ import {
   type CompletionResult
 } from "../src/providerClient";
 import { SessionEngine } from "../src/sessionEngine";
+import { AGENT_CREATION_INTAKE_TOOL_SCHEMAS } from "../src/toolSchemas";
 import { WorkspacePolicy } from "../src/workspacePolicy";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
 
@@ -93,8 +94,8 @@ class MultiEnvelopeProvider {
     if (this.call === 1) {
       return textOnly(
         '{"response":"first envelope","actions":[{"tool":"write_file","path":"one.txt","content":"1"}]}' +
-          "\n\n" +
-          '{"response":"second envelope","actions":[{"tool":"write_file","path":"two.txt","content":"2"}]}'
+        "\n\n" +
+        '{"response":"second envelope","actions":[{"tool":"write_file","path":"two.txt","content":"2"}]}'
       );
     }
     return textOnly(
@@ -130,6 +131,59 @@ class CopyAssetProvider {
         response: "Copied font asset.",
         actions: []
       })
+    );
+  }
+}
+
+class ClaudeFunctionCallsXmlProvider {
+  async complete(): Promise<CompletionResult> {
+    return textOnly(
+      [
+        "I'll set up your widget project.",
+        "<function_calls>",
+        '<invoke name="dartsnut_ask_question">',
+        '<parameter name="question_id">widget_display_size</parameter>',
+        "</invoke>",
+        "</function_calls>",
+        "<function_calls>",
+        '<invoke name="dartsnut_project_intake">',
+        '<parameter name="action">set_project_type</parameter>',
+        '<parameter name="project_type">widget</parameter>',
+        "</invoke>",
+        "</function_calls>"
+      ].join("\n")
+    );
+  }
+}
+
+/** Same XML order as live Claude intake: ask_question before set_widget_size in one turn. */
+class ClaudeIntakeBatchOrderProvider {
+  async complete(): Promise<CompletionResult> {
+    return textOnly(
+      [
+        "<function_calls>",
+        '<invoke name="dartsnut_project_intake">',
+        '<parameter name="action">set_project_type</parameter>',
+        '<parameter name="project_type">widget</parameter>',
+        "</invoke>",
+        "</function_calls>",
+        "<function_calls>",
+        '<invoke name="dartsnut_ask_question">',
+        '<parameter name="question_id">widget_display_size</parameter>',
+        "</invoke>",
+        "</function_calls>",
+        "<function_calls>",
+        '<invoke name="dartsnut_project_intake">',
+        '<parameter name="action">set_widget_size</parameter>',
+        '<parameter name="widget_size">128x128</parameter>',
+        "</invoke>",
+        "</function_calls>",
+        "<function_calls>",
+        '<invoke name="dartsnut_project_intake">',
+        '<parameter name="action">read_workspace_conf</parameter>',
+        "</invoke>",
+        "</function_calls>"
+      ].join("\n")
     );
   }
 }
@@ -617,6 +671,65 @@ describe("SessionEngine tool loop", () => {
     expect(statusMessages).toContain("Ran write file note.txt");
   });
 
+  it("parses Claude <function_calls> XML for intake host tools", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const intakeCalls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const engine = new SessionEngine({
+      provider: new ClaudeFunctionCallsXmlProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a creation intake assistant.",
+      completionTools: AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
+      hostIntakeToolHandler: async (args) => {
+        intakeCalls.push({ tool: "dartsnut_project_intake", args });
+        return JSON.stringify({ ok: true });
+      },
+      hostAskQuestionHandler: async (args) => {
+        intakeCalls.push({ tool: "dartsnut_ask_question", args });
+        return JSON.stringify({ ok: true, question_id: args.question_id });
+      }
+    });
+
+    await engine.runPrompt("new widget", () => { });
+
+    expect(intakeCalls).toEqual(
+      expect.arrayContaining([
+        { tool: "dartsnut_ask_question", args: { question_id: "widget_display_size" } },
+        {
+          tool: "dartsnut_project_intake",
+          args: { action: "set_project_type", project_type: "widget" }
+        }
+      ])
+    );
+  });
+
+  it("runs intake project_intake before ask_question when Claude XML lists ask first", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const executionOrder: string[] = [];
+    const engine = new SessionEngine({
+      provider: new ClaudeIntakeBatchOrderProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a creation intake assistant.",
+      completionTools: AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
+      hostIntakeToolHandler: async (args) => {
+        executionOrder.push(`intake:${String(args.action)}`);
+        return JSON.stringify({ ok: true });
+      },
+      hostAskQuestionHandler: async (args) => {
+        executionOrder.push(`ask:${String(args.question_id)}`);
+        return JSON.stringify({ ok: true, question_id: args.question_id });
+      }
+    });
+
+    await engine.runPrompt("widget clock 128x128", () => { });
+
+    const askIdx = executionOrder.indexOf("ask:widget_display_size");
+    const sizeIdx = executionOrder.indexOf("intake:set_widget_size");
+    expect(askIdx).toBeGreaterThanOrEqual(0);
+    expect(sizeIdx).toBeGreaterThanOrEqual(0);
+    expect(sizeIdx).toBeLessThan(askIdx);
+    expect(executionOrder.indexOf("intake:set_project_type")).toBeLessThan(sizeIdx);
+  });
+
   it("applies targeted replace_in_file actions for existing files", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     fs.writeFileSync(path.join(tempRoot, "hello.txt"), "hello dartsnut", "utf-8");
@@ -866,7 +979,7 @@ describe("SessionEngine tool loop", () => {
     });
 
     const prompt = ["TEMPLATE", "", "User request:", "create 128x128 flipping clock widget"].join("\n");
-    const response = await engine.runPrompt(prompt, () => {});
+    const response = await engine.runPrompt(prompt, () => { });
 
     expect(provider.call).toBe(5);
     expect(provider.toolFirstTurn).toBe(true);
@@ -889,7 +1002,7 @@ describe("SessionEngine tool loop", () => {
     });
 
     const prompt = ["TEMPLATE", "", "User request:", "128x128 flipping clock widget"].join("\n");
-    await engine.runPrompt(prompt, () => {});
+    await engine.runPrompt(prompt, () => { });
 
     expect(provider.call).toBe(1);
     const injectedRecovery = provider.lastMessages.filter(
@@ -901,7 +1014,7 @@ describe("SessionEngine tool loop", () => {
     expect(injectedRecovery).toHaveLength(0);
   });
 
-  it("finalizes tool-free creator reply when scaffold files are still missing", async () => {
+  it("nudges creator to scaffold when the first reply has no tools and conf.json is missing", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     const provider = new CreatorClarifyThenBuildProvider();
     const engine = new SessionEngine({
@@ -912,11 +1025,16 @@ describe("SessionEngine tool loop", () => {
     });
 
     const prompt = ["TEMPLATE", "", "User request:", "Trajectory smoothing"].join("\n");
-    const response = await engine.runPrompt(prompt, () => {});
+    const response = await engine.runPrompt(prompt, () => { });
 
-    expect(provider.call).toBe(1);
-    expect(response).toContain("Which visualization");
-    expect(fs.existsSync(path.join(tempRoot, "conf.json"))).toBe(false);
+    expect(provider.call).toBe(3);
+    expect(
+      provider.lastMessages.some(
+        (m) => m.role === "user" && m.content.includes("no conf.json yet")
+      )
+    ).toBe(true);
+    expect(response).toContain("Done.");
+    expect(fs.existsSync(path.join(tempRoot, "conf.json"))).toBe(true);
   });
 
   it("executes get_dartsnut_skill then write_file with skill content in thread", async () => {
@@ -933,7 +1051,7 @@ describe("SessionEngine tool loop", () => {
       }
     });
 
-    const response = await engine.runPrompt("scaffold", () => {});
+    const response = await engine.runPrompt("scaffold", () => { });
     expect(fs.readFileSync(path.join(tempRoot, "x.txt"), "utf-8")).toBe("ok");
     expect(response).toContain("Done.");
     expect(provider.receivedMessages.length).toBeGreaterThanOrEqual(2);
@@ -952,7 +1070,7 @@ describe("SessionEngine tool loop", () => {
       }
     });
 
-    const response = await engine.runPrompt("try load display mapping", () => {});
+    const response = await engine.runPrompt("try load display mapping", () => { });
     expect(response).toContain("Noted denial.");
   });
 });
@@ -1060,7 +1178,26 @@ class CreatorClarifyThenBuildProvider implements CompletionProvider {
   async complete(messages: ChatMessage[]): Promise<CompletionResult> {
     this.call += 1;
     this.lastMessages = messages;
-    return textOnly("Which visualization do you prefer?");
+    if (this.call === 1) {
+      return textOnly("Which visualization do you prefer?");
+    }
+    if (this.call === 2) {
+      return {
+        content: "Scaffolding.",
+        toolCalls: [
+          {
+            id: "w_conf",
+            name: "write_file",
+            argumentsJson: JSON.stringify({
+              path: "conf.json",
+              content:
+                '{"id":"t","type":"widget","name":"T","author":"A","version":"1","description":"d","size":[128,128],"fields":[],"preview":[""]}'
+            })
+          }
+        ]
+      };
+    }
+    return textOnly("Done.");
   }
 }
 
@@ -1114,7 +1251,7 @@ describe("SessionEngine abort", () => {
       skipInitialWorkspaceResolve: true
     });
 
-    const run = engine.runPrompt("stop me", () => {}, abort.signal);
+    const run = engine.runPrompt("stop me", () => { }, abort.signal);
     const rejection = expect(run).rejects.toThrow(AGENT_STOPPED_MESSAGE);
     abort.abort();
     await rejection;
@@ -1136,8 +1273,8 @@ describe("SessionEngine workspace persistence", () => {
       sessionSection: "game-creator"
     });
 
-    await engine.runPrompt("first line", () => {});
-    await engine.runPrompt("second line", () => {});
+    await engine.runPrompt("first line", () => { });
+    await engine.runPrompt("second line", () => { });
 
     const userLines = provider.lastMessages
       .filter((m): m is Extract<ChatMessage, { role: "user" }> => m.role === "user")

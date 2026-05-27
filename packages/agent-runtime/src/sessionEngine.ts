@@ -23,6 +23,7 @@ import { DEFERRED_SKILL_IDS, readDeferredSkillMarkdown } from "./skillBundle";
 import type { AgentSessionPersistence } from "./agentSessionPersistence";
 import { AGENT_SESSION_SCHEMA_VERSION } from "./agentSessionPersistence";
 import {
+  decideCreatorLoopStep,
   isCreatorTemplateMode,
   isFileMutationToolName,
   readCreatorArtifactStatus
@@ -34,6 +35,10 @@ import {
   TOOL_ENVELOPE_STREAM_REPLACE,
   type BuildStreamingFileToolEnvelopeOptions
 } from "./streamingToolEnvelope";
+import {
+  createXmlToolUiStreamFilterState,
+  filterAssistantUiStreamDelta
+} from "./xmlToolCallUiStreamFilter";
 import { WorkspacePolicy } from "./workspacePolicy";
 
 /** Cap read_file tool payloads to limit conversation growth and main-thread JSON work. */
@@ -94,6 +99,57 @@ type ToolAction =
     skill_id: DeferredSkillId;
   };
 
+function intakeToolSortRank(toolName: string, args?: Record<string, unknown>): number {
+  if (toolName === "dartsnut_project_intake") {
+    const action = args?.action;
+    if (action === "set_project_type") {
+      return 0;
+    }
+    if (action === "set_widget_size") {
+      return 1;
+    }
+    if (action === "read_workspace_conf") {
+      return 2;
+    }
+    return 3;
+  }
+  if (toolName === "dartsnut_ask_question") {
+    return 10;
+  }
+  return 5;
+}
+
+function sortParsedToolCallsForExecution(toolCalls: ParsedToolCall[]): ParsedToolCall[] {
+  return [...toolCalls].sort((a, b) => {
+    let aArgs: Record<string, unknown> = {};
+    let bArgs: Record<string, unknown> = {};
+    try {
+      aArgs = JSON.parse(a.argumentsJson || "{}") as Record<string, unknown>;
+    } catch {
+      aArgs = {};
+    }
+    try {
+      bArgs = JSON.parse(b.argumentsJson || "{}") as Record<string, unknown>;
+    } catch {
+      bArgs = {};
+    }
+    return intakeToolSortRank(a.name, aArgs) - intakeToolSortRank(b.name, bArgs);
+  });
+}
+
+function sortToolActionsForExecution(actions: ToolAction[]): ToolAction[] {
+  return [...actions].sort((a, b) => {
+    const aArgs =
+      a.tool === "dartsnut_project_intake" || a.tool === "dartsnut_ask_question" ? a.args : {};
+    const bArgs =
+      b.tool === "dartsnut_project_intake" || b.tool === "dartsnut_ask_question" ? b.args : {};
+    return (
+      intakeToolSortRank(a.tool, aArgs as Record<string, unknown>) -
+      intakeToolSortRank(b.tool, bArgs as Record<string, unknown>)
+    );
+  });
+}
+
 interface AgentActionEnvelope {
   response?: string;
   actions?: unknown[];
@@ -140,6 +196,8 @@ export interface SessionEngineOptions {
   sessionSection?: string | null;
   /** Prior turns loaded from disk (or empty); excluded from system prompts. */
   initialConversation?: ChatMessage[];
+  /** When true (creation-intake), end the tool loop after host intake fields are recorded. */
+  hostIntakeReadyToFinish?: () => boolean;
   /** Sticky response locale for user-visible prose (not routing). */
   preferredUserLocale?: UserLocale | null;
 }
@@ -334,7 +392,7 @@ export class SessionEngine {
     const fileToolLine = `You have native tools available via the API: ${names.filter(Boolean).join(", ")}.`;
     const lines = [
       fileToolLine,
-      "Call them through the standard tool_calls mechanism — do not emit JSON envelopes, <tool_call> XML, or any other text-shaped tool syntax.",
+      "Call them through the standard tool_calls mechanism — do not emit JSON envelopes, <tool_call> / <function_calls> XML, or any other text-shaped tool syntax.",
       "Rules:",
       "1) Use workspace-relative paths only.",
       "2) For existing files, prefer replace_in_file over write_file to keep payloads small and fast.",
@@ -541,17 +599,19 @@ export class SessionEngine {
     };
   }
 
-  private static parseXmlToolCalls(raw: string): {
-    responseText: string;
-    rawActions: unknown[];
-  } | null {
+  private static trimXmlParameterValue(rawValue: string): string {
+    return rawValue.replace(/^\r?\n/, "").replace(/\r?\n$/, "").trim();
+  }
+
+  private static parseAnthropicStyleToolCallBlocks(
+    raw: string,
+    rawActions: unknown[]
+  ): RegExp | null {
     const toolCallRegex = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
     const matches = Array.from(raw.matchAll(toolCallRegex));
     if (matches.length === 0) {
       return null;
     }
-
-    const rawActions: unknown[] = [];
     for (const match of matches) {
       const inner = match[1] ?? "";
       const fnMatch = inner.match(/<function=([^>\s]+)\s*>([\s\S]*?)<\/function>/i);
@@ -564,18 +624,100 @@ export class SessionEngine {
       const paramRegex = /<parameter=([^>\s]+)\s*>([\s\S]*?)<\/parameter>/gi;
       for (const pMatch of paramsBody.matchAll(paramRegex)) {
         const key = pMatch[1].trim();
-        const rawValue = pMatch[2] ?? "";
-        action[key] = rawValue.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+        action[key] = SessionEngine.trimXmlParameterValue(pMatch[2] ?? "");
       }
       rawActions.push(action);
     }
+    return toolCallRegex;
+  }
+
+  /** Claude / proxy gateways that emit `<function_calls><invoke name="…">` in message text. */
+  private static parseClaudeFunctionCallBlocks(
+    raw: string,
+    rawActions: unknown[]
+  ): RegExp | null {
+    const functionCallsRegex = /<function_calls>([\s\S]*?)<\/function_calls>/gi;
+    const blocks = Array.from(raw.matchAll(functionCallsRegex));
+    if (blocks.length === 0) {
+      return null;
+    }
+    const invokeRegex = /<invoke\s+name="([^"]+)"\s*>([\s\S]*?)<\/invoke>/gi;
+    for (const block of blocks) {
+      const body = block[1] ?? "";
+      for (const invoke of body.matchAll(invokeRegex)) {
+        const toolName = invoke[1].trim();
+        const paramsBody = invoke[2] ?? "";
+        const action: Record<string, string> = { tool: toolName };
+        const paramRegex = /<parameter\s+name="([^"]+)"\s*>([\s\S]*?)<\/parameter>/gi;
+        for (const pMatch of paramsBody.matchAll(paramRegex)) {
+          action[pMatch[1].trim()] = SessionEngine.trimXmlParameterValue(pMatch[2] ?? "");
+        }
+        rawActions.push(action);
+      }
+    }
+    return functionCallsRegex;
+  }
+
+  private static parseXmlToolCalls(raw: string): {
+    responseText: string;
+    rawActions: unknown[];
+  } | null {
+    const rawActions: unknown[] = [];
+    const anthropicStrip = SessionEngine.parseAnthropicStyleToolCallBlocks(raw, rawActions);
+    const claudeStrip = SessionEngine.parseClaudeFunctionCallBlocks(raw, rawActions);
 
     if (rawActions.length === 0) {
       return null;
     }
 
-    const responseText = raw.replace(toolCallRegex, "").trim();
-    return { responseText, rawActions };
+    let responseText = raw;
+    if (anthropicStrip) {
+      responseText = responseText.replace(anthropicStrip, "");
+    }
+    if (claudeStrip) {
+      responseText = responseText.replace(claudeStrip, "");
+    }
+    return { responseText: responseText.trim(), rawActions };
+  }
+
+  /** When the model emits Claude `<function_calls>` XML in `content` with no native `tool_calls`. */
+  private static promoteXmlToolCallsInCompletion(completion: CompletionResult): CompletionResult {
+    if (completion.toolCalls.length > 0) {
+      return {
+        ...completion,
+        toolCalls: sortParsedToolCallsForExecution(completion.toolCalls)
+      };
+    }
+    const xml = SessionEngine.parseXmlToolCalls(completion.content);
+    if (!xml || xml.rawActions.length === 0) {
+      return completion;
+    }
+    const toolCalls: ParsedToolCall[] = [];
+    for (let i = 0; i < xml.rawActions.length; i += 1) {
+      const raw = xml.rawActions[i];
+      if (!raw || typeof raw !== "object") {
+        continue;
+      }
+      const rec = raw as Record<string, string>;
+      const name = typeof rec.tool === "string" ? rec.tool.trim() : "";
+      if (!name) {
+        continue;
+      }
+      const { tool: _ignored, ...rest } = rec;
+      toolCalls.push({
+        id: `xml_${i}_${randomUUID().slice(0, 8)}`,
+        name,
+        argumentsJson: JSON.stringify(rest)
+      });
+    }
+    if (toolCalls.length === 0) {
+      return completion;
+    }
+    return {
+      ...completion,
+      content: xml.responseText,
+      toolCalls: sortParsedToolCallsForExecution(toolCalls)
+    };
   }
 
   private static stripArtifactHashSuffixFromFileName(fileName: string): string {
@@ -791,19 +933,27 @@ export class SessionEngine {
     return `Ran copy asset ${action.source} -> ${action.path}`;
   }
 
-  /** Widget/game creator flows need many read→edit→verify rounds (fonts, reload+logs). */
+  /** Widget/game creator flows need read→edit→verify rounds but should not run unbounded. */
   private static readonly DEFAULT_TOOL_LOOP_MAX = 128;
+  private static readonly CREATOR_TOOL_LOOP_MAX = 48;
+  private static readonly INTAKE_TOOL_LOOP_MAX = 12;
 
-  private static resolveToolLoopMax(): number {
+  private resolveToolLoopMax(): number {
     const raw = process.env.AGENT_TOOL_LOOP_MAX;
-    if (raw === undefined || raw === "") {
-      return SessionEngine.DEFAULT_TOOL_LOOP_MAX;
+    let cap = SessionEngine.DEFAULT_TOOL_LOOP_MAX;
+    if (raw !== undefined && raw !== "") {
+      const n = Number(raw);
+      if (Number.isFinite(n)) {
+        cap = Math.min(128, Math.max(1, Math.floor(n)));
+      }
     }
-    const n = Number(raw);
-    if (!Number.isFinite(n)) {
-      return SessionEngine.DEFAULT_TOOL_LOOP_MAX;
+    if (this.options.sessionSection === "creation-intake") {
+      return Math.min(cap, SessionEngine.INTAKE_TOOL_LOOP_MAX);
     }
-    return Math.min(128, Math.max(1, Math.floor(n)));
+    if (isCreatorTemplateMode(this.options.sessionTemplateMode)) {
+      return Math.min(cap, SessionEngine.CREATOR_TOOL_LOOP_MAX);
+    }
+    return cap;
   }
 
   private readCreatorArtifacts(): { confJson: boolean; mainPy: boolean } {
@@ -811,6 +961,43 @@ export class SessionEngine {
       fs.existsSync.bind(fs),
       (relativePath) => this.options.workspacePolicy.resolveWithinRoot(relativePath)
     );
+  }
+
+  private creatorNeedsScaffold(artifactStatus: { confJson: boolean }): boolean {
+    return isCreatorTemplateMode(this.options.sessionTemplateMode) && !artifactStatus.confJson;
+  }
+
+  private static readonly CREATOR_SCAFFOLD_NUDGE =
+    "The workspace has no conf.json yet. Call get_dartsnut_skill for karpathy-guidelines, creator-incremental, conf-contract, and pydartsnut-core, then write_file for conf.json and main.py. Do not reply with prose only — use tools.";
+
+  private static readonly MAX_CREATOR_SCAFFOLD_NUDGES = 6;
+
+  /** Cap assistant stream forwarded to UI during creator (avoids 10k+ JSON prose freezing the timeline). */
+  private static readonly CREATOR_STREAM_UI_CAP = 2_500;
+
+  private pushCreatorScaffoldNudge(
+    messages: ChatMessage[],
+    onEvent: (event: AgentEvent) => void
+  ): void {
+    onEvent({
+      type: "status",
+      message: "Scaffolding widget files (conf.json, main.py)…",
+      at: Date.now()
+    });
+    messages.push({ role: "user", content: SessionEngine.CREATOR_SCAFFOLD_NUDGE });
+  }
+
+  private bumpCreatorStepsWithoutConfJson(counter: { value: number }): void {
+    if (!isCreatorTemplateMode(this.options.sessionTemplateMode)) {
+      return;
+    }
+    const artifacts = this.readCreatorArtifacts();
+    const artifactsReady = artifacts.confJson && artifacts.mainPy;
+    if (!artifactsReady) {
+      counter.value += 1;
+    } else {
+      counter.value = 0;
+    }
   }
 
   private emitTurnCompletionStats(
@@ -1038,7 +1225,8 @@ export class SessionEngine {
       result: string;
     }> = [];
 
-    for (const toolCall of completion.toolCalls) {
+    const orderedCalls = sortParsedToolCallsForExecution(completion.toolCalls);
+    for (const toolCall of orderedCalls) {
       throwIfAborted(abortSignal);
       let action: ToolAction | null = null;
       let result: string;
@@ -1068,7 +1256,7 @@ export class SessionEngine {
           value.tool !== "get_dartsnut_skill"
       );
 
-    const assistantToolCalls: ToolCallEnvelope[] = completion.toolCalls.map((toolCall) => ({
+    const assistantToolCalls: ToolCallEnvelope[] = orderedCalls.map((toolCall) => ({
       id: toolCall.id,
       type: "function",
       function: { name: toolCall.name, arguments: toolCall.argumentsJson }
@@ -1127,7 +1315,11 @@ export class SessionEngine {
       }
     }
 
-    const maxToolRounds = SessionEngine.resolveToolLoopMax();
+    const maxToolRounds = this.resolveToolLoopMax();
+    let verifyStepsSinceArtifactsReady = 0;
+    let creatorStallNudgeUsed = false;
+    let creatorScaffoldNudgeCount = 0;
+    const creatorStepsWithoutConf = { value: 0 };
 
     for (let step = 0; step < maxToolRounds; step += 1) {
       let filesWrittenThisCompletion = 0;
@@ -1143,12 +1335,40 @@ export class SessionEngine {
       const liveToolEnvelopeStreamed: { count: number; lastTail?: string } = { count: 0 };
       const livePreviousByPath = new Map<string, string>();
       let assistantStreamContent = "";
-      const completion = await this.options.provider.complete(messages, {
+      const uiXmlStreamFilter = createXmlToolUiStreamFilterState();
+      const creatorStreamMode = isCreatorTemplateMode(this.options.sessionTemplateMode);
+      let creatorStreamToUiChars = 0;
+      let creatorStreamTruncationNotified = false;
+      const completionRaw = await this.options.provider.complete(messages, {
         tools: completionTools,
         abortSignal,
         onChunk: (delta) => {
           assistantStreamContent += delta;
-          onEvent({ type: "stream", delta, at: Date.now() });
+          const uiDelta = filterAssistantUiStreamDelta(uiXmlStreamFilter, delta);
+          if (uiDelta.length === 0) {
+            return;
+          }
+          if (creatorStreamMode) {
+            if (creatorStreamToUiChars >= SessionEngine.CREATOR_STREAM_UI_CAP) {
+              if (!creatorStreamTruncationNotified) {
+                creatorStreamTruncationNotified = true;
+                onEvent({
+                  type: "status",
+                  message: "Creator still working (long model output hidden in chat)…",
+                  at: Date.now()
+                });
+              }
+              return;
+            }
+            const remain = SessionEngine.CREATOR_STREAM_UI_CAP - creatorStreamToUiChars;
+            const slice = uiDelta.length <= remain ? uiDelta : uiDelta.slice(0, remain);
+            creatorStreamToUiChars += slice.length;
+            if (slice.length > 0) {
+              onEvent({ type: "stream", delta: slice, at: Date.now() });
+            }
+            return;
+          }
+          onEvent({ type: "stream", delta: uiDelta, at: Date.now() });
         },
         onReasoningChunk: (delta) => {
           if (delta.length > 0) {
@@ -1167,6 +1387,7 @@ export class SessionEngine {
           );
         }
       });
+      const completion = SessionEngine.promoteXmlToolCallsInCompletion(completionRaw);
 
       const reasoningTrimmed = completion.reasoningContent?.trim() ?? "";
       if (reasoningTrimmed.length > 0) {
@@ -1199,6 +1420,91 @@ export class SessionEngine {
         workspaceHasConfJson: artifactStatus.confJson,
         workspaceHasMainPy: artifactStatus.mainPy
       });
+
+      if (isCreatorTemplateMode(this.options.sessionTemplateMode)) {
+        if (artifactStatus.confJson && artifactStatus.mainPy) {
+          if (completion.toolCalls.length > 0) {
+            verifyStepsSinceArtifactsReady += 1;
+          }
+        } else {
+          verifyStepsSinceArtifactsReady = 0;
+        }
+        const loopDecision = decideCreatorLoopStep(
+          {
+            step,
+            toolCallCount: completion.toolCalls.length,
+            contentChars: completion.content.length,
+            reasoningChars: reasoningTrimmed.length,
+            filesWrittenThisTurn: filesWrittenThisCompletion,
+            workspaceHasConfJson: artifactStatus.confJson,
+            workspaceHasMainPy: artifactStatus.mainPy,
+            toolNames: completion.toolCalls.map((tc) => tc.name)
+          },
+          verifyStepsSinceArtifactsReady,
+          creatorStepsWithoutConf.value
+        );
+        if (loopDecision.type === "fail") {
+          this.emitTransaction({
+            type: "creator.incomplete_turn",
+            correlationId: turnCorrelationId,
+            step,
+            reason: loopDecision.reason,
+            stepsWithoutConfJson: creatorStepsWithoutConf.value
+          });
+          onEvent({ type: "error", message: loopDecision.message, at: Date.now() });
+          await this.finalizeWorkspacePersistence(messages, systemSlots, loopDecision.message);
+          return loopDecision.message;
+        }
+        if (loopDecision.type === "complete") {
+          const summary =
+            completion.content.trim().length > 0 ? completion.content.trim() : loopDecision.summary;
+          onEvent({ type: "final", content: summary, at: Date.now() });
+          await this.finalizeWorkspacePersistence(messages, systemSlots, summary);
+          return summary;
+        }
+        if (loopDecision.type === "stall_turn") {
+          this.emitTransaction({
+            type: "creator.stall_turn",
+            correlationId: turnCorrelationId,
+            step,
+            reason: loopDecision.reason,
+            reasoningChars: reasoningTrimmed.length,
+            workspaceHasConfJson: artifactStatus.confJson,
+            workspaceHasMainPy: artifactStatus.mainPy
+          });
+          if (!creatorStallNudgeUsed) {
+            creatorStallNudgeUsed = true;
+            onEvent({
+              type: "status",
+              message: "Long reply without file tools — nudging creator to write files…",
+              at: Date.now()
+            });
+            messages.push({ role: "user", content: loopDecision.nudgeUser });
+            this.bumpCreatorStepsWithoutConfJson(creatorStepsWithoutConf);
+            continue;
+          }
+          if (this.creatorNeedsScaffold(artifactStatus)) {
+            creatorScaffoldNudgeCount += 1;
+            if (creatorScaffoldNudgeCount > SessionEngine.MAX_CREATOR_SCAFFOLD_NUDGES) {
+              const failMsg =
+                "Creator could not scaffold conf.json after repeated prose-only replies.";
+              this.emitTransaction({
+                type: "creator.incomplete_turn",
+                correlationId: turnCorrelationId,
+                step,
+                reason: "prose_stall_nudge_exhausted",
+                scaffoldNudges: creatorScaffoldNudgeCount
+              });
+              onEvent({ type: "error", message: failMsg, at: Date.now() });
+              await this.finalizeWorkspacePersistence(messages, systemSlots, failMsg);
+              return failMsg;
+            }
+            this.pushCreatorScaffoldNudge(messages, onEvent);
+            this.bumpCreatorStepsWithoutConfJson(creatorStepsWithoutConf);
+            continue;
+          }
+        }
+      }
 
       if (completion.toolCalls.length > 0) {
         throwIfAborted(abortSignal);
@@ -1251,12 +1557,45 @@ export class SessionEngine {
         for (const toolMessage of toolMessages) {
           messages.push(toolMessage);
         }
+        if (
+          this.options.sessionSection === "creation-intake" &&
+          this.options.hostIntakeReadyToFinish?.()
+        ) {
+          const summary =
+            completion.content.trim().length > 0
+              ? completion.content.trim()
+              : "Intake complete. Creator phase will run next.";
+          onEvent({ type: "final", content: summary, at: Date.now() });
+          await this.finalizeWorkspacePersistence(messages, systemSlots, summary);
+          return summary;
+        }
+        this.bumpCreatorStepsWithoutConfJson(creatorStepsWithoutConf);
         continue;
       }
 
       const merged = this.tryParseEnvelopesMerged(completion.content);
 
       if (!merged) {
+        if (this.creatorNeedsScaffold(artifactStatus) && completion.toolCalls.length === 0) {
+          creatorScaffoldNudgeCount += 1;
+          if (creatorScaffoldNudgeCount > SessionEngine.MAX_CREATOR_SCAFFOLD_NUDGES) {
+            const failMsg =
+              "Creator could not scaffold conf.json after repeated tool-free replies.";
+            this.emitTransaction({
+              type: "creator.incomplete_turn",
+              correlationId: turnCorrelationId,
+              step,
+              reason: "scaffold_nudge_exhausted",
+              scaffoldNudges: creatorScaffoldNudgeCount
+            });
+            onEvent({ type: "error", message: failMsg, at: Date.now() });
+            await this.finalizeWorkspacePersistence(messages, systemSlots, failMsg);
+            return failMsg;
+          }
+          this.pushCreatorScaffoldNudge(messages, onEvent);
+          this.bumpCreatorStepsWithoutConfJson(creatorStepsWithoutConf);
+          continue;
+        }
         onEvent({ type: "final", content: completion.content, at: Date.now() });
         await this.finalizeWorkspacePersistence(messages, systemSlots, completion.content);
         return completion.content;
@@ -1272,16 +1611,38 @@ export class SessionEngine {
       }
 
       if (actions.length === 0) {
+        if (this.creatorNeedsScaffold(artifactStatus)) {
+          creatorScaffoldNudgeCount += 1;
+          if (creatorScaffoldNudgeCount > SessionEngine.MAX_CREATOR_SCAFFOLD_NUDGES) {
+            const failMsg =
+              "Creator could not scaffold conf.json after repeated empty action envelopes.";
+            this.emitTransaction({
+              type: "creator.incomplete_turn",
+              correlationId: turnCorrelationId,
+              step,
+              reason: "scaffold_nudge_exhausted",
+              scaffoldNudges: creatorScaffoldNudgeCount
+            });
+            onEvent({ type: "error", message: failMsg, at: Date.now() });
+            await this.finalizeWorkspacePersistence(messages, systemSlots, failMsg);
+            return failMsg;
+          }
+          this.pushCreatorScaffoldNudge(messages, onEvent);
+          this.bumpCreatorStepsWithoutConfJson(creatorStepsWithoutConf);
+          continue;
+        }
         const finalText = merged.responseText || "Done.";
         onEvent({ type: "final", content: finalText, at: Date.now() });
         await this.finalizeWorkspacePersistence(messages, systemSlots, finalText);
         return finalText;
       }
 
-      throwIfAborted(abortSignal);
-      await this.emitUiEnvelope(actions, merged.responseText, onEvent);
+      const orderedActions = sortToolActionsForExecution(actions);
 
-      for (const action of actions) {
+      throwIfAborted(abortSignal);
+      await this.emitUiEnvelope(orderedActions, merged.responseText, onEvent);
+
+      for (const action of orderedActions) {
         if (isFileMutationToolName(action.tool)) {
           filesWrittenThisCompletion += 1;
         }
@@ -1336,6 +1697,9 @@ export class SessionEngine {
         role: "user",
         content: `TOOL_RESULTS:\n${JSON.stringify(toolResults, null, 2)}`
       });
+
+      this.bumpCreatorStepsWithoutConfJson(creatorStepsWithoutConf);
+      continue;
     }
 
     const fallback = "Tool loop limit reached before final response.";

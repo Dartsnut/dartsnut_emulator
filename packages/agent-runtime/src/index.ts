@@ -1,4 +1,5 @@
 export * from "./agentSessionPersistence";
+export * from "./creationIntakeHost";
 export * from "./providerConfig";
 export * from "./providerClient";
 export * from "./sessionEngine";

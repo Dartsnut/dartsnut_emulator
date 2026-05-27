@@ -4,7 +4,8 @@
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently --kill-others --success first -n renderer,tsc,electron \"pnpm run dev:renderer\" \"pnpm run dev:electron:tsc\" \"pnpm run dev:electron:run\"",
+    "dev": "concurrently --kill-others --success first -n renderer,tsc,agent,electron \"pnpm run dev:renderer\" \"pnpm run dev:electron:tsc\" \"pnpm run dev:agent-runtime\" \"pnpm run dev:electron:run\"",
+    "dev:agent-runtime": "pnpm --dir ../../packages/agent-runtime exec tsc -p tsconfig.json --watch --preserveWatchOutput",
     "dev:renderer": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "dev:electron:tsc": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
     "dev:electron:run": "wait-on tcp:5173 file:dist-electron/main.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js",

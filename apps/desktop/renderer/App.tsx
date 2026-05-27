@@ -840,7 +840,8 @@ export function App() {
     if (!timeline) {
       return;
     }
-    timeline.scrollTop = timeline.scrollHeight;
+    const maxScroll = timeline.scrollHeight - timeline.clientHeight;
+    timeline.scrollTop = maxScroll > 0 ? maxScroll : 0;
   }
 
   /** Take queued stream deltas (cancels RAF) without discarding unapplied content. */
@@ -1837,36 +1838,13 @@ export function App() {
       {screen === "main" ? (
         <section
           className={cn(
-            "left-rail col-start-1 row-start-2 grid min-h-0 h-full overflow-visible border-r border-edge bg-[var(--gradient-rail)] pt-[14px] pb-[18px] px-[18px]",
-            "grid-rows-[auto_minmax(0,1fr)_auto] gap-4",
-            "max-[1100px]:col-start-1 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]",
-            "max-[760px]:gap-2.5 max-[760px]:p-3"
+            "left-rail left-rail--chat col-start-1 row-start-2 relative min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
+            "max-[1100px]:col-start-1 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]"
           )}
         >
-          <div className="flex min-w-0 flex-col gap-2.5">
-            <div className="flex min-w-0 flex-col gap-2">
-              {runtimeError ? (
-                <div
-                  className="m-0 rounded-lg border border-[var(--color-runtime-error-border)] bg-[var(--color-runtime-error-bg)] p-2 text-xs"
-                  role="status"
-                >
-                  {runtimeError}
-                </div>
-              ) : null}
-              {pythonRuntimeStatus ? (
-                <div
-                  className="m-0 rounded-lg border border-[var(--color-runtime-status-border)] bg-[var(--color-runtime-status-bg)] p-2 text-xs text-[var(--color-runtime-status-text)]"
-                  role="status"
-                >
-                  {pythonRuntimeStatus}
-                </div>
-              ) : null}
-            </div>
-          </div>
-
           <section
             className={cn(
-              "timeline min-h-0 flex flex-col items-start gap-1 overflow-auto overscroll-contain",
+              "timeline absolute inset-0 z-0 overflow-y-auto overflow-x-hidden overscroll-contain",
               autoScrollEnabled && "timeline--autoscroll"
             )}
             ref={timelineRef}
@@ -1883,6 +1861,7 @@ export function App() {
               }
             }}
           >
+            <div className="timeline-inner">
             {entries.map((entry) => (
               <div
                 key={entry.id}
@@ -1924,14 +1903,40 @@ export function App() {
                 )}
               </div>
             ))}
+            </div>
           </section>
 
+          {runtimeError || pythonRuntimeStatus ? (
+            <div className="chat-rail-overlay chat-rail-overlay--top pointer-events-none absolute inset-x-0 top-0 z-10">
+              <div className="pointer-events-auto flex min-w-0 flex-col gap-2">
+                {runtimeError ? (
+                  <div
+                    className="m-0 rounded-lg border border-[var(--color-runtime-error-border)] bg-[var(--color-runtime-error-bg)] p-2 text-xs"
+                    role="status"
+                  >
+                    {runtimeError}
+                  </div>
+                ) : null}
+                {pythonRuntimeStatus ? (
+                  <div
+                    className="m-0 rounded-lg border border-[var(--color-runtime-status-border)] bg-[var(--color-runtime-status-bg)] p-2 text-xs text-[var(--color-runtime-status-text)]"
+                    role="status"
+                  >
+                    {pythonRuntimeStatus}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="chat-rail-overlay chat-rail-overlay--bottom pointer-events-none absolute inset-x-0 bottom-0 z-10">
+            <div className="chat-rail-chrome pointer-events-auto">
           {/* Chip rows: host shows these while a blocking `dartsnut_ask_question` call is waiting. */}
           {bootstrap?.needsCreationIntake &&
           projectTypePicker.visible &&
           projectTypePicker.types.length > 0 ? (
             <div
-              className="flex flex-col gap-1.5 px-0.5"
+              className="flex flex-col gap-1.5"
               role="group"
               aria-label="Project type"
             >
@@ -1957,7 +1962,7 @@ export function App() {
           widgetSizePicker.visible &&
           widgetSizePicker.sizes.length > 0 ? (
             <div
-              className="flex flex-col gap-1.5 px-0.5"
+              className="flex flex-col gap-1.5"
               role="group"
               aria-label="Widget display size"
             >
@@ -2050,6 +2055,8 @@ export function App() {
               </div>
             </div>
           </section>
+            </div>
+          </div>
         </section>
       ) : (
         <section

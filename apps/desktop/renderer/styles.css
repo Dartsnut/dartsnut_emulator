@@ -106,8 +106,41 @@ kbd,
 }
 
 .timeline {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
   scrollbar-width: thin;
   scrollbar-color: var(--color-scrollbar-gutter) transparent;
+  scroll-padding-block-start: 88px;
+  scroll-padding-block-end: 280px;
+}
+
+.timeline-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.chat-rail-overlay--top {
+  background: linear-gradient(
+    180deg,
+    var(--color-bg-page) 0%,
+    color-mix(in srgb, var(--color-bg-page) 88%, transparent) 72%,
+    transparent 100%
+  );
+}
+
+.chat-rail-overlay--bottom {
+  background: linear-gradient(
+    0deg,
+    var(--color-bg-page) 0%,
+    color-mix(in srgb, var(--color-bg-page) 94%, transparent) 50%,
+    transparent 100%
+  );
 }
 
 .timeline::-webkit-scrollbar {
@@ -749,11 +782,12 @@ kbd,
   background: transparent;
   border: none;
   border-radius: 0;
-  padding: 4px 0;
+  padding: 6px 0;
   width: 100%;
   max-width: 100%;
   align-self: stretch;
   color: var(--color-timeline-status-text);
+  line-height: 1.45;
 }
 
 .entry.error {
@@ -1110,6 +1144,41 @@ kbd,
 
 .left-rail {
   position: relative;
+  z-index: 0;
+  isolation: isolate;
+  --rail-inset-x: 20px;
+  --rail-inset-top: 14px;
+  --rail-inset-bottom: 18px;
+  --rail-scroll-pad-bottom: 300px;
+}
+
+.left-rail--chat .timeline-inner {
+  padding: var(--rail-inset-top) var(--rail-inset-x) var(--rail-scroll-pad-bottom);
+  /* Extra room so the scrollbar does not crowd message bubbles */
+  padding-inline-end: calc(var(--rail-inset-x) + 4px);
+}
+
+.left-rail--chat .chat-rail-overlay--top {
+  padding: var(--rail-inset-top) var(--rail-inset-x) 0;
+}
+
+.left-rail--chat .chat-rail-chrome {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 3.5rem var(--rail-inset-x) var(--rail-inset-bottom);
+}
+
+@media (max-width: 760px) {
+  .left-rail {
+    --rail-inset-x: 12px;
+    --rail-inset-top: 12px;
+    --rail-inset-bottom: 14px;
+  }
+
+  .left-rail--chat .chat-rail-chrome {
+    padding-top: 3rem;
+  }
 }
 
 .left-rail::before {
@@ -1117,7 +1186,25 @@ kbd,
   pointer-events: none;
   position: absolute;
   inset: 0;
+  z-index: 0;
   opacity: 1;
   background-image: radial-gradient(circle at 8% 0%, var(--color-neon-coral-dim), transparent 42%),
     radial-gradient(circle at 92% 30%, var(--color-neon-mint-dim), transparent 38%);
 }
+
+.left-rail .timeline {
+  z-index: 1;
+}
+
+.left-rail .chat-rail-overlay {
+  z-index: 2;
+}
+
+.left-rail:has(.chat-rail-overlay--top) .timeline {
+  scroll-padding-block-start: 120px;
+}
+
+.left-rail:not(:has(.chat-rail-overlay--top)) .timeline {
+  scroll-padding-block-start: 12px;
+}
+

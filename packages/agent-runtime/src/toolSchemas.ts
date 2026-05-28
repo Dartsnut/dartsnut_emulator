@@ -42,7 +42,8 @@ const DARTSNUT_ASK_QUESTION_TOOL: ChatCompletionTool = {
       "Dartsnut Chat **creation intake** only (host-executed). Presents a **blocking** question in the desktop UI — the call does not return until the user answers.",
       "Use native `tool_calls` only. Prefer this whenever the user must choose in the UI rather than inferring from their message.",
       "**question_id** `project_type` — Game vs Widget chips; on success updates the same intake state as `set_project_type`.",
-      "**question_id** `widget_display_size` — only when intake is already `widget`; shows WxH chips; on success same as `set_widget_size`."
+      "**question_id** `widget_display_size` — only when intake is already `widget`; shows WxH chips; on success same as `set_widget_size`.",
+      "Policy: if project type or widget size is uncertain, ask first; do not guess or default."
     ].join(" "),
     parameters: {
       type: "object",
@@ -69,6 +70,7 @@ const DARTSNUT_PROJECT_INTAKE_TOOL: ChatCompletionTool = {
       "Actions:",
       "- **set_project_type** — record whether the user is building a `game` or `widget` (required before scaffolding). Use when the user already stated it clearly in text; otherwise call **`dartsnut_ask_question`** with `question_id` `project_type` first.",
       "- **set_widget_size** — for widgets only; one of the supported WxH tokens. Use when the user already named a supported size; otherwise call **`dartsnut_ask_question`** with `widget_display_size` first.",
+      "- Never default project_type or widget_size when uncertain; ask the user.",
       "- **read_workspace_conf** — reads `conf.json` in the **selected** workspace and reports deploy-style validity plus guidance. **If no workspace is selected yet**, the host **creates** an empty directory under the OS temp folder, selects it, then reads — call after type (and widget size if applicable) are resolved; call again if the user switches workspace via the app shell.",
       "Typical order when starting from no workspace: infer or **`dartsnut_ask_question`(`project_type`)** → if widget, infer size or **`dartsnut_ask_question`(`widget_display_size`)** then `set_widget_size` when needed → **`read_workspace_conf`** (host allocates temp workspace on first call if needed), then ask **one** focused follow-up question when the snapshot shows an existing project or invalid `conf.json`."
     ].join(" "),
@@ -259,6 +261,7 @@ export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
   GET_DARTSNUT_SKILL_TOOL,
   RELOAD_EMULATOR_TOOL,
   GET_EMULATOR_LOGS_TOOL,
+  DARTSNUT_ASK_QUESTION_TOOL,
   DARTSNUT_PROJECT_INTAKE_TOOL
 ];
 

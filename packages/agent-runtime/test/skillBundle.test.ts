@@ -258,11 +258,12 @@ describe("deferred skill router", () => {
 });
 
 describe("AGENT_TOOL_SCHEMAS", () => {
-  it("includes get_emulator_logs for creator sessions", async () => {
+  it("includes intake question and emulator verification tools", async () => {
     const { AGENT_TOOL_SCHEMAS } = await import("../src/toolSchemas");
     const names = AGENT_TOOL_SCHEMAS.map((t) =>
       t.type === "function" ? t.function.name : ""
     );
+    expect(names).toContain("dartsnut_ask_question");
     expect(names).toContain("get_emulator_logs");
     expect(names).toContain("reload_emulator");
   });

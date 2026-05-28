@@ -49,8 +49,6 @@ import {
   type IntakeSubmitQuestionAnswerRequest,
   type IntakeSubmitQuestionAnswerResponse,
   type AgentSessionWorkspaceSummary,
-  buildCreationIntakeUserPrompt,
-  buildPostIntakeCreatorUserPrompt,
   resolveSessionUserLocale,
   type UserLocale,
   formatCreatorBuildPlanMessage,
@@ -67,13 +65,11 @@ import {
   bundleForTemplateMode,
   resolveSkillRouterPrompt,
   allowedDeferredSkillIdsForMode,
-  AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
   AGENT_TOOL_SCHEMAS,
   AgentSessionPersistence,
   isAgentSessionPersistenceDisabledByEnv,
   AGENT_STOPPED_MESSAGE,
   executeIntakeHostTool,
-  isIntakeStateReady,
   nextAfterProjectType,
   parseConfWidgetSize,
   precheckAskQuestion,
@@ -1875,7 +1871,7 @@ function buildSession(
   templateMode: PromptRequest["templateMode"] | undefined,
   extras?: {
     workspacePath?: string;
-    completionTools?: typeof AGENT_TOOL_SCHEMAS | typeof AGENT_CREATION_INTAKE_TOOL_SCHEMAS;
+    completionTools?: typeof AGENT_TOOL_SCHEMAS;
     hostIntakeToolHandler?: (args: Record<string, unknown>) => Promise<string>;
     hostAskQuestionHandler?: (args: Record<string, unknown>) => Promise<string>;
     hostIntakeReadyToFinish?: () => boolean;
@@ -1903,7 +1899,6 @@ function buildSession(
   const skillBundleMode =
     extras?.skillBundleMode !== undefined ? extras.skillBundleMode : templateMode ?? null;
   const { skillPrompt, skillLibrary } = resolveSkillSessionContext(skillBundleMode);
-  const intakeToolsOnly = extras?.completionTools === AGENT_CREATION_INTAKE_TOOL_SCHEMAS;
   const preferredUserLocale =
     extras?.preferredUserLocale ??
     (extras?.latestUserTextForLocale != null
@@ -1922,10 +1917,8 @@ function buildSession(
     hostIntakeToolHandler: extras?.hostIntakeToolHandler,
     hostAskQuestionHandler: extras?.hostAskQuestionHandler,
     hostIntakeReadyToFinish: extras?.hostIntakeReadyToFinish,
-    hostReloadEmulatorHandler: intakeToolsOnly ? undefined : () => executeHostReloadEmulatorForAgent(),
-    hostGetEmulatorLogsHandler: intakeToolsOnly
-      ? undefined
-      : (args) => Promise.resolve(executeHostGetEmulatorLogsForAgent(args)),
+    hostReloadEmulatorHandler: () => executeHostReloadEmulatorForAgent(),
+    hostGetEmulatorLogsHandler: (args) => Promise.resolve(executeHostGetEmulatorLogsForAgent(args)),
     skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve,
     sessionPersistence: extras?.sessionPersistence,
     initialConversation: extras?.initialConversation,
@@ -2567,109 +2560,45 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     const sharedIntakeHandler = async (args: Record<string, unknown>) =>
       intakeHostToolExecute(args, hostState);
 
-    const shouldRunCreationIntake = Boolean(req.creationIntake && computeNeedsCreationIntake());
-
-    if (shouldRunCreationIntake) {
-      const intakeWorkspace = workspaceRoot;
-      if (!intakeWorkspace) {
-        throw new Error("Workspace is not selected.");
-      }
-      emitAgent({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
-      emitAgent({ type: "intake_project_type_prompt", at: Date.now(), visible: false });
-      const intakeState: IntakeToolState = {};
-      if (req.intakeProjectTypeChoice) {
-        intakeState.projectType = req.intakeProjectTypeChoice;
-        if (req.intakeProjectTypeChoice === "game") {
-          intakeState.widgetSize = undefined;
-        }
-      }
-      if (req.intakeWidgetSizeChoice) {
-        intakeState.projectType = "widget";
-        intakeState.widgetSize = req.intakeWidgetSizeChoice;
-      }
-      let intakeReadWorkspaceConfDone = false;
-      const intakeSession = buildSession(undefined, {
-        workspacePath: intakeWorkspace,
-        completionTools: AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
-        hostIntakeToolHandler: async (args) => {
-          if (args.action === "read_workspace_conf") {
-            intakeReadWorkspaceConfDone = true;
-          }
-          return intakeHostToolExecute(args, intakeState);
-        },
-        hostAskQuestionHandler: (args) => askQuestionHostExecute(args, intakeState),
-        hostIntakeReadyToFinish: () =>
-          isIntakeStateReady(intakeState) && intakeReadWorkspaceConfDone,
-        skillBundleMode: "creation-intake",
-        latestUserTextForLocale: req.prompt
-      });
-      terminalAgentLifecycleLog("[agent] runPrompt creation-intake start");
-      const intakeUserPrompt = buildCreationIntakeUserPrompt(req.prompt, {
-        widgetSizeFromPicker: req.intakeWidgetSizeChoice,
-        projectTypeFromPicker: req.intakeProjectTypeChoice
-      });
-      await intakeSession.runPrompt(intakeUserPrompt, emitAgent, runAbort.signal);
-
-      const canChain =
-        Boolean(workspaceRoot) &&
-        intakeState.projectType &&
-        (intakeState.projectType === "game" ||
-          (intakeState.projectType === "widget" && intakeState.widgetSize));
-
-      if (canChain && intakeState.projectType && workspaceRoot) {
-        const creatorWorkspace = intakeWorkspace;
-        const templateMode =
-          intakeState.projectType === "game" ? "game-creator" : "widget-creator";
-        sessionRouting = {
-          templateMode,
-          projectType: intakeState.projectType,
-          widgetSize: intakeState.projectType === "widget" ? intakeState.widgetSize : undefined
-        };
-        const followUpPersistence = buildWorkspaceSessionPersistence(creatorWorkspace);
-        // Intake → creator is always a new scaffold: do not resume a half-finished creator
-        // transcript from a prior crash/relaunch in the same temp folder (common in packaged builds).
-        if (followUpPersistence) {
-          followUpPersistence.archiveOrResetSession("post-intake-creator-chain");
-        }
-        const followUpInitial: ChatMessage[] = [];
-        const followUp = buildSession(templateMode, {
-          workspacePath: creatorWorkspace,
-          completionTools: AGENT_TOOL_SCHEMAS,
-          hostIntakeToolHandler: sharedIntakeHandler,
-          sessionPersistence: followUpPersistence,
-          initialConversation: followUpInitial,
-          latestUserTextForLocale: req.prompt
-        });
-        const postIntakeUserPrompt = buildPostIntakeCreatorUserPrompt(req.prompt, { forceBuildAfterIntake: true });
-        const routed = buildRoutedPrompt({
-          prompt: postIntakeUserPrompt,
-          templateMode,
-          projectType: intakeState.projectType,
-          widgetSize: intakeState.widgetSize,
-          workspacePath: creatorWorkspace
-        });
-        terminalAgentLifecycleLog("[agent] runPrompt chained creator", { templateMode });
-        await followUp.runPrompt(routed, emitAgent, runAbort.signal);
-      }
-    } else {
-      const intent = req.agentSession?.intent ?? "auto";
-      const persistence = buildWorkspaceSessionPersistence(workspaceRoot);
-      if (intent === "fresh" && persistence) {
-        persistence.archiveOrResetSession("renderer-fresh");
-      }
-      const initialConversation =
-        persistence && intent !== "fresh" ? persistence.readConversation() : [];
-      const session = buildSession(req.templateMode, {
-        completionTools: AGENT_TOOL_SCHEMAS,
-        hostIntakeToolHandler: sharedIntakeHandler,
-        sessionPersistence: persistence,
-        initialConversation,
-        latestUserTextForLocale: req.prompt
-      });
-      const prompt = buildRoutedPrompt(req);
-      terminalAgentLifecycleLog("[agent] runPrompt start", { promptChars: prompt.length });
-      await session.runPrompt(prompt, emitAgent, runAbort.signal);
+    const intent = req.agentSession?.intent ?? "auto";
+    const persistence = buildWorkspaceSessionPersistence(workspaceRoot);
+    if (intent === "fresh" && persistence) {
+      persistence.archiveOrResetSession("renderer-fresh");
     }
+    const initialConversation =
+      persistence && intent !== "fresh" ? persistence.readConversation() : [];
+    const session = buildSession(req.templateMode, {
+      completionTools: AGENT_TOOL_SCHEMAS,
+      hostIntakeToolHandler: sharedIntakeHandler,
+      hostAskQuestionHandler: (args) => askQuestionHostExecute(args, hostState),
+      sessionPersistence: persistence,
+      initialConversation,
+      latestUserTextForLocale: req.prompt
+    });
+    const effectiveWorkspacePath =
+      typeof req.workspacePath === "string" && req.workspacePath.length > 0 ? req.workspacePath : workspaceRoot;
+    const hintedRouting =
+      effectiveWorkspacePath && fs.existsSync(effectiveWorkspacePath)
+        ? readWorkspaceCreatorHints(effectiveWorkspacePath)
+        : null;
+    const routedTemplateMode =
+      req.templateMode === "game-creator" || req.templateMode === "widget-creator"
+        ? req.templateMode
+        : hintedRouting?.templateMode;
+    if (routedTemplateMode) {
+      const routedProjectType = req.projectType ?? hintedRouting?.projectType;
+      const routedWidgetSize = req.widgetSize ?? hintedRouting?.widgetSize;
+      sessionRouting = {
+        templateMode: routedTemplateMode,
+        projectType:
+          routedProjectType ??
+          (routedTemplateMode === "widget-creator" ? "widget" : "game"),
+        ...(routedWidgetSize ? { widgetSize: routedWidgetSize } : {})
+      };
+    }
+    const prompt = buildRoutedPrompt(req);
+    terminalAgentLifecycleLog("[agent] runPrompt start", { promptChars: prompt.length });
+    await session.runPrompt(prompt, emitAgent, runAbort.signal);
 
     if (!firstRunComplete) {
       writeProofState(true);

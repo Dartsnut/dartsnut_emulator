@@ -188,6 +188,174 @@ class ClaudeIntakeBatchOrderProvider {
   }
 }
 
+class IntakeGuardNativeProvider {
+  call = 0;
+  sawBlockedWrite = false;
+
+  async complete(messages: ChatMessage[]): Promise<CompletionResult> {
+    this.call += 1;
+    if (this.call === 2) {
+      const blocked = messages
+        .filter((m): m is Extract<ChatMessage, { role: "tool" }> => m.role === "tool")
+        .some((m) => m.content.includes("intake_required"));
+      this.sawBlockedWrite = blocked;
+    }
+    if (this.call === 1) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "wf_blocked",
+            name: "write_file",
+            argumentsJson: JSON.stringify({ path: "main.py", content: "print('blocked')" })
+          }
+        ]
+      };
+    }
+    if (this.call === 2) {
+      return {
+        content: "",
+        toolCalls: [
+          { id: "ask_pt", name: "dartsnut_ask_question", argumentsJson: JSON.stringify({ question_id: "project_type" }) }
+        ]
+      };
+    }
+    if (this.call === 3) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "set_pt",
+            name: "dartsnut_project_intake",
+            argumentsJson: JSON.stringify({ action: "set_project_type", project_type: "widget" })
+          }
+        ]
+      };
+    }
+    if (this.call === 4) {
+      return {
+        content: "",
+        toolCalls: [
+          { id: "ask_sz", name: "dartsnut_ask_question", argumentsJson: JSON.stringify({ question_id: "widget_display_size" }) }
+        ]
+      };
+    }
+    if (this.call === 5) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "set_sz",
+            name: "dartsnut_project_intake",
+            argumentsJson: JSON.stringify({ action: "set_widget_size", widget_size: "128x128" })
+          }
+        ]
+      };
+    }
+    if (this.call === 6) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "read_conf",
+            name: "dartsnut_project_intake",
+            argumentsJson: JSON.stringify({ action: "read_workspace_conf" })
+          }
+        ]
+      };
+    }
+    if (this.call === 7) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "wf_ok",
+            name: "write_file",
+            argumentsJson: JSON.stringify({ path: "main.py", content: "print('ok')" })
+          }
+        ]
+      };
+    }
+    return { content: "Done.", toolCalls: [] };
+  }
+}
+
+class IntakeAskBeforeSetProvider {
+  call = 0;
+  sawBlockedSetProjectType = false;
+
+  async complete(messages: ChatMessage[]): Promise<CompletionResult> {
+    this.call += 1;
+    if (this.call === 2) {
+      const blocked = messages
+        .filter((m): m is Extract<ChatMessage, { role: "tool" }> => m.role === "tool")
+        .some((m) => m.content.includes("before set_project_type"));
+      this.sawBlockedSetProjectType = blocked;
+    }
+    if (this.call === 1) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "set_pt_first",
+            name: "dartsnut_project_intake",
+            argumentsJson: JSON.stringify({ action: "set_project_type", project_type: "game" })
+          }
+        ]
+      };
+    }
+    if (this.call === 2) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "ask_pt_then",
+            name: "dartsnut_ask_question",
+            argumentsJson: JSON.stringify({ question_id: "project_type" })
+          }
+        ]
+      };
+    }
+    if (this.call === 3) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "set_pt_after",
+            name: "dartsnut_project_intake",
+            argumentsJson: JSON.stringify({ action: "set_project_type", project_type: "game" })
+          }
+        ]
+      };
+    }
+    if (this.call === 4) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "read_conf",
+            name: "dartsnut_project_intake",
+            argumentsJson: JSON.stringify({ action: "read_workspace_conf" })
+          }
+        ]
+      };
+    }
+    if (this.call === 5) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "write_ok",
+            name: "write_file",
+            argumentsJson: JSON.stringify({ path: "main.py", content: "print('game')" })
+          }
+        ]
+      };
+    }
+    return { content: "Done.", toolCalls: [] };
+  }
+}
+
 class XmlToolCallProvider {
   private call = 0;
 
@@ -702,7 +870,7 @@ describe("SessionEngine tool loop", () => {
     );
   });
 
-  it("runs intake project_intake before ask_question when Claude XML lists ask first", async () => {
+  it("runs blocking ask_question before set_widget_size when both are emitted in one turn", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     const executionOrder: string[] = [];
     const engine = new SessionEngine({
@@ -726,8 +894,59 @@ describe("SessionEngine tool loop", () => {
     const sizeIdx = executionOrder.indexOf("intake:set_widget_size");
     expect(askIdx).toBeGreaterThanOrEqual(0);
     expect(sizeIdx).toBeGreaterThanOrEqual(0);
-    expect(sizeIdx).toBeLessThan(askIdx);
-    expect(executionOrder.indexOf("intake:set_project_type")).toBeLessThan(sizeIdx);
+    expect(askIdx).toBeLessThan(sizeIdx);
+  });
+
+  it("blocks file writes until intake type/size/conf are resolved", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const provider = new IntakeGuardNativeProvider();
+    const engine = new SessionEngine({
+      provider,
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant.",
+      hostAskQuestionHandler: async (args) => {
+        if (args.question_id === "project_type") {
+          return JSON.stringify({ ok: true, recorded: { projectType: "widget" } });
+        }
+        return JSON.stringify({ ok: true, recorded: { widgetSize: "128x128" } });
+      },
+      hostIntakeToolHandler: async (args) => {
+        if (args.action === "read_workspace_conf") {
+          return JSON.stringify({ ok: true, conf_status: "missing" });
+        }
+        return JSON.stringify({ ok: true });
+      }
+    });
+
+    const response = await engine.runPrompt("make something cute", () => { });
+
+    expect(response).toContain("Done.");
+    expect(provider.sawBlockedWrite).toBe(true);
+    expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toBe("print('ok')");
+  });
+
+  it("blocks set_project_type until project_type question is asked", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const provider = new IntakeAskBeforeSetProvider();
+    const engine = new SessionEngine({
+      provider,
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a coding assistant.",
+      hostAskQuestionHandler: async () =>
+        JSON.stringify({ ok: true, recorded: { projectType: "game" } }),
+      hostIntakeToolHandler: async (args) => {
+        if (args.action === "read_workspace_conf") {
+          return JSON.stringify({ ok: true, conf_status: "missing" });
+        }
+        return JSON.stringify({ ok: true });
+      }
+    });
+
+    const response = await engine.runPrompt("surprise me", () => { });
+
+    expect(response).toContain("Done.");
+    expect(provider.sawBlockedSetProjectType).toBe(true);
+    expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toBe("print('game')");
   });
 
   it("applies targeted replace_in_file actions for existing files", async () => {

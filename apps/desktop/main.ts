@@ -1042,10 +1042,17 @@ function buildRoutedPrompt(request: PromptRequest): string {
         ""
       ]
       : [];
+  const designSkillNudgeBlock = [
+    "Success criteria emphasis:",
+    "- For requests about visual polish, pixel-perfect rendering, compact layouts, or console-style game UI, call `get_dartsnut_skill` with `design-console-smallform` before implementing those UI decisions.",
+    "- Keep coordinates and sizing integer-aligned; avoid subpixel artifacts on tiny panels.",
+    ""
+  ];
   return [
     template,
     "",
     ...buildPlanBlock,
+    ...designSkillNudgeBlock,
     "Creation context:",
     JSON.stringify(context, null, 2),
     "",

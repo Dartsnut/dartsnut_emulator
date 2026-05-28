@@ -14,6 +14,7 @@ export const DEFERRED_SKILL_IDS = [
   "widget-fonts",
   "game-dart-colors",
   "dartsnut-display-mapping",
+  "design-console-smallform",
   "asset-pipeline",
   "dartsnut-skill"
 ] as const;
@@ -30,6 +31,7 @@ export const DEFERRED_SKILL_FILE: Record<DeferredSkillId, string> = {
   "widget-fonts": "widget-fonts.md",
   "game-dart-colors": "game-dart-colors.md",
   "dartsnut-display-mapping": "dartsnut-display-mapping.md",
+  "design-console-smallform": "design-console-smallform.md",
   "asset-pipeline": "asset-pipeline.md",
   "dartsnut-skill": "dartsnut-skill.md"
 };
@@ -48,6 +50,8 @@ const SKILL_INDEX_BLURB: Record<DeferredSkillId, string> = {
   "game-dart-colors": "Dart index % 4 color map and RGB table for game UI.",
   "dartsnut-display-mapping":
     "Physical panels ↔ framebuffer merge, layout, fonts on canvas, clipping.",
+  "design-console-smallform":
+    "Pixel-perfect compact UI heuristics, tiny-screen readability, and console-game-forward HUD composition.",
   "asset-pipeline":
     "`dartsnut.assets.json`, `assets_loader.py`, placeholders, art-bearing entities, apply mode.",
   "dartsnut-skill": "Legacy index — prefer granular ids above; expands to core + game + widget loops when loaded."
@@ -73,6 +77,8 @@ const SKILL_INTENT_HINT: Partial<Record<DeferredSkillId, string>> = {
     "Intent: color darts by player index. Examples: dart colors, 飞镖颜色, 飛鏢顏色.",
   "dartsnut-display-mapping":
     "Intent: layout across panels / framebuffer. Examples: split screen, 分屏布局, 分屏佈局.",
+  "design-console-smallform":
+    "Intent: pixel-perfect polish on compact screens with console-like style. Examples: pixel perfect UI, 小屏精致像素风, 小屏精緻像素風.",
   "asset-pipeline":
     "Intent: sprites/icons/animations or user will supply/replace art (incl. 我来给你一个…图片 / I'll give you a picture). Use Assets pane bind + Apply — never ask to paste images in chat.",
   "dartsnut-skill": "Intent: broad runtime overview — prefer granular ids above."
@@ -102,6 +108,7 @@ const CREATOR_OPTIONAL_SKILLS: readonly DeferredSkillId[] = [
   "widget-fonts",
   "game-dart-colors",
   "dartsnut-display-mapping",
+  "design-console-smallform",
   "asset-pipeline",
   "dartsnut-skill"
 ];

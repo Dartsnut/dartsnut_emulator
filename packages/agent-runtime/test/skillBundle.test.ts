@@ -59,6 +59,14 @@ describe("loadSkillBundle", () => {
     expect(content).toContain("framebuffer merges");
   });
 
+  it("loads the compact console design skill", () => {
+    const templatePath = path.join(SKILLS_DIR, "design-console-smallform.md");
+    const content = loadSkillBundle(templatePath);
+    expect(content).toContain("design-console-smallform");
+    expect(content).toContain("pixel-perfect");
+    expect(content).toContain("console-game-favor");
+  });
+
   it("concatenates multiple skills with a separator when given several paths", () => {
     const corePath = path.join(SKILLS_DIR, "pydartsnut-core.md");
     const displayPath = path.join(SKILLS_DIR, "dartsnut-display-mapping.md");
@@ -202,6 +210,7 @@ describe("deferred skill router", () => {
     expect(creatorIds).toContain("conf-contract");
     expect(creatorIds).toContain("pydartsnut-core");
     expect(creatorIds).toContain("dartsnut-display-mapping");
+    expect(creatorIds).toContain("design-console-smallform");
   });
 
   it("resolveSkillRouterPrompt uses just-in-time loading for creators", () => {
@@ -222,6 +231,8 @@ describe("deferred skill router", () => {
     expect(router).toContain("read_file");
     expect(router).toContain("Verify run");
     expect(router).toContain("get_emulator_logs");
+    expect(router).toContain("design-console-smallform");
+    expect(router).toContain("pixel-perfect polish");
   });
 
   it("resolveSkillRouterPrompt for asset-applier mentions pydartsnut-core", () => {

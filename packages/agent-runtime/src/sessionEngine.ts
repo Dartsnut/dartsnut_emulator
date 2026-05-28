@@ -100,23 +100,30 @@ type ToolAction =
   };
 
 function intakeToolSortRank(toolName: string, args?: Record<string, unknown>): number {
+  if (toolName === "dartsnut_ask_question") {
+    const questionId = args?.question_id;
+    if (questionId === "project_type") {
+      return 0;
+    }
+    if (questionId === "widget_display_size") {
+      return 2;
+    }
+    return 4;
+  }
   if (toolName === "dartsnut_project_intake") {
     const action = args?.action;
     if (action === "set_project_type") {
-      return 0;
-    }
-    if (action === "set_widget_size") {
       return 1;
     }
-    if (action === "read_workspace_conf") {
-      return 2;
+    if (action === "set_widget_size") {
+      return 3;
     }
-    return 3;
+    if (action === "read_workspace_conf") {
+      return 5;
+    }
+    return 6;
   }
-  if (toolName === "dartsnut_ask_question") {
-    return 10;
-  }
-  return 5;
+  return 10;
 }
 
 function sortParsedToolCallsForExecution(toolCalls: ParsedToolCall[]): ParsedToolCall[] {
@@ -153,6 +160,14 @@ function sortToolActionsForExecution(actions: ToolAction[]): ToolAction[] {
 interface AgentActionEnvelope {
   response?: string;
   actions?: unknown[];
+}
+
+interface RuntimeIntakeProgress {
+  projectType?: "game" | "widget";
+  widgetSize?: string;
+  readWorkspaceConf: boolean;
+  askedProjectType: boolean;
+  askedWidgetSize: boolean;
 }
 
 /** Host (Electron main) executes `dartsnut_project_intake`; returns JSON text for the model. */
@@ -411,7 +426,7 @@ export class SessionEngine {
         "9) `read_file` `main.py` (and `conf.json` when size/config matters) before edits when those files exist.",
         "10) Do not put implementable source code in reasoning — use file tools.",
         "11) Do not end creator work with only skills or reasoning when files still need changes — use file tools or reload+logs to verify. Final round may be a one-sentence status only.",
-        "12) **Verify run:** after material `conf.json` or `main.py` changes, before declaring done, or when logs show errors — `reload_emulator` then `get_emulator_logs`; fix Traceback/SyntaxError before continuing.",
+        "12) **Creator verify run:** after material `conf.json` or `main.py` changes, before declaring done, or when logs show errors — `reload_emulator` then `get_emulator_logs`; fix Traceback/SyntaxError before continuing.",
         "13) **User-provided images:** when the user offers to give/send/provide a picture or sprite (any language), load **`asset-pipeline`**, add or update manifest slots + `slot.draw(...)` as needed, and direct them to the desktop **Assets** pane (**Choose File** → **Apply Assets**) — do **not** ask them to paste the image in chat."
       );
     }
@@ -422,12 +437,20 @@ export class SessionEngine {
     }
     if (hasAskQuestion) {
       lines.push(
-        "Intake UI: **dartsnut_ask_question** is host-executed and **blocking** — it shows Game/Widget chips or widget size chips and returns only after the user answers. Use it whenever you need that choice and cannot take it reliably from the user's text alone. Never assume a widget display size without evidence. After `read_workspace_conf`, ask at most one focused question when the folder already has a valid `conf.json`, invalid JSON, or a type/size mismatch."
+        "Intake UI: **dartsnut_ask_question** is host-executed and **blocking** — it shows Game/Widget chips or widget size chips and returns only after the user answers.",
+        "Information-closure loop (run before scaffold/file edits):",
+        "A) Check if project type is known; if not, call `dartsnut_ask_question` with `project_type`.",
+        "B) If project type is `widget`, check if widget size is known; if not, call `dartsnut_ask_question` with `widget_display_size`.",
+        "C) Record known values via `dartsnut_project_intake` (`set_project_type` / `set_widget_size`) and then call `read_workspace_conf`.",
+        "D) Only after A-C are satisfied, proceed to implementation/file mutation tools.",
+        "If project type is not explicit, ask `project_type` first. If widget size is not explicit, ask `widget_display_size` first.",
+        "Do not guess or default these values, and do not call `set_project_type` / `set_widget_size` until that value is known from user text or the blocking question result.",
+        "After `read_workspace_conf`, ask at most one focused question when the folder already has a valid `conf.json`, invalid JSON, or a type/size mismatch."
       );
     }
     if (hasReload) {
       lines.push(
-        "After creating or changing root `conf.json`, call **reload_emulator** then **get_emulator_logs** so the preview and deploy panel see the new config and you can confirm Python started cleanly."
+        "Global best practice: after material `conf.json` or `main.py` edits, run **reload_emulator** then **get_emulator_logs** before declaring done so preview/deploy state is fresh and Python runtime errors are visible."
       );
     }
     const hasEmulatorLogs = names.includes("get_emulator_logs");
@@ -933,6 +956,155 @@ export class SessionEngine {
     return `Ran copy asset ${action.source} -> ${action.path}`;
   }
 
+  private readRuntimeIntakeProgressFromWorkspace(): RuntimeIntakeProgress {
+    try {
+      const confPath = this.options.workspacePolicy.resolveWithinRoot("conf.json");
+      if (!fs.existsSync(confPath)) {
+        return {
+          readWorkspaceConf: false,
+          askedProjectType: false,
+          askedWidgetSize: false
+        };
+      }
+      const parsed = JSON.parse(fs.readFileSync(confPath, "utf-8")) as Record<string, unknown>;
+      const projectType = parsed.type === "game" || parsed.type === "widget" ? parsed.type : undefined;
+      let widgetSize: string | undefined;
+      if (projectType === "widget" && Array.isArray(parsed.size) && parsed.size.length === 2) {
+        const w = Number(parsed.size[0]);
+        const h = Number(parsed.size[1]);
+        if (Number.isFinite(w) && Number.isFinite(h)) {
+          widgetSize = `${w}x${h}`;
+        }
+      }
+      return {
+        projectType,
+        widgetSize,
+        readWorkspaceConf: true,
+        askedProjectType: Boolean(projectType),
+        askedWidgetSize: projectType === "widget" ? Boolean(widgetSize) : false
+      };
+    } catch {
+      return {
+        readWorkspaceConf: false,
+        askedProjectType: false,
+        askedWidgetSize: false
+      };
+    }
+  }
+
+  private gateIntakeSetUntilAsked(
+    action: ToolAction,
+    intake: RuntimeIntakeProgress
+  ): string | null {
+    if (action.tool !== "dartsnut_project_intake") {
+      return null;
+    }
+    const actionName = action.args.action;
+    if (actionName === "set_project_type" && !intake.projectType && !intake.askedProjectType) {
+      return "intake_required: call dartsnut_ask_question(project_type) before set_project_type when type is unknown.";
+    }
+    if (
+      actionName === "set_widget_size" &&
+      intake.projectType === "widget" &&
+      !intake.widgetSize &&
+      !intake.askedWidgetSize
+    ) {
+      return "intake_required: call dartsnut_ask_question(widget_display_size) before set_widget_size when size is unknown.";
+    }
+    return null;
+  }
+
+  private gateFileMutationUntilIntakeReady(
+    action: ToolAction,
+    intake: RuntimeIntakeProgress
+  ): string | null {
+    const completionTools = this.options.completionTools ?? AGENT_TOOL_SCHEMAS;
+    const toolNames = completionTools
+      .map((t) => (t.type === "function" ? t.function.name : ""))
+      .filter(Boolean);
+    const intakeFlowAvailable =
+      this.options.hostIntakeToolHandler &&
+      this.options.hostAskQuestionHandler &&
+      toolNames.includes("dartsnut_project_intake") &&
+      toolNames.includes("dartsnut_ask_question");
+    if (!intakeFlowAvailable) {
+      return null;
+    }
+    if (
+      action.tool !== "write_file" &&
+      action.tool !== "replace_in_file" &&
+      action.tool !== "copy_asset_file"
+    ) {
+      return null;
+    }
+    if (!intake.projectType) {
+      return "intake_required: call dartsnut_ask_question(project_type) first, or set_project_type only when user text already states game/widget.";
+    }
+    if (intake.projectType === "widget" && !intake.widgetSize) {
+      return "intake_required: widget project needs size. call dartsnut_ask_question(widget_display_size) first, or set_widget_size only when user text already states a supported size.";
+    }
+    if (!intake.readWorkspaceConf) {
+      return "intake_required: call dartsnut_project_intake(read_workspace_conf) before file mutations.";
+    }
+    return null;
+  }
+
+  private updateRuntimeIntakeProgress(
+    action: ToolAction,
+    result: string,
+    intake: RuntimeIntakeProgress
+  ): void {
+    if (action.tool === "dartsnut_project_intake") {
+      const actionName = action.args.action;
+      if (actionName === "set_project_type") {
+        const pt = action.args.project_type;
+        if (pt === "game" || pt === "widget") {
+          intake.projectType = pt;
+          if (pt === "game") {
+            intake.widgetSize = undefined;
+          }
+        }
+      } else if (actionName === "set_widget_size") {
+        const sz = action.args.widget_size;
+        if (typeof sz === "string" && sz.length > 0) {
+          intake.widgetSize = sz;
+        }
+      } else if (actionName === "read_workspace_conf") {
+        intake.readWorkspaceConf = true;
+      }
+    }
+    if (action.tool === "dartsnut_ask_question") {
+      const qid = action.args.question_id;
+      if (qid === "project_type") {
+        intake.askedProjectType = true;
+      } else if (qid === "widget_display_size") {
+        intake.askedWidgetSize = true;
+      }
+    }
+    if (action.tool !== "dartsnut_ask_question" && action.tool !== "dartsnut_project_intake") {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(result) as {
+        recorded?: { projectType?: unknown; widgetSize?: unknown };
+        creator_hints?: { projectType?: unknown; widgetSize?: unknown };
+      };
+      const recordedProjectType = parsed.recorded?.projectType ?? parsed.creator_hints?.projectType;
+      if (recordedProjectType === "game" || recordedProjectType === "widget") {
+        intake.projectType = recordedProjectType;
+        if (recordedProjectType === "game") {
+          intake.widgetSize = undefined;
+        }
+      }
+      const recordedWidgetSize = parsed.recorded?.widgetSize ?? parsed.creator_hints?.widgetSize;
+      if (typeof recordedWidgetSize === "string" && recordedWidgetSize.length > 0) {
+        intake.widgetSize = recordedWidgetSize;
+      }
+    } catch {
+      // Ignore malformed host tool JSON; explicit action args still update state.
+    }
+  }
+
   /** Widget/game creator flows need read→edit→verify rounds but should not run unbounded. */
   private static readonly DEFAULT_TOOL_LOOP_MAX = 128;
   private static readonly CREATOR_TOOL_LOOP_MAX = 48;
@@ -1208,6 +1380,7 @@ export class SessionEngine {
 
   private async processNativeToolCalls(
     completion: CompletionResult,
+    runtimeIntake: RuntimeIntakeProgress,
     abortSignal?: AbortSignal
   ): Promise<{
     assistantMessage: ChatMessage;
@@ -1233,13 +1406,24 @@ export class SessionEngine {
       try {
         const rawAction = this.rawActionFromToolCall(toolCall);
         action = this.normalizeAction(rawAction);
-        result = await this.executeAction(action);
+        const intakeBlock = this.gateFileMutationUntilIntakeReady(action, runtimeIntake);
+        const intakeSetBlock = this.gateIntakeSetUntilAsked(action, runtimeIntake);
+        if (intakeSetBlock) {
+          result = JSON.stringify({ ok: false, error: intakeSetBlock });
+        } else if (intakeBlock) {
+          result = JSON.stringify({ ok: false, error: intakeBlock });
+        } else {
+          result = await this.executeAction(action);
+        }
       } catch (error) {
         if (error instanceof Error && error.message === AGENT_STOPPED_MESSAGE) {
           throw error;
         }
         const message = error instanceof Error ? error.message : "Unknown tool error";
         result = JSON.stringify({ ok: false, error: message });
+      }
+      if (action) {
+        this.updateRuntimeIntakeProgress(action, result, runtimeIntake);
       }
       outcomes.push({ toolCall, action, result });
     }
@@ -1320,6 +1504,7 @@ export class SessionEngine {
     let creatorStallNudgeUsed = false;
     let creatorScaffoldNudgeCount = 0;
     const creatorStepsWithoutConf = { value: 0 };
+    const runtimeIntake = this.readRuntimeIntakeProgressFromWorkspace();
 
     for (let step = 0; step < maxToolRounds; step += 1) {
       let filesWrittenThisCompletion = 0;
@@ -1510,7 +1695,7 @@ export class SessionEngine {
         throwIfAborted(abortSignal);
         await this.finalizeNativeFileToolPreview(completion, liveToolEnvelopeStreamed, onEvent);
         const { assistantMessage, toolMessages, successfulActions, outcomes } =
-          await this.processNativeToolCalls(completion, abortSignal);
+          await this.processNativeToolCalls(completion, runtimeIntake, abortSignal);
         for (const outcome of outcomes) {
           if (outcome.action && isFileMutationToolName(outcome.toolCall.name)) {
             filesWrittenThisCompletion += 1;
@@ -1670,7 +1855,14 @@ export class SessionEngine {
       for (const action of actions) {
         throwIfAborted(abortSignal);
         try {
-          toolResults.push({ action, result: await this.executeAction(action) });
+          const intakeBlock = this.gateFileMutationUntilIntakeReady(action, runtimeIntake);
+          const intakeSetBlock = this.gateIntakeSetUntilAsked(action, runtimeIntake);
+          const result = intakeSetBlock
+            ? JSON.stringify({ ok: false, error: intakeSetBlock })
+            : intakeBlock
+              ? JSON.stringify({ ok: false, error: intakeBlock })
+              : await this.executeAction(action);
+          toolResults.push({ action, result });
         } catch (error) {
           if (error instanceof Error && error.message === AGENT_STOPPED_MESSAGE) {
             throw error;
@@ -1678,6 +1870,9 @@ export class SessionEngine {
           const message = error instanceof Error ? error.message : "Unknown tool error";
           toolResults.push({ action, result: JSON.stringify({ ok: false, error: message }) });
         }
+      }
+      for (const row of toolResults) {
+        this.updateRuntimeIntakeProgress(row.action, row.result, runtimeIntake);
       }
 
       for (const row of toolResults) {

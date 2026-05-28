@@ -160,17 +160,52 @@ export class DeployMachineSession {
       throw new Error("Host is empty.");
     }
     const c = new Client();
+    let ready = false;
+    let settled = false;
+    const settle = (fn: () => void): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      fn();
+    };
+
     await new Promise<void>((resolve, reject) => {
+      const handleError = (err: Error): void => {
+        if (this.client === c) {
+          this.emitLog(`[deploy] SSH error: ${err.message}`);
+        }
+        if (!ready) {
+          settle(() => {
+            clearTimeout(t);
+            c.end();
+            reject(err);
+          });
+        }
+      };
       const t = setTimeout(() => {
-        reject(new Error("SSH connection timed out."));
+        settle(() => {
+          c.end();
+          reject(new Error("SSH connection timed out."));
+        });
       }, 25000);
+      // Keep a persistent listener so ssh2 socket/protocol errors never become
+      // unhandled EventEmitter "error" exceptions in Electron main process.
+      c.on("error", handleError);
       c.once("ready", () => {
-        clearTimeout(t);
-        resolve();
+        ready = true;
+        settle(() => {
+          clearTimeout(t);
+          resolve();
+        });
       });
-      c.once("error", (e: Error) => {
-        clearTimeout(t);
-        reject(e);
+      c.once("close", () => {
+        if (!ready) {
+          settle(() => {
+            clearTimeout(t);
+            reject(new Error("SSH connection lost before handshake."));
+          });
+        }
       });
       c.connect({
         host: trimmed,
@@ -180,6 +215,12 @@ export class DeployMachineSession {
       });
     });
     this.client = c;
+    c.on("close", () => {
+      if (this.client === c) {
+        this.client = null;
+        this.stopLogTail();
+      }
+    });
     const deviceName = await this.readDeviceName();
     return { deviceName };
   }

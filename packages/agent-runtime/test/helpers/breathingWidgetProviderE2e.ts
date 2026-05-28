@@ -3,9 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import {
-  buildCreationIntakeUserPrompt,
-  buildPostIntakeCreatorUserPrompt,
-  formatCreatorBuildPlanMessage,
   validateDeployWorkspaceConf,
   type AgentEvent,
   type LlmProviderId,
@@ -13,7 +10,6 @@ import {
 } from "@dartsnut/shared-ipc";
 import {
   createIntakeHostHandlers,
-  isIntakeStateReady,
   nextAfterProjectType
 } from "../../src/creationIntakeHost";
 import { AgentSessionPersistence } from "../../src/agentSessionPersistence";
@@ -22,11 +18,10 @@ import type { ProviderConfig } from "../../src/providerConfig";
 import { loadProviderConfig, validateProviderConfig } from "../../src/providerConfig";
 import {
   allowedDeferredSkillIdsForMode,
-  bundleForTemplateMode,
   resolveSkillRouterPrompt
 } from "../../src/skillBundle";
 import { SessionEngine } from "../../src/sessionEngine";
-import { AGENT_CREATION_INTAKE_TOOL_SCHEMAS } from "../../src/toolSchemas";
+import { AGENT_TOOL_SCHEMAS } from "../../src/toolSchemas";
 import { WorkspacePolicy } from "../../src/workspacePolicy";
 
 export const INITIAL_BREATHING_WIDGET_PROMPT = "我想要一个可爱的呼吸小组件";
@@ -194,39 +189,6 @@ export function canRunProviderE2e(providerId: LlmProviderId): boolean {
 
 function resolveSkillsDir(): string {
   return path.resolve(__dirname, "../../skills");
-}
-
-export function buildWidgetCreatorRoutedPrompt(
-  workspacePath: string,
-  originalUserPrompt: string,
-  widgetSize: WidgetSize
-): string {
-  const skillsDir = resolveSkillsDir();
-  const template = fs.readFileSync(path.join(skillsDir, "widget-creator.md"), "utf-8");
-  const buildPlan = formatCreatorBuildPlanMessage({
-    templateMode: "widget-creator",
-    projectType: "widget",
-    widgetSize
-  });
-  const context = {
-    projectType: "widget",
-    widgetSize,
-    workspacePath
-  };
-  const userRequest = buildPostIntakeCreatorUserPrompt(originalUserPrompt, {
-    forceBuildAfterIntake: true
-  });
-  return [
-    template,
-    "",
-    buildPlan,
-    "",
-    "Creation context:",
-    JSON.stringify(context, null, 2),
-    "",
-    "User request:",
-    userRequest
-  ].join("\n");
 }
 
 function parseTransactions(workspaceRoot: string): Array<Record<string, unknown>> {
@@ -530,25 +492,27 @@ export async function runBreathingWidgetFlow(
 
   const provider = wrapProviderForE2eLogging(new ProviderClient(config), providerId);
 
-  const intakeEngine = new SessionEngine({
+  const unifiedEngine = new SessionEngine({
     provider,
     workspacePolicy: new WorkspacePolicy(tempRoot),
-    skillPrompt: bundleForTemplateMode(skillsDir, "creation-intake"),
-    completionTools: AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
+    skillPrompt: resolveSkillRouterPrompt(skillsDir, null),
+    completionTools: AGENT_TOOL_SCHEMAS,
+    skillLibrary: {
+      skillsDir,
+      allowedIds: allowedDeferredSkillIdsForMode(null)
+    },
     hostIntakeToolHandler: intakeHandlers.hostIntakeToolHandler,
     hostAskQuestionHandler: intakeHandlers.hostAskQuestionHandler,
-    hostIntakeReadyToFinish: () =>
-      isIntakeStateReady(intakeHandlers.state) &&
-      hostIntakeActions.includes("read_workspace_conf"),
+    hostReloadEmulatorHandler: async () => "reload_emulator ok (e2e noop)",
+    hostGetEmulatorLogsHandler: async () =>
+      JSON.stringify({ ok: true, lines: [], emulator: { running: false, status: "Idle" } }),
     sessionPersistence: persistence,
-    sessionTemplateMode: null,
-    sessionSection: "creation-intake"
+    sessionTemplateMode: null
   });
 
-  const intakePrompt = buildCreationIntakeUserPrompt(INITIAL_BREATHING_WIDGET_PROMPT);
-  log("creation-intake");
-  const intakeResponse = await withE2eRetry(() =>
-    intakeEngine.runPrompt(intakePrompt, (event) => {
+  log("unified-session");
+  const response = await withE2eRetry(() =>
+    unifiedEngine.runPrompt(INITIAL_BREATHING_WIDGET_PROMPT, (event) => {
       events.push(event);
       if (event.type === "stream") {
         streamedAssistant += event.delta;
@@ -558,10 +522,11 @@ export async function runBreathingWidgetFlow(
       }
     })
   );
-  if (intakeResponse.includes("Tool loop limit reached")) {
-    throw new Error(
-      `Intake exceeded tool loop limit (${hostIntakeActions.join(" → ") || "no host actions"})`
-    );
+  if (
+    response.includes("Tool loop limit reached") ||
+    response.includes("could not scaffold conf.json")
+  ) {
+    throw new Error(`Unified flow failed: ${response}`);
   }
 
   const intakeState = intakeHandlers.state;
@@ -571,67 +536,22 @@ export async function runBreathingWidgetFlow(
     );
   }
 
-  const intakeTransactions = parseTransactions(tempRoot);
-  const intakeToolNames = toolCallsFromTransactions(intakeTransactions);
-  log(
-    `intake done (${intakeToolNames.length} tools, ${intakeTransactions.filter((r) => r.type === "completion.response").length} completions)`
+  const transactions = parseTransactions(tempRoot);
+  const allToolNames = toolCallsFromTransactions(transactions);
+  const intakeToolNames = allToolNames.filter(
+    (name) => name === "dartsnut_project_intake" || name === "dartsnut_ask_question"
   );
-  persistence.archiveOrResetSession("post-intake-creator-chain");
-
-  log("widget-creator");
-  const creatorEngine = new SessionEngine({
-    provider,
-    workspacePolicy: new WorkspacePolicy(tempRoot),
-    skillPrompt: resolveSkillRouterPrompt(skillsDir, "widget-creator"),
-    skillLibrary: {
-      skillsDir,
-      allowedIds: allowedDeferredSkillIdsForMode("widget-creator")
-    },
-    hostReloadEmulatorHandler: async () => "reload_emulator ok (e2e noop)",
-    hostGetEmulatorLogsHandler: async () =>
-      JSON.stringify({ ok: true, lines: [], emulator: { running: false, status: "Idle" } }),
-    sessionPersistence: persistence,
-    sessionTemplateMode: "widget-creator",
-    sessionSection: "widget-creator"
-  });
-
-  const creatorPrompt = buildWidgetCreatorRoutedPrompt(
-    tempRoot,
-    INITIAL_BREATHING_WIDGET_PROMPT,
-    BREATHING_WIDGET_SIZE
+  const creatorToolNames = allToolNames.filter(
+    (name) => name !== "dartsnut_project_intake" && name !== "dartsnut_ask_question"
   );
-  const creatorResponse = await withE2eRetry(() =>
-    creatorEngine.runPrompt(creatorPrompt, (event) => {
-      events.push(event);
-      if (event.type === "stream") {
-        streamedAssistant += event.delta;
-      }
-      if (event.type === "reasoning_stream") {
-        streamedReasoning += event.delta;
-      }
-    })
-  );
-
-  const creatorTransactions = parseTransactions(tempRoot);
-  const creatorToolNames = toolCallsFromTransactions(creatorTransactions);
-  const creatorCompletions = creatorTransactions.filter((r) => r.type === "completion.response");
-  log(
-    `creator done (${creatorToolNames.length} tools, ${creatorCompletions.length} completion rounds)`
-  );
-  if (
-    creatorResponse.includes("Tool loop limit reached") ||
-    creatorResponse.includes("could not scaffold conf.json")
-  ) {
-    throw new Error(
-      `Creator failed (${creatorCompletions.length} completion rounds, tools: ${creatorToolNames.join(", ") || "none"}): ${creatorResponse}`
-    );
-  }
+  const completionRounds = transactions.filter((r) => r.type === "completion.response").length;
+  log(`unified done (${allToolNames.length} tools, ${completionRounds} completion rounds)`);
 
   const health = assertFlowHealth(
     events,
-    creatorTransactions,
+    transactions,
     streamedAssistant,
-    creatorResponse,
+    response,
     streamedReasoning
   );
   assertArtifacts(tempRoot);

@@ -783,8 +783,6 @@ export function App() {
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
   const lastAgentSessionHydrateKeyRef = useRef<string>("");
-  /** Last no-workspace prompt text — used when the user picks a widget size from chips so the idea is not lost. */
-  const creationIntakeBasePromptRef = useRef("");
   const timelineRef = useRef<HTMLElement | null>(null);
   const composerPillRef = useRef<HTMLDivElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1294,13 +1292,6 @@ export function App() {
   }, [assetManifest, deployEligible, rightPaneTab]);
 
   useEffect(() => {
-    if (!bootstrap?.needsCreationIntake) {
-      setWidgetSizePicker({ visible: false, sizes: [] });
-      setProjectTypePicker({ visible: false, types: [] });
-    }
-  }, [bootstrap?.needsCreationIntake]);
-
-  useEffect(() => {
     const ws = bootstrap?.workspaceRoot;
     if (!api || !ws) {
       lastAgentSessionHydrateKeyRef.current = "";
@@ -1358,7 +1349,6 @@ export function App() {
     setSessionProjectType(null);
     setWidgetSizePicker({ visible: false, sizes: [] });
     setProjectTypePicker({ visible: false, types: [] });
-    creationIntakeBasePromptRef.current = "";
     setPrompt("");
     setRuntimeError(null);
     setEntries([{ id: `greeting-${Date.now()}`, role: "agent", text: GREETING_TEXT, streaming: false }]);
@@ -1647,18 +1637,13 @@ export function App() {
     setPrompt("");
     setEntries((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", text: current }]);
 
-    if (!bootstrap?.needsCreationIntake && bootstrap?.workspaceRoot) {
-      await submitPrompt({
-        prompt: current,
-        workspacePath: bootstrap.workspaceRoot,
-        templateMode: sessionTemplateMode ?? undefined,
-        widgetSize: sessionWidgetSize ?? undefined,
-        projectType: sessionProjectType ?? undefined
-      });
-      return;
-    }
-    creationIntakeBasePromptRef.current = current;
-    await submitPrompt({ prompt: current, creationIntake: true });
+    await submitPrompt({
+      prompt: current,
+      workspacePath: bootstrap?.workspaceRoot ?? undefined,
+      templateMode: sessionTemplateMode ?? undefined,
+      widgetSize: sessionWidgetSize ?? undefined,
+      projectType: sessionProjectType ?? undefined
+    });
   }
 
   async function handleStopAgent() {
@@ -1932,8 +1917,7 @@ export function App() {
           <div className="chat-rail-overlay chat-rail-overlay--bottom pointer-events-none absolute inset-x-0 bottom-0 z-10">
             <div className="chat-rail-chrome pointer-events-auto">
           {/* Chip rows: host shows these while a blocking `dartsnut_ask_question` call is waiting. */}
-          {bootstrap?.needsCreationIntake &&
-          projectTypePicker.visible &&
+          {projectTypePicker.visible &&
           projectTypePicker.types.length > 0 ? (
             <div
               className="flex flex-col gap-1.5"
@@ -1958,8 +1942,7 @@ export function App() {
             </div>
           ) : null}
 
-          {bootstrap?.needsCreationIntake &&
-          widgetSizePicker.visible &&
+          {widgetSizePicker.visible &&
           widgetSizePicker.sizes.length > 0 ? (
             <div
               className="flex flex-col gap-1.5"

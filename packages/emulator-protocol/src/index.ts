@@ -14,6 +14,7 @@ export type EmulatorCommand =
   | { type: "set_path"; path: string }
   | { type: "set_params"; params: Record<string, unknown> }
   | { type: "stop_widget" }
+  | { type: "shutdown" }
   | { type: "reload_widget" }
   | { type: "set_button"; button: "A" | "B" | "UP" | "DOWN" | "LEFT" | "RIGHT"; pressed: boolean }
   | { type: "throw_dart"; index: number; x: number; y: number }

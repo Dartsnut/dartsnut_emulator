@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import queue
+import signal
 import subprocess
 import sys
 import threading
@@ -36,6 +37,38 @@ def sanitize_name(name: str) -> str:
 
 # Darwin shm_open: name length includes the leading '/' (max 31 total).
 _POSIX_SHM_NAME_MAX = 31
+
+
+def _kill_process_tree(proc: subprocess.Popen[Any], *, force: bool = False) -> None:
+    """Stop a widget subprocess and descendants so pygame/SDL audio cannot outlive the bridge."""
+    if proc.poll() is not None:
+        return
+    pid = proc.pid
+    if pid is None:
+        try:
+            proc.kill() if force else proc.terminate()
+        except OSError:
+            pass
+        return
+    if sys.platform == "win32":
+        args = ["taskkill", "/PID", str(pid), "/T"]
+        if force:
+            args.append("/F")
+        subprocess.run(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    try:
+        os.killpg(os.getpgid(pid), sig)
+    except ProcessLookupError:
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            pass
 
 
 def _unique_shm_name(prefix: str) -> str:
@@ -193,7 +226,7 @@ class EmulatorCore:
             return
         if self.widget_process.poll() is None:
             self._queue_bridge_log("Stopping running widget process.")
-            self.widget_process.terminate()
+            _kill_process_tree(self.widget_process, force=False)
             try:
                 self.widget_process.wait(timeout=2)
             except subprocess.TimeoutExpired:
@@ -201,7 +234,7 @@ class EmulatorCore:
                     "Widget process did not exit after terminate(); killing.",
                     source="stderr",
                 )
-                self.widget_process.kill()
+                _kill_process_tree(self.widget_process, force=True)
                 try:
                     self.widget_process.wait(timeout=2)
                 except Exception:
@@ -239,11 +272,13 @@ class EmulatorCore:
         self._last_launch_argv_chars = sum(len(str(a)) for a in command) + max(0, len(command) - 1)
 
         child_env = os.environ.copy()
-        # Always headless for emulator widgets. setdefault() would keep a host
-        # SDL_VIDEODRIVER (e.g. from Electron/shell), which can block set_mode or
-        # prevent frames from ever reaching shared memory on Windows.
+        # Headless video only: frames go to shared memory, not a window.
+        # setdefault() would keep a host SDL_VIDEODRIVER (e.g. from Electron/shell),
+        # which can block set_mode or prevent frames from reaching SHM on Windows.
         child_env["SDL_VIDEODRIVER"] = "dummy"
-        child_env["SDL_AUDIODRIVER"] = "dummy"
+        # Let pygame use the platform audio backend (coreaudio, WASAPI, pulse, etc.).
+        # Older builds forced SDL_AUDIODRIVER=dummy alongside dummy video, which muted all sound.
+        child_env.pop("SDL_AUDIODRIVER", None)
         child_env.setdefault("PYTHONUNBUFFERED", "1")
         # Pygame prints a welcome banner to stderr unless this is set — absence of that line does not
         # mean the interpreter failed to start. Set DARTSNUT_EMULATOR_VERBOSE=1 (host env) to show it.
@@ -259,6 +294,12 @@ class EmulatorCore:
             )
         self._queue_bridge_log(f"launch command cwd={launch_cwd} argv={json.dumps(command)}")
 
+        popen_kwargs: dict[str, Any] = {}
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
+
         self.widget_process = subprocess.Popen(
             command,
             cwd=launch_cwd,
@@ -269,6 +310,7 @@ class EmulatorCore:
             stderr=subprocess.PIPE,
             text=True,
             env=child_env,
+            **popen_kwargs,
         )
         self.state.running = True
         self.state.status = ""
@@ -343,6 +385,11 @@ class EmulatorCore:
                     raise ValueError("set_params requires object params")
                 self.current_params = params
                 self.state.status = "Params updated"
+            elif action == "shutdown":
+                self._queue_bridge_log("shutdown requested")
+                self.stop_widget_process()
+                self.state.running = False
+                self.state.status = "Shutting down"
             elif action == "stop_widget":
                 self._queue_bridge_log("stop_widget requested")
                 self.stop_widget_process()

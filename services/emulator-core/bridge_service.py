@@ -1,6 +1,7 @@
 import json
 import os
 import queue
+import signal
 import sys
 import threading
 import time
@@ -26,6 +27,12 @@ def _pump_stdin_lines(command_queue: queue.Queue[str]) -> None:
 
 
 def main() -> None:
+    def _exit_on_signal(signum: int, _frame: object) -> None:
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _exit_on_signal)
+    signal.signal(signal.SIGINT, _exit_on_signal)
+
     workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     core = EmulatorCore(workspace_root=workspace_root)
     last_heartbeat_ms = 0
@@ -53,8 +60,11 @@ def main() -> None:
                 try:
                     request = json.loads(stripped)
                     command = request.get("command", {})
+                    action = command.get("type") if isinstance(command, dict) else None
                     next_state = core.apply_command(command)
                     emit("state", next_state)
+                    if action == "shutdown":
+                        break
                 except Exception as exc:  # pragma: no cover - defensive
                     emit("error", {"message": str(exc)})
             frame_payload = core.read_latest_frame()

@@ -70,5 +70,68 @@ class LifecycleLoggingTests(unittest.TestCase):
             self.assertTrue(any("spawn broken" in text for text in texts), texts)
 
 
+class ShutdownCommandTests(unittest.TestCase):
+    def test_shutdown_stops_widget(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            _write_widget_conf(workspace, "demo")
+            (workspace / "demo" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+
+            core.apply_command({"type": "set_path", "path": "demo"})
+            proc = mock.MagicMock()
+            proc.poll.return_value = None
+            proc.pid = 9999
+            core.widget_process = proc
+            core.state.running = True
+
+            with mock.patch.object(module, "_kill_process_tree") as kill_tree:
+                state = core.apply_command({"type": "shutdown"})
+
+            kill_tree.assert_called()
+            self.assertIsNone(core.widget_process)
+            self.assertFalse(state["running"])
+            self.assertEqual(state["status"], "Shutting down")
+
+
+class WidgetLaunchEnvTests(unittest.TestCase):
+    def test_widget_launch_uses_dummy_video_but_not_dummy_audio(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            _write_widget_conf(workspace, "demo")
+            (workspace / "demo" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+
+            core.apply_command({"type": "set_path", "path": "demo"})
+            captured: dict[str, object] = {}
+
+            def _capture_popen(*args, **kwargs):
+                captured["env"] = kwargs.get("env")
+                proc = mock.MagicMock()
+                proc.poll.return_value = 0
+                proc.stdout = None
+                proc.stderr = None
+                proc.pid = 4242
+                return proc
+
+            with (
+                mock.patch.object(module.time, "sleep", lambda _: None),
+                mock.patch.object(module.subprocess, "Popen", side_effect=_capture_popen),
+            ):
+                core.start_widget_process_for_current()
+
+            env = captured.get("env")
+            self.assertIsInstance(env, dict)
+            assert isinstance(env, dict)
+            self.assertEqual(env.get("SDL_VIDEODRIVER"), "dummy")
+            self.assertNotIn("SDL_AUDIODRIVER", env)
+
+
 if __name__ == "__main__":
     unittest.main()

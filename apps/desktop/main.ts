@@ -101,6 +101,9 @@ let firstRunComplete = false;
 let bridgeProcess: ReturnType<typeof spawn> | null = null;
 /** Interpreter used to spawn the current bridge (restart bridge when this changes). */
 let bridgePythonExec: string | null = null;
+/** True after graceful bridge teardown so quit does not orphan pygame/SDL audio. */
+let emulatorBridgeTeardownDone = false;
+let emulatorBridgeTeardownInFlight: Promise<void> | null = null;
 const repoRoot = app.isPackaged
   ? process.resourcesPath
   : path.resolve(__dirname, "../../..");
@@ -588,15 +591,87 @@ async function promptSaveDiscardCancel(reason: TempWorkspaceGuardReason): Promis
   return "cancel";
 }
 
-function stopPythonBridgeProcess(): void {
-  if (bridgeProcess) {
-    bridgeProcess.kill();
-    bridgeProcess = null;
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function gracefulStopEmulatorBridge(
+  timeoutMs = 3000,
+  options?: { permanent?: boolean }
+): Promise<void> {
+  if (emulatorBridgeTeardownDone) {
+    return;
+  }
+  const proc = bridgeProcess;
+  if (!proc) {
+    if (options?.permanent) {
+      emulatorBridgeTeardownDone = true;
+    }
+    return;
+  }
+
+  try {
+    if (proc.stdin && !proc.stdin.destroyed) {
+      proc.stdin.write(`${JSON.stringify({ command: { type: "stop_widget" } })}\n`);
+      proc.stdin.write(`${JSON.stringify({ command: { type: "shutdown" } })}\n`);
+    }
+  } catch {
+    /* bridge stdin may already be closed */
+  }
+
+  await new Promise<void>((resolve) => {
+    if (proc.exitCode !== null) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, timeoutMs);
+    proc.once("close", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+
+  if (proc.exitCode === null) {
+    try {
+      proc.kill();
+    } catch {
+      /* ignore */
+    }
+    await sleepMs(400);
+    if (proc.exitCode === null) {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  bridgeProcess = null;
+  bridgePythonExec = null;
+  emulatorState.running = false;
+  emulatorState.status = "Bridge stopped";
+  if (options?.permanent) {
+    emulatorBridgeTeardownDone = true;
   }
 }
 
-function releaseWorkspaceFileHandles(): void {
-  stopPythonBridgeProcess();
+function stopPythonBridgeProcess(): void {
+  if (emulatorBridgeTeardownDone || !bridgeProcess) {
+    return;
+  }
+  try {
+    bridgeProcess.kill();
+  } catch {
+    /* ignore */
+  }
+  bridgeProcess = null;
+  bridgePythonExec = null;
+  emulatorBridgeTeardownDone = true;
+}
+
+async function releaseWorkspaceFileHandles(): Promise<void> {
+  await gracefulStopEmulatorBridge(3000, { permanent: false });
   assetManager.stop();
   stopDeployConfWatcher();
 }
@@ -617,7 +692,7 @@ async function discardTrackedTemporaryProject(reason?: TempWorkspaceGuardReason)
     writeTempWorkspaceRecordToDisk(null);
   }
   if (discardingOnQuit) {
-    releaseWorkspaceFileHandles();
+    await releaseWorkspaceFileHandles();
     void disconnectDeployMachine();
   }
   removeDirectoryBestEffort(toRemove);
@@ -1727,14 +1802,6 @@ async function resolvePythonExecutable(): Promise<string> {
   return venvFallback ?? (process.platform === "win32" ? "python" : "python3");
 }
 
-function stopPythonBridge(): void {
-  if (bridgeProcess) {
-    bridgeProcess.kill();
-    bridgeProcess = null;
-    bridgePythonExec = null;
-  }
-}
-
 function startPythonBridge() {
   if (!canRunEmulatorDeps(pythonExec) || !isPythonVersionSupportedSync(pythonExec)) {
     emulatorState.status =
@@ -1747,7 +1814,18 @@ function startPythonBridge() {
   if (bridgeProcess && bridgePythonExec === pythonExec) {
     return;
   }
-  stopPythonBridge();
+  void gracefulStopEmulatorBridge().then(() => {
+    if (emulatorBridgeTeardownDone || bridgeProcess) {
+      return;
+    }
+    spawnBridgeAfterStop();
+  });
+}
+
+function spawnBridgeAfterStop() {
+  if (emulatorBridgeTeardownDone) {
+    return;
+  }
   const bridgePath = path.join(repoRoot, "services", "emulator-core", "bridge_service.py");
   bridgeProcess = spawn(pythonExec, [bridgePath], {
     stdio: ["pipe", "pipe", "pipe"],
@@ -2021,8 +2099,26 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   appQuitRequested = true;
+  if (emulatorBridgeTeardownDone) {
+    return;
+  }
+  if (!bridgeProcess) {
+    emulatorBridgeTeardownDone = true;
+    return;
+  }
+  if (emulatorBridgeTeardownInFlight) {
+    event.preventDefault();
+    return;
+  }
+  event.preventDefault();
+  emulatorBridgeTeardownInFlight = gracefulStopEmulatorBridge(3000, { permanent: true })
+    .catch(() => undefined)
+    .finally(() => {
+      emulatorBridgeTeardownInFlight = null;
+      app.quit();
+    });
 });
 
 app.on("will-quit", () => {
@@ -2303,7 +2399,7 @@ ipcMain.handle(IPCChannels.pickPythonPath, async () => {
   }
   const persistedPath = writeSelectedPythonPath(selectedPath);
   pythonExec = await resolvePythonExecutable();
-  stopPythonBridge();
+  await gracefulStopEmulatorBridge();
   startPythonBridge();
   return {
     accepted: true,

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
-import { AdkSessionRuntime } from "../src/adkSessionRuntime";
+import { AgentSessionRuntime } from "../src/sessionRuntime";
 import { buildModificationWorkflowPrompt } from "../src/modificationWorkflow";
 
 function createEngineSpy() {
@@ -31,13 +31,13 @@ describe("buildModificationWorkflowPrompt", () => {
   });
 });
 
-describe("AdkSessionRuntime", () => {
+describe("AgentSessionRuntime", () => {
   it("uses modification workflow when conf.json and main.py exist", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-adk-mod-"));
     fs.writeFileSync(path.join(workspace, "conf.json"), '{"type":"widget","size":[128,128]}', "utf-8");
     fs.writeFileSync(path.join(workspace, "main.py"), "print('hi')\n", "utf-8");
     const spy = createEngineSpy();
-    const runtime = new AdkSessionRuntime({
+    const runtime = new AgentSessionRuntime({
       workspacePath: workspace,
       engine: spy.engine as never
     });
@@ -50,7 +50,7 @@ describe("AdkSessionRuntime", () => {
   it("runs creation only for empty workspace", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-adk-create-"));
     const spy = createEngineSpy();
-    const runtime = new AdkSessionRuntime({
+    const runtime = new AgentSessionRuntime({
       workspacePath: workspace,
       engine: spy.engine as never
     });
@@ -75,7 +75,7 @@ describe("AdkSessionRuntime", () => {
       },
       lastRunStoppedOnCleanEmulator: () => true
     };
-    const runtime = new AdkSessionRuntime({
+    const runtime = new AgentSessionRuntime({
       workspacePath: workspace,
       engine: engine as never
     });

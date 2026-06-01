@@ -4,7 +4,7 @@ import { CreationWorkflow } from "./creationWorkflow";
 import { ModificationWorkflow } from "./modificationWorkflow";
 import { decideWorkflowRoute } from "./workflowRouter";
 
-export interface AdkSessionRuntimeOptions {
+export interface AgentSessionRuntimeOptions {
   workspacePath: string;
   engine: SessionEngine;
 }
@@ -15,11 +15,11 @@ export interface AdkSessionRuntimeOptions {
  * Creation runs until the session engine finishes (including clean emulator verify when applicable).
  * There is no automatic handoff to modification after creation.
  */
-export class AdkSessionRuntime {
+export class AgentSessionRuntime {
   private readonly creation: CreationWorkflow;
   private readonly modification: ModificationWorkflow;
 
-  constructor(private readonly options: AdkSessionRuntimeOptions) {
+  constructor(private readonly options: AgentSessionRuntimeOptions) {
     this.creation = new CreationWorkflow({
       engine: options.engine
     });
@@ -55,3 +55,8 @@ export class AdkSessionRuntime {
     return this.creation.runPrompt(prompt, onEvent, abortSignal);
   }
 }
+
+/** @deprecated compatibility alias while ADK-era naming is removed. */
+export type AdkSessionRuntimeOptions = AgentSessionRuntimeOptions;
+/** @deprecated compatibility alias while ADK-era naming is removed. */
+export const AdkSessionRuntime = AgentSessionRuntime;

@@ -20,6 +20,7 @@ export function buildPostIntakeCreatorUserPrompt(
   const original = originalUserPrompt.trim();
   const shared = [
     "Creation **intake just finished**. Project type and (for widgets) display size are in workspace metadata / **Creation context** above.",
+    "Runtime is OpenAI-agent based. Continue with native tool calls only (no XML/JSON envelope text).",
     "Do **not** open with a generic **Hello / Welcome to Dartsnut Chat** or repeat product onboarding."
   ];
 

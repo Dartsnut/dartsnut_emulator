@@ -20,6 +20,7 @@ export function buildCreationIntakeUserPrompt(
   return [
     "## New project intake (mandatory tool use)",
     "An empty workspace directory is already selected on disk. Complete intake before the creator phase writes `conf.json` and `main.py`.",
+    "This turn runs on the OpenAI agent runtime. Use native function tool calls only; do not emit XML/JSON tool envelopes in assistant text.",
     "Use **only** these host tools via native `tool_calls`: **`dartsnut_ask_question`** and **`dartsnut_project_intake`**.",
     "**Blocking questions (`dartsnut_ask_question`):** Each call shows the matching desktop UI (Game/Widget chips or widget size chips) and **does not return** until the user answers. You **must** call this tool when you need that input and cannot take it reliably from the user's message alone — do **not** rely on hidden marker lines or prose-only prompts for those choices.",
     "Allowed `question_id` values: **`project_type`**, **`widget_display_size`** (only after `project_type` is `widget`).",

@@ -15,8 +15,6 @@ const config = loadProviderConfig({ activeProvider: "gpt" });
 const canRunLive = validateProviderConfig(config, "gpt").ok;
 
 function buildFlipClockRoutedPrompt(workspacePath: string): string {
-  const skillsDir = path.resolve(__dirname, "../skills");
-  const template = fs.readFileSync(path.join(skillsDir, "widget-creator.md"), "utf-8");
   const buildPlan = formatCreatorBuildPlanMessage({
     templateMode: "widget-creator",
     projectType: "widget",
@@ -28,8 +26,6 @@ function buildFlipClockRoutedPrompt(workspacePath: string): string {
     workspacePath
   };
   return [
-    template,
-    "",
     buildPlan,
     "",
     "Creation context:",

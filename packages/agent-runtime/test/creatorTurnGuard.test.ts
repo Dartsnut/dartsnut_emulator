@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CREATOR_MAX_STEPS_AFTER_ARTIFACTS,
   CREATOR_MAX_STEPS_WITHOUT_ARTIFACTS,
   CREATOR_MAX_VERIFY_STEPS_AFTER_ARTIFACTS,
   CREATOR_PROSE_ONLY_STALL_CHARS,
@@ -48,7 +49,8 @@ describe("decideCreatorLoopStep", () => {
         filesWrittenThisTurn: 0,
         workspaceHasConfJson: true,
         workspaceHasMainPy: true,
-        toolNames: []
+        toolNames: [],
+        stepsAfterArtifactsReady: 0
       },
       0
     );
@@ -65,7 +67,8 @@ describe("decideCreatorLoopStep", () => {
         filesWrittenThisTurn: 0,
         workspaceHasConfJson: false,
         workspaceHasMainPy: false,
-        toolNames: []
+        toolNames: [],
+        stepsAfterArtifactsReady: 0
       },
       0
     );
@@ -82,7 +85,8 @@ describe("decideCreatorLoopStep", () => {
         filesWrittenThisTurn: 0,
         workspaceHasConfJson: true,
         workspaceHasMainPy: false,
-        toolNames: []
+        toolNames: [],
+        stepsAfterArtifactsReady: 0
       },
       0,
       CREATOR_MAX_STEPS_WITHOUT_ARTIFACTS
@@ -103,11 +107,33 @@ describe("decideCreatorLoopStep", () => {
         filesWrittenThisTurn: 0,
         workspaceHasConfJson: true,
         workspaceHasMainPy: true,
-        toolNames: ["read_file", "get_emulator_logs"]
+        toolNames: ["read_file", "get_emulator_logs"],
+        stepsAfterArtifactsReady: 6
       },
       CREATOR_MAX_VERIFY_STEPS_AFTER_ARTIFACTS
     );
     expect(decision.type).toBe("complete");
+  });
+
+  it("completes after post-scaffold step budget even when still mutating files", () => {
+    const decision = decideCreatorLoopStep(
+      {
+        step: 12,
+        toolCallCount: 1,
+        contentChars: 0,
+        reasoningChars: 0,
+        filesWrittenThisTurn: 0,
+        workspaceHasConfJson: true,
+        workspaceHasMainPy: true,
+        toolNames: ["replace_in_file"],
+        stepsAfterArtifactsReady: CREATOR_MAX_STEPS_AFTER_ARTIFACTS
+      },
+      2
+    );
+    expect(decision).toMatchObject({
+      type: "complete",
+      summary: expect.stringContaining("Initial scaffold")
+    });
   });
 });
 

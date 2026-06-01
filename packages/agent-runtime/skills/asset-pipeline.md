@@ -2,37 +2,22 @@ You are the shared **asset pipeline** skill for Dartsnut games and widgets.
 
 ## When to apply
 
-Apply this skill whenever a game or widget has an **art-bearing entity** — a sprite, icon, animation, or background image that should later carry user-provided art. This is the single source of truth for the asset manifest, the loader-helper interface, the placeholder fallback, and the post-bind "apply mode" workflow.
-
-## User intent (any language)
-
-Interpret **meaning**, not exact words:
-
-- User will **provide images/assets later** (placeholders + manifest now; binding happens in the desktop Asset Manager).
-- User mentions **sprites, icons, animations, characters, backgrounds**, or art slots.
-- You are scaffolding entities that should render user art after bind.
-
-**Examples (non-exhaustive):** "I'll provide assets", 「我将提供素材」, 「之後會給圖」, 「我會提供貼圖」, 「我来给你一个皮卡丘的图片」, "I'll give you a Pikachu picture".
+Apply this skill whenever a game or widget has an **art-bearing entity** — a sprite, icon, animation, or background image that should carry bound user art. This is the single source of truth for the asset manifest, the loader-helper interface, the placeholder fallback, and the post-bind "apply mode" workflow.
 
 **Creator phase:** scaffold `dartsnut.assets.json`, `assets_loader.py`, and `slot.draw(...)` call sites with placeholders.
 
-**Apply mode** (separate host step after bind): only wire loader + named slots — see Apply mode section below; not triggered by chat phrases alone.
+**Apply mode** (separate host step after bind): only wire loader + named slots — see Apply mode section below.
 
-## User offers an image (chat) — mandatory workflow
+## Chat images — use Assets pane, not chat paste
 
-When the user says they will **give**, **send**, or **provide** a picture/image/sprite (in any language), treat it as **asset-pipeline** work — not chat attachment.
+The desktop app does not bind art from chat messages. **Do not** ask the user to paste or upload images in chat.
 
-**Do not** ask the user to paste or upload the image **in the chat**. The desktop app does not bind art from chat messages.
-
-**Do instead (same turn when possible):**
+When adding art slots:
 
 1. Call **`get_dartsnut_skill`** for **`asset-pipeline`** if not already loaded.
-2. Ensure the workspace has **`dartsnut.assets.json`** with a slot for that entity (e.g. `pikachu` — kebab-case `id`, human `description`, `size`, `placeholder`, `binding: null`).
-3. Ensure **`assets_loader.py`** exists and entity code uses **`slot.draw(...)`** (replace hand-drawn Pillow/pygame placeholders for that entity when refactoring).
-4. Tell the user — in **their language** — to bind the file in the desktop **Assets** pane: **Choose File** on the matching slot, then **Apply Assets** when prompted. PNG/JPG with transparency recommended.
-5. After they bind and Apply Assets, the host may run apply mode automatically; you do not need to re-scaffold the whole project.
-
-If the project already drew the entity in code (e.g. pixel Pikachu), **migrate** that entity to a manifest slot and loader draw call so the user's file can replace it after bind — do not keep both paths indefinitely.
+2. Add **`dartsnut.assets.json`** with a slot (`id`, `description`, `size`, `placeholder`, `binding: null`).
+3. Scaffold **`assets_loader.py`** and wire **`slot.draw(...)`** in render code.
+4. Tell the user to bind files in the desktop **Assets** pane: **Choose File** on the slot, then **Apply Assets**.
 
 Both `game-creator` and `widget-creator` reference this skill. Do not restate its rules from those skills — read them here.
 
@@ -249,7 +234,7 @@ def load_slot(slot_id):
 
 ## Authoring rules
 
-When generating a new game or widget that has art-bearing entities:
+When a workspace needs art-bearing entities:
 
 1. Add `dartsnut.assets.json` at the workspace root with one slot per art-bearing entity. Set `binding: null` and pick a distinct `placeholder.color` per slot.
 2. Scaffold `assets_loader.py` in the workspace using the snippet for the matching backend.

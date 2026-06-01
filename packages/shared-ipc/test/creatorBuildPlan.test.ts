@@ -5,21 +5,20 @@ import {
 } from "../src/creatorBuildPlan";
 
 describe("formatCreatorBuildPlanMessage", () => {
-  it("includes success criteria for game creator", () => {
+  it("includes workspace metadata for game creator", () => {
     const msg = formatCreatorBuildPlanMessage({
       templateMode: "game-creator",
       projectType: "game"
     });
-    expect(msg).toContain("## Success criteria");
-    expect(msg).toContain("karpathy-guidelines");
-    expect(msg).toContain("creator-incremental");
-    expect(msg).toContain("does **not** prescribe step order");
+    expect(msg).toContain("## Workspace metadata");
+    expect(msg).toContain("Project type: **game**");
     expect(msg).toContain("conf.json");
     expect(msg).toContain("main.py");
     expect(msg).toContain("reload_emulator");
     expect(msg).toContain("get_emulator_logs");
-    expect(msg).not.toContain("Agent steps");
-    expect(msg).not.toContain("Phase 1");
+    expect(msg).not.toContain("Success criteria");
+    expect(msg).not.toContain("Behavior matches the user request");
+    expect(msg).not.toContain("karpathy-guidelines");
   });
 
   it("includes widget display size when provided", () => {
@@ -29,7 +28,7 @@ describe("formatCreatorBuildPlanMessage", () => {
       widgetSize: "128x128"
     });
     expect(msg).toContain("128x128");
-    expect(msg).toContain("Success criteria");
+    expect(msg).toContain("Widget display size");
   });
 });
 

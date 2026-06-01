@@ -37,7 +37,7 @@ In README or final replies:
 
 ## Frame types
 
-- **Widgets:** Pillow `Image` sized to `conf.json` / Creation context.
+- **Widgets:** Pillow `Image` sized to `conf.json` `size`.
 - **Games:** pygame `Surface` → transpose `pygame.surfarray.array3d(screen)` before `update_frame_buffer`.
 
 **Layout, panels, clipping, fonts on canvas:** load **`dartsnut-display-mapping`** when needed.

@@ -59,9 +59,9 @@ import {
 import {
   loadProviderConfig,
   validateProviderConfig,
-  ProviderClient,
+  buildAgentModelConfig,
   SessionEngine,
-  AdkSessionRuntime,
+  AgentSessionRuntime,
   WorkspacePolicy,
   bundleForTemplateMode,
   resolveSkillRouterPrompt,
@@ -1943,7 +1943,7 @@ function buildSession(
     preferredUserLocale?: UserLocale | null;
     latestUserTextForLocale?: string;
   }
-): AdkSessionRuntime {
+): AgentSessionRuntime {
   const workspacePath = extras?.workspacePath ?? workspaceRoot;
   if (!workspacePath) {
     throw new Error("Workspace is not selected.");
@@ -1966,7 +1966,13 @@ function buildSession(
       ? resolvePreferredUserLocaleForSession(extras.latestUserTextForLocale, extras.sessionPersistence)
       : null);
   const engine = new SessionEngine({
-    provider: new ProviderClient(config),
+    agentModelConfig: buildAgentModelConfig({
+      activeProvider: providerSettings.activeProvider,
+      model: config.model,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      userDefine: providerSettings.userDefine
+    }),
     workspacePolicy: new WorkspacePolicy(workspacePath),
     skillPrompt,
     skillLibrary,
@@ -1986,7 +1992,7 @@ function buildSession(
     sessionTemplateMode: templateMode ?? null,
     sessionSection: skillBundleMode === null ? null : String(skillBundleMode)
   });
-  return new AdkSessionRuntime({
+  return new AgentSessionRuntime({
     workspacePath,
     engine
   });

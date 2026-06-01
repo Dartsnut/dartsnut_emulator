@@ -230,7 +230,14 @@ export function transcriptUserBubbleText(fullUserPrompt: string): string | null 
   const buildAt = body.indexOf(POST_INTAKE_BUILD_REQUEST_PREFIX);
   if (buildAt >= 0) {
     const afterBuild = body.slice(buildAt + POST_INTAKE_BUILD_REQUEST_PREFIX.length).trim();
-    return afterBuild.length > 0 ? afterBuild : null;
+    if (
+      afterBuild.length === 0 ||
+      afterBuild === "(none recorded before intake)" ||
+      afterBuild === "There was no substantive first message before intake."
+    ) {
+      return null;
+    }
+    return afterBuild;
   }
 
   const originalAt = body.indexOf(TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX);

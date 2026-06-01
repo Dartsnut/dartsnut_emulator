@@ -2,7 +2,7 @@
 
 **When to apply — mandatory:** Read and follow this skill for **any** Dartsnut task that touches **pixels, layout, resolution, framebuffer size, UI placement, fonts, or `update_frame_buffer`**. That includes games, widgets, emulator previews, and refactors of drawing code.
 
-**Relationship to other skills:** Use **`dartsnut-skill`** for `pydartsnut` APIs, loops, and I/O. Use **`game-creator`** / **`widget-creator`** for project contracts. This file is the **single reference for physical screens ↔ framebuffer mapping** and related rendering rules.
+**Relationship to other skills:** Use **`pydartsnut-skill`** for `pydartsnut` APIs, loops, and I/O. Use **`conf-contract`** for root config. This file is the **single reference for physical screens ↔ framebuffer mapping** and related rendering rules.
 
 ---
 
@@ -18,9 +18,10 @@
 - The secondary panel shows the crop corresponding to **`[129, 0]` → `[160, 64]`** in the **machine / firmware** coordinate space.
 - That range is **not** literal **`x`** indices in a **`128`**-pixel-wide Pillow/pygame image. When drawing, stay within **`x ∈ [0, 127]`**, **`y ∈ [0, 159]`** and place content intended for the small panel in the **lower band** that firmware maps onto the **`64×32`** display. Treat exact alignment as **firmware-defined** when pixel-perfect placement matters.
 
-### Main vs secondary content (agent judgment)
+### Main vs secondary content
 
-- **Unless the user specifies otherwise**, you choose what belongs on the **main surface** (top **`128×128`**) versus what is relegated to the **secondary** mapping (bottom strip → **`64×32`** hardware). Typical split: gameplay and dart feedback on the main area; scores, labels, icons, or ambient chrome on the secondary when it improves layout.
+- Place gameplay and dart feedback on the main **`128×128`** area when using a full **`128×160`** buffer.
+- Use the lower band mapped to the **`64×32`** hardware panel for scores, labels, icons, or status when it improves layout.
 
 ## Partial-size widgets (`128×128`, `128×64`, `64×32`)
 
@@ -46,4 +47,4 @@
 
 ## Display layout convention (games)
 
-- Resolution is typically **`[128, 160]`**. Treat the surface as a **`128×128`** primary area plus a **secondary region** mapped to the physical **`64×32`** panel; follow that split when it fits the design unless the user or creation context specifies otherwise.
+- Resolution is typically **`[128, 160]`**. Treat the surface as a **`128×128`** primary area plus a **secondary region** mapped to the physical **`64×32`** panel.

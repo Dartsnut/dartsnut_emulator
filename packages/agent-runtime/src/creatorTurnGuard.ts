@@ -29,6 +29,9 @@ export const CREATOR_REASONING_ONLY_STALL_CHARS = CREATOR_PROSE_ONLY_STALL_CHARS
 /** After both artifacts exist, end if the model only verifies for this many tool rounds. */
 export const CREATOR_MAX_VERIFY_STEPS_AFTER_ARTIFACTS = 6;
 
+/** Hard cap on tool-loop steps once conf.json and main.py exist (initial pass only). */
+export const CREATOR_MAX_STEPS_AFTER_ARTIFACTS = 6;
+
 export interface CreatorLoopSignals {
   step: number;
   toolCallCount: number;
@@ -39,6 +42,8 @@ export interface CreatorLoopSignals {
   workspaceHasConfJson: boolean;
   workspaceHasMainPy: boolean;
   toolNames: string[];
+  /** Incremented each tool-loop step after both artifacts exist. */
+  stepsAfterArtifactsReady: number;
 }
 
 /** Creator tool-loop rounds before failing when conf.json and main.py are not both present. */
@@ -81,6 +86,16 @@ export function decideCreatorLoopStep(
       type: "fail",
       reason: "artifacts_missing_after_step_budget",
       message: `Creator did not produce conf.json and main.py within ${CREATOR_MAX_STEPS_WITHOUT_ARTIFACTS} tool-loop steps.`
+    };
+  }
+
+  if (
+    artifactsReady &&
+    signals.stepsAfterArtifactsReady >= CREATOR_MAX_STEPS_AFTER_ARTIFACTS
+  ) {
+    return {
+      type: "complete",
+      summary: "Initial scaffold is in place; handing off from creation phase."
     };
   }
 

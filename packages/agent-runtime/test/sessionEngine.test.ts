@@ -675,6 +675,65 @@ class GetEmulatorLogsNativeProvider {
   }
 }
 
+class CreatorCleanVerifyProvider {
+  private call = 0;
+
+  async complete(): Promise<CompletionResult> {
+    this.call += 1;
+    if (this.call === 1) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "wf_conf",
+            name: "write_file",
+            argumentsJson: JSON.stringify({
+              path: "conf.json",
+              content: '{"type":"widget","size":[128,128]}'
+            })
+          },
+          {
+            id: "wf_main",
+            name: "write_file",
+            argumentsJson: JSON.stringify({ path: "main.py", content: "print('ok')\n" })
+          }
+        ]
+      };
+    }
+    if (this.call === 2) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "call_reload",
+            name: "reload_emulator",
+            argumentsJson: "{}"
+          },
+          {
+            id: "call_logs",
+            name: "get_emulator_logs",
+            argumentsJson: JSON.stringify({ max_lines: 12 })
+          }
+        ]
+      };
+    }
+    return {
+      content: "",
+      toolCalls: [
+        {
+          id: "call_replace",
+          name: "replace_in_file",
+          argumentsJson: JSON.stringify({
+            path: "main.py",
+            old_string: "print('ok')",
+            new_string: "print('still going')"
+          })
+        }
+      ]
+    };
+  }
+}
+
 class LoadDeniedSkillProvider {
   private call = 0;
 
@@ -1133,6 +1192,29 @@ describe("SessionEngine tool loop", () => {
       .filter((event): event is Extract<AgentEvent, { type: "status" }> => event.type === "status")
       .map((event) => event.message);
     expect(statusMessages.some((m) => m.toLowerCase().includes("emulator log"))).toBe(true);
+  });
+
+  it("stops creator flow after reload and clean emulator logs once scaffold exists", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const cleanLogs = JSON.stringify({
+      ok: true,
+      lines: [{ source: "stdout", text: "widget started" }],
+      emulator: { running: true, status: "Running", lastError: null }
+    });
+    const engine = new SessionEngine({
+      provider: new CreatorCleanVerifyProvider(),
+      workspacePolicy: new WorkspacePolicy(tempRoot),
+      skillPrompt: "You are a widget creator.",
+      sessionTemplateMode: "widget-creator",
+      hostReloadEmulatorHandler: async () => JSON.stringify({ ok: true }),
+      hostGetEmulatorLogsHandler: async () => cleanLogs
+    });
+
+    const response = await engine.runPrompt("build widget", () => {});
+
+    expect(response).toContain("Widget runs cleanly in the emulator.");
+    expect(engine.lastRunStoppedOnCleanEmulator()).toBe(true);
+    expect(fs.readFileSync(path.join(tempRoot, "main.py"), "utf-8")).toBe("print('ok')\n");
   });
 
   it("executes native tool_calls and threads tool_call_id through the conversation", async () => {

@@ -90,8 +90,7 @@ export function readWorkspaceConfIntakeSnapshot(
     return {
       ...base,
       conf_status: "missing",
-      guidance:
-        "No conf.json yet — safe for a brand-new scaffold. Confirm the user's goal in one sentence, then the next agent phase can create conf.json + main.py."
+      guidance: "No conf.json yet — safe for a brand-new scaffold."
     };
   }
   let raw: unknown;

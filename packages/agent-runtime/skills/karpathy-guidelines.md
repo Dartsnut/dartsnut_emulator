@@ -66,13 +66,4 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
-## Dartsnut creator overlay
-
-When building a new game or widget, map §4 to these verifiable goals (order is yours; merge steps when simpler):
-
-1. **`conf.json` valid** → verify: `read_file` + `reload_emulator` + `get_emulator_logs` (no Traceback from config)
-2. **`main.py` runnable stub** → verify: reload + logs show clean startup (blank frame / pygame shell)
-3. **Feature matches user request** → verify: `read_file` `main.py` + emulator behavior; iterate until done
-4. **Done** → verify: logs clean; one short status sentence to the user
-
-**Communication:** Prefer **tool-first** turns. Optional ≤5-line plan + verify checks when non-trivial; no mandatory long Agent-steps lists or phase announcements. Load domain skills via **`get_dartsnut_skill`** (`creator-incremental`, `conf-contract`, etc.) before you need them.
+When editing Dartsnut workspace files, prefer **tool-first** turns and load domain skills via **`get_dartsnut_skill`** (`conf-contract`, `pydartsnut-core`, etc.) before you need them.

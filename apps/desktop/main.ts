@@ -61,6 +61,7 @@ import {
   validateProviderConfig,
   ProviderClient,
   SessionEngine,
+  AdkSessionRuntime,
   WorkspacePolicy,
   bundleForTemplateMode,
   resolveSkillRouterPrompt,
@@ -73,6 +74,7 @@ import {
   nextAfterProjectType,
   parseConfWidgetSize,
   precheckAskQuestion,
+  isIntakeStateReady,
   type IntakeToolState,
   type ChatMessage
 } from "@dartsnut/agent-runtime";
@@ -117,10 +119,6 @@ let pythonRuntimeStatus: string | null = null;
 
 const PYTHON_SETUP_LOG_PREFIX = "[python-setup]";
 let lastWidgetDir: string | null = null;
-const creatorTemplatePaths = {
-  "game-creator": "packages/agent-runtime/skills/game-creator.md",
-  "widget-creator": "packages/agent-runtime/skills/widget-creator.md"
-} as const;
 const assetPreprocessScriptRelativePath = "scripts/asset_preprocess.py";
 const assetManager = new AssetManager({
   pythonExec: () => pythonExec,
@@ -835,11 +833,7 @@ function isDirectoryEmpty(directoryPath: string): boolean {
   return entries.length === 0;
 }
 
-type CreatorTemplateMode = keyof typeof creatorTemplatePaths;
-
-function resolveCreatorTemplatePath(templateMode: CreatorTemplateMode): string {
-  return path.join(repoRoot, creatorTemplatePaths[templateMode]);
-}
+type CreatorTemplateMode = "game-creator" | "widget-creator";
 
 function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
   templateMode: CreatorTemplateMode;
@@ -1073,8 +1067,6 @@ function buildRoutedPrompt(request: PromptRequest): string {
   if (!templateMode) {
     return request.prompt;
   }
-  const templatePath = resolveCreatorTemplatePath(templateMode);
-  const template = fs.readFileSync(templatePath, "utf-8");
   const widgetFontManifestPath = path.join(repoRoot, widgetFontManifestRelativePath);
   let availableWidgetFonts: WidgetFontCatalogEntry[] = [];
   if (templateMode === "widget-creator" && fs.existsSync(widgetFontManifestPath)) {
@@ -1113,17 +1105,8 @@ function buildRoutedPrompt(request: PromptRequest): string {
         ""
       ]
       : [];
-  const designSkillNudgeBlock = [
-    "Success criteria emphasis:",
-    "- For requests about visual polish, pixel-perfect rendering, compact layouts, or console-style game UI, call `get_dartsnut_skill` with `design-console-smallform` before implementing those UI decisions.",
-    "- Keep coordinates and sizing integer-aligned; avoid subpixel artifacts on tiny panels.",
-    ""
-  ];
   return [
-    template,
-    "",
     ...buildPlanBlock,
-    ...designSkillNudgeBlock,
     "Creation context:",
     JSON.stringify(context, null, 2),
     "",
@@ -1960,7 +1943,7 @@ function buildSession(
     preferredUserLocale?: UserLocale | null;
     latestUserTextForLocale?: string;
   }
-): SessionEngine {
+): AdkSessionRuntime {
   const workspacePath = extras?.workspacePath ?? workspaceRoot;
   if (!workspacePath) {
     throw new Error("Workspace is not selected.");
@@ -1982,7 +1965,7 @@ function buildSession(
     (extras?.latestUserTextForLocale != null
       ? resolvePreferredUserLocaleForSession(extras.latestUserTextForLocale, extras.sessionPersistence)
       : null);
-  return new SessionEngine({
+  const engine = new SessionEngine({
     provider: new ProviderClient(config),
     workspacePolicy: new WorkspacePolicy(workspacePath),
     skillPrompt,
@@ -2002,6 +1985,10 @@ function buildSession(
     initialConversation: extras?.initialConversation,
     sessionTemplateMode: templateMode ?? null,
     sessionSection: skillBundleMode === null ? null : String(skillBundleMode)
+  });
+  return new AdkSessionRuntime({
+    workspacePath,
+    engine
   });
 }
 
@@ -2667,6 +2654,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
       completionTools: AGENT_TOOL_SCHEMAS,
       hostIntakeToolHandler: sharedIntakeHandler,
       hostAskQuestionHandler: (args) => askQuestionHostExecute(args, hostState),
+      hostIntakeReadyToFinish: () => isIntakeStateReady(hostState),
       sessionPersistence: persistence,
       initialConversation,
       latestUserTextForLocale: req.prompt

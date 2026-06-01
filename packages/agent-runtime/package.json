@@ -7,10 +7,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --exclude '**/*.e2e.test.ts'",
-    "test:e2e": "vitest run '**/*.e2e.test.ts'"
+    "test:e2e": "vitest run test/breathingWidgetProvider.e2e.test.ts test/flipClockCreator.e2e.test.ts"
   },
   "dependencies": {
     "@dartsnut/shared-ipc": "workspace:*",
+    "@google/adk": "^1.1.0",
     "dotenv": "^16.5.0",
     "openai": "^4.104.0"
   },

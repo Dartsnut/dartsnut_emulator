@@ -40,7 +40,7 @@ const SKILL_INDEX_BLURB: Record<DeferredSkillId, string> = {
   "karpathy-guidelines":
     "Goal-driven execution, simplicity, surgical edits; brief plan + verify checks; tool-first creator turns.",
   "creator-incremental":
-    "Dartsnut scaffold constraints (conf → stub → iterate); verify run; anti-prose duplication.",
+    "Scaffold file rules, verify run (reload + logs), anti-prose duplication.",
   "conf-contract": "Root `conf.json` keys, defaults, size, `reload_emulator` after changes.",
   "pydartsnut-core":
     "`Dartsnut()`, loop guard, `update_frame_buffer`, deps boundary, Chat Start/Reload/Logs.",
@@ -60,9 +60,9 @@ const SKILL_INDEX_BLURB: Record<DeferredSkillId, string> = {
 /** Illustrative user intents (any language) — not keyword matchers. */
 const SKILL_INTENT_HINT: Partial<Record<DeferredSkillId, string>> = {
   "karpathy-guidelines":
-    "Intent: plan + verify before/while editing. Examples: how should we approach this, 先做再验证.",
+    "Intent: edit discipline and verify with tools. Examples: surgical fix, minimal diff.",
   "creator-incremental":
-    "Intent: new project scaffold order. Examples: build from scratch, 从零开始做, 新建專案.",
+    "Intent: conf/main scaffold mechanics and emulator verify. Examples: write conf.json, stub main.py.",
   "conf-contract":
     "Intent: create/fix `conf.json`. Examples: set up config, 配置檔, 配置文件.",
   "pydartsnut-core":
@@ -80,7 +80,7 @@ const SKILL_INTENT_HINT: Partial<Record<DeferredSkillId, string>> = {
   "design-console-smallform":
     "Intent: pixel-perfect polish on compact screens with console-like style. Examples: pixel perfect UI, 小屏精致像素风, 小屏精緻像素風.",
   "asset-pipeline":
-    "Intent: sprites/icons/animations or user will supply/replace art (incl. 我来给你一个…图片 / I'll give you a picture). Use Assets pane bind + Apply — never ask to paste images in chat.",
+    "Intent: manifest slots and loader wiring. Bind user art via Assets pane — not chat paste.",
   "dartsnut-skill": "Intent: broad runtime overview — prefer granular ids above."
 };
 
@@ -189,23 +189,21 @@ function formatCreatorRouterBody(skillsDir: string, allowed: readonly DeferredSk
     "",
     "**Language:** Users may write in **English**, **Simplified Chinese (zh-Hans)**, or **Traditional Chinese (zh-Hant)**. Decide which **`get_dartsnut_skill`** ids to load from **meaning**, not exact keywords. Skill ids and tool names stay English.",
     "",
-    "**Skill loading (just-in-time):** Use **`get_dartsnut_skill`** before the step that needs it. Follow host **Success criteria** in the user prompt when present.",
+    "**Skill loading (just-in-time):** Use **`get_dartsnut_skill`** before the step that needs it.",
     "",
-    "**Goal-driven execution:** Load **`karpathy-guidelines`** and plan with brief steps + verify checks (optional ≤5 lines in assistant text when non-trivial). Otherwise go **tool-first** — minimal chat, no mandatory Agent-steps lists or phase announcements.",
+    "**Editing:** `read_file` workspace files before edits. Prefer **`replace_in_file`** on existing files. Do not end turns with only prose when files still need changes.",
     "",
-    "**Editing:** `read_file` workspace files before edits. You decide batch size; prefer smaller hunks when risk is high. Do not end creator work with only prose when files still need changes.",
-    "",
-    "**Verify run:** After material `conf.json` / `main.py` changes or before declaring done → `reload_emulator` then `get_emulator_logs`. Fix Traceback / SyntaxError before continuing.",
+    "**Verify run:** After material `conf.json` / `main.py` changes or before declaring done → `reload_emulator` then **`get_emulator_logs`**. Stop when logs have no runtime errors.",
     "",
     "**Load first** (parallel `get_dartsnut_skill` calls OK) before scaffolding files:",
     ...always.map((id) => `- **${id}**`),
     "",
-    "**Load before use** (only when that step applies — intent examples are illustrative, not matchers):",
+    "**Load before use** (only when that step applies):",
     ...optional.map((id) => formatOptionalSkillLine(id)),
     "",
     `Skills directory (reasoning only; read via tool): ${skillsDir}`,
     "",
-    "After skill results return, **continue the same concept** toward Success criteria — do not re-brainstorm a different project. Do not paste full file bodies in assistant text or in thinking; write with tools. Obey the separate system message about native tool calling (no JSON/XML tool envelopes in assistant text)."
+    "Do not paste full file bodies in assistant text or in thinking; write with tools. Obey the separate system message about native tool calling (no JSON/XML tool envelopes in assistant text)."
   ];
 }
 

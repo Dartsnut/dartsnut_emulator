@@ -4,11 +4,10 @@ Load **before** `copy_asset_file` for fonts or when `main.py` loads widget fonts
 
 ## Authoritative list
 
-Use **`availableWidgetFonts`** from Creation context JSON: each entry has **`file`** (basename) and **`glyphWidth`** / **`glyphHeight`** (nominal glyph size in pixels; from the `WxH` in names like `10x20.pil`, or manifest bounds for fonts without that pattern).
+Use **`availableWidgetFonts`** from host/workspace metadata: each entry has **`file`** (basename) and **`glyphWidth`** / **`glyphHeight`** (nominal glyph size in pixels; from the `WxH` in names like `10x20.pil`, or manifest bounds for fonts without that pattern).
 
 - Do **not** `read_file` on `font_manifest.json` or repo paths outside the widget workspace.
 - Copy using the exact **`file`** basename from the catalog (no invented `*-541a345d` suffixes in code paths).
-- **You choose** which font fits the layout, widget `conf.json` size, and what you are drawing (time strings, labels, hero numbers, etc.). Do **not** default to `big_digits` just because the widget shows a clock.
 
 ## Copy convention
 

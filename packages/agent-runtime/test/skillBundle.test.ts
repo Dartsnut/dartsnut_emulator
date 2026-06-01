@@ -39,16 +39,16 @@ describe("loadSkillBundle", () => {
 
   it("loads creator-incremental scaffold constraints skill", () => {
     const content = loadSkillBundle(path.join(SKILLS_DIR, "creator-incremental.md"));
-    expect(content).toContain("Success criteria");
-    expect(content).toContain("paste full `conf.json`");
     expect(content).toContain("Verify run");
+    expect(content).toContain("paste full `conf.json`");
     expect(content).toContain("get_emulator_logs");
+    expect(content).not.toContain("Behavior matches the user request");
   });
 
   it("loads karpathy-guidelines skill", () => {
     const content = loadSkillBundle(path.join(SKILLS_DIR, "karpathy-guidelines.md"));
     expect(content).toContain("Goal-Driven Execution");
-    expect(content).toContain("Dartsnut creator overlay");
+    expect(content).not.toContain("Dartsnut creator overlay");
   });
 
   it("loads the dartsnut display mapping skill", () => {
@@ -105,13 +105,13 @@ describe("asset-pipeline skill", () => {
     expect(content).toContain("scaffold");
   });
 
-  it("directs user image offers to Assets pane bind, not chat paste", () => {
+  it("directs asset binding through Assets pane, not chat paste", () => {
     const content = loadSkillBundle(assetPipelinePath);
-    expect(content).toContain("我来给你一个皮卡丘的图片");
     expect(content).toContain("Do not");
     expect(content).toContain("paste");
     expect(content).toContain("Assets");
     expect(content).toContain("Choose File");
+    expect(content).not.toContain("皮卡丘");
   });
 });
 
@@ -217,22 +217,18 @@ describe("deferred skill router", () => {
     const router = resolveSkillRouterPrompt(SKILLS_DIR, "widget-creator");
     expect(router).toContain("just-in-time");
     expect(router).toContain("Simplified Chinese");
-    expect(router).toContain("meaning");
-    expect(router).toContain("我来给你一个");
-    expect(router).toContain("Assets pane");
-    expect(router).toContain("never ask to paste");
     expect(router).toContain("Load first");
     expect(router).toContain("creator-incremental");
     expect(router).toContain("conf-contract");
     expect(router).not.toContain("loaded **every** skill");
     expect(router).not.toContain("Agent steps");
+    expect(router).not.toContain("Success criteria");
+    expect(router).not.toContain("re-brainstorm");
     expect(router).toContain("karpathy-guidelines");
-    expect(router).toContain("Goal-driven");
     expect(router).toContain("read_file");
     expect(router).toContain("Verify run");
     expect(router).toContain("get_emulator_logs");
     expect(router).toContain("design-console-smallform");
-    expect(router).toContain("pixel-perfect polish");
   });
 
   it("resolveSkillRouterPrompt for asset-applier mentions pydartsnut-core", () => {

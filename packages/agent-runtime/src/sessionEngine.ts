@@ -28,6 +28,12 @@ import {
   isFileMutationToolName,
   readCreatorArtifactStatus
 } from "./creatorTurnGuard";
+import { decideModificationLoopStep } from "./modificationTurnGuard";
+import {
+  assessEmulatorVerifyBatch,
+  EMULATOR_VERIFY_CLEAN_SUMMARY,
+  type EmulatorVerifyBatchState
+} from "./emulatorLogHealth";
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import {
   buildStreamingFileToolEnvelope,
@@ -217,12 +223,24 @@ export interface SessionEngineOptions {
   preferredUserLocale?: UserLocale | null;
 }
 
+export type RunPromptToolLoopProfile = "default" | "modification";
+
+export interface RunPromptOptions {
+  toolLoopProfile?: RunPromptToolLoopProfile;
+}
+
 export class SessionEngine {
   /** User / assistant / tool messages for this workspace session (excludes system prompts). */
   private rollingConversation: ChatMessage[];
+  private stoppedOnCleanEmulator = false;
 
   constructor(private readonly options: SessionEngineOptions) {
     this.rollingConversation = [...(options.initialConversation ?? [])];
+  }
+
+  /** True when the most recent runPrompt ended after a clean reload + emulator log verify. */
+  lastRunStoppedOnCleanEmulator(): boolean {
+    return this.stoppedOnCleanEmulator;
   }
 
   private buildSystemMessages(): ChatMessage[] {
@@ -1109,8 +1127,9 @@ export class SessionEngine {
   private static readonly DEFAULT_TOOL_LOOP_MAX = 128;
   private static readonly CREATOR_TOOL_LOOP_MAX = 48;
   private static readonly INTAKE_TOOL_LOOP_MAX = 12;
+  private static readonly MODIFICATION_TOOL_LOOP_MAX = 8;
 
-  private resolveToolLoopMax(): number {
+  private resolveToolLoopMax(runOptions?: RunPromptOptions): number {
     const raw = process.env.AGENT_TOOL_LOOP_MAX;
     let cap = SessionEngine.DEFAULT_TOOL_LOOP_MAX;
     if (raw !== undefined && raw !== "") {
@@ -1118,6 +1137,9 @@ export class SessionEngine {
       if (Number.isFinite(n)) {
         cap = Math.min(128, Math.max(1, Math.floor(n)));
       }
+    }
+    if (runOptions?.toolLoopProfile === "modification") {
+      return Math.min(cap, SessionEngine.MODIFICATION_TOOL_LOOP_MAX);
     }
     if (this.options.sessionSection === "creation-intake") {
       return Math.min(cap, SessionEngine.INTAKE_TOOL_LOOP_MAX);
@@ -1189,6 +1211,46 @@ export class SessionEngine {
       step,
       ...stats
     });
+  }
+
+  private async tryCompleteOnCleanEmulatorVerify(
+    outcomes: Array<{ toolCall: ParsedToolCall; result: string }>,
+    emulatorVerifyState: EmulatorVerifyBatchState,
+    artifactStatus: { confJson: boolean; mainPy: boolean },
+    runOptions: RunPromptOptions | undefined,
+    turnCorrelationId: string,
+    step: number,
+    messages: ChatMessage[],
+    systemSlots: number,
+    onEvent: (event: AgentEvent) => void
+  ): Promise<string | null> {
+    const batch = assessEmulatorVerifyBatch(outcomes, emulatorVerifyState);
+    emulatorVerifyState.reloadPending = batch.reloadPending;
+    if (!batch.cleanVerifyAfterReload) {
+      return null;
+    }
+
+    const isModification = runOptions?.toolLoopProfile === "modification";
+    const isCreator = isCreatorTemplateMode(this.options.sessionTemplateMode);
+    const artifactsReady = artifactStatus.confJson && artifactStatus.mainPy;
+    if (!isModification && !(isCreator && artifactsReady)) {
+      return null;
+    }
+
+    this.stoppedOnCleanEmulator = true;
+    this.emitTransaction({
+      type: "emulator.verify_clean",
+      correlationId: turnCorrelationId,
+      step
+    });
+    onEvent({
+      type: "status",
+      message: "Emulator reload verified — no runtime errors in logs.",
+      at: Date.now()
+    });
+    onEvent({ type: "final", content: EMULATOR_VERIFY_CLEAN_SUMMARY, at: Date.now() });
+    await this.finalizeWorkspacePersistence(messages, systemSlots, EMULATOR_VERIFY_CLEAN_SUMMARY);
+    return EMULATOR_VERIFY_CLEAN_SUMMARY;
   }
 
   private async buildFileToolEnvelopeJson(
@@ -1465,11 +1527,14 @@ export class SessionEngine {
   async runPrompt(
     prompt: string,
     onEvent: (event: AgentEvent) => void,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    runOptions?: RunPromptOptions
   ): Promise<string> {
     if (!this.options.skipInitialWorkspaceResolve) {
       this.options.workspacePolicy.resolveWithinRoot(".");
     }
+
+    this.stoppedOnCleanEmulator = false;
 
     const completionTools = this.options.completionTools ?? AGENT_TOOL_SCHEMAS;
 
@@ -1499,12 +1564,14 @@ export class SessionEngine {
       }
     }
 
-    const maxToolRounds = this.resolveToolLoopMax();
+    const maxToolRounds = this.resolveToolLoopMax(runOptions);
     let verifyStepsSinceArtifactsReady = 0;
+    let stepsAfterArtifactsReady = 0;
     let creatorStallNudgeUsed = false;
     let creatorScaffoldNudgeCount = 0;
     const creatorStepsWithoutConf = { value: 0 };
     const runtimeIntake = this.readRuntimeIntakeProgressFromWorkspace();
+    const emulatorVerifyState: EmulatorVerifyBatchState = { reloadPending: false };
 
     for (let step = 0; step < maxToolRounds; step += 1) {
       let filesWrittenThisCompletion = 0;
@@ -1607,12 +1674,15 @@ export class SessionEngine {
       });
 
       if (isCreatorTemplateMode(this.options.sessionTemplateMode)) {
-        if (artifactStatus.confJson && artifactStatus.mainPy) {
+        const artifactsReady = artifactStatus.confJson && artifactStatus.mainPy;
+        if (artifactsReady) {
+          stepsAfterArtifactsReady += 1;
           if (completion.toolCalls.length > 0) {
             verifyStepsSinceArtifactsReady += 1;
           }
         } else {
           verifyStepsSinceArtifactsReady = 0;
+          stepsAfterArtifactsReady = 0;
         }
         const loopDecision = decideCreatorLoopStep(
           {
@@ -1623,7 +1693,8 @@ export class SessionEngine {
             filesWrittenThisTurn: filesWrittenThisCompletion,
             workspaceHasConfJson: artifactStatus.confJson,
             workspaceHasMainPy: artifactStatus.mainPy,
-            toolNames: completion.toolCalls.map((tc) => tc.name)
+            toolNames: completion.toolCalls.map((tc) => tc.name),
+            stepsAfterArtifactsReady
           },
           verifyStepsSinceArtifactsReady,
           creatorStepsWithoutConf.value
@@ -1691,6 +1762,20 @@ export class SessionEngine {
         }
       }
 
+      if (runOptions?.toolLoopProfile === "modification") {
+        const modDecision = decideModificationLoopStep({
+          step,
+          toolCallCount: completion.toolCalls.length
+        });
+        if (modDecision.type === "complete") {
+          const summary =
+            completion.content.trim().length > 0 ? completion.content.trim() : modDecision.summary;
+          onEvent({ type: "final", content: summary, at: Date.now() });
+          await this.finalizeWorkspacePersistence(messages, systemSlots, summary);
+          return summary;
+        }
+      }
+
       if (completion.toolCalls.length > 0) {
         throwIfAborted(abortSignal);
         await this.finalizeNativeFileToolPreview(completion, liveToolEnvelopeStreamed, onEvent);
@@ -1753,6 +1838,20 @@ export class SessionEngine {
           onEvent({ type: "final", content: summary, at: Date.now() });
           await this.finalizeWorkspacePersistence(messages, systemSlots, summary);
           return summary;
+        }
+        const cleanVerifySummary = await this.tryCompleteOnCleanEmulatorVerify(
+          outcomes,
+          emulatorVerifyState,
+          artifactStatus,
+          runOptions,
+          turnCorrelationId,
+          step,
+          messages,
+          systemSlots,
+          onEvent
+        );
+        if (cleanVerifySummary) {
+          return cleanVerifySummary;
         }
         this.bumpCreatorStepsWithoutConfJson(creatorStepsWithoutConf);
         continue;

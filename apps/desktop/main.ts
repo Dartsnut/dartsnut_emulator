@@ -4,7 +4,7 @@ import os from "node:os";
 import dotenv from "dotenv";
 import readline from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen } from "electron";
 import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
@@ -88,6 +88,14 @@ import {
 } from "@dartsnut/emulator-protocol";
 import { AssetManager } from "./assetManager";
 import { DeployMachineSession } from "./deployMachine";
+import {
+  DEFAULT_WINDOW_HEIGHT,
+  DEFAULT_WINDOW_WIDTH,
+  MIN_WINDOW_HEIGHT,
+  MIN_WINDOW_WIDTH,
+  normalizeWindowBounds,
+  type PersistedWindowState
+} from "./windowState";
 
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
@@ -286,6 +294,60 @@ const tempWorkspaceRecordPath = () => path.join(app.getPath("userData"), "temp-w
 const emulatorStatePath = () => path.join(app.getPath("userData"), "emulator-state.json");
 const providerSettingsPath = () => path.join(app.getPath("userData"), "provider-settings.json");
 const pythonSettingsPath = () => path.join(app.getPath("userData"), "python-settings.json");
+const windowStatePath = () => path.join(app.getPath("userData"), "window-state.json");
+
+function readWindowState(): PersistedWindowState | null {
+  const file = windowStatePath();
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+  try {
+    const content = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<PersistedWindowState>;
+    const bounds = normalizeWindowBounds(content, screen.getAllDisplays());
+    if (!bounds) {
+      return null;
+    }
+    return {
+      ...bounds,
+      isMaximized: Boolean(content.isMaximized),
+      isFullScreen: Boolean(content.isFullScreen)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function captureWindowState(window: BrowserWindow): PersistedWindowState {
+  const bounds = window.isMaximized() || window.isFullScreen() ? window.getNormalBounds() : window.getBounds();
+  return {
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+    width: Math.max(MIN_WINDOW_WIDTH, Math.round(bounds.width)),
+    height: Math.max(MIN_WINDOW_HEIGHT, Math.round(bounds.height)),
+    isMaximized: window.isMaximized(),
+    isFullScreen: window.isFullScreen() || window.isSimpleFullScreen()
+  };
+}
+
+function writeWindowState(state: PersistedWindowState): void {
+  const normalizedBounds = normalizeWindowBounds(state, screen.getAllDisplays());
+  if (!normalizedBounds) {
+    return;
+  }
+  fs.mkdirSync(path.dirname(windowStatePath()), { recursive: true });
+  fs.writeFileSync(
+    windowStatePath(),
+    JSON.stringify(
+      {
+        ...normalizedBounds,
+        isMaximized: state.isMaximized,
+        isFullScreen: state.isFullScreen
+      },
+      null,
+      2
+    )
+  );
+}
 
 const LLM_PROVIDER_IDS: readonly LlmProviderId[] = ["gpt", "gemini", "xiaomi", "claude", "user-define"];
 
@@ -2001,11 +2063,22 @@ function buildSession(
 async function createWindow() {
   readProofState();
   readEmulatorState();
+  const restoredWindowState = readWindowState();
+  const restoredBounds = restoredWindowState
+    ? {
+      x: restoredWindowState.x,
+      y: restoredWindowState.y,
+      width: restoredWindowState.width,
+      height: restoredWindowState.height
+    }
+    : {
+      width: DEFAULT_WINDOW_WIDTH,
+      height: DEFAULT_WINDOW_HEIGHT
+    };
   win = new BrowserWindow({
-    width: 1560,
-    height: 980,
-    minWidth: 1320,
-    minHeight: 860,
+    ...restoredBounds,
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     backgroundColor: WINDOWS_SHELL_UI.dark.windowBackground,
     ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
     ...(process.platform === "win32"
@@ -2026,6 +2099,18 @@ async function createWindow() {
       sandbox: false
     }
   });
+  if (restoredWindowState?.isMaximized) {
+    win.maximize();
+  }
+  if (restoredWindowState?.isFullScreen) {
+    win.setFullScreen(true);
+  }
+  const persistWindowState = () => {
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+    writeWindowState(captureWindowState(win));
+  };
   win.webContents.on("did-finish-load", () => {
     void syncShellUiThemeFromDomSnapshot().catch(() => {
       /* Theme sync uses executeJavaScript; failures are non-fatal. */
@@ -2042,6 +2127,7 @@ async function createWindow() {
   // Guard quit here while the window is still alive; async native dialogs during `before-quit`
   // caused unstable macOS teardown behavior.
   win.on("close", (event) => {
+    persistWindowState();
     if (allowWindowCloseWithoutTempPrompt || !isTemporaryWorkspaceActiveNow()) {
       allowWindowCloseWithoutTempPrompt = false;
       return;
@@ -2070,6 +2156,12 @@ async function createWindow() {
     chromeInsetInsertedCssKey = undefined;
     win = null;
   });
+  win.on("move", persistWindowState);
+  win.on("resize", persistWindowState);
+  win.on("maximize", persistWindowState);
+  win.on("unmaximize", persistWindowState);
+  win.on("enter-full-screen", persistWindowState);
+  win.on("leave-full-screen", persistWindowState);
   win.on("resize", emitChromeInsetsAndPushStyles);
   win.on("maximize", emitChromeInsetsAndPushStyles);
   win.on("unmaximize", emitChromeInsetsAndPushStyles);

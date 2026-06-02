@@ -75,6 +75,126 @@ type ToolResult = {
   result: unknown;
 };
 
+const TOOL_STATUS_META_PREFIX = " @@tool_status_meta@@";
+
+type ToolStatusPhase = "call" | "result";
+
+type ToolStatusMeta = {
+  callId?: string;
+  toolName?: string;
+  phase?: ToolStatusPhase;
+  filePath?: string;
+  added?: number;
+  deleted?: number;
+};
+
+type ToolStatusContext = {
+  callId?: string;
+  path?: string;
+  source?: string;
+  added?: number;
+  deleted?: number;
+};
+
+function toRelPath(input: unknown): string | undefined {
+  return typeof input === "string" && input.trim().length > 0 ? input.trim() : undefined;
+}
+
+function countLines(text: string): number {
+  if (text.length === 0) {
+    return 0;
+  }
+  return text.split(/\r?\n/).length;
+}
+
+function computeWriteDiff(previousContent: string | undefined, nextContent: string): { added: number; deleted: number } {
+  const nextLines = countLines(nextContent);
+  const prevLines = typeof previousContent === "string" ? countLines(previousContent) : 0;
+  return {
+    added: Math.max(0, nextLines),
+    deleted: Math.max(0, prevLines)
+  };
+}
+
+function computeReplaceDiff(findText: string, replaceText: string): { added: number; deleted: number } {
+  const removed = countLines(findText);
+  const added = countLines(replaceText);
+  return { added, deleted: removed };
+}
+
+function buildToolStatusMessage(name: string, phase: ToolStatusPhase, context?: ToolStatusContext): {
+  text: string;
+  meta?: ToolStatusMeta;
+} {
+  const filePath = context?.path;
+  const baseMeta: ToolStatusMeta | undefined =
+    filePath || typeof context?.added === "number" || typeof context?.deleted === "number"
+      ? {
+        callId: context?.callId,
+        toolName: name,
+        phase,
+        filePath,
+        added: context?.added,
+        deleted: context?.deleted
+      }
+      : { callId: context?.callId, toolName: name, phase };
+
+  switch (name) {
+    case "list_files":
+      return { text: phase === "call" ? "Listing files…" : "Listed files.", meta: baseMeta };
+    case "read_file":
+      return {
+        text: phase === "call" ? `Reading ${filePath ?? "file"}…` : `Read ${filePath ?? "file"}.`,
+        ...(baseMeta ? { meta: baseMeta } : {})
+      };
+    case "write_file":
+      return {
+        text:
+          phase === "call"
+            ? `Creating ${filePath ?? "file"}…`
+            : `Created ${filePath ?? "file"}.`,
+        ...(baseMeta ? { meta: baseMeta } : {})
+      };
+    case "replace_in_file":
+      return {
+        text:
+          phase === "call"
+            ? `Editing ${filePath ?? "file"}…`
+            : `Edited ${filePath ?? "file"}.`,
+        ...(baseMeta ? { meta: baseMeta } : {})
+      };
+    case "copy_asset_file": {
+      const source = context?.source ?? "asset";
+      return {
+        text:
+          phase === "call"
+            ? `Copying ${source} to ${filePath ?? "destination"}…`
+            : `Copied ${source} → ${filePath ?? "destination"}.`,
+        ...(baseMeta ? { meta: baseMeta } : {})
+      };
+    }
+    case "get_dartsnut_skill":
+      return { text: phase === "call" ? "Loading Dartsnut skill…" : "Loaded Dartsnut skill.", meta: baseMeta };
+    case "dartsnut_ask_question":
+      return { text: phase === "call" ? "Asking question…" : "Recorded answer.", meta: baseMeta };
+    case "dartsnut_project_intake":
+      return { text: phase === "call" ? "Updating project intake…" : "Updated project intake.", meta: baseMeta };
+    case "reload_emulator":
+      return { text: phase === "call" ? "Reloading emulator…" : "Reloaded emulator.", meta: baseMeta };
+    case "get_emulator_logs":
+      return { text: phase === "call" ? "Fetching emulator logs…" : "Fetched emulator logs.", meta: baseMeta };
+    default:
+      return { text: phase === "call" ? `Running ${name}…` : `Finished ${name}.`, meta: baseMeta };
+  }
+}
+
+function encodeToolStatusForTransport(message: { text: string; meta?: ToolStatusMeta }): string {
+  if (!message.meta) {
+    return message.text;
+  }
+  return `${message.text}${TOOL_STATUS_META_PREFIX}${JSON.stringify(message.meta)}`;
+}
+
 function toolResultToString(result: ToolResult): string {
   return JSON.stringify(result.result);
 }
@@ -362,6 +482,18 @@ export class SessionEngine {
     return handler(args);
   }
 
+  private readWorkspaceFileIfExists(relPath: string): string | undefined {
+    try {
+      const abs = this.options.workspacePolicy.resolveWithinRoot(relPath);
+      if (!fs.existsSync(abs)) {
+        return undefined;
+      }
+      return fs.readFileSync(abs, "utf-8");
+    } catch {
+      return undefined;
+    }
+  }
+
   private persistSessionState(): void {
     const persistence = this.options.sessionPersistence;
     if (!persistence) {
@@ -381,13 +513,20 @@ export class SessionEngine {
     persistence.saveConversationAtomic(this.conversation);
   }
 
-  private emitToolStatus(name: string, phase: "call" | "result", onEvent: (event: AgentEvent) => void): void {
+  private emitToolStatus(
+    name: string,
+    phase: ToolStatusPhase,
+    onEvent: (event: AgentEvent) => void,
+    context?: ToolStatusContext
+  ): void {
+    const formatted = buildToolStatusMessage(name, phase, context);
+    const transportMessage = encodeToolStatusForTransport(formatted);
     onEvent({
       type: "status",
       at: Date.now(),
-      message: `[agent] tool_${phase} ${name}`
+      message: transportMessage
     });
-    this.persistTranscript("tool_status", `tool_${phase} ${name}`);
+    this.persistTranscript("tool_status", transportMessage);
   }
 
   async runPrompt(
@@ -413,7 +552,7 @@ export class SessionEngine {
     let stepsWithoutArtifactsReady = 0;
     let stepsAfterArtifactsReady = 0;
 
-    onEvent({ type: "status", at: Date.now(), message: "OpenAI agents run started." });
+    onEvent({ type: "status", at: Date.now(), message: "Dartsnut Agent run started." });
 
     try {
       const profile = runOptions?.toolLoopProfile ?? "default";
@@ -464,6 +603,9 @@ export class SessionEngine {
         if (assistantText.trim()) {
           this.persistTranscript("assistant", assistantText);
         }
+        if (stepReasoning) {
+          onEvent({ type: "reasoning_done", at: Date.now() });
+        }
 
         if (completion.toolCalls.length === 0) {
           finalText = assistantText || finalText;
@@ -479,14 +621,37 @@ export class SessionEngine {
           if (isFileMutationToolName(call.name)) {
             filesWrittenThisTurn += 1;
           }
-          this.emitToolStatus(call.name, "call", onEvent);
+          const args = this.parseArguments(call.argumentsJson);
+          const pathArg = toRelPath(args.path);
+          const sourceArg = toRelPath(args.source);
+          let context: ToolStatusContext = {
+            callId: call.id,
+            path: pathArg,
+            source: sourceArg
+          };
+          if (call.name === "write_file") {
+            const nextContent = typeof args.content === "string" ? args.content : "";
+            const previousContent = pathArg ? this.readWorkspaceFileIfExists(pathArg) : undefined;
+            context = {
+              ...context,
+              ...computeWriteDiff(previousContent, nextContent)
+            };
+          } else if (call.name === "replace_in_file") {
+            const findText = typeof args.find === "string" ? args.find : "";
+            const replaceText = typeof args.replace === "string" ? args.replace : "";
+            context = {
+              ...context,
+              ...computeReplaceDiff(findText, replaceText)
+            };
+          }
+          this.emitToolStatus(call.name, "call", onEvent, context);
           const toolResult = await this.executeToolCall(call);
           this.conversation.push({
             role: "tool",
             tool_call_id: call.id,
             content: toolResult
           });
-          this.emitToolStatus(call.name, "result", onEvent);
+          this.emitToolStatus(call.name, "result", onEvent, context);
         }
 
         if (profile === "modification") {
@@ -558,13 +723,9 @@ export class SessionEngine {
       onEvent({ type: "error", at: Date.now(), message });
       this.persistTranscript("assistant", message);
       return message;
-    } finally {
-      if (sawReasoning) {
-        onEvent({ type: "reasoning_done", at: Date.now() });
-      }
     }
 
-    const final = finalText.trim() || "OpenAI agents run complete.";
+    const final = finalText.trim() || "Dartsnut Agent run complete.";
     onEvent({ type: "final", at: Date.now(), content: final });
     onEvent({
       type: "status",

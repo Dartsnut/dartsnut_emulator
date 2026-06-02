@@ -96,6 +96,11 @@ import {
   normalizeWindowBounds,
   type PersistedWindowState
 } from "./windowState";
+import {
+  decideBeforeQuitBridgeAction,
+  shouldAllocateTempWorkspaceAfterDiscard,
+  type TempWorkspaceGuardReason
+} from "./quitFlow";
 
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
@@ -620,8 +625,6 @@ function markNewTemporaryWorkspaceAllocated(root: string): void {
   writeTempWorkspaceRecordToDisk(absRoot);
 }
 
-type TempWorkspaceGuardReason = "quit" | "open_workspace" | "new_project";
-
 function tempGuardDialogMessage(reason: TempWorkspaceGuardReason): string {
   switch (reason) {
     case "quit":
@@ -730,12 +733,6 @@ function stopPythonBridgeProcess(): void {
   emulatorBridgeTeardownDone = true;
 }
 
-async function releaseWorkspaceFileHandles(): Promise<void> {
-  await gracefulStopEmulatorBridge(3000, { permanent: false });
-  assetManager.stop();
-  stopDeployConfWatcher();
-}
-
 async function discardTrackedTemporaryProject(reason?: TempWorkspaceGuardReason): Promise<void> {
   const tracked = trackedTempWorkspacePath;
   if (!tracked) {
@@ -745,18 +742,16 @@ async function discardTrackedTemporaryProject(reason?: TempWorkspaceGuardReason)
   const discardingOnQuit = reason === "quit";
   if (discardingOnQuit) {
     pendingTempDirRemovalOnQuit = toRemove;
+    clearSessionStateForQuitDiscard(toRemove);
+    return;
   }
   if (workspaceRoot && path.resolve(workspaceRoot) === toRemove) {
     performSessionCleanup({ clearWorkspace: true });
   } else {
     writeTempWorkspaceRecordToDisk(null);
   }
-  if (discardingOnQuit) {
-    await releaseWorkspaceFileHandles();
-    void disconnectDeployMachine();
-  }
   removeDirectoryBestEffort(toRemove);
-  if (!discardingOnQuit) {
+  if (shouldAllocateTempWorkspaceAfterDiscard(reason)) {
     ensureTemporaryWorkspaceRootAllocated();
   }
 }
@@ -1472,6 +1467,18 @@ function performSessionCleanup(options: { clearWorkspace: boolean }): void {
   emitEmulatorState();
 }
 
+function clearSessionStateForQuitDiscard(toRemove: string): void {
+  // During quit, avoid renderer reset churn to prevent visible timeline flicker.
+  if (workspaceRoot && path.resolve(workspaceRoot) === toRemove) {
+    workspaceRoot = null;
+  }
+  assetManager.stop();
+  stopDeployConfWatcher();
+  lastWidgetDir = null;
+  writeTempWorkspaceRecordToDisk(null);
+  writeEmulatorState();
+}
+
 function emitEmulatorState() {
   sendToRenderer(EMULATOR_IPC_CHANNELS.emulatorState, emulatorState);
 }
@@ -2142,13 +2149,8 @@ async function createWindow() {
         return;
       }
       allowWindowCloseWithoutTempPrompt = true;
-      const windowRef = win;
-      if (!windowRef || windowRef.isDestroyed()) {
-        app.quit();
-        return;
-      }
-      // Close the window (do not call app.quit here — the first quit was aborted by preventDefault).
-      windowRef.close();
+      // Resume the original quit request immediately after the guard succeeds.
+      app.quit();
     })();
   });
   win.on("closed", () => {
@@ -2186,18 +2188,22 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", (event) => {
   appQuitRequested = true;
-  if (emulatorBridgeTeardownDone) {
+  const action = decideBeforeQuitBridgeAction({
+    teardownDone: emulatorBridgeTeardownDone,
+    hasBridgeProcess: !!bridgeProcess,
+    teardownInFlight: !!emulatorBridgeTeardownInFlight
+  });
+  if (action === "proceed") {
     return;
   }
-  if (!bridgeProcess) {
+  if (action === "mark_teardown_done") {
     emulatorBridgeTeardownDone = true;
     return;
   }
-  if (emulatorBridgeTeardownInFlight) {
-    event.preventDefault();
+  event.preventDefault();
+  if (action === "wait_for_inflight_teardown") {
     return;
   }
-  event.preventDefault();
   emulatorBridgeTeardownInFlight = gracefulStopEmulatorBridge(3000, { permanent: true })
     .catch(() => undefined)
     .finally(() => {

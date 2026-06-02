@@ -1,11 +1,9 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   type AgentEvent,
-  type AgentSessionTranscriptLine,
   type AssetManifest,
   type BootstrapState,
   type DeployEligibility,
-  getIntakePromptTimelineText,
   type ManifestSnapshot,
   type LlmProviderId,
   type ProviderSettings,
@@ -15,26 +13,19 @@ import {
   type SendPromptResponse,
   type SaveTempWorkspaceResponse,
   type MainProcessConsoleMirrorPayload,
-  stripIntakeUiMarkers,
-  transcriptUserBubbleText,
-  type WidgetSize,
-  TOOL_ENVELOPE_STREAM_REPLACE
+  type WidgetSize
 } from "@dartsnut/shared-ipc";
-import { applyStreamDeltaToEntryText } from "./applyStreamDelta";
-import {
-  entryTextHasFileWriteActions,
-  mergeAgentStreamEntryOnFinal,
-  shouldClearFileWritePreviewOnStatus,
-  shouldShowFileEditSummary,
-  shouldShowRollingFilePreview
-} from "./fileWritePreviewPhase";
 import { AssetManagerPanel } from "./AssetManagerPanel";
-import { isStructuredAgentEnvelopeText } from "../agentEventConsole";
 import { cn } from "./cn";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
 import { DeployPanel } from "./DeployPanel";
 import { EmulatorPanel } from "./EmulatorPanel";
-import FileEditSummary from "./FileEditSummary";
+import {
+  agentEventTimelineRole,
+  formatAgentEventForTimeline,
+  transcriptLineToTimelineEntry,
+  type TimelineEntry
+} from "./rawTimeline";
 import { ThemeSwitcherIcon } from "./ThemeSwitcher";
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
@@ -43,13 +34,7 @@ import { useWindowChromeInsets } from "./useWindowChromeInsets";
 const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
 
 const CREATION_INTAKE_PROJECT_TYPES: readonly ProjectType[] = ["game", "widget"];
-
 const AgentMarkdownRenderer = lazy(() => import("./AgentMarkdownRenderer"));
-
-interface DiffLine {
-  kind: "add" | "remove" | "context";
-  text: string;
-}
 
 function projectTypeChipLabel(pt: ProjectType): string {
   return pt === "game" ? "Game" : "Widget";
@@ -57,57 +42,16 @@ function projectTypeChipLabel(pt: ProjectType): string {
 
 type RightPaneTab = "emulator" | "assets" | "deploy";
 
-interface TimelineEntry {
-  id: string;
-  role: "user" | "agent" | "status" | "error" | "thinking";
-  text: string;
-  streaming?: boolean;
-  /** Keep write_file / replace_in_file rolling preview after stream ends until tool status. */
-  fileWritePreview?: boolean;
-  /** Thinking blocks: when true, body is hidden unless streaming. */
-  collapsed?: boolean;
-}
-
-interface FormattedAgentMessage {
-  narrative: string;
-  response: string | null;
-  actions: ParsedAction[];
-}
-
-interface ParsedAction {
-  tool: string;
-  path?: string;
-  content?: string;
-  contentClosed?: boolean;
-  previousContent?: string;
-  isFileWrite: boolean;
-  /** read_file / list_files (and similar) — show path while streaming, no diff body. */
-  isToolPlan?: boolean;
-  raw: string;
-}
-
-/** write_file with no prior snapshot — treat as new file (diff is empty → content). */
-function isNewFileWrite(action: ParsedAction): boolean {
-  return (
-    action.tool === "write_file" &&
-    (action.previousContent === undefined || action.previousContent === "")
-  );
-}
-
 type AppScreen = "main" | "settings";
 
-const STREAM_PREVIEW_LINES = 8;
-const DIFF_MAX_LINES = 220;
-const DIFF_CONTEXT_LINES = 4;
-/** Cap line count before O(n×m) LCS diff to avoid renderer beach ball on large files. */
-const DIFF_LCS_MAX_LINES_PER_SIDE = 400;
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
-/** While an agent message is streaming, cap how often we snap the timeline scroll to the bottom. */
-const STREAM_TIMELINE_AUTOSCROLL_MIN_MS = 72;
 /** Keep in sync with composer textarea `max-h-[200px]` */
 const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
-/** Content taller than one line — switch composer shell from pill to rounded card */
-const COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX = 52;
+/**
+ * Visual multiline detection can be off by a fractional pixel depending on
+ * font metrics, zoom, and platform.
+ */
+const COMPOSER_PROMPT_MULTILINE_EPSILON_PX = 1;
 const GREETING_TEXT =
   "What are we making today? Share your idea and I'll help turn it into a Dartsnut widget or game.";
 
@@ -123,31 +67,6 @@ const LLM_PROVIDER_OPTIONS: { id: LlmProviderId; label: string }[] = [
   { id: "xiaomi", label: "Mimo V2.5 Pro" },
   { id: "user-define", label: "User define" }
 ];
-
-function transcriptLineToTimelineEntry(line: AgentSessionTranscriptLine, seq: number): TimelineEntry | null {
-  const id = `persisted-${line.at}-${seq}`;
-  if (line.kind === "user") {
-    const visible = transcriptUserBubbleText(line.text);
-    if (visible == null || !visible.trim()) {
-      return null;
-    }
-    return { id, role: "user", text: stripIntakeUiMarkers(visible), streaming: false };
-  }
-  if (line.kind === "thinking") {
-    return {
-      id,
-      role: "thinking",
-      text: stripIntakeUiMarkers(line.text),
-      streaming: false,
-      collapsed: true
-    };
-  }
-  if (line.kind === "assistant") {
-    return { id, role: "agent", text: stripIntakeUiMarkers(line.text), streaming: false };
-  }
-  const tool = line.toolName ? `${line.toolName}: ` : "";
-  return { id, role: "status", text: `${tool}${line.text}` };
-}
 
 const chromeIconBtnClass = "ui-chrome-btn";
 
@@ -178,526 +97,6 @@ function maskApiKey(value: string): string {
   return `${"*".repeat(Math.max(4, value.length - 4))}${suffix}`;
 }
 
-function getLatestPreviewLines(content: string): { lines: string[]; truncated: boolean } {
-  const normalized = content.replace(/\r/g, "");
-  const allLines = normalized.split("\n");
-  const lines = allLines.slice(-STREAM_PREVIEW_LINES);
-  return {
-    lines,
-    truncated: allLines.length > lines.length
-  };
-}
-
-/** Last lines + tail char cap — mirrors agent rolling preview while thought streams. */
-function getThinkingRollingPreview(full: string): { text: string; truncated: boolean } {
-  const normalized = full.replace(/\r/g, "");
-  const allLines = normalized.split("\n");
-  const lineTruncated = allLines.length > STREAM_PREVIEW_LINES;
-  const tailLines = allLines.slice(-STREAM_PREVIEW_LINES);
-  let text = tailLines.join("\n");
-  let truncated = lineTruncated;
-  const maxChars = 1200;
-  if (text.length > maxChars) {
-    text = text.slice(-maxChars);
-    truncated = true;
-  }
-  return { text, truncated };
-}
-
-function getStreamingPreviewDiffLines(action: ParsedAction): { lines: DiffLine[]; truncated: boolean } {
-  if (typeof action.content !== "string") {
-    return { lines: [], truncated: false };
-  }
-  if (typeof action.previousContent === "string") {
-    const diff = buildDiffLines(action.previousContent, action.content, STREAM_PREVIEW_LINES * 4);
-    const lines = diff.lines.slice(-STREAM_PREVIEW_LINES);
-    return { lines, truncated: diff.truncated || diff.lines.length > lines.length };
-  }
-  const preview = getLatestPreviewLines(action.content);
-  return {
-    lines: preview.lines.map((text) => ({ kind: "add", text })),
-    truncated: preview.truncated
-  };
-}
-
-function decodeEscapedStreamingText(input: string): string {
-  return input
-    .replace(/\\\\/g, "\\")
-    .replace(/\\"/g, "\"")
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t")
-    .replace(/\\r/g, "");
-}
-
-function capTextLinesForDiff(text: string, maxLines: number): string {
-  const lines = text.split(/\r?\n/);
-  if (lines.length <= maxLines) {
-    return text;
-  }
-  return lines.slice(-maxLines).join("\n");
-}
-
-function buildRawDiffLines(oldText: string, newText: string): DiffLine[] {
-  const oldLines = capTextLinesForDiff(oldText, DIFF_LCS_MAX_LINES_PER_SIDE).split(/\r?\n/);
-  const newLines = capTextLinesForDiff(newText, DIFF_LCS_MAX_LINES_PER_SIDE).split(/\r?\n/);
-  const n = oldLines.length;
-  const m = newLines.length;
-  const lcs: number[][] = Array.from({ length: n + 1 }, () => Array<number>(m + 1).fill(0));
-
-  for (let i = n - 1; i >= 0; i -= 1) {
-    for (let j = m - 1; j >= 0; j -= 1) {
-      lcs[i][j] =
-        oldLines[i] === newLines[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
-    }
-  }
-
-  const lines: DiffLine[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (oldLines[i] === newLines[j]) {
-      lines.push({ kind: "context", text: oldLines[i] });
-      i += 1;
-      j += 1;
-    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
-      lines.push({ kind: "remove", text: oldLines[i] });
-      i += 1;
-    } else {
-      lines.push({ kind: "add", text: newLines[j] });
-      j += 1;
-    }
-  }
-
-  while (i < n) {
-    lines.push({ kind: "remove", text: oldLines[i] });
-    i += 1;
-  }
-
-  while (j < m) {
-    lines.push({ kind: "add", text: newLines[j] });
-    j += 1;
-  }
-
-  return lines;
-}
-
-function trimDiffLinesAroundChanges(
-  lines: DiffLine[],
-  maxLines: number,
-  contextLines: number
-): { lines: DiffLine[]; truncated: boolean } {
-  const changeIdxs: number[] = [];
-  for (let idx = 0; idx < lines.length; idx += 1) {
-    if (lines[idx].kind !== "context") {
-      changeIdxs.push(idx);
-    }
-  }
-
-  if (changeIdxs.length === 0) {
-    const capped = lines.slice(0, Math.min(lines.length, maxLines));
-    return { lines: capped, truncated: lines.length > maxLines };
-  }
-
-  const windows: Array<{ start: number; end: number }> = changeIdxs.map((idx) => ({
-    start: Math.max(0, idx - contextLines),
-    end: Math.min(lines.length - 1, idx + contextLines)
-  }));
-
-  const merged: Array<{ start: number; end: number }> = [];
-  for (const window of windows) {
-    const prev = merged[merged.length - 1];
-    if (!prev || window.start > prev.end + 1) {
-      merged.push({ ...window });
-    } else {
-      prev.end = Math.max(prev.end, window.end);
-    }
-  }
-
-  const firstWindow = merged[0]!;
-  const hadMoreHunks = merged.length > 1;
-
-  const out: DiffLine[] = [];
-  for (let i = firstWindow.start; i <= firstWindow.end; i += 1) {
-    out.push(lines[i]);
-  }
-
-  if (hadMoreHunks) {
-    out.push({ kind: "context", text: "..." });
-  }
-
-  let truncated = hadMoreHunks;
-  if (out.length > maxLines) {
-    return { lines: out.slice(0, maxLines), truncated: true };
-  }
-
-  return { lines: out, truncated };
-}
-
-function buildDiffLines(oldText: string, newText: string, maxLines: number): {
-  lines: DiffLine[];
-  truncated: boolean;
-} {
-  const raw = buildRawDiffLines(oldText, newText);
-  return trimDiffLinesAroundChanges(raw, maxLines, DIFF_CONTEXT_LINES);
-}
-
-function parseJsonStringValue(input: string, startQuoteIdx: number): { value: string; nextIndex: number; closed: boolean } {
-  let escaped = false;
-  let idx = startQuoteIdx + 1;
-  while (idx < input.length) {
-    const ch = input[idx];
-    if (escaped) {
-      escaped = false;
-      idx += 1;
-      continue;
-    }
-    if (ch === "\\") {
-      escaped = true;
-      idx += 1;
-      continue;
-    }
-    if (ch === "\"") {
-      const raw = input.slice(startQuoteIdx, idx + 1);
-      try {
-        return { value: JSON.parse(raw) as string, nextIndex: idx + 1, closed: true };
-      } catch {
-        return { value: input.slice(startQuoteIdx + 1, idx), nextIndex: idx + 1, closed: true };
-      }
-    }
-    idx += 1;
-  }
-  const raw = `${input.slice(startQuoteIdx)}"`;
-  try {
-    return { value: JSON.parse(raw) as string, nextIndex: input.length, closed: false };
-  } catch {
-    return {
-      value: decodeEscapedStreamingText(input.slice(startQuoteIdx + 1)),
-      nextIndex: input.length,
-      closed: false
-    };
-  }
-}
-
-function parsePartialAgentMessage(text: string): FormattedAgentMessage {
-  const actions: ParsedAction[] = [];
-  const jsonStart = text.indexOf("{");
-  const narrative = jsonStart > 0 ? text.slice(0, jsonStart).trim() : "";
-  let response: string | null = null;
-
-  const responseKey = text.indexOf("\"response\"");
-  if (responseKey >= 0) {
-    const responseQuote = text.indexOf("\"", text.indexOf(":", responseKey));
-    if (responseQuote >= 0) {
-      response = parseJsonStringValue(text, responseQuote).value;
-    }
-  }
-
-  let scanFrom = 0;
-  while (scanFrom < text.length) {
-    const toolKey = text.indexOf("\"tool\"", scanFrom);
-    if (toolKey < 0) {
-      break;
-    }
-    const toolQuote = text.indexOf("\"", text.indexOf(":", toolKey));
-    if (toolQuote < 0) {
-      break;
-    }
-    const parsedTool = parseJsonStringValue(text, toolQuote);
-    const nextToolKey = text.indexOf("\"tool\"", parsedTool.nextIndex);
-    const sectionEnd = nextToolKey >= 0 ? nextToolKey : text.length;
-
-    if (parsedTool.value === "write_file") {
-      const pathKey = text.indexOf("\"path\"", toolKey);
-      let pathValue: string | undefined;
-      if (pathKey >= 0 && pathKey < sectionEnd) {
-        const pathQuote = text.indexOf("\"", text.indexOf(":", pathKey));
-        if (pathQuote >= 0 && pathQuote < sectionEnd) {
-          pathValue = parseJsonStringValue(text, pathQuote).value;
-        }
-      }
-
-      const contentKey = text.indexOf("\"content\"", toolKey);
-      let previousContentValue: string | undefined;
-      const previousContentKeys = ["\"previousContent\"", "\"originalContent\"", "\"beforeContent\""];
-      for (const key of previousContentKeys) {
-        const previousKey = text.indexOf(key, toolKey);
-        if (previousKey >= 0 && previousKey < sectionEnd) {
-          const previousQuote = text.indexOf("\"", text.indexOf(":", previousKey));
-          if (previousQuote >= 0 && previousQuote < sectionEnd) {
-            previousContentValue = parseJsonStringValue(text, previousQuote).value;
-            break;
-          }
-        }
-      }
-      if (contentKey >= 0 && contentKey < sectionEnd) {
-        const contentQuote = text.indexOf("\"", text.indexOf(":", contentKey));
-        if (contentQuote >= 0 && contentQuote < sectionEnd) {
-          const parsedContent = parseJsonStringValue(text, contentQuote);
-          actions.push({
-            tool: "write_file",
-            path: pathValue,
-            content: parsedContent.value,
-            contentClosed: parsedContent.closed,
-            previousContent: previousContentValue,
-            isFileWrite: true,
-            raw: ""
-          });
-        }
-      } else if (pathValue) {
-        actions.push({
-          tool: "write_file",
-          path: pathValue,
-          previousContent: previousContentValue,
-          isFileWrite: true,
-          raw: ""
-        });
-      }
-    }
-
-    if (parsedTool.value === "replace_in_file") {
-      const pathKey = text.indexOf("\"path\"", toolKey);
-      let pathValue: string | undefined;
-      if (pathKey >= 0 && pathKey < sectionEnd) {
-        const pathQuote = text.indexOf("\"", text.indexOf(":", pathKey));
-        if (pathQuote >= 0 && pathQuote < sectionEnd) {
-          pathValue = parseJsonStringValue(text, pathQuote).value;
-        }
-      }
-
-      const findKey = text.indexOf("\"find\"", toolKey);
-      const replaceKey = text.indexOf("\"replace\"", toolKey);
-      let parsedFind: { value: string; closed: boolean } | undefined;
-      let parsedReplace: { value: string; closed: boolean } | undefined;
-      if (findKey >= 0 && findKey < sectionEnd) {
-        const findQuote = text.indexOf("\"", text.indexOf(":", findKey));
-        if (findQuote >= 0 && findQuote < sectionEnd) {
-          parsedFind = parseJsonStringValue(text, findQuote);
-        }
-      }
-      if (replaceKey >= 0 && replaceKey < sectionEnd) {
-        const replaceQuote = text.indexOf("\"", text.indexOf(":", replaceKey));
-        if (replaceQuote >= 0 && replaceQuote < sectionEnd) {
-          parsedReplace = parseJsonStringValue(text, replaceQuote);
-        }
-      }
-      if (pathValue || parsedFind || parsedReplace) {
-        actions.push({
-          tool: "replace_in_file",
-          path: pathValue,
-          content: parsedReplace?.value ?? "",
-          contentClosed: parsedReplace?.closed,
-          previousContent: parsedFind?.value ?? "",
-          isFileWrite: true,
-          raw: ""
-        });
-      }
-    }
-
-    if (parsedTool.value === "read_file" || parsedTool.value === "list_files") {
-      const pathKey = text.indexOf("\"path\"", toolKey);
-      let pathValue: string | undefined;
-      if (pathKey >= 0 && pathKey < sectionEnd) {
-        const pathQuote = text.indexOf("\"", text.indexOf(":", pathKey));
-        if (pathQuote >= 0 && pathQuote < sectionEnd) {
-          pathValue = parseJsonStringValue(text, pathQuote).value;
-        }
-      }
-      actions.push({
-        tool: parsedTool.value,
-        path: pathValue,
-        isFileWrite: false,
-        isToolPlan: true,
-        raw: ""
-      });
-    }
-
-    scanFrom = parsedTool.nextIndex;
-  }
-
-  return { narrative, response, actions };
-}
-
-const streamingPartialParseCache: {
-  text: string;
-  result: FormattedAgentMessage | null;
-} = { text: "", result: null };
-
-function parsePartialAgentMessageCached(text: string): FormattedAgentMessage {
-  if (text === streamingPartialParseCache.text && streamingPartialParseCache.result) {
-    return streamingPartialParseCache.result;
-  }
-  const result = parsePartialAgentMessage(text);
-  streamingPartialParseCache.text = text;
-  streamingPartialParseCache.result = result;
-  return result;
-}
-
-function formatAgentMessage(text: string): FormattedAgentMessage {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return { narrative: "", response: null, actions: [] };
-  }
-
-  for (let idx = trimmed.indexOf("{"); idx >= 0; idx = trimmed.indexOf("{", idx + 1)) {
-    const maybeJson = trimmed.slice(idx).trim();
-    try {
-      const parsed = JSON.parse(maybeJson) as {
-        response?: string;
-        actions?: Array<{
-          tool?: string;
-          path?: string;
-          content?: string;
-          previousContent?: string;
-          originalContent?: string;
-          beforeContent?: string;
-        }>;
-      };
-      const narrative = trimmed.slice(0, idx).trim();
-      return {
-        narrative,
-        response: typeof parsed.response === "string" ? parsed.response : null,
-        actions: Array.isArray(parsed.actions)
-          ? parsed.actions.map((action) => ({
-              tool: action.tool ?? "unknown",
-              path: action.path,
-              content:
-                typeof action.content === "string"
-                  ? action.content
-                  : action.tool === "replace_in_file" && typeof (action as { replace?: unknown }).replace === "string"
-                    ? ((action as { replace: string }).replace ?? "")
-                    : undefined,
-              contentClosed: true,
-              previousContent:
-                action.previousContent ??
-                action.originalContent ??
-                action.beforeContent ??
-                (action.tool === "replace_in_file" && typeof (action as { find?: unknown }).find === "string"
-                  ? ((action as { find: string }).find ?? "")
-                  : undefined),
-              isFileWrite:
-                (action.tool === "write_file" && typeof action.content === "string") ||
-                (action.tool === "replace_in_file" &&
-                  typeof (action as { find?: unknown }).find === "string" &&
-                  typeof (action as { replace?: unknown }).replace === "string"),
-              isToolPlan: action.tool === "read_file" || action.tool === "list_files",
-              raw: JSON.stringify(action, null, 2)
-            }))
-          : []
-      };
-    } catch {
-      // Keep scanning for a valid JSON block.
-    }
-  }
-
-  return parsePartialAgentMessage(text);
-}
-
-function diffLinePrefix(kind: DiffLine["kind"]): string {
-  if (kind === "add") {
-    return "+";
-  }
-  if (kind === "remove") {
-    return "-";
-  }
-  return " ";
-}
-
-function FileRollingPreview(props: { lines: DiffLine[] }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const peakHeightRef = useRef(0);
-  const [minHeightPx, setMinHeightPx] = useState<number | undefined>(undefined);
-
-  useLayoutEffect(() => {
-    const el = containerRef.current;
-    if (!el) {
-      return;
-    }
-    const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight);
-    const capPx = Number.isFinite(lineHeight) ? lineHeight * STREAM_PREVIEW_LINES : el.scrollHeight;
-    const measured = Math.min(el.scrollHeight, capPx);
-    if (measured > peakHeightRef.current) {
-      peakHeightRef.current = measured;
-      setMinHeightPx(measured);
-    }
-  }, [props.lines]);
-
-  const style: CSSProperties | undefined =
-    minHeightPx !== undefined ? { minHeight: minHeightPx } : undefined;
-
-  return (
-    <div ref={containerRef} className="file-rolling-preview rolling-preview" style={style}>
-      <div className="file-rolling-preview__body">
-        {props.lines.map((line, idx) => (
-          <div key={idx} className={`file-rolling-preview__line file-rolling-preview__line--${line.kind}`}>
-            <span className="file-rolling-preview__prefix" aria-hidden>
-              {diffLinePrefix(line.kind)}
-            </span>
-            <code className="file-rolling-preview__code">{line.text}</code>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ThinkingRollingPreview(props: { source: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const peakHeightRef = useRef(0);
-  const [minHeightPx, setMinHeightPx] = useState<number | undefined>(undefined);
-
-  useLayoutEffect(() => {
-    const el = containerRef.current;
-    if (!el) {
-      return;
-    }
-    const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight);
-    const capPx = Number.isFinite(lineHeight) ? lineHeight * STREAM_PREVIEW_LINES : el.scrollHeight;
-    const measured = Math.min(el.scrollHeight, capPx);
-    if (measured > peakHeightRef.current) {
-      peakHeightRef.current = measured;
-      setMinHeightPx(measured);
-    }
-  }, [props.source]);
-
-  const style: CSSProperties | undefined =
-    minHeightPx !== undefined ? { minHeight: minHeightPx } : undefined;
-
-  return (
-    <div ref={containerRef} className="thinking-entry__rolling rolling-preview" style={style}>
-      <AgentMarkdownBody source={props.source} />
-    </div>
-  );
-}
-
-function ThinkingTimelineEntry(props: { entry: TimelineEntry; onToggleHeader: () => void }) {
-  const { entry, onToggleHeader } = props;
-  const bodyVisible = entry.collapsed !== true;
-  const rolling =
-    entry.streaming && entry.text.length > 0 && bodyVisible ? getThinkingRollingPreview(entry.text) : null;
-
-  return (
-    <div className="thinking-entry">
-      <button
-        type="button"
-        className="thinking-entry__header"
-        onClick={onToggleHeader}
-        aria-expanded={bodyVisible}
-      >
-        <span className="thinking-entry__chevron" aria-hidden>
-          {bodyVisible ? "▼" : "▶"}
-        </span>
-        <span className="thinking-entry__title">Thought</span>
-        {entry.streaming ? <span className="thinking-entry__streaming"> … </span> : null}
-      </button>
-      {rolling ? <ThinkingRollingPreview key={entry.id} source={rolling.text} /> : null}
-      {!entry.streaming && bodyVisible ? (
-        <div className="thinking-entry__body">
-          <AgentMarkdownBody source={entry.text} />
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 function workspaceFolderBasename(workspaceRoot: string): string {
   const normalized = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -705,32 +104,15 @@ function workspaceFolderBasename(workspaceRoot: string): string {
   return segments.length > 0 ? segments[segments.length - 1]! : workspaceRoot;
 }
 
-/** User Stop — no timeline bubble; abort is silent in the chat UI. */
-function isAgentStopTimelineNoise(event: AgentEvent): boolean {
+function AgentMarkdownBody({ source, className }: { source: string; className?: string }) {
+  const fallbackClass = className ?? "entry-text";
   return (
-    (event.type === "error" && event.message === "Agent stopped.") ||
-    (event.type === "status" && /^Stopping agent/i.test(event.message))
+    <Suspense fallback={<div className={fallbackClass}>{source}</div>}>
+      <AgentMarkdownRenderer source={source} />
+    </Suspense>
   );
 }
 
-function toEntry(event: AgentEvent, seq: number): TimelineEntry {
-  if (event.type === "intake_widget_size_prompt" || event.type === "intake_project_type_prompt") {
-    throw new Error("intake_* events are handled in onAgentEvent, not the timeline");
-  }
-  if (event.type === "reasoning_stream" || event.type === "reasoning_done") {
-    throw new Error("reasoning_* events are handled in onAgentEvent, not toEntry");
-  }
-  if (event.type === "stream") {
-    return { id: `${event.type}-${event.at}-${seq}`, role: "agent", text: event.delta, streaming: true };
-  }
-  if (event.type === "final") {
-    return { id: `${event.type}-${event.at}-${seq}`, role: "agent", text: event.content, streaming: false };
-  }
-  if (event.type === "error") {
-    return { id: `${event.type}-${event.at}-${seq}`, role: "error", text: event.message };
-  }
-  return { id: `${event.type}-${event.at}-${seq}`, role: "status", text: event.message };
-}
 
 export function App() {
   useWindowChromeInsets();
@@ -747,7 +129,7 @@ export function App() {
 
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
   const [entries, setEntries] = useState<TimelineEntry[]>([
-    { id: "greeting-initial", role: "agent", text: GREETING_TEXT, streaming: false }
+    { id: "greeting-initial", role: "agent", text: GREETING_TEXT }
   ]);
   const [prompt, setPrompt] = useState("");
   const [sending, setSending] = useState(false);
@@ -773,19 +155,16 @@ export function App() {
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
-  const streamPendingDeltaRef = useRef("");
-  const streamFlushRafRef = useRef<number | null>(null);
+  const activeStreamDeltaRef = useRef("");
   const activeReasoningStreamEntryIdRef = useRef<string | null>(null);
-  const reasoningPendingDeltaRef = useRef("");
-  const reasoningStreamFlushRafRef = useRef<number | null>(null);
-  const streamAutoscrollGateRef = useRef(0);
-  const fileWritePreviewClearRafRef = useRef<number | null>(null);
+  const activeReasoningStreamDeltaRef = useRef("");
+  const activeReasoningStartedAtRef = useRef<number | null>(null);
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
   const lastAgentSessionHydrateKeyRef = useRef<string>("");
   const timelineRef = useRef<HTMLElement | null>(null);
-  const composerPillRef = useRef<HTMLDivElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const [composerExpandedSticky, setComposerExpandedSticky] = useState(false);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>({
     activeProvider: "gpt",
     userDefine: EMPTY_USER_DEFINE
@@ -816,17 +195,95 @@ export function App() {
     setTheme(next);
   }
 
-  function appendIntakePromptEntry(event: AgentEvent): void {
-    const text = getIntakePromptTimelineText(event);
-    if (!text) {
-      return;
-    }
+  function clearActiveCoalescedStreamEntries(): void {
+    activeStreamEntryIdRef.current = null;
+    activeStreamDeltaRef.current = "";
+    activeReasoningStreamEntryIdRef.current = null;
+    activeReasoningStreamDeltaRef.current = "";
+    activeReasoningStartedAtRef.current = null;
+  }
+
+  function appendRawAgentEvent(event: AgentEvent): void {
+    clearActiveCoalescedStreamEntries();
     const seq = eventSeqRef.current;
     eventSeqRef.current += 1;
+    const role = agentEventTimelineRole(event);
     setEntries((prev) => [
       ...prev,
-      { id: `intake-prompt-${event.type}-${event.at}-${seq}`, role: "agent", text, streaming: false }
+      { id: `evt-${seq}-${event.at}`, role, text: formatAgentEventForTimeline(event) }
     ]);
+  }
+
+  function appendOrPatchReasoningStream(event: Extract<AgentEvent, { type: "reasoning_stream" }>): void {
+    const activeId = activeReasoningStreamEntryIdRef.current;
+    if (!activeId) {
+      const seq = eventSeqRef.current;
+      eventSeqRef.current += 1;
+      const id = `evt-${seq}-${event.at}`;
+      activeReasoningStreamEntryIdRef.current = id;
+      activeReasoningStreamDeltaRef.current = event.delta;
+      activeReasoningStartedAtRef.current = event.at;
+      setEntries((prev) => [
+        ...prev,
+        {
+          id,
+          role: "status",
+          text: activeReasoningStreamDeltaRef.current,
+          reasoningMode: "delta",
+          reasoningFullText: activeReasoningStreamDeltaRef.current
+        }
+      ]);
+      return;
+    }
+
+    activeReasoningStreamDeltaRef.current += event.delta;
+    setEntries((prev) =>
+      prev.map((entry) =>
+        entry.id === activeId
+          ? {
+            ...entry,
+            text: activeReasoningStreamDeltaRef.current,
+            reasoningMode: "delta",
+            reasoningFullText: activeReasoningStreamDeltaRef.current
+          }
+          : entry
+      )
+    );
+  }
+
+  function formatReasoningElapsedSeconds(startAt: number, endAt: number): string {
+    const secs = Math.max(0, (endAt - startAt) / 1000);
+    if (secs < 10) {
+      return secs.toFixed(1);
+    }
+    return Math.round(secs).toString();
+  }
+
+  function appendOrPatchStream(event: Extract<AgentEvent, { type: "stream" }>): void {
+    const activeId = activeStreamEntryIdRef.current;
+    if (!activeId) {
+      const seq = eventSeqRef.current;
+      eventSeqRef.current += 1;
+      const id = `evt-${seq}-${event.at}`;
+      activeStreamEntryIdRef.current = id;
+      activeStreamDeltaRef.current = event.delta;
+      setEntries((prev) => [
+        ...prev,
+        {
+          id,
+          role: "agent",
+          text: activeStreamDeltaRef.current
+        }
+      ]);
+      return;
+    }
+
+    activeStreamDeltaRef.current += event.delta;
+    setEntries((prev) =>
+      prev.map((entry) =>
+        entry.id === activeId ? { ...entry, text: activeStreamDeltaRef.current } : entry
+      )
+    );
   }
 
   function isTimelineNearBottom(element: HTMLElement): boolean {
@@ -842,128 +299,10 @@ export function App() {
     timeline.scrollTop = maxScroll > 0 ? maxScroll : 0;
   }
 
-  /** Take queued stream deltas (cancels RAF) without discarding unapplied content. */
-  function takeStreamPendingDeltas(): string {
-    if (streamFlushRafRef.current !== null) {
-      cancelAnimationFrame(streamFlushRafRef.current);
-      streamFlushRafRef.current = null;
-    }
-    const pending = streamPendingDeltaRef.current;
-    streamPendingDeltaRef.current = "";
-    return pending;
-  }
-
-  function cancelStreamCoalesce() {
-    takeStreamPendingDeltas();
-    if (reasoningStreamFlushRafRef.current !== null) {
-      cancelAnimationFrame(reasoningStreamFlushRafRef.current);
-      reasoningStreamFlushRafRef.current = null;
-    }
-    reasoningPendingDeltaRef.current = "";
-  }
-
-  /** End in-flight assistant/reasoning streams after Stop (pending RAF deltas are applied first). */
-  function finalizeActiveStreamingEntries() {
-    const streamId = activeStreamEntryIdRef.current;
-    const streamPending = takeStreamPendingDeltas();
-    const reasoningId = activeReasoningStreamEntryIdRef.current;
-    const reasoningPending = reasoningPendingDeltaRef.current;
-    if (reasoningStreamFlushRafRef.current !== null) {
-      cancelAnimationFrame(reasoningStreamFlushRafRef.current);
-      reasoningStreamFlushRafRef.current = null;
-    }
-    reasoningPendingDeltaRef.current = "";
-    activeStreamEntryIdRef.current = null;
-    activeReasoningStreamEntryIdRef.current = null;
-    if (!streamId && !reasoningId) {
-      return;
-    }
-    setEntries((prev) =>
-      prev.map((entry) => {
-        if (entry.id === streamId) {
-          const merged = mergeAgentStreamEntryOnFinal(entry.text, streamPending, "");
-          return {
-            ...entry,
-            text: merged.text,
-            streaming: false,
-            fileWritePreview: false
-          };
-        }
-        if (entry.id === reasoningId) {
-          const text = reasoningPending.length > 0 ? entry.text + reasoningPending : entry.text;
-          return { ...entry, text, streaming: false, collapsed: true };
-        }
-        return entry;
-      })
-    );
-  }
-
-  function patchAgentStreamEntry(entry: TimelineEntry, newText: string): TimelineEntry {
-    const next: TimelineEntry = { ...entry, text: newText, streaming: true };
-    if (entryTextHasFileWriteActions(newText)) {
-      next.fileWritePreview = true;
-    }
-    return next;
-  }
-
-  function flushPendingStreamDeltas() {
-    streamFlushRafRef.current = null;
-    const streamId = activeStreamEntryIdRef.current;
-    const pending = streamPendingDeltaRef.current;
-    streamPendingDeltaRef.current = "";
-    if (!streamId || !pending) {
-      return;
-    }
-    setEntries((prev) =>
-      prev.map((entry) =>
-        entry.id === streamId ? patchAgentStreamEntry(entry, applyStreamDeltaToEntryText(entry.text, pending)) : entry
-      )
-    );
-    if (streamPendingDeltaRef.current.length > 0) {
-      scheduleStreamFlush();
-    }
-  }
-
-  function scheduleStreamFlush() {
-    if (streamFlushRafRef.current !== null) {
-      return;
-    }
-    streamFlushRafRef.current = window.requestAnimationFrame(() => {
-      flushPendingStreamDeltas();
-    });
-  }
-
-  function flushPendingReasoningDeltas() {
-    reasoningStreamFlushRafRef.current = null;
-    const streamId = activeReasoningStreamEntryIdRef.current;
-    const pending = reasoningPendingDeltaRef.current;
-    reasoningPendingDeltaRef.current = "";
-    if (!streamId || !pending) {
-      return;
-    }
-    setEntries((prev) =>
-      prev.map((entry) =>
-        entry.id === streamId ? { ...entry, text: entry.text + pending, streaming: true } : entry
-      )
-    );
-    if (reasoningPendingDeltaRef.current.length > 0) {
-      scheduleReasoningStreamFlush();
-    }
-  }
-
-  function scheduleReasoningStreamFlush() {
-    if (reasoningStreamFlushRafRef.current !== null) {
-      return;
-    }
-    reasoningStreamFlushRafRef.current = window.requestAnimationFrame(() => {
-      flushPendingReasoningDeltas();
-    });
-  }
 
   function syncComposerPromptHeight() {
     const el = promptInputRef.current;
-    const pill = composerPillRef.current;
-    if (!el || !pill) {
+    if (!el) {
       return;
     }
     el.style.height = "auto";
@@ -971,10 +310,30 @@ export function App() {
     const capped = Math.min(scrollH, COMPOSER_PROMPT_MAX_HEIGHT_PX);
     el.style.height = `${capped}px`;
     el.style.overflowY = scrollH > COMPOSER_PROMPT_MAX_HEIGHT_PX ? "auto" : "hidden";
-    if (scrollH > COMPOSER_PROMPT_EXPANDED_THRESHOLD_PX) {
-      pill.dataset.expanded = "true";
-    } else {
-      delete pill.dataset.expanded;
+    const computed = window.getComputedStyle(el);
+    const computedLineHeightPx = Number.parseFloat(computed.lineHeight);
+    const lineHeightPx = Number.isFinite(computedLineHeightPx) && computedLineHeightPx > 0
+      ? computedLineHeightPx
+      : 18;
+    const paddingTopPx = Number.parseFloat(computed.paddingTop);
+    const paddingBottomPx = Number.parseFloat(computed.paddingBottom);
+    const minHeightPx = Number.parseFloat(computed.minHeight);
+    const verticalPaddingPx =
+      (Number.isFinite(paddingTopPx) ? paddingTopPx : 0) +
+      (Number.isFinite(paddingBottomPx) ? paddingBottomPx : 0);
+    const hasInput = el.value.length > 0;
+    if (!hasInput) {
+      setComposerExpandedSticky(false);
+      return;
+    }
+    const contentSingleLineHeightPx = lineHeightPx + verticalPaddingPx;
+    const baselineSingleLineHeightPx = Number.isFinite(minHeightPx) && minHeightPx > 0
+      ? Math.max(contentSingleLineHeightPx, minHeightPx)
+      : contentSingleLineHeightPx;
+    const isVisuallyMultiline =
+      scrollH > baselineSingleLineHeightPx + COMPOSER_PROMPT_MULTILINE_EPSILON_PX;
+    if (isVisuallyMultiline) {
+      setComposerExpandedSticky((prev) => prev || true);
     }
   }
 
@@ -999,14 +358,6 @@ export function App() {
   useLayoutEffect(() => {
     if (!autoScrollEnabled) {
       return;
-    }
-    const streaming = entries.some((entry) => entry.streaming);
-    if (streaming) {
-      const now = performance.now();
-      if (now - streamAutoscrollGateRef.current < STREAM_TIMELINE_AUTOSCROLL_MIN_MS) {
-        return;
-      }
-      streamAutoscrollGateRef.current = now;
     }
     scrollTimelineToBottom();
   }, [entries, autoScrollEnabled]);
@@ -1046,9 +397,6 @@ export function App() {
                 ? [...CREATION_INTAKE_PROJECT_TYPES]
                 : []
         });
-        if (event.visible) {
-          appendIntakePromptEntry(event);
-        }
         return;
       }
       if (event.type === "intake_widget_size_prompt") {
@@ -1061,142 +409,47 @@ export function App() {
                 ? [...WIDGET_DISPLAY_SIZES]
                 : []
         });
-        if (event.visible) {
-          appendIntakePromptEntry(event);
-        }
         return;
       }
       if (event.type === "reasoning_stream") {
-        const reasoningId = activeReasoningStreamEntryIdRef.current;
-        if (!reasoningId) {
-          const seq = eventSeqRef.current;
-          eventSeqRef.current += 1;
-          const id = `reasoning-${event.at}-${seq}`;
-          activeReasoningStreamEntryIdRef.current = id;
-          setEntries((prev) => [
-            ...prev,
-            { id, role: "thinking", text: event.delta, streaming: true, collapsed: false }
-          ]);
-          return;
-        }
-        reasoningPendingDeltaRef.current += event.delta;
-        scheduleReasoningStreamFlush();
-        return;
-      }
-      if (event.type === "reasoning_done") {
-        if (reasoningStreamFlushRafRef.current !== null) {
-          cancelAnimationFrame(reasoningStreamFlushRafRef.current);
-          reasoningStreamFlushRafRef.current = null;
-        }
-        const rid = activeReasoningStreamEntryIdRef.current;
-        const pending = reasoningPendingDeltaRef.current;
-        reasoningPendingDeltaRef.current = "";
-        activeReasoningStreamEntryIdRef.current = null;
-        if (rid && pending) {
-          setEntries((prev) =>
-            prev.map((entry) =>
-              entry.id === rid
-                ? { ...entry, text: entry.text + pending, streaming: false, collapsed: true }
-                : entry
-            )
-          );
-        } else if (rid) {
-          setEntries((prev) =>
-            prev.map((entry) =>
-              entry.id === rid ? { ...entry, streaming: false, collapsed: true } : entry
-            )
-          );
-        }
+        appendOrPatchReasoningStream(event);
         return;
       }
       if (event.type === "stream") {
-        const streamId = activeStreamEntryIdRef.current;
-        if (!streamId) {
-          const seq = eventSeqRef.current;
-          eventSeqRef.current += 1;
-          const entry = toEntry(event, seq);
-          const text = applyStreamDeltaToEntryText("", event.delta);
-          const next: TimelineEntry = { ...entry, text };
-          if (entryTextHasFileWriteActions(text)) {
-            next.fileWritePreview = true;
-          }
-          activeStreamEntryIdRef.current = next.id;
-          setEntries((prev) => [...prev, next]);
-          return;
-        }
-        streamPendingDeltaRef.current += event.delta;
-        if (event.delta.includes(TOOL_ENVELOPE_STREAM_REPLACE)) {
-          flushPendingStreamDeltas();
-        } else {
-          scheduleStreamFlush();
-        }
+        appendOrPatchStream(event);
         return;
       }
-
-      if (event.type === "final" && activeStreamEntryIdRef.current) {
-        const streamId = activeStreamEntryIdRef.current;
-        activeStreamEntryIdRef.current = null;
-        const pending = takeStreamPendingDeltas();
-        setEntries((prev) =>
-          prev.map((entry) => {
-            if (entry.id !== streamId) {
-              return entry;
-            }
-            const merged = mergeAgentStreamEntryOnFinal(entry.text, pending, event.content);
-            return {
-              ...entry,
-              text: merged.text,
-              streaming: false,
-              ...(merged.fileWritePreview ? { fileWritePreview: true } : { fileWritePreview: false })
-            };
-          })
-        );
-        return;
-      }
-
-      if (event.type === "error") {
-        cancelStreamCoalesce();
-        activeStreamEntryIdRef.current = null;
+      if (event.type === "reasoning_done") {
+        const activeId = activeReasoningStreamEntryIdRef.current;
+        const startedAt = activeReasoningStartedAtRef.current;
+        if (activeId && startedAt != null) {
+          const elapsed = formatReasoningElapsedSeconds(startedAt, event.at);
+          setEntries((prev) =>
+            prev.map((entry) =>
+              entry.id === activeId
+                ? { ...entry, text: `Thought for ${elapsed} s`, reasoningMode: "summary" }
+                : entry
+            )
+          );
+        }
         activeReasoningStreamEntryIdRef.current = null;
-        if (isAgentStopTimelineNoise(event)) {
+        activeReasoningStreamDeltaRef.current = "";
+        activeReasoningStartedAtRef.current = null;
+        return;
+      }
+      if (event.type === "final") {
+        if (
+          activeStreamEntryIdRef.current &&
+          activeStreamDeltaRef.current.trim() === event.content.trim()
+        ) {
+          activeStreamEntryIdRef.current = null;
+          activeStreamDeltaRef.current = "";
           return;
         }
-        const seq = eventSeqRef.current;
-        eventSeqRef.current += 1;
-        setEntries((prev) => [...prev, toEntry(event, seq)]);
+        appendRawAgentEvent(event);
         return;
       }
-
-      if (isAgentStopTimelineNoise(event)) {
-        return;
-      }
-
-      if (event.type === "status" && shouldClearFileWritePreviewOnStatus(event.message)) {
-        const seq = eventSeqRef.current;
-        eventSeqRef.current += 1;
-        const statusEntry = toEntry(event, seq);
-        setEntries((prev) => [...prev, statusEntry]);
-        if (fileWritePreviewClearRafRef.current !== null) {
-          cancelAnimationFrame(fileWritePreviewClearRafRef.current);
-        }
-        fileWritePreviewClearRafRef.current = requestAnimationFrame(() => {
-          fileWritePreviewClearRafRef.current = requestAnimationFrame(() => {
-            fileWritePreviewClearRafRef.current = null;
-            setEntries((prev) =>
-              prev.map((entry) =>
-                entry.role === "agent" && entry.fileWritePreview
-                  ? { ...entry, fileWritePreview: false }
-                  : entry
-              )
-            );
-          });
-        });
-        return;
-      }
-
-      const seq = eventSeqRef.current;
-      eventSeqRef.current += 1;
-      setEntries((prev) => [...prev, toEntry(event, seq)]);
+      appendRawAgentEvent(event);
     });
     const unsubscribePythonRuntime = api.onPythonRuntimeStatus((status) => {
       setPythonRuntimeStatus(status);
@@ -1210,11 +463,6 @@ export function App() {
         })
       : () => {};
     return () => {
-      if (fileWritePreviewClearRafRef.current !== null) {
-        cancelAnimationFrame(fileWritePreviewClearRafRef.current);
-        fileWritePreviewClearRafRef.current = null;
-      }
-      cancelStreamCoalesce();
       unsubscribe();
       unsubscribeBootstrap();
       unsubscribePythonRuntime();
@@ -1308,7 +556,7 @@ export function App() {
       }
       lastAgentSessionHydrateKeyRef.current = ws;
       if (!summary.hasPersistedSession || summary.transcriptTail.length === 0) {
-        setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT, streaming: false }]);
+        setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT }]);
         return;
       }
       const hydrated = summary.transcriptTail
@@ -1339,9 +587,7 @@ export function App() {
 
   function resetChatSessionUi() {
     discardAgentEventsRef.current = true;
-    cancelStreamCoalesce();
-    activeStreamEntryIdRef.current = null;
-    activeReasoningStreamEntryIdRef.current = null;
+    clearActiveCoalescedStreamEntries();
     eventSeqRef.current = 0;
     lastAgentSessionHydrateKeyRef.current = "";
     setSessionTemplateMode(null);
@@ -1351,7 +597,7 @@ export function App() {
     setProjectTypePicker({ visible: false, types: [] });
     setPrompt("");
     setRuntimeError(null);
-    setEntries([{ id: `greeting-${Date.now()}`, role: "agent", text: GREETING_TEXT, streaming: false }]);
+    setEntries([{ id: `greeting-${Date.now()}`, role: "agent", text: GREETING_TEXT }]);
   }
 
   async function isChatSectionNonEmpty(): Promise<boolean> {
@@ -1650,7 +896,7 @@ export function App() {
     if (!api || !sending) {
       return;
     }
-    finalizeActiveStreamingEntries();
+    clearActiveCoalescedStreamEntries();
     setWidgetSizePicker({ visible: false, sizes: [] });
     setProjectTypePicker({ visible: false, types: [] });
     setSending(false);
@@ -1856,35 +1102,51 @@ export function App() {
                   entry.id.startsWith("greeting") && entry.role === "agent" && "greeting-entry"
                 )}
               >
-                {entry.role === "agent" ? (
-                  entry.id.startsWith("greeting") ? (
-                    <div className="greeting-card" role="status">
-                      <p className="greeting-card__eyebrow">Neon Pit · ready</p>
-                      <p className="greeting-card__title">Dartsnut Chat</p>
-                      <p className="greeting-card__body">{entry.text}</p>
-                    </div>
-                  ) : (
-                  <AgentEntryContent
-                    text={entry.text}
-                    isStreaming={Boolean(entry.streaming)}
-                    fileWritePreview={Boolean(entry.fileWritePreview)}
-                  />
-                  )
-                ) : entry.role === "thinking" ? (
-                  <ThinkingTimelineEntry
-                    entry={entry}
-                    onToggleHeader={() =>
+                {entry.role === "agent" && entry.id.startsWith("greeting") ? (
+                  <div className="greeting-card" role="status">
+                    <p className="greeting-card__eyebrow">Neon Pit · ready</p>
+                    <p className="greeting-card__title">Dartsnut Chat</p>
+                    <p className="greeting-card__body">{entry.text}</p>
+                  </div>
+                ) : entry.role === "user" ? (
+                  <div className="entry-text">{entry.text}</div>
+                ) : entry.role === "agent" ? (
+                  <AgentMarkdownBody source={entry.text} className="entry-text" />
+                ) : entry.reasoningMode === "delta" ? (
+                  <div className="entry-text entry-text--subtle">
+                    <AgentMarkdownBody source={entry.text} className="entry-text entry-text--subtle" />
+                  </div>
+                ) : entry.reasoningMode === "summary" || entry.reasoningMode === "expanded" ? (
+                  <div className="entry-reasoning-wrap">
+                  <button
+                    type="button"
+                    className="entry-reasoning-summary entry-text--subtle"
+                    onClick={() =>
                       setEntries((prev) =>
-                        prev.map((e) =>
-                          e.id === entry.id && e.role === "thinking"
-                            ? { ...e, collapsed: e.collapsed === true ? false : true }
-                            : e
+                        prev.map((candidate) =>
+                          candidate.id === entry.id
+                            ? {
+                              ...candidate,
+                              reasoningMode: candidate.reasoningMode === "expanded" ? "summary" : "expanded"
+                            }
+                            : candidate
                         )
                       )
                     }
-                  />
+                  >
+                    {entry.text}
+                  </button>
+                  {entry.reasoningMode === "expanded" ? (
+                    <div className="entry-text entry-text--subtle">
+                      <AgentMarkdownBody
+                        source={entry.reasoningFullText ?? ""}
+                        className="entry-text entry-text--subtle"
+                      />
+                    </div>
+                  ) : null}
+                  </div>
                 ) : (
-                  <div className="entry-text">{entry.text}</div>
+                  <pre className="entry-json">{entry.text}</pre>
                 )}
               </div>
             ))}
@@ -1968,10 +1230,19 @@ export function App() {
           ) : null}
 
           <section className="flex flex-col gap-3 border-0 bg-transparent p-0">
-            <div ref={composerPillRef} className="ui-composer">
+            <div
+              className={cn(
+                "ui-composer",
+                composerExpandedSticky && "flex-col items-stretch gap-2"
+              )}
+              data-expanded={composerExpandedSticky ? "true" : undefined}
+            >
               <textarea
                 ref={promptInputRef}
-                className="m-0 max-h-[200px] min-h-[26px] min-w-0 flex-1 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-0.5 text-[13px] leading-snug text-[var(--color-composer-input)] shadow-none outline-none [font:inherit] placeholder:text-[var(--color-composer-placeholder)] focus:border-0 focus:shadow-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+                className={cn(
+                  "m-0 max-h-[200px] min-h-[26px] min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-0.5 text-[13px] leading-snug text-[var(--color-composer-input)] shadow-none outline-none [font:inherit] placeholder:text-[var(--color-composer-placeholder)] focus:border-0 focus:shadow-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-45",
+                  composerExpandedSticky ? "w-full flex-none" : "flex-1"
+                )}
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
                 onKeyDown={(event) => {
@@ -1986,7 +1257,12 @@ export function App() {
                 disabled={chatDisabled}
                 aria-busy={sending}
               />
-              <div className="flex shrink-0 items-center gap-2">
+              <div
+                className={cn(
+                  "ui-composer-controls flex shrink-0 gap-2",
+                  composerExpandedSticky ? "items-center justify-end" : "items-center"
+                )}
+              >
                 {!autoScrollEnabled ? (
                   <button
                     type="button"
@@ -2287,25 +1563,6 @@ export function App() {
   );
 }
 
-function dedupeToolPlansLastWins(actions: ParsedAction[]): ParsedAction[] {
-  const rev = [...actions].reverse();
-  const seen = new Set<string>();
-  const out: ParsedAction[] = [];
-  for (const action of rev) {
-    if (!action.isToolPlan) {
-      continue;
-    }
-    const key = `${action.tool}\0${action.path ?? ""}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(action);
-  }
-  out.reverse();
-  return out;
-}
-
 function printMainProcessMirrorToDevtools(payload: MainProcessConsoleMirrorPayload): void {
   if (!isDevLoggingEnabled()) {
     return;
@@ -2321,118 +1578,4 @@ function printMainProcessMirrorToDevtools(payload: MainProcessConsoleMirrorPaylo
   } else {
     devLog.log(line);
   }
-}
-
-function AgentMarkdownBody({ source }: { source: string }) {
-  return (
-    <Suspense fallback={<div className="agent-markdown whitespace-pre-wrap">{source}</div>}>
-      <AgentMarkdownRenderer source={source} />
-    </Suspense>
-  );
-}
-
-
-function fileActionPathLabel(action: ParsedAction): string {
-  const pathParts = action.path?.replace(/\\/g, "/").split("/");
-  return pathParts && pathParts.length > 0 ? pathParts[pathParts.length - 1]! : "file";
-}
-
-function AgentEntryContent({
-  text,
-  isStreaming,
-  fileWritePreview
-}: {
-  text: string;
-  isStreaming: boolean;
-  fileWritePreview: boolean;
-}) {
-  const displayText = stripIntakeUiMarkers(text);
-  const liveFormatted =
-    isStreaming || fileWritePreview
-      ? parsePartialAgentMessageCached(displayText)
-      : formatAgentMessage(displayText);
-  const leadText = liveFormatted.response || liveFormatted.narrative || "";
-  const fileActions = liveFormatted.actions.filter((action) => action.isFileWrite);
-  const planActions = dedupeToolPlansLastWins(liveFormatted.actions);
-  const showRawMarkdownFallback =
-    !leadText &&
-    fileActions.length === 0 &&
-    planActions.length === 0 &&
-    !isStructuredAgentEnvelopeText(displayText);
-
-  return (
-    <div className="entry-content">
-      {leadText ? <AgentMarkdownBody source={leadText} /> : null}
-      {planActions.length > 0 ? (
-        <div className="entry-tool-plans" aria-label="Tool calls">
-          {planActions.map((action, idx) => (
-            <div key={`${action.tool}-${action.path ?? idx}`} className="entry-tool-plan">
-              <code className="entry-tool-plan-name">{action.tool}</code>
-              {action.path ? (
-                <span className="entry-tool-plan-path">{action.path}</span>
-              ) : (
-                <span className="entry-tool-plan-path entry-tool-plan-path--muted">…</span>
-              )}
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {fileActions.map((action, idx) => {
-        const hasPreviewBody = typeof action.content === "string" && action.content.length > 0;
-        const hasPath = Boolean(action.path);
-        const showRollingPreview = shouldShowRollingFilePreview({
-          isStreaming,
-          fileWritePreview,
-          hasPreviewBody,
-          hasPath
-        });
-        const showFileSummary = shouldShowFileEditSummary({
-          isStreaming,
-          fileWritePreview,
-          hasContent: typeof action.content === "string"
-        });
-        return (
-        <div
-          key={`${action.tool}-${action.path ?? idx}`}
-          className={`entry-action${
-            showFileSummary ? " entry-action--file-summary" : ""
-          }${showRollingPreview ? " entry-action--rolling-preview" : ""}`}
-        >
-          {showRollingPreview ? (
-            <div className="rolling-preview">
-              <span className="entry-action-meta">
-                {action.tool === "replace_in_file" ? "Editing" : "Writing"} {fileActionPathLabel(action)}
-                …
-              </span>
-              {hasPreviewBody ? (
-                <FileRollingPreview lines={getStreamingPreviewDiffLines(action).lines} />
-              ) : null}
-            </div>
-          ) : typeof action.content === "string" ? (
-            (() => {
-              const diff = buildDiffLines(
-                action.previousContent ?? "",
-                action.content ?? "",
-                DIFF_MAX_LINES
-              );
-              const addCount = diff.lines.filter((l) => l.kind === "add").length;
-              const removeCount = diff.lines.filter((l) => l.kind === "remove").length;
-              return (
-                <FileEditSummary
-                  addCount={addCount}
-                  fileLabel={fileActionPathLabel(action)}
-                  isNewFile={isNewFileWrite(action)}
-                  removeCount={removeCount}
-                />
-              );
-            })()
-          ) : (
-            <div className="entry-text">No file content provided.</div>
-          )}
-        </div>
-        );
-      })}
-      {showRawMarkdownFallback ? <AgentMarkdownBody source={displayText} /> : null}
-    </div>
-  );
 }

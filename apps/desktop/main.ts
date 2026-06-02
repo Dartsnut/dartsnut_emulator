@@ -600,6 +600,28 @@ function removeDirectoryBestEffort(dir: string): void {
   }
 }
 
+function removeDirectoryDeferredOnQuit(dir: string): void {
+  try {
+    if (process.platform === "win32") {
+      const escaped = dir.replace(/"/g, "\"\"");
+      const child = spawn("cmd.exe", ["/d", "/s", "/c", `rmdir /s /q "${escaped}"`], {
+        detached: true,
+        stdio: "ignore",
+      });
+      child.unref();
+      return;
+    }
+    const child = spawn("/bin/rm", ["-rf", "--", dir], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  } catch {
+    // Fall back to best-effort sync removal if detached cleanup cannot be started.
+    removeDirectoryBestEffort(dir);
+  }
+}
+
 function isProbableAllocatedTempDir(absPath: string): boolean {
   const base = path.basename(absPath);
   if (!base.startsWith("dartsnut-chat-")) {
@@ -2219,7 +2241,7 @@ app.on("will-quit", () => {
   const pending = pendingTempDirRemovalOnQuit;
   pendingTempDirRemovalOnQuit = null;
   if (pending) {
-    removeDirectoryBestEffort(pending);
+    removeDirectoryDeferredOnQuit(pending);
   }
 });
 

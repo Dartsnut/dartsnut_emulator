@@ -206,6 +206,27 @@ function safeParseObject(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
+function extractPathFromArgumentsJson(argumentsJson: string): string | undefined {
+  if (!argumentsJson.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = safeParseObject(JSON.parse(argumentsJson));
+    return toRelPath(parsed.path);
+  } catch {
+    // Partial streaming JSON may not parse yet.
+    const match = argumentsJson.match(/"path"\s*:\s*"([^"]*)"?/);
+    if (!match) {
+      return undefined;
+    }
+    try {
+      return toRelPath(JSON.parse(`"${match[1]}"`));
+    } catch {
+      return toRelPath(match[1]);
+    }
+  }
+}
+
 function isDeferredSkillId(value: string): value is DeferredSkillId {
   return (DEFERRED_SKILL_IDS as readonly string[]).includes(value);
 }
@@ -564,6 +585,8 @@ export class SessionEngine {
 
         let stepText = "";
         let stepReasoning = "";
+        const reasoningId = `rsn-${Date.now()}-${step}`;
+        const streamedToolArgsByCallId = new Map<string, string>();
         const completion = await this.provider.complete(this.conversation, {
           tools: this.completionTools,
           abortSignal,
@@ -578,7 +601,28 @@ export class SessionEngine {
             }
             sawReasoning = true;
             stepReasoning += delta;
-            onEvent({ type: "reasoning_stream", at: Date.now(), delta });
+            onEvent({ type: "reasoning_stream", at: Date.now(), reasoningId, delta });
+          },
+          onToolCallProgress: (toolCalls) => {
+            for (const call of toolCalls) {
+              if (!isFileMutationToolName(call.name)) {
+                continue;
+              }
+              const prevArgs = streamedToolArgsByCallId.get(call.id);
+              if (prevArgs === call.argumentsJson) {
+                continue;
+              }
+              streamedToolArgsByCallId.set(call.id, call.argumentsJson);
+              const relPath = extractPathFromArgumentsJson(call.argumentsJson);
+              onEvent({
+                type: "tool_call_delta",
+                at: Date.now(),
+                callId: call.id,
+                toolName: call.name,
+                argumentsJson: call.argumentsJson,
+                ...(relPath ? { path: relPath } : {})
+              });
+            }
           }
         });
 
@@ -604,7 +648,7 @@ export class SessionEngine {
           this.persistTranscript("assistant", assistantText);
         }
         if (stepReasoning) {
-          onEvent({ type: "reasoning_done", at: Date.now() });
+          onEvent({ type: "reasoning_done", at: Date.now(), reasoningId });
         }
 
         if (completion.toolCalls.length === 0) {

@@ -310,9 +310,6 @@ export interface SaveProviderSettingsRequest {
   userDefine: UserDefineProviderSettings;
 }
 
-/** Prefix on `stream` deltas that replace the tool-envelope JSON tail (lead text before `{` is kept). */
-export const TOOL_ENVELOPE_STREAM_REPLACE = "@@DARTSNUT_TOOL_ENVELOPE@@";
-
 export type AgentEvent =
   | {
     type: "stream";
@@ -322,17 +319,32 @@ export type AgentEvent =
   | {
     /** Incremental model reasoning (e.g. wire `reasoning_content`); timeline renders separately from assistant content. */
     type: "reasoning_stream";
+    /** Correlates all reasoning chunks and completion for a single completion step. */
+    reasoningId: string;
     delta: string;
     at: number;
   }
   | {
     /** End of one completion step’s reasoning stream; renderer finalizes the active Thought block. */
     type: "reasoning_done";
+    /** Must match the corresponding `reasoning_stream.reasoningId`. */
+    reasoningId: string;
     at: number;
   }
   | {
     type: "status";
     message: string;
+    at: number;
+  }
+  | {
+    /** Incremental tool-call argument streaming progress (used for large file writes). */
+    type: "tool_call_delta";
+    callId: string;
+    toolName: string;
+    /** Current accumulated argument JSON text from model streaming. */
+    argumentsJson: string;
+    /** Best-effort file path extracted from partial arguments, when available. */
+    path?: string;
     at: number;
   }
   | {
@@ -360,17 +372,6 @@ export type AgentEvent =
     visible: boolean;
     options?: ProjectType[];
   };
-
-export function getIntakePromptTimelineText(event: AgentEvent): string | null {
-  switch (event.type) {
-    case "intake_project_type_prompt":
-      return event.visible ? "Game or widget?" : null;
-    case "intake_widget_size_prompt":
-      return event.visible ? "Pick display size" : null;
-    default:
-      return null;
-  }
-}
 
 export type AssetKind = "static" | "gif" | "spritesheet";
 

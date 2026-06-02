@@ -20,7 +20,7 @@ export function createAgentEventBatcher(
   deliver: (event: AgentEvent) => void,
   batchMs: number = DEFAULT_BATCH_MS
 ): AgentEventBatcher {
-  const pending: Partial<Record<StreamKind, { delta: string; at: number }>> = {};
+  const pending: Partial<Record<StreamKind, { delta: string; at: number; reasoningId?: string }>> = {};
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   const flushPending = () => {
@@ -33,7 +33,15 @@ export function createAgentEventBatcher(
       if (!chunk || chunk.delta.length === 0) {
         continue;
       }
-      deliver({ type: kind, delta: chunk.delta, at: chunk.at });
+      if (kind === "reasoning_stream") {
+        if (!chunk.reasoningId) {
+          delete pending[kind];
+          continue;
+        }
+        deliver({ type: kind, reasoningId: chunk.reasoningId, delta: chunk.delta, at: chunk.at });
+      } else {
+        deliver({ type: kind, delta: chunk.delta, at: chunk.at });
+      }
       delete pending[kind];
     }
   };
@@ -57,10 +65,26 @@ export function createAgentEventBatcher(
       }
       const existing = pending[event.type];
       if (existing) {
-        existing.delta += event.delta;
-        existing.at = event.at;
+        if (
+          event.type === "reasoning_stream" &&
+          existing.reasoningId &&
+          existing.reasoningId !== event.reasoningId
+        ) {
+          flushPending();
+        }
+      }
+      const current = pending[event.type];
+      if (current) {
+        current.delta += event.delta;
+        current.at = event.at;
+        if (event.type === "reasoning_stream") {
+          current.reasoningId = event.reasoningId;
+        }
       } else {
-        pending[event.type] = { delta: event.delta, at: event.at };
+        pending[event.type] =
+          event.type === "reasoning_stream"
+            ? { delta: event.delta, at: event.at, reasoningId: event.reasoningId }
+            : { delta: event.delta, at: event.at };
       }
       scheduleFlush();
     },

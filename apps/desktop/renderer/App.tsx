@@ -23,6 +23,7 @@ import { EmulatorPanel } from "./EmulatorPanel";
 import {
   agentEventTimelineRole,
   formatAgentEventForTimeline,
+  parseToolStatusMessage,
   transcriptLineToTimelineEntry,
   type TimelineEntry
 } from "./rawTimeline";
@@ -113,6 +114,67 @@ function AgentMarkdownBody({ source, className }: { source: string; className?: 
   );
 }
 
+function extractPartialStringField(argumentsJson: string, fieldName: string): string | null {
+  const key = `"${fieldName}"`;
+  const keyAt = argumentsJson.indexOf(key);
+  if (keyAt < 0) {
+    return null;
+  }
+  const colonAt = argumentsJson.indexOf(":", keyAt + key.length);
+  if (colonAt < 0) {
+    return null;
+  }
+  const quoteAt = argumentsJson.indexOf("\"", colonAt + 1);
+  if (quoteAt < 0) {
+    return null;
+  }
+  let out = "";
+  for (let i = quoteAt + 1; i < argumentsJson.length; i += 1) {
+    const ch = argumentsJson[i];
+    if (ch === "\\") {
+      const next = argumentsJson[i + 1];
+      if (next === "n") {
+        out += "\n";
+      } else if (next === "t") {
+        out += "\t";
+      } else if (next === "r") {
+        out += "\r";
+      } else if (next === "\"" || next === "\\" || next === "/") {
+        out += next;
+      } else if (next) {
+        out += next;
+      } else {
+        break;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === "\"") {
+      return out;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function summarizeFileToolCallDelta(event: Extract<AgentEvent, { type: "tool_call_delta" }>): string {
+  const args = event.argumentsJson ?? "";
+  const trimmedPath = typeof event.path === "string" && event.path.trim() ? event.path.trim() : "file";
+  if (event.toolName === "write_file") {
+    const contentSoFar = extractPartialStringField(args, "content");
+    const lineCount = contentSoFar ? contentSoFar.split(/\r?\n/).length : 0;
+    return `Creating ${trimmedPath} +${lineCount}`;
+  }
+  if (event.toolName === "replace_in_file") {
+    const findSoFar = extractPartialStringField(args, "find");
+    const replaceSoFar = extractPartialStringField(args, "replace");
+    const findLines = findSoFar ? findSoFar.split(/\r?\n/).length : 0;
+    const replaceLines = replaceSoFar ? replaceSoFar.split(/\r?\n/).length : 0;
+    return `Editing ${trimmedPath} +${replaceLines} -${findLines}`;
+  }
+  return `Running ${event.toolName}…`;
+}
+
 
 export function App() {
   useWindowChromeInsets();
@@ -157,8 +219,10 @@ export function App() {
   const activeStreamEntryIdRef = useRef<string | null>(null);
   const activeStreamDeltaRef = useRef("");
   const activeReasoningStreamEntryIdRef = useRef<string | null>(null);
+  const activeReasoningIdRef = useRef<string | null>(null);
   const activeReasoningStreamDeltaRef = useRef("");
   const activeReasoningStartedAtRef = useRef<number | null>(null);
+  const activeToolStatusEntryByKeyRef = useRef<Map<string, string>>(new Map());
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
   const lastAgentSessionHydrateKeyRef = useRef<string>("");
@@ -199,8 +263,19 @@ export function App() {
     activeStreamEntryIdRef.current = null;
     activeStreamDeltaRef.current = "";
     activeReasoningStreamEntryIdRef.current = null;
+    activeReasoningIdRef.current = null;
     activeReasoningStreamDeltaRef.current = "";
     activeReasoningStartedAtRef.current = null;
+  }
+
+  function toolStatusKey(meta: { callId?: string; toolName?: string; filePath?: string }): string | null {
+    if (meta.callId) {
+      return `call:${meta.callId}`;
+    }
+    if (!meta.toolName) {
+      return null;
+    }
+    return `${meta.toolName}\0${meta.filePath ?? ""}`;
   }
 
   function appendRawAgentEvent(event: AgentEvent): void {
@@ -216,11 +291,13 @@ export function App() {
 
   function appendOrPatchReasoningStream(event: Extract<AgentEvent, { type: "reasoning_stream" }>): void {
     const activeId = activeReasoningStreamEntryIdRef.current;
-    if (!activeId) {
+    const activeReasoningId = activeReasoningIdRef.current;
+    if (!activeId || (activeReasoningId && activeReasoningId !== event.reasoningId)) {
       const seq = eventSeqRef.current;
       eventSeqRef.current += 1;
       const id = `evt-${seq}-${event.at}`;
       activeReasoningStreamEntryIdRef.current = id;
+      activeReasoningIdRef.current = event.reasoningId;
       activeReasoningStreamDeltaRef.current = event.delta;
       activeReasoningStartedAtRef.current = event.at;
       setEntries((prev) => [
@@ -419,10 +496,59 @@ export function App() {
         appendOrPatchStream(event);
         return;
       }
+      if (event.type === "tool_call_delta") {
+        clearActiveCoalescedStreamEntries();
+        const key = toolStatusKey({ callId: event.callId, toolName: event.toolName, filePath: event.path });
+        if (!key) {
+          return;
+        }
+        const priorId = activeToolStatusEntryByKeyRef.current.get(key);
+        const text = summarizeFileToolCallDelta(event);
+        if (priorId) {
+          setEntries((prev) =>
+            prev.map((entry) =>
+              entry.id === priorId
+                ? {
+                  ...entry,
+                  role: "status",
+                  text,
+                  toolStatusMeta: {
+                    callId: event.callId,
+                    toolName: event.toolName,
+                    phase: "call",
+                    filePath: event.path
+                  }
+                }
+                : entry
+            )
+          );
+          return;
+        }
+        const seq = eventSeqRef.current;
+        eventSeqRef.current += 1;
+        const id = `evt-${seq}-${event.at}`;
+        setEntries((prev) => [
+          ...prev,
+          {
+            id,
+            role: "status",
+            text,
+            toolStatusMeta: {
+              callId: event.callId,
+              toolName: event.toolName,
+              phase: "call",
+              filePath: event.path
+            }
+          }
+        ]);
+        activeToolStatusEntryByKeyRef.current.set(key, id);
+        return;
+      }
       if (event.type === "reasoning_done") {
         const activeId = activeReasoningStreamEntryIdRef.current;
+        const activeReasoningId = activeReasoningIdRef.current;
         const startedAt = activeReasoningStartedAtRef.current;
-        if (activeId && startedAt != null) {
+        if (activeId && startedAt != null && activeReasoningId === event.reasoningId) {
           const elapsed = formatReasoningElapsedSeconds(startedAt, event.at);
           setEntries((prev) =>
             prev.map((entry) =>
@@ -432,12 +558,76 @@ export function App() {
             )
           );
         }
-        activeReasoningStreamEntryIdRef.current = null;
-        activeReasoningStreamDeltaRef.current = "";
-        activeReasoningStartedAtRef.current = null;
+        if (activeReasoningId === event.reasoningId) {
+          activeReasoningStreamEntryIdRef.current = null;
+          activeReasoningIdRef.current = null;
+          activeReasoningStreamDeltaRef.current = "";
+          activeReasoningStartedAtRef.current = null;
+        }
+        return;
+      }
+      if (event.type === "status") {
+        if (event.message.startsWith("[agent_eval]")) {
+          return;
+        }
+        clearActiveCoalescedStreamEntries();
+        const seq = eventSeqRef.current;
+        eventSeqRef.current += 1;
+        const parsed = parseToolStatusMessage(event.message);
+        const meta = parsed.meta;
+        const key = meta ? toolStatusKey(meta) : null;
+        if (meta?.phase === "result" && key) {
+          const priorId = activeToolStatusEntryByKeyRef.current.get(key);
+          if (priorId) {
+            setEntries((prev) =>
+              prev.map((entry) =>
+                entry.id === priorId
+                  ? {
+                    ...entry,
+                    text: parsed.text,
+                    ...(meta ? { toolStatusMeta: meta } : {})
+                  }
+                  : entry
+              )
+            );
+            activeToolStatusEntryByKeyRef.current.delete(key);
+            return;
+          }
+        }
+        if (meta?.phase === "call" && key) {
+          const priorId = activeToolStatusEntryByKeyRef.current.get(key);
+          if (priorId) {
+            setEntries((prev) =>
+              prev.map((entry) =>
+                entry.id === priorId
+                  ? {
+                    ...entry,
+                    text: parsed.text,
+                    ...(meta ? { toolStatusMeta: meta } : {})
+                  }
+                  : entry
+              )
+            );
+            return;
+          }
+        }
+        const id = `evt-${seq}-${event.at}`;
+        setEntries((prev) => [
+          ...prev,
+          {
+            id,
+            role: "status",
+            text: parsed.text,
+            ...(meta ? { toolStatusMeta: meta } : {})
+          }
+        ]);
+        if (meta?.phase === "call" && key) {
+          activeToolStatusEntryByKeyRef.current.set(key, id);
+        }
         return;
       }
       if (event.type === "final") {
+        activeToolStatusEntryByKeyRef.current.clear();
         if (
           activeStreamEntryIdRef.current &&
           activeStreamDeltaRef.current.trim() === event.content.trim()
@@ -446,7 +636,16 @@ export function App() {
           activeStreamDeltaRef.current = "";
           return;
         }
-        appendRawAgentEvent(event);
+        const seq = eventSeqRef.current;
+        eventSeqRef.current += 1;
+        const id = `evt-${seq}-${event.at}`;
+        setEntries((prev) => {
+          const last = prev.length > 0 ? prev[prev.length - 1] : null;
+          if (last && last.role === "agent" && last.text.trim() === event.content.trim()) {
+            return prev;
+          }
+          return [...prev, { id, role: "agent", text: event.content }];
+        });
         return;
       }
       appendRawAgentEvent(event);
@@ -562,7 +761,35 @@ export function App() {
       const hydrated = summary.transcriptTail
         .map((line, idx) => transcriptLineToTimelineEntry(line, idx))
         .filter((entry): entry is TimelineEntry => entry != null);
-      setEntries(hydrated);
+      const toolCallEntryIndexByKey = new Map<string, number>();
+      const deduped: TimelineEntry[] = [];
+      for (const entry of hydrated) {
+        if (entry.role === "status" && entry.toolStatusMeta) {
+          const key = toolStatusKey(entry.toolStatusMeta);
+          if (entry.toolStatusMeta.phase === "result" && key) {
+            const priorIdx = toolCallEntryIndexByKey.get(key);
+            if (typeof priorIdx === "number") {
+              deduped[priorIdx] = { ...deduped[priorIdx], ...entry };
+              toolCallEntryIndexByKey.delete(key);
+              continue;
+            }
+          }
+          if (entry.toolStatusMeta.phase === "call" && key) {
+            toolCallEntryIndexByKey.set(key, deduped.length);
+          }
+        }
+        const prev = deduped.length > 0 ? deduped[deduped.length - 1] : null;
+        if (
+          prev &&
+          prev.role === "agent" &&
+          entry.role === "agent" &&
+          prev.text.trim() === entry.text.trim()
+        ) {
+          continue;
+        }
+        deduped.push(entry);
+      }
+      setEntries(deduped);
     })();
     return () => {
       cancelled = true;
@@ -588,6 +815,7 @@ export function App() {
   function resetChatSessionUi() {
     discardAgentEventsRef.current = true;
     clearActiveCoalescedStreamEntries();
+    activeToolStatusEntryByKeyRef.current.clear();
     eventSeqRef.current = 0;
     lastAgentSessionHydrateKeyRef.current = "";
     setSessionTemplateMode(null);
@@ -897,6 +1125,7 @@ export function App() {
       return;
     }
     clearActiveCoalescedStreamEntries();
+    activeToolStatusEntryByKeyRef.current.clear();
     setWidgetSizePicker({ visible: false, sizes: [] });
     setProjectTypePicker({ visible: false, types: [] });
     setSending(false);
@@ -1145,6 +1374,26 @@ export function App() {
                     </div>
                   ) : null}
                   </div>
+                ) : entry.role === "status" && entry.toolStatusMeta ? (
+                  <div className="entry-status-detail">
+                    <span className="entry-status-detail__text">{entry.text}</span>
+                    {entry.toolStatusMeta.filePath ? (
+                      <span className="entry-status-detail__path">{entry.toolStatusMeta.filePath}</span>
+                    ) : null}
+                    {typeof entry.toolStatusMeta.added === "number" ||
+                    typeof entry.toolStatusMeta.deleted === "number" ? (
+                      <span className="entry-status-detail__diff" aria-label="Line changes">
+                        <span className="entry-status-detail__add">
+                          +{entry.toolStatusMeta.added ?? 0}
+                        </span>
+                        <span className="entry-status-detail__del">
+                          -{entry.toolStatusMeta.deleted ?? 0}
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
+                ) : entry.role === "status" ? (
+                  <div className="entry-text">{entry.text}</div>
                 ) : (
                   <pre className="entry-json">{entry.text}</pre>
                 )}

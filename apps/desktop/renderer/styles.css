@@ -104,17 +104,18 @@ kbd,
   inset: 0;
   z-index: 0;
   width: 100%;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: var(--color-scrollbar-gutter) transparent;
   scroll-padding-block-start: 88px;
-  scroll-padding-block-end: 280px;
+  scroll-padding-block-end: 140px;
 }
 
 .timeline-inner {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
   box-sizing: border-box;
   width: 100%;
 }
@@ -153,12 +154,12 @@ kbd,
 }
 
 .timeline.timeline--autoscroll {
-  scrollbar-width: none;
+  scrollbar-width: thin;
 }
 
 .timeline.timeline--autoscroll::-webkit-scrollbar {
-  width: 0;
-  height: 0;
+  width: 8px;
+  height: 8px;
 }
 
 .entry {
@@ -267,6 +268,67 @@ kbd,
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* Reasoning delta/expanded text should align flush-left like stream text. */
+.entry-text--subtle .agent-markdown,
+.entry-text--subtle .agent-markdown p,
+.entry-text--subtle .agent-markdown pre,
+.entry-text--subtle .agent-markdown blockquote,
+.entry-text--subtle .agent-markdown table {
+  margin-left: 0;
+}
+
+.entry-text--subtle .agent-markdown ul,
+.entry-text--subtle .agent-markdown ol {
+  padding-left: 0;
+  margin-left: 0;
+  list-style-position: inside;
+}
+
+.entry-text--subtle .agent-markdown blockquote {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.entry-status-detail {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+
+.entry-status-detail__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.entry-status-detail__path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  opacity: 0.66;
+}
+
+.entry-status-detail__diff {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.78;
+}
+
+.entry-status-detail__add {
+  color: var(--color-diff-add);
+  font-weight: 600;
+}
+
+.entry-status-detail__del {
+  color: var(--color-diff-remove);
+  font-weight: 600;
 }
 
 .entry-json {
@@ -527,24 +589,49 @@ kbd,
 }
 
 .entry.user {
-  background: var(--color-entry-user-bg);
-  border-color: var(--color-entry-user-border);
+  background: color-mix(in srgb, var(--color-entry-user-bg) 97%, var(--color-bg-page) 3%);
+  border: 1px solid color-mix(in srgb, var(--color-entry-user-border) 94%, transparent);
+  border-radius: 12px;
+  padding: 8px 12px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
   align-self: flex-start;
+  margin-left: 0;
+  width: 100%;
+  max-width: 100%;
+  margin-bottom: 8px;
+}
+
+.entry.user .entry-text {
+  font-size: 13px;
+  line-height: 1.32;
+  letter-spacing: 0;
+  color: var(--color-text-primary);
 }
 
 .entry.agent {
   background: transparent;
   border: none;
-  padding: 4px 0;
+  padding: 0;
   width: 100%;
   max-width: 100%;
   align-self: stretch;
+  margin-bottom: 8px;
+}
+
+.entry.agent .agent-markdown {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-entry-border) 72%, transparent);
+  background: color-mix(in srgb, var(--color-bg-page) 80%, var(--color-neon-mint-dim) 20%);
 }
 
 .entry.thinking {
   background: transparent;
   border: none;
-  padding: 4px 0;
+  padding: 0;
   align-self: stretch;
   max-width: 100%;
   width: 100%;
@@ -581,12 +668,14 @@ kbd,
   background: transparent;
   border: none;
   border-radius: 0;
-  padding: 6px 0;
+  padding: 0;
   width: 100%;
   max-width: 100%;
   align-self: stretch;
   color: var(--color-timeline-status-text);
-  line-height: 1.45;
+  line-height: 1.25;
+  font-size: 11.5px;
+  opacity: 0.72;
 }
 
 .entry.error {
@@ -597,13 +686,17 @@ kbd,
 
 .agent-markdown {
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.3;
   color: var(--color-text-primary);
   word-break: break-word;
 }
 
+.entry.status .entry-text {
+  color: color-mix(in srgb, var(--color-timeline-status-text) 84%, transparent);
+}
+
 .agent-markdown p {
-  margin: 0 0 0.65em;
+  margin: 0 0 0.4em;
 }
 
 .agent-markdown p:last-child {
@@ -612,12 +705,12 @@ kbd,
 
 .agent-markdown ul,
 .agent-markdown ol {
-  margin: 0 0 0.65em;
+  margin: 0 0 0.4em;
   padding-left: 1.35em;
 }
 
 .agent-markdown li {
-  margin: 0.2em 0;
+  margin: 0.1em 0;
 }
 
 .agent-markdown strong {
@@ -950,7 +1043,7 @@ kbd,
   --rail-inset-x: 20px;
   --rail-inset-top: 14px;
   --rail-inset-bottom: 18px;
-  --rail-scroll-pad-bottom: 300px;
+  --rail-scroll-pad-bottom: 140px;
 }
 
 .left-rail--chat .timeline-inner {

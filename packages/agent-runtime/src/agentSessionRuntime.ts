@@ -10,10 +10,7 @@ export interface AgentSessionRuntimeOptions {
 }
 
 /**
- * ADK runtime entrypoint: creation for new scaffolds, modification for existing projects.
- *
- * Creation runs until the session engine finishes (including clean emulator verify when applicable).
- * There is no automatic handoff to modification after creation.
+ * Routes prompts to creation (new scaffolds) or modification (existing projects).
  */
 export class AgentSessionRuntime {
   private readonly creation: CreationWorkflow;
@@ -55,8 +52,3 @@ export class AgentSessionRuntime {
     return this.creation.runPrompt(prompt, onEvent, abortSignal);
   }
 }
-
-/** @deprecated compatibility alias while ADK-era naming is removed. */
-export type AdkSessionRuntimeOptions = AgentSessionRuntimeOptions;
-/** @deprecated compatibility alias while ADK-era naming is removed. */
-export const AdkSessionRuntime = AgentSessionRuntime;

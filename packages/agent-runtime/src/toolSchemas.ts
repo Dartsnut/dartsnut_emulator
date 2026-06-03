@@ -270,3 +270,27 @@ export const AGENT_CREATION_INTAKE_TOOL_SCHEMAS: ChatCompletionTool[] = [
   DARTSNUT_ASK_QUESTION_TOOL,
   DARTSNUT_PROJECT_INTAKE_TOOL
 ];
+
+export type AgentToolSchemaDefinition = {
+  description: string;
+  parameters: Record<string, unknown>;
+};
+
+/** Lookup a tool's JSON Schema parameters (Gemini-compatible explicit `type` fields). */
+export function getAgentToolDefinition(name: string): AgentToolSchemaDefinition | undefined {
+  const schemas = AGENT_TOOL_SCHEMAS;
+  for (const entry of schemas) {
+    if (entry.type !== "function" || entry.function?.name !== name) {
+      continue;
+    }
+    const parameters = entry.function.parameters;
+    if (!parameters || typeof parameters !== "object") {
+      return undefined;
+    }
+    return {
+      description: entry.function.description ?? name,
+      parameters: parameters as Record<string, unknown>
+    };
+  }
+  return undefined;
+}

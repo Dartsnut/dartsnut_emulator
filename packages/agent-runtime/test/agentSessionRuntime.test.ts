@@ -33,7 +33,7 @@ describe("buildModificationWorkflowPrompt", () => {
 
 describe("AgentSessionRuntime", () => {
   it("uses modification workflow when conf.json and main.py exist", async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-adk-mod-"));
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-mod-"));
     fs.writeFileSync(path.join(workspace, "conf.json"), '{"type":"widget","size":[128,128]}', "utf-8");
     fs.writeFileSync(path.join(workspace, "main.py"), "print('hi')\n", "utf-8");
     const spy = createEngineSpy();
@@ -48,7 +48,7 @@ describe("AgentSessionRuntime", () => {
   });
 
   it("runs creation only for empty workspace", async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-adk-create-"));
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-create-"));
     const spy = createEngineSpy();
     const runtime = new AgentSessionRuntime({
       workspacePath: workspace,
@@ -59,7 +59,7 @@ describe("AgentSessionRuntime", () => {
   });
 
   it("does not hand off to modification after creation scaffold", async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-adk-create-"));
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-create-"));
     const spy = createEngineSpy();
     let call = 0;
     const engine = {

@@ -1,8 +1,15 @@
+import "./agentsBootstrap";
+
 export * from "./agentSessionPersistence";
-export * from "./eventBridge";
+export * from "./agentsBootstrap";
+export * from "./agentsEventBridge";
+export * from "./agentTools";
+export * from "./conversationProtocol";
+export * from "./dartsnutAgentsSession";
+export * from "./reasoningContentFilter";
+export * from "./toolStatusHelpers";
 export * from "./agentProviderConfig";
 export * from "./sessionRuntime";
-export * from "./toolRegistry";
 export * from "./creationIntakeHost";
 export * from "./creationWorkflow";
 export * from "./modificationWorkflow";

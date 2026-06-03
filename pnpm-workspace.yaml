@@ -2,7 +2,6 @@ packages:
   - "apps/*"
   - "packages/*"
 allowBuilds:
-  '@google/genai': true
   cpu-features: true
   electron: true
   electron-winstaller: true

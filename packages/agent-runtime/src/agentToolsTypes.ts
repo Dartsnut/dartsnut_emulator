@@ -7,12 +7,22 @@ export type HostAskQuestionHandler = (args: Record<string, unknown>) => Promise<
 export type HostReloadEmulatorHandler = () => Promise<string>;
 export type HostGetEmulatorLogsHandler = (args: { max_lines?: number }) => Promise<string>;
 
+export type AgentToolProfile =
+  | "orchestrator"
+  | "intake"
+  | "creator"
+  | "modifier"
+  | "surgical"
+  | "asset-applier"
+  | "full";
+
 export type AgentToolsOptions = {
   workspacePolicy: WorkspacePolicy;
   skillLibrary?: AgentSkillLibrary;
   assetRoots?: {
     widgetFonts?: string;
   };
+  profile?: AgentToolProfile;
   completionTools?: ChatCompletionTool[];
   hostIntakeToolHandler?: HostIntakeToolHandler;
   hostAskQuestionHandler?: HostAskQuestionHandler;

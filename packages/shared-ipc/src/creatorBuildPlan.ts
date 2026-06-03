@@ -27,7 +27,7 @@ export function formatCreatorBuildPlanMessage(options: FormatCreatorBuildPlanOpt
     `- Project type: **${kind}**`,
     ...(sizeLine ? [sizeLine] : []),
     "",
-    "**Technical scaffold only:** write **`conf.json`** and **`main.py`** using deferred skills; after material changes run **`reload_emulator`** then **`get_emulator_logs`** and stop when logs have no runtime errors.",
+    "Use **Creation context** and the user request; load deferred skills and tools as you judge necessary.",
     ""
   ];
   return lines.join("\n").trimEnd();

@@ -265,7 +265,7 @@ export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
   DARTSNUT_PROJECT_INTAKE_TOOL
 ];
 
-/** Intake-only session: host tools only (no file writes until creator phase). */
+/** Intake-only session: host tools only (no file writes). */
 export const AGENT_CREATION_INTAKE_TOOL_SCHEMAS: ChatCompletionTool[] = [
   DARTSNUT_ASK_QUESTION_TOOL,
   DARTSNUT_PROJECT_INTAKE_TOOL
@@ -276,13 +276,63 @@ export type AgentToolSchemaDefinition = {
   parameters: Record<string, unknown>;
 };
 
+/** Creator profile: file tools + skills + emulator (no intake host tools). */
+export const AGENT_CREATOR_TOOL_SCHEMAS: ChatCompletionTool[] = [
+  ...AGENT_FILE_TOOL_SCHEMAS,
+  GET_DARTSNUT_SKILL_TOOL,
+  RELOAD_EMULATOR_TOOL,
+  GET_EMULATOR_LOGS_TOOL
+];
+
+/** Modification pass: edit existing projects without intake tools. */
+export const AGENT_MODIFIER_TOOL_SCHEMAS: ChatCompletionTool[] = [
+  ...AGENT_FILE_TOOL_SCHEMAS,
+  GET_DARTSNUT_SKILL_TOOL,
+  RELOAD_EMULATOR_TOOL,
+  GET_EMULATOR_LOGS_TOOL
+];
+
+/** Surgical fix: read/replace focused; no write_file or copy_asset_file. */
+export const AGENT_SURGICAL_TOOL_SCHEMAS: ChatCompletionTool[] = [
+  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "list_files")!,
+  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "read_file")!,
+  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "replace_in_file")!,
+  GET_DARTSNUT_SKILL_TOOL,
+  RELOAD_EMULATOR_TOOL,
+  GET_EMULATOR_LOGS_TOOL
+];
+
+/** Asset applier: bind art to existing slots. */
+export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: ChatCompletionTool[] = [
+  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "list_files")!,
+  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "read_file")!,
+  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "write_file")!,
+  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "replace_in_file")!,
+  GET_DARTSNUT_SKILL_TOOL,
+  RELOAD_EMULATOR_TOOL,
+  GET_EMULATOR_LOGS_TOOL
+];
+
+const ALL_TOOL_SCHEMAS: ChatCompletionTool[] = [
+  ...AGENT_TOOL_SCHEMAS,
+  ...AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
+  ...AGENT_CREATOR_TOOL_SCHEMAS,
+  ...AGENT_MODIFIER_TOOL_SCHEMAS,
+  ...AGENT_SURGICAL_TOOL_SCHEMAS,
+  ...AGENT_ASSET_APPLIER_TOOL_SCHEMAS
+];
+
 /** Lookup a tool's JSON Schema parameters (Gemini-compatible explicit `type` fields). */
 export function getAgentToolDefinition(name: string): AgentToolSchemaDefinition | undefined {
-  const schemas = AGENT_TOOL_SCHEMAS;
-  for (const entry of schemas) {
+  const seen = new Set<string>();
+  for (const entry of ALL_TOOL_SCHEMAS) {
     if (entry.type !== "function" || entry.function?.name !== name) {
       continue;
     }
+    if (seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
     const parameters = entry.function.parameters;
     if (!parameters || typeof parameters !== "object") {
       return undefined;

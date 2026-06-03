@@ -19,6 +19,7 @@ import {
 export type AgentsStreamBridgeHooks = {
   readWorkspaceFileIfExists?: (relPath: string) => string | undefined;
   persistTranscript?: (kind: "user" | "assistant" | "tool_status" | "thinking", text: string) => void;
+  onActiveAgentChange?: (agentName: string) => void;
 };
 
 export type AgentsStreamBridgeResult = {
@@ -30,6 +31,12 @@ export type AgentsStreamBridgeResult = {
   toolNames: string[];
   filesWrittenThisTurn: number;
   toolCallCount: number;
+};
+
+type StreamingToolCallAccumulator = {
+  id: string;
+  name: string;
+  argumentsJson: string;
 };
 
 function readReasoningDelta(delta: unknown): string {
@@ -48,6 +55,62 @@ function readReasoningDelta(delta: unknown): string {
   return "";
 }
 
+function mergeToolCallDeltas(
+  accumulators: Map<number, StreamingToolCallAccumulator>,
+  deltas: NonNullable<ChatCompletionChunk["choices"]>[number]["delta"]["tool_calls"]
+): void {
+  if (!Array.isArray(deltas)) {
+    return;
+  }
+  for (let i = 0; i < deltas.length; i += 1) {
+    const delta = deltas[i];
+    if (!delta) {
+      continue;
+    }
+    const index = typeof delta.index === "number" ? delta.index : i;
+    const existing = accumulators.get(index) ?? { id: "", name: "", argumentsJson: "" };
+    if (typeof delta.id === "string" && delta.id.length > 0) {
+      existing.id = delta.id;
+    }
+    const fn = delta.function;
+    if (fn) {
+      if (typeof fn.name === "string" && fn.name.length > 0) {
+        existing.name = fn.name;
+      }
+      if (typeof fn.arguments === "string" && fn.arguments.length > 0) {
+        existing.argumentsJson += fn.arguments;
+      }
+    }
+    accumulators.set(index, existing);
+  }
+}
+
+function resolveStreamingToolCallId(acc: StreamingToolCallAccumulator, index: number): string {
+  return acc.id.length > 0 ? acc.id : `call_${index}`;
+}
+
+function emitFileToolCallDelta(
+  callId: string,
+  toolName: string,
+  argumentsJson: string,
+  emit: (event: AgentEvent) => void,
+  streamedFileToolCallIds: Set<string>
+): void {
+  if (!isFileMutationToolName(toolName)) {
+    return;
+  }
+  streamedFileToolCallIds.add(callId);
+  const relPath = extractPathFromArgumentsJson(argumentsJson);
+  emit({
+    type: "tool_call_delta",
+    at: Date.now(),
+    callId,
+    toolName,
+    argumentsJson,
+    ...(relPath ? { path: relPath } : {})
+  });
+}
+
 function handleChatCompletionsChunk(
   chunk: ChatCompletionChunk,
   state: {
@@ -55,7 +118,8 @@ function handleChatCompletionsChunk(
     sawReasoning: boolean;
     stepReasoning: string;
     stepText: string;
-    streamedToolArgsByCallId: Map<string, string>;
+    toolCallAccumulators: Map<number, StreamingToolCallAccumulator>;
+    streamedFileToolCallIds: Set<string>;
   },
   emit: (event: AgentEvent) => void
 ): void {
@@ -79,26 +143,15 @@ function handleChatCompletionsChunk(
       delta: reasoningDelta
     });
   }
-  if (Array.isArray(delta.tool_calls)) {
-    for (const call of delta.tool_calls) {
-      const callId = call.id ?? `call_${call.index ?? 0}`;
-      const name = call.function?.name ?? "";
-      const prev = state.streamedToolArgsByCallId.get(callId) ?? "";
-      const next = prev + (call.function?.arguments ?? "");
-      state.streamedToolArgsByCallId.set(callId, next);
-      if (!isFileMutationToolName(name)) {
-        continue;
-      }
-      const relPath = extractPathFromArgumentsJson(next);
-      emit({
-        type: "tool_call_delta",
-        at: Date.now(),
-        callId,
-        toolName: name,
-        argumentsJson: next,
-        ...(relPath ? { path: relPath } : {})
-      });
+  if (!Array.isArray(delta.tool_calls)) {
+    return;
+  }
+  mergeToolCallDeltas(state.toolCallAccumulators, delta.tool_calls);
+  for (const [index, acc] of state.toolCallAccumulators) {
+    if (!isFileMutationToolName(acc.name)) {
+      continue;
     }
+    emitFileToolCallDelta(resolveStreamingToolCallId(acc, index), acc.name, acc.argumentsJson, emit, state.streamedFileToolCallIds);
   }
 }
 
@@ -140,7 +193,8 @@ export async function mapAgentsStreamToAgentEvents(
     sawReasoning: false,
     stepReasoning: "",
     stepText: "",
-    streamedToolArgsByCallId: new Map<string, string>()
+    toolCallAccumulators: new Map<number, StreamingToolCallAccumulator>(),
+    streamedFileToolCallIds: new Set<string>()
   };
   const toolNames: string[] = [];
   let filesWrittenThisTurn = 0;
@@ -154,7 +208,29 @@ export async function mapAgentsStreamToAgentEvents(
       handleChatCompletionsChunk(event.data.event, state, emit);
       continue;
     }
+    if (event.type === "agent_updated_stream_event") {
+      const agentName = event.agent?.name;
+      if (typeof agentName === "string" && agentName.length > 0) {
+        hooks.onActiveAgentChange?.(agentName);
+        emit({ type: "status", at: Date.now(), message: `Agent: ${agentName}` });
+      }
+      continue;
+    }
     if (event.type === "run_item_stream_event") {
+      if (event.name === "handoff_requested" || event.name === "handoff_occurred") {
+        const item = event.item as { agent?: { name?: string }; rawItem?: { name?: string } };
+        const targetName =
+          typeof item.agent?.name === "string"
+            ? item.agent.name
+            : typeof item.rawItem?.name === "string"
+              ? item.rawItem.name
+              : "specialist";
+        const verb = event.name === "handoff_requested" ? "Handoff requested" : "Handoff";
+        emit({ type: "status", at: Date.now(), message: `${verb}: ${targetName}` });
+        if (typeof item.agent?.name === "string") {
+          hooks.onActiveAgentChange?.(item.agent.name);
+        }
+      }
       if (event.name === "tool_called") {
         const raw = event.item.rawItem as { name?: string; callId?: string; arguments?: string };
         const name = typeof raw?.name === "string" ? raw.name : "";
@@ -170,7 +246,14 @@ export async function mapAgentsStreamToAgentEvents(
           }
           const context = toolContextFromArgs(name, argsJson, callId, hooks);
           lastToolContext = context;
-          emitToolStatusEvent(name, "call", emit, context, hooks.persistTranscript);
+          if (isFileMutationToolName(name) && !state.streamedFileToolCallIds.has(callId)) {
+            emitFileToolCallDelta(callId, name, argsJson, emit, state.streamedFileToolCallIds);
+          }
+          const skipCallStatus =
+            isFileMutationToolName(name) && state.streamedFileToolCallIds.has(callId);
+          if (!skipCallStatus) {
+            emitToolStatusEvent(name, "call", emit, context, hooks.persistTranscript);
+          }
         }
       }
       if (event.name === "tool_output") {

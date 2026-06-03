@@ -62,7 +62,7 @@ const SKILL_INTENT_HINT: Partial<Record<DeferredSkillId, string>> = {
   "karpathy-guidelines":
     "Intent: edit discipline and verify with tools. Examples: surgical fix, minimal diff.",
   "creator-incremental":
-    "Intent: conf/main scaffold mechanics and emulator verify. Examples: write conf.json, stub main.py.",
+    "Intent: workspace files and emulator verify. Examples: write conf.json, implement main.py.",
   "conf-contract":
     "Intent: create/fix `conf.json`. Examples: set up config, 配置檔, 配置文件.",
   "pydartsnut-core":
@@ -193,7 +193,7 @@ function formatCreatorRouterBody(skillsDir: string, allowed: readonly DeferredSk
     "",
     "**Editing:** `read_file` workspace files before edits. Prefer **`replace_in_file`** on existing files. Do not end turns with only prose when files still need changes.",
     "",
-    "**Verify run:** After material `conf.json` / `main.py` changes or before declaring done → `reload_emulator` then **`get_emulator_logs`**. Stop when logs have no runtime errors.",
+    "**Verify:** After material workspace changes, `reload_emulator` then **`get_emulator_logs`**. Stop when logs are clean and the user's request is satisfied.",
     "",
     "**Load first** (parallel `get_dartsnut_skill` calls OK) before scaffolding files:",
     ...always.map((id) => `- **${id}**`),

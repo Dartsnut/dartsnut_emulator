@@ -16,15 +16,16 @@ Load when writing or editing **widget** `main.py`. Requires **`pydartsnut-core`*
 5. `dartsnut.update_frame_buffer(frame)` each iteration.
 6. Small **`time.sleep(...)`** to limit update rate.
 
-## Phase-2 stub (blank frame only)
+## Implementation
 
-- **`Image.new` + solid background + loop only** — enough for preview to run.
-- **Do not** import `ImageDraw`, `ImageFont`, or font paths in the stub; add those in a later round when you use them (after `read_file`).
+Build **`main.py`** to satisfy the **user's request** in conversation history, not a fixed multi-step checklist. Use `ImageDraw`, fonts, and assets when the request needs them — load **`widget-fonts`** before copying or loading font files.
+
+A solid-color loop with no user-visible behavior is only appropriate when the user explicitly asked for a minimal placeholder.
 
 ## Params
 
-Handle missing or ambiguous params with safe defaults. Keep setup, one render/update function, and `main()` clear.
+Handle missing or ambiguous params with safe defaults. Keep setup, render/update, and `main()` clear.
 
-## Fonts
+## Verify
 
-When copying or loading fonts, load **`widget-fonts`** — do not guess manifest paths outside the workspace.
+After material changes to **`main.py`** or **`conf.json`**, **`reload_emulator`** then **`get_emulator_logs`**. Fix Traceback / SyntaxError / ModuleNotFoundError before finishing.

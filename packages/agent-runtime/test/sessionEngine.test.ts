@@ -132,9 +132,9 @@ describe("SessionEngine (@openai/agents)", () => {
     });
 
     expect(fs.readFileSync(path.join(workspace, "hello.txt"), "utf-8")).toBe("hello from test");
-    expect(result).toContain("Done after tool loop");
+    expect(result).toContain("Writing file now");
+    expect(calls).toBe(1);
     const statusMessages = events.filter((e) => e.type === "status").map((e) => e.message);
-    expect(statusMessages.some((m) => m.includes("Creating hello.txt…"))).toBe(true);
     expect(statusMessages.some((m) => m.includes("Created hello.txt."))).toBe(true);
     const toolDeltas = events.filter((e) => e.type === "tool_call_delta");
     expect(toolDeltas.length).toBeGreaterThan(0);
@@ -145,6 +145,56 @@ describe("SessionEngine (@openai/agents)", () => {
       path: "hello.txt"
     });
     expect(events.some((e) => e.type === "final")).toBe(true);
+  });
+
+  it("runs modification agents once per user prompt (no host orchestrator re-loop)", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-mod-"));
+    await fsp.writeFile(path.join(workspace, "conf.json"), "{}", "utf-8");
+    await fsp.writeFile(path.join(workspace, "main.py"), "print('ok')\n", "utf-8");
+
+    let runCalls = 0;
+    const runFn: typeof import("@openai/agents").run = async () => {
+      runCalls += 1;
+      return createMockStream({
+        finalOutput: "Aligned labels.",
+        events: [
+          {
+            type: "agent_updated_stream_event",
+            agent: { name: "WidgetModifier" }
+          } as RunStreamEvent,
+          toolCalled("read_file", "call_1", { path: "main.py" }),
+          toolOutput("read_file", "call_1"),
+          toolCalled("replace_in_file", "call_2", {
+            path: "main.py",
+            find: "old",
+            replace: "new"
+          }),
+          toolOutput("replace_in_file", "call_2"),
+          chatChunk({ choices: [{ index: 0, delta: { content: "Aligned labels." } }] })
+        ]
+      });
+    };
+
+    const engine = new SessionEngine({
+      runFn,
+      agentModelConfig: buildAgentModelConfig({
+        activeProvider: "gpt",
+        model: "gpt-4.1-mini",
+        apiKey: "test-key"
+      }),
+      workspacePolicy: new WorkspacePolicy(workspace),
+      skillPrompt: "system skill prompt",
+      runContextSeed: {
+        projectType: "widget",
+        widgetSize: "128x128",
+        intakeReady: true
+      }
+    });
+
+    const result = await engine.runPrompt("align the time label", () => {});
+    expect(result).toContain("Aligned labels");
+    expect(runCalls).toBe(1);
   });
 
   it("throws stop message when aborted", async () => {

@@ -9,7 +9,7 @@ describe("buildPostIntakeCreatorUserPrompt", () => {
     const prompt = buildPostIntakeCreatorUserPrompt("create a smoothing widget for me", {
       forceBuildAfterIntake: true
     });
-    expect(prompt).toContain("intake just finished");
+    expect(prompt).toContain("Intake is complete");
     expect(prompt).toContain(POST_INTAKE_BUILD_REQUEST_PREFIX);
     expect(prompt).toContain("create a smoothing widget for me");
     expect(prompt).not.toContain("Build now");

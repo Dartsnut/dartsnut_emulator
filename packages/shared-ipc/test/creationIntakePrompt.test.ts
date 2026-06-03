@@ -7,6 +7,8 @@ describe("buildCreationIntakeUserPrompt", () => {
     expect(prompt).toContain("我想要一个可爱的呼吸小组件");
     expect(prompt).toContain("dartsnut_ask_question");
     expect(prompt).toContain("widget_display_size");
+    expect(prompt).toContain("hand off");
+    expect(prompt).not.toContain("will run next");
   });
 
   it("adds picker hints when size was chosen in the UI", () => {

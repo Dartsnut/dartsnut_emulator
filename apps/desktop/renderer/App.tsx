@@ -1114,9 +1114,9 @@ export function App() {
     await submitPrompt({
       prompt: current,
       workspacePath: bootstrap?.workspaceRoot ?? undefined,
-      templateMode: sessionTemplateMode ?? undefined,
-      widgetSize: sessionWidgetSize ?? undefined,
-      projectType: sessionProjectType ?? undefined
+      templateMode: bootstrap?.needsCreationIntake ? undefined : sessionTemplateMode ?? undefined,
+      widgetSize: bootstrap?.needsCreationIntake ? undefined : sessionWidgetSize ?? undefined,
+      projectType: bootstrap?.needsCreationIntake ? undefined : sessionProjectType ?? undefined
     });
   }
 

@@ -2,9 +2,8 @@ import "./agentsBootstrap";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { Agent, run, type StreamedRunResult } from "@openai/agents";
+import { run, type StreamedRunResult } from "@openai/agents";
 import {
-  buildLanguageSystemPrompt,
   type AgentEvent,
   type UserLocale
 } from "@dartsnut/shared-ipc";
@@ -16,14 +15,16 @@ import type { AgentModelConfig } from "./agentProviderConfig";
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import { WorkspacePolicy } from "./workspacePolicy";
 import { AGENT_STOPPED_MESSAGE } from "./providerClient";
-import {
-  CREATOR_MAX_STEPS_WITHOUT_ARTIFACTS,
-  decideCreatorLoopStep,
-  readCreatorArtifactStatus
-} from "./creatorTurnGuard";
-import { decideModificationLoopStep, MODIFICATION_MAX_STEPS } from "./modificationTurnGuard";
 import { configureAgentsSdk } from "./agentsBootstrap";
-import { buildAgentTools } from "./agentTools";
+import { buildDartsnutAgentGraph } from "./agents/buildDartsnutAgents";
+import {
+  refreshDartsnutRunContext,
+  seedDartsnutRunContext,
+  type DartsnutRunContext,
+  type DartsnutTemplateMode,
+  type SeedDartsnutRunContextInput
+} from "./dartsnutRunContext";
+import type { IntakeToolState } from "./creationIntakeHost";
 import { DartsnutAgentsSession } from "./dartsnutAgentsSession";
 import { mapAgentsStreamToAgentEvents } from "./agentsEventBridge";
 import { fixReasoningContentEcho } from "./reasoningContentFilter";
@@ -40,7 +41,8 @@ export interface AgentSkillLibrary {
 
 export interface SessionEngineOptions {
   workspacePolicy: WorkspacePolicy;
-  skillPrompt: string;
+  /** @deprecated Orchestrator builds per-specialist instructions from skillsDir. */
+  skillPrompt?: string;
   skillLibrary?: AgentSkillLibrary;
   assetRoots?: {
     widgetFonts?: string;
@@ -56,18 +58,25 @@ export interface SessionEngineOptions {
   sessionSection?: string | null;
   initialConversation?: ChatMessage[];
   hostIntakeReadyToFinish?: () => boolean;
+  getIntakeState?: () => IntakeToolState;
   preferredUserLocale?: UserLocale | null;
   agentModelConfig?: AgentModelConfig;
+  /** Seeds shared SDK run context for orchestrator handoffs. */
+  runContextSeed?: Omit<SeedDartsnutRunContextInput, "workspacePath" | "skillsDir"> & {
+    skillsDir?: string;
+  };
   /** Test injection — bypasses @openai/agents run(). */
   runFn?: typeof run;
 }
 
-export type RunPromptToolLoopProfile = "default" | "modification";
 export interface RunPromptOptions {
-  toolLoopProfile?: RunPromptToolLoopProfile;
+  /** Raw user text (e.g. `surprise me`) — not the routed intake/creator system prompt. */
+  userPrompt?: string;
 }
 
 export class SessionEngine {
+  private static readonly ORCHESTRATOR_SDK_MAX_TURNS = 128;
+
   private sessionId: string = randomUUID();
   private stoppedOnCleanEmulator = false;
   private readonly completionTools: ChatCompletionTool[];
@@ -94,13 +103,60 @@ export class SessionEngine {
     return cfg;
   }
 
-  private buildInstructions(): string {
-    const languagePrompt = buildLanguageSystemPrompt(this.options.preferredUserLocale ?? null);
-    return [
-      "You are the Dartsnut coding runtime. Use function tool calls for all tool usage.",
-      this.options.skillPrompt,
-      languagePrompt
-    ].join("\n\n");
+  private resolveSkillsDir(): string {
+    return (
+      this.options.runContextSeed?.skillsDir ??
+      this.options.skillLibrary?.skillsDir ??
+      path.join(__dirname, "..", "skills")
+    );
+  }
+
+  private buildRunContext(originalUserPrompt?: string): DartsnutRunContext {
+    const workspacePath = this.options.workspacePolicy.getRoot();
+    const seed = this.options.runContextSeed;
+    return seedDartsnutRunContext({
+      workspacePath,
+      skillsDir: this.resolveSkillsDir(),
+      preferredUserLocale: this.options.preferredUserLocale ?? null,
+      projectType: seed?.projectType,
+      widgetSize: seed?.widgetSize,
+      templateMode: seed?.templateMode ?? (this.options.sessionTemplateMode as DartsnutTemplateMode),
+      assetApplierMode: seed?.assetApplierMode,
+      intakeState: seed?.intakeState,
+      hostIntakeReadyToFinish: this.options.hostIntakeReadyToFinish,
+      originalUserPrompt
+    });
+  }
+
+  private toolsBaseForRun(runContext: DartsnutRunContext) {
+    const refresh = () =>
+      refreshDartsnutRunContext(
+        runContext,
+        this.options.hostIntakeReadyToFinish,
+        this.options.getIntakeState?.()
+      );
+    return {
+      workspacePolicy: this.options.workspacePolicy,
+      skillLibrary: this.options.skillLibrary,
+      assetRoots: this.options.assetRoots,
+      completionTools: this.completionTools,
+      hostIntakeToolHandler: this.options.hostIntakeToolHandler
+        ? async (args: Record<string, unknown>) => {
+            const result = await this.options.hostIntakeToolHandler!(args);
+            refresh();
+            return result;
+          }
+        : undefined,
+      hostAskQuestionHandler: this.options.hostAskQuestionHandler
+        ? async (args: Record<string, unknown>) => {
+            const result = await this.options.hostAskQuestionHandler!(args);
+            refresh();
+            return result;
+          }
+        : undefined,
+      hostReloadEmulatorHandler: this.options.hostReloadEmulatorHandler,
+      hostGetEmulatorLogsHandler: this.options.hostGetEmulatorLogsHandler
+    };
   }
 
   private persistTranscript(kind: "user" | "assistant" | "tool_status" | "thinking", text: string): void {
@@ -144,20 +200,19 @@ export class SessionEngine {
     const cfg = this.resolveModelConfig();
     configureAgentsSdk(cfg);
 
-    const agent = new Agent({
-      name: "DartsnutAgent",
-      instructions: this.buildInstructions(),
+    const runContext = this.buildRunContext(runOptions?.userPrompt ?? prompt);
+    refreshDartsnutRunContext(
+      runContext,
+      this.options.hostIntakeReadyToFinish,
+      this.options.getIntakeState?.()
+    );
+
+    const toolsBase = this.toolsBaseForRun(runContext);
+    const graph = buildDartsnutAgentGraph({
       model: cfg.model,
-      tools: buildAgentTools({
-        workspacePolicy: this.options.workspacePolicy,
-        skillLibrary: this.options.skillLibrary,
-        assetRoots: this.options.assetRoots,
-        completionTools: this.completionTools,
-        hostIntakeToolHandler: this.options.hostIntakeToolHandler,
-        hostAskQuestionHandler: this.options.hostAskQuestionHandler,
-        hostReloadEmulatorHandler: this.options.hostReloadEmulatorHandler,
-        hostGetEmulatorLogsHandler: this.options.hostGetEmulatorLogsHandler
-      })
+      toolsBase,
+      contextSnapshot: runContext,
+      preferredUserLocale: this.options.preferredUserLocale ?? null
     });
 
     const session = new DartsnutAgentsSession({
@@ -170,111 +225,39 @@ export class SessionEngine {
     });
 
     this.persistTranscript("user", prompt);
-    onEvent({ type: "status", at: Date.now(), message: "Dartsnut Agent run started." });
-
-    const profile = runOptions?.toolLoopProfile ?? "default";
-    const maxSteps =
-      profile === "modification" ? MODIFICATION_MAX_STEPS : Math.max(12, CREATOR_MAX_STEPS_WITHOUT_ARTIFACTS + 4);
-
-    let finalText = "";
-    let sawReasoning = false;
-    let sawToolCall = false;
-    let verifyStepsAfterArtifactsReady = 0;
-    let stepsWithoutArtifactsReady = 0;
-    let stepsAfterArtifactsReady = 0;
-    let nextInput: string | undefined = prompt;
+    onEvent({ type: "status", at: Date.now(), message: "Dartsnut orchestrator run started." });
 
     try {
-      for (let step = 0; step < maxSteps; step += 1) {
-        if (abortSignal?.aborted) {
-          throw new Error(AGENT_STOPPED_MESSAGE);
-        }
-
-        const stream = (await this.runFn(agent, nextInput ?? " ", {
-          session,
-          stream: true,
-          signal: abortSignal,
-          // SDK default maxTurns is 10 — enough for model→tool→model within one outer step.
-          // Do not set maxTurns: 1; that fails as soon as any tool call needs a follow-up turn.
-          callModelInputFilter: fixReasoningContentEcho
-        })) as StreamedRunResult<any, any>;
-
-        const bridgeResult = await mapAgentsStreamToAgentEvents(stream, onEvent, {
-          readWorkspaceFileIfExists: (rel) => this.readWorkspaceFileIfExists(rel),
-          persistTranscript: (kind, text) => this.persistTranscript(kind, text)
-        });
-
-        finalText = bridgeResult.finalText || finalText;
-        sawReasoning = sawReasoning || bridgeResult.sawReasoning;
-        sawToolCall = sawToolCall || bridgeResult.sawToolCall;
-        nextInput = undefined;
-
-        if (profile === "modification") {
-          const modDecision = decideModificationLoopStep({
-            step,
-            toolCallCount: bridgeResult.toolCallCount
-          });
-          if (modDecision.type === "complete") {
-            onEvent({ type: "status", at: Date.now(), message: modDecision.summary });
-            finalText = (bridgeResult.finalText || finalText || modDecision.summary).trim();
-            break;
-          }
-          if (bridgeResult.toolCallCount === 0) {
-            break;
-          }
-          continue;
-        }
-
-        const artifacts = readCreatorArtifactStatus(
-          (absolutePath) => fs.existsSync(absolutePath),
-          (relativePath) => this.options.workspacePolicy.resolveWithinRoot(relativePath)
-        );
-        const artifactsReady = artifacts.confJson && artifacts.mainPy;
-        if (artifactsReady) {
-          stepsAfterArtifactsReady += 1;
-          const verificationOnly = bridgeResult.toolNames.every((name) =>
-            ["read_file", "get_emulator_logs", "get_dartsnut_skill", "list_files", "reload_emulator"].includes(name)
-          );
-          verifyStepsAfterArtifactsReady = verificationOnly ? verifyStepsAfterArtifactsReady + 1 : 0;
-        } else {
-          stepsWithoutArtifactsReady += 1;
-          verifyStepsAfterArtifactsReady = 0;
-        }
-
-        const creatorDecision = decideCreatorLoopStep(
-          {
-            step,
-            toolCallCount: bridgeResult.toolCallCount,
-            contentChars: bridgeResult.stepText.length,
-            reasoningChars: bridgeResult.stepReasoning.length,
-            filesWrittenThisTurn: bridgeResult.filesWrittenThisTurn,
-            workspaceHasConfJson: artifacts.confJson,
-            workspaceHasMainPy: artifacts.mainPy,
-            toolNames: bridgeResult.toolNames,
-            stepsAfterArtifactsReady
-          },
-          verifyStepsAfterArtifactsReady,
-          stepsWithoutArtifactsReady
-        );
-
-        if (creatorDecision.type === "fail") {
-          throw new Error(creatorDecision.message);
-        }
-        if (creatorDecision.type === "stall_turn") {
-          onEvent({ type: "status", at: Date.now(), message: creatorDecision.reason });
-          this.persistTranscript("user", creatorDecision.nudgeUser);
-          nextInput = creatorDecision.nudgeUser;
-          continue;
-        }
-        if (creatorDecision.type === "complete") {
-          onEvent({ type: "status", at: Date.now(), message: creatorDecision.summary });
-          finalText = (bridgeResult.finalText || finalText || creatorDecision.summary).trim();
-          break;
-        }
-        if (bridgeResult.toolCallCount === 0) {
-          break;
-        }
+      if (abortSignal?.aborted) {
+        throw new Error(AGENT_STOPPED_MESSAGE);
       }
+
+      const stream = (await this.runFn(graph.orchestrator, prompt, {
+        session,
+        stream: true,
+        signal: abortSignal,
+        maxTurns: SessionEngine.ORCHESTRATOR_SDK_MAX_TURNS,
+        context: runContext,
+        callModelInputFilter: fixReasoningContentEcho
+      })) as StreamedRunResult<DartsnutRunContext, any>;
+
+      const bridgeResult = await mapAgentsStreamToAgentEvents(stream, onEvent, {
+        readWorkspaceFileIfExists: (rel) => this.readWorkspaceFileIfExists(rel),
+        persistTranscript: (kind, text) => this.persistTranscript(kind, text),
+        onActiveAgentChange: (name) => {
+          runContext.activeAgentName = name;
+        }
+      });
+
+      const final = (bridgeResult.finalText || "Dartsnut Agent run complete.").trim();
+      onEvent({ type: "final", at: Date.now(), content: final });
+      onEvent({
+        type: "status",
+        at: Date.now(),
+        message: `[agent_eval] reasoning=${bridgeResult.sawReasoning} tool_calls=${bridgeResult.sawToolCall} output_chars=${final.length}`
+      });
+      this.persistTranscript("assistant", final);
+      return final;
     } catch (error) {
       if (abortSignal?.aborted) {
         throw new Error(AGENT_STOPPED_MESSAGE);
@@ -284,15 +267,5 @@ export class SessionEngine {
       this.persistTranscript("assistant", message);
       return message;
     }
-
-    const final = finalText.trim() || "Dartsnut Agent run complete.";
-    onEvent({ type: "final", at: Date.now(), content: final });
-    onEvent({
-      type: "status",
-      at: Date.now(),
-      message: `[agent_eval] reasoning=${sawReasoning} tool_calls=${sawToolCall} output_chars=${final.length}`
-    });
-    this.persistTranscript("assistant", final);
-    return final;
   }
 }

@@ -4,8 +4,37 @@ import { tool } from "@openai/agents";
 import type { Tool, ToolInputParameters } from "@openai/agents";
 import { DEFERRED_SKILL_IDS, readDeferredSkillMarkdown } from "./skillBundle";
 import type { DeferredSkillId } from "./skillBundle";
-import { AGENT_TOOL_SCHEMAS, getAgentToolDefinition } from "./toolSchemas";
-import type { AgentToolsOptions } from "./agentToolsTypes";
+import {
+  AGENT_ASSET_APPLIER_TOOL_SCHEMAS,
+  AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
+  AGENT_CREATOR_TOOL_SCHEMAS,
+  AGENT_MODIFIER_TOOL_SCHEMAS,
+  AGENT_SURGICAL_TOOL_SCHEMAS,
+  AGENT_TOOL_SCHEMAS,
+  getAgentToolDefinition
+} from "./toolSchemas";
+import type { AgentToolProfile, AgentToolsOptions } from "./agentToolsTypes";
+import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
+
+function schemasForProfile(profile: AgentToolProfile | undefined): ChatCompletionTool[] {
+  switch (profile) {
+    case "intake":
+      return AGENT_CREATION_INTAKE_TOOL_SCHEMAS;
+    case "creator":
+      return AGENT_CREATOR_TOOL_SCHEMAS;
+    case "modifier":
+      return AGENT_MODIFIER_TOOL_SCHEMAS;
+    case "surgical":
+      return AGENT_SURGICAL_TOOL_SCHEMAS;
+    case "asset-applier":
+      return AGENT_ASSET_APPLIER_TOOL_SCHEMAS;
+    case "orchestrator":
+      return [];
+    case "full":
+    default:
+      return AGENT_TOOL_SCHEMAS;
+  }
+}
 
 function isDeferredSkillId(value: string): value is DeferredSkillId {
   return (DEFERRED_SKILL_IDS as readonly string[]).includes(value);
@@ -204,10 +233,13 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
   };
 
   const requested = new Set(
-    (options.completionTools ?? AGENT_TOOL_SCHEMAS)
+    (options.completionTools ?? schemasForProfile(options.profile))
       .map((entry) => (entry.type === "function" ? entry.function?.name : undefined))
       .filter((name): name is string => Boolean(name))
   );
+  if (requested.size === 0 && options.profile === "orchestrator") {
+    return [];
+  }
   if (requested.size === 0) {
     return Object.values(registry);
   }

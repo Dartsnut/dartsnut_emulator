@@ -3,6 +3,8 @@ import path from "node:path";
 import {
   validateDeployWorkspaceConf,
   WIDGET_DISPLAY_SIZES,
+  canRecordProjectTypeFromUserText,
+  canRecordWidgetSizeFromUserText,
   type AgentEvent,
   type ProjectType,
   type WidgetSize
@@ -12,6 +14,9 @@ import type { HostAskQuestionHandler, HostIntakeToolHandler } from "./sessionEng
 export interface IntakeToolState {
   projectType?: ProjectType;
   widgetSize?: WidgetSize;
+  /** Set when the user answered via chips or a blocking ask_question result. */
+  projectTypeUserConfirmed?: boolean;
+  widgetSizeUserConfirmed?: boolean;
 }
 
 export function isIntakeStateReady(state: IntakeToolState): boolean {
@@ -147,18 +152,37 @@ export function nextAfterProjectType(pt: ProjectType): string {
 export async function executeIntakeHostTool(
   args: Record<string, unknown>,
   state: IntakeToolState,
-  workspaceRoot: string
+  workspaceRoot: string,
+  opts?: { lastUserPrompt?: string }
 ): Promise<string> {
   const action = args.action;
   if (typeof action !== "string") {
     return JSON.stringify({ ok: false, error: "action is required" });
   }
+  const lastUserPrompt = opts?.lastUserPrompt?.trim() ?? "";
   if (action === "set_project_type") {
     const pt = args.project_type;
     if (pt !== "game" && pt !== "widget") {
       return JSON.stringify({ ok: false, error: "project_type must be \"game\" or \"widget\"." });
     }
+    if (!state.projectTypeUserConfirmed) {
+      if (!lastUserPrompt) {
+        return JSON.stringify({
+          ok: false,
+          error:
+            "Project type is not clear from the user message. Call **dartsnut_ask_question** with question_id **project_type** first."
+        });
+      }
+      if (!canRecordProjectTypeFromUserText(lastUserPrompt, pt)) {
+        return JSON.stringify({
+          ok: false,
+          error:
+            "Project type cannot be assumed from this message (e.g. vague prompts like \"surprise me\"). Call **dartsnut_ask_question** with question_id **project_type**."
+        });
+      }
+    }
     state.projectType = pt;
+    state.projectTypeUserConfirmed = true;
     if (pt === "game") {
       state.widgetSize = undefined;
     }
@@ -182,7 +206,25 @@ export async function executeIntakeHostTool(
         error: `widget_size must be one of: ${WIDGET_DISPLAY_SIZES.join(", ")}.`
       });
     }
-    state.widgetSize = sz as WidgetSize;
+    const size = sz as WidgetSize;
+    if (!state.widgetSizeUserConfirmed) {
+      if (!lastUserPrompt) {
+        return JSON.stringify({
+          ok: false,
+          error:
+            "Widget display size is not in the user message. Call **dartsnut_ask_question** with question_id **widget_display_size** first."
+        });
+      }
+      if (!canRecordWidgetSizeFromUserText(lastUserPrompt, size)) {
+        return JSON.stringify({
+          ok: false,
+          error:
+            "Do not assume a default widget size. Call **dartsnut_ask_question** with question_id **widget_display_size** unless the user named a supported WxH token (128x160, 128x128, 128x64, 64x32)."
+        });
+      }
+    }
+    state.widgetSize = size;
+    state.widgetSizeUserConfirmed = true;
     return JSON.stringify({
       ok: true,
       recorded: { widgetSize: state.widgetSize },
@@ -253,6 +295,8 @@ export function precheckAskQuestion(
 
 export interface CreateIntakeHostHandlersOptions {
   workspaceRoot: string;
+  /** Latest user message for this run — used to reject guessed intake values. */
+  lastUserPrompt?: string;
   /** When the model calls a blocking ask_question; return JSON tool result text. */
   resolveAskQuestion: (
     questionId: string,
@@ -273,7 +317,7 @@ export function createIntakeHostHandlers(
   options: CreateIntakeHostHandlersOptions
 ): CreateIntakeHostHandlersResult {
   const state: IntakeToolState = {};
-  const { workspaceRoot, resolveAskQuestion, onPromptEvent, onHostIntakeAction, onAskQuestionInvoked } =
+  const { workspaceRoot, lastUserPrompt, resolveAskQuestion, onPromptEvent, onHostIntakeAction, onAskQuestionInvoked } =
     options;
 
   const hostIntakeToolHandler: HostIntakeToolHandler = async (args) => {
@@ -281,7 +325,7 @@ export function createIntakeHostHandlers(
     if (typeof action === "string") {
       onHostIntakeAction?.(action);
     }
-    return executeIntakeHostTool(args, state, workspaceRoot);
+    return executeIntakeHostTool(args, state, workspaceRoot, { lastUserPrompt });
   };
 
   const hostAskQuestionHandler: HostAskQuestionHandler = async (args) => {

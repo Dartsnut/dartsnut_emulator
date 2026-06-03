@@ -1,5 +1,6 @@
 export * from "./contracts";
 export * from "./creationIntakePrompt";
+export * from "./creationIntakeInference";
 export * from "./postIntakeCreatorPrompt";
 export * from "./userLocale";
 export * from "./creatorBuildPlan";

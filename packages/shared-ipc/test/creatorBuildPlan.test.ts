@@ -12,10 +12,8 @@ describe("formatCreatorBuildPlanMessage", () => {
     });
     expect(msg).toContain("## Workspace metadata");
     expect(msg).toContain("Project type: **game**");
-    expect(msg).toContain("conf.json");
-    expect(msg).toContain("main.py");
-    expect(msg).toContain("reload_emulator");
-    expect(msg).toContain("get_emulator_logs");
+    expect(msg).toContain("Creation context");
+    expect(msg).toContain("user request");
     expect(msg).not.toContain("Success criteria");
     expect(msg).not.toContain("Behavior matches the user request");
     expect(msg).not.toContain("karpathy-guidelines");

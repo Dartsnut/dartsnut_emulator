@@ -1,10 +1,3 @@
-import type { AgentEvent } from "@dartsnut/shared-ipc";
-import type { RunPromptOptions, SessionEngine } from "./sessionEngine";
-
-export interface ModificationWorkflowOptions {
-  engine: SessionEngine;
-}
-
 export interface ModificationRunOptions {
   userPrompt: string;
 }
@@ -22,18 +15,4 @@ const SURGICAL_MODIFICATION_PREAMBLE = [
 export function buildModificationWorkflowPrompt(options: ModificationRunOptions): string {
   const userPrompt = options.userPrompt.trim();
   return [SURGICAL_MODIFICATION_PREAMBLE, "", "User request:", userPrompt].join("\n");
-}
-
-export class ModificationWorkflow {
-  constructor(private readonly options: ModificationWorkflowOptions) { }
-
-  runPrompt(
-    runOptions: ModificationRunOptions,
-    onEvent: (event: AgentEvent) => void,
-    abortSignal?: AbortSignal
-  ) {
-    const prompt = buildModificationWorkflowPrompt(runOptions);
-    const engineOptions: RunPromptOptions = { toolLoopProfile: "modification" };
-    return this.options.engine.runPrompt(prompt, onEvent, abortSignal, engineOptions);
-  }
 }

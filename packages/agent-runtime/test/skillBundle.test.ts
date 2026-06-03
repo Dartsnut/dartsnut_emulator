@@ -39,8 +39,8 @@ describe("loadSkillBundle", () => {
 
   it("loads creator-incremental scaffold constraints skill", () => {
     const content = loadSkillBundle(path.join(SKILLS_DIR, "creator-incremental.md"));
-    expect(content).toContain("Verify run");
-    expect(content).toContain("paste full `conf.json`");
+    expect(content).toContain("## Verify");
+    expect(content).toContain("paste full file bodies");
     expect(content).toContain("get_emulator_logs");
     expect(content).not.toContain("Behavior matches the user request");
   });
@@ -226,7 +226,7 @@ describe("deferred skill router", () => {
     expect(router).not.toContain("re-brainstorm");
     expect(router).toContain("karpathy-guidelines");
     expect(router).toContain("read_file");
-    expect(router).toContain("Verify run");
+    expect(router).toContain("**Verify:**");
     expect(router).toContain("get_emulator_logs");
     expect(router).toContain("design-console-smallform");
   });

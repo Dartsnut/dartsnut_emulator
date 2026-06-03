@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  CREATOR_MAX_STEPS_AFTER_ARTIFACTS,
-  CREATOR_MAX_STEPS_WITHOUT_ARTIFACTS,
-  CREATOR_MAX_VERIFY_STEPS_AFTER_ARTIFACTS,
-  CREATOR_PROSE_ONLY_STALL_CHARS,
-  decideCreatorLoopStep,
   isCreatorTemplateMode,
   isFileMutationToolName,
   readCreatorArtifactStatus
@@ -35,105 +30,6 @@ describe("isCreatorTemplateMode", () => {
     expect(isCreatorTemplateMode("game-creator")).toBe(true);
     expect(isCreatorTemplateMode("asset-applier")).toBe(false);
     expect(isCreatorTemplateMode(null)).toBe(false);
-  });
-});
-
-describe("decideCreatorLoopStep", () => {
-  it("completes when artifacts exist and the model returns no tools", () => {
-    const decision = decideCreatorLoopStep(
-      {
-        step: 5,
-        toolCallCount: 0,
-        contentChars: 0,
-        reasoningChars: 100,
-        filesWrittenThisTurn: 0,
-        workspaceHasConfJson: true,
-        workspaceHasMainPy: true,
-        toolNames: [],
-        stepsAfterArtifactsReady: 0
-      },
-      0
-    );
-    expect(decision.type).toBe("complete");
-  });
-
-  it("nudges on prose-only stall before artifacts exist", () => {
-    const decision = decideCreatorLoopStep(
-      {
-        step: 2,
-        toolCallCount: 0,
-        contentChars: CREATOR_PROSE_ONLY_STALL_CHARS,
-        reasoningChars: 0,
-        filesWrittenThisTurn: 0,
-        workspaceHasConfJson: false,
-        workspaceHasMainPy: false,
-        toolNames: [],
-        stepsAfterArtifactsReady: 0
-      },
-      0
-    );
-    expect(decision).toMatchObject({ type: "stall_turn", reason: "prose_only_without_tools" });
-  });
-
-  it("fails when artifacts are still missing after the step budget", () => {
-    const decision = decideCreatorLoopStep(
-      {
-        step: 11,
-        toolCallCount: 0,
-        contentChars: 100,
-        reasoningChars: 0,
-        filesWrittenThisTurn: 0,
-        workspaceHasConfJson: true,
-        workspaceHasMainPy: false,
-        toolNames: [],
-        stepsAfterArtifactsReady: 0
-      },
-      0,
-      CREATOR_MAX_STEPS_WITHOUT_ARTIFACTS
-    );
-    expect(decision).toMatchObject({
-      type: "fail",
-      reason: "artifacts_missing_after_step_budget"
-    });
-  });
-
-  it("completes after repeated verification-only tool rounds", () => {
-    const decision = decideCreatorLoopStep(
-      {
-        step: 20,
-        toolCallCount: 2,
-        contentChars: 0,
-        reasoningChars: 0,
-        filesWrittenThisTurn: 0,
-        workspaceHasConfJson: true,
-        workspaceHasMainPy: true,
-        toolNames: ["read_file", "get_emulator_logs"],
-        stepsAfterArtifactsReady: 6
-      },
-      CREATOR_MAX_VERIFY_STEPS_AFTER_ARTIFACTS
-    );
-    expect(decision.type).toBe("complete");
-  });
-
-  it("completes after post-scaffold step budget even when still mutating files", () => {
-    const decision = decideCreatorLoopStep(
-      {
-        step: 12,
-        toolCallCount: 1,
-        contentChars: 0,
-        reasoningChars: 0,
-        filesWrittenThisTurn: 0,
-        workspaceHasConfJson: true,
-        workspaceHasMainPy: true,
-        toolNames: ["replace_in_file"],
-        stepsAfterArtifactsReady: CREATOR_MAX_STEPS_AFTER_ARTIFACTS
-      },
-      2
-    );
-    expect(decision).toMatchObject({
-      type: "complete",
-      summary: expect.stringContaining("Initial scaffold")
-    });
   });
 });
 

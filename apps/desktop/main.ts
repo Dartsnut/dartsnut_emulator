@@ -51,8 +51,7 @@ import {
   type AgentSessionWorkspaceSummary,
   resolveSessionUserLocale,
   type UserLocale,
-  formatCreatorBuildPlanMessage,
-  shouldIncludeCreatorBuildPlan,
+  buildCreationIntakeUserPrompt,
   parseWidgetFontCatalogFromManifest,
   type WidgetFontCatalogEntry
 } from "@dartsnut/shared-ipc";
@@ -1041,13 +1040,14 @@ function applyWorkspaceRoot(selectedPath: string): void {
 
 async function intakeHostToolExecute(
   args: Record<string, unknown>,
-  state: IntakeToolState
+  state: IntakeToolState,
+  lastUserPrompt?: string
 ): Promise<string> {
   const root = workspaceRoot;
   if (!root) {
     return JSON.stringify({ ok: false, error: "No workspace is active." });
   }
-  return executeIntakeHostTool(args, state, root);
+  return executeIntakeHostTool(args, state, root, { lastUserPrompt });
 }
 
 async function askQuestionHostExecute(
@@ -1113,7 +1113,7 @@ function buildAssetApplierPrompt(request: PromptRequest): string {
   return [directives, "", "User request:", userPrompt].join("\n");
 }
 
-function buildRoutedPrompt(request: PromptRequest): string {
+function buildRoutedPrompt(request: PromptRequest, intakeState?: IntakeToolState): string {
   if (request.templateMode === "asset-applier") {
     return buildAssetApplierPrompt(request);
   }
@@ -1122,6 +1122,27 @@ function buildRoutedPrompt(request: PromptRequest): string {
     typeof request.workspacePath === "string" && request.workspacePath
       ? request.workspacePath
       : workspaceRoot;
+  const confPath =
+    effectiveWorkspacePath && effectiveWorkspacePath.length > 0
+      ? path.join(effectiveWorkspacePath, "conf.json")
+      : "";
+  const confJsonExists = confPath.length > 0 && fs.existsSync(confPath);
+  const intakeReady = intakeState != null && isIntakeStateReady(intakeState);
+  const needsCreationIntake =
+    Boolean(effectiveWorkspacePath) &&
+    effectiveWorkspacePath!.length > 0 &&
+    !confJsonExists &&
+    !intakeReady;
+
+  if (needsCreationIntake) {
+    return buildCreationIntakeUserPrompt(request.prompt, {
+      projectTypeFromPicker:
+        request.projectType === "game" || request.projectType === "widget"
+          ? request.projectType
+          : undefined,
+      widgetSizeFromPicker: request.widgetSize
+    });
+  }
 
   let templateMode: CreatorTemplateMode | undefined =
     request.templateMode === "game-creator" || request.templateMode === "widget-creator"
@@ -1165,27 +1186,9 @@ function buildRoutedPrompt(request: PromptRequest): string {
     widgetFontManifestPath: templateMode === "widget-creator" ? widgetFontManifestPath : undefined,
     availableWidgetFonts: templateMode === "widget-creator" ? availableWidgetFonts : undefined
   };
-  const confPath =
-    effectiveWorkspacePath && effectiveWorkspacePath.length > 0
-      ? path.join(effectiveWorkspacePath, "conf.json")
-      : "";
-  const confJsonExists = confPath.length > 0 && fs.existsSync(confPath);
   const resolvedProjectType: ProjectType =
     projectType === "game" || projectType === "widget" ? projectType : templateMode === "widget-creator" ? "widget" : "game";
-  const buildPlanBlock =
-    shouldIncludeCreatorBuildPlan(templateMode, confJsonExists) &&
-      (resolvedProjectType === "game" || resolvedProjectType === "widget")
-      ? [
-        formatCreatorBuildPlanMessage({
-          templateMode,
-          projectType: resolvedProjectType,
-          widgetSize: widgetSize as WidgetSize | undefined
-        }),
-        ""
-      ]
-      : [];
   return [
-    ...buildPlanBlock,
     "Creation context:",
     JSON.stringify(context, null, 2),
     "",
@@ -2033,6 +2036,11 @@ function buildSession(
     initialConversation?: ChatMessage[];
     preferredUserLocale?: UserLocale | null;
     latestUserTextForLocale?: string;
+    intakeState?: IntakeToolState;
+    getIntakeState?: () => IntakeToolState;
+    projectType?: ProjectType;
+    widgetSize?: WidgetSize;
+    assetApplierMode?: boolean;
   }
 ): AgentSessionRuntime {
   const workspacePath = extras?.workspacePath ?? workspaceRoot;
@@ -2081,7 +2089,17 @@ function buildSession(
     sessionPersistence: extras?.sessionPersistence,
     initialConversation: extras?.initialConversation,
     sessionTemplateMode: templateMode ?? null,
-    sessionSection: skillBundleMode === null ? null : String(skillBundleMode)
+    sessionSection: skillBundleMode === null ? null : String(skillBundleMode),
+    runContextSeed: {
+      skillsDir: resolveAgentRuntimeSkillsDir(),
+      projectType: extras?.projectType,
+      widgetSize: extras?.widgetSize,
+      templateMode: templateMode ?? skillBundleMode ?? null,
+      assetApplierMode: extras?.assetApplierMode ?? templateMode === "asset-applier",
+      intakeState: extras?.intakeState,
+      originalUserPrompt: extras?.latestUserTextForLocale
+    },
+    getIntakeState: extras?.getIntakeState
   });
   return new AgentSessionRuntime({
     workspacePath,
@@ -2598,6 +2616,7 @@ ipcMain.handle(
       const { resolve, state } = intakeChipQuestionPending;
       intakeChipQuestionPending = null;
       state.projectType = body.value;
+      state.projectTypeUserConfirmed = true;
       if (body.value === "game") {
         state.widgetSize = undefined;
       }
@@ -2621,6 +2640,7 @@ ipcMain.handle(
       const { resolve, state } = intakeChipQuestionPending;
       intakeChipQuestionPending = null;
       state.widgetSize = body.value;
+      state.widgetSizeUserConfirmed = true;
       agentEventEmitter?.({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
       resolve(
         JSON.stringify({
@@ -2711,7 +2731,10 @@ ipcMain.handle(
       return { ok: false, reason: "missing_conf", message };
     }
     try {
-      const session = buildSession("asset-applier");
+      const session = buildSession("asset-applier", {
+        workspacePath: targetWorkspace,
+        assetApplierMode: true
+      });
       const prompt = buildRoutedPrompt({
         prompt: "",
         templateMode: "asset-applier",
@@ -2766,8 +2789,9 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     agentEventEmitter = emitAgent;
     let sessionRouting: SendPromptResponse["sessionRouting"];
     const hostState: IntakeToolState = {};
+    const lastIntakeUserPrompt = req.prompt;
     const sharedIntakeHandler = async (args: Record<string, unknown>) =>
-      intakeHostToolExecute(args, hostState);
+      intakeHostToolExecute(args, hostState, lastIntakeUserPrompt);
 
     const intent = req.agentSession?.intent ?? "auto";
     const persistence = buildWorkspaceSessionPersistence(workspaceRoot);
@@ -2776,15 +2800,6 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     }
     const initialConversation =
       persistence && intent !== "fresh" ? persistence.readConversation() : [];
-    const session = buildSession(req.templateMode, {
-      completionTools: AGENT_TOOL_SCHEMAS,
-      hostIntakeToolHandler: sharedIntakeHandler,
-      hostAskQuestionHandler: (args) => askQuestionHostExecute(args, hostState),
-      hostIntakeReadyToFinish: () => isIntakeStateReady(hostState),
-      sessionPersistence: persistence,
-      initialConversation,
-      latestUserTextForLocale: req.prompt
-    });
     const effectiveWorkspacePath =
       typeof req.workspacePath === "string" && req.workspacePath.length > 0 ? req.workspacePath : workspaceRoot;
     const hintedRouting =
@@ -2795,9 +2810,30 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
       req.templateMode === "game-creator" || req.templateMode === "widget-creator"
         ? req.templateMode
         : hintedRouting?.templateMode;
+    const routedProjectType =
+      req.projectType ??
+      hintedRouting?.projectType ??
+      (routedTemplateMode === "widget-creator"
+        ? "widget"
+        : routedTemplateMode === "game-creator"
+          ? "game"
+          : undefined);
+    const routedWidgetSize = req.widgetSize ?? hintedRouting?.widgetSize;
+    const intakeReadyNow = isIntakeStateReady(hostState);
+    const session = buildSession(req.templateMode, {
+      completionTools: AGENT_TOOL_SCHEMAS,
+      hostIntakeToolHandler: sharedIntakeHandler,
+      hostAskQuestionHandler: (args) => askQuestionHostExecute(args, hostState),
+      hostIntakeReadyToFinish: () => isIntakeStateReady(hostState),
+      sessionPersistence: persistence,
+      initialConversation,
+      latestUserTextForLocale: req.prompt,
+      intakeState: hostState,
+      projectType: intakeReadyNow ? routedProjectType : undefined,
+      widgetSize: intakeReadyNow ? routedWidgetSize : undefined,
+      getIntakeState: () => hostState
+    });
     if (routedTemplateMode) {
-      const routedProjectType = req.projectType ?? hintedRouting?.projectType;
-      const routedWidgetSize = req.widgetSize ?? hintedRouting?.widgetSize;
       sessionRouting = {
         templateMode: routedTemplateMode,
         projectType:
@@ -2806,12 +2842,22 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         ...(routedWidgetSize ? { widgetSize: routedWidgetSize } : {})
       };
     }
-    const prompt = buildRoutedPrompt(req);
+    const prompt = buildRoutedPrompt(req, hostState);
     terminalAgentLifecycleLog("[agent] runPrompt start", { promptChars: prompt.length });
-    await session.runPrompt(prompt, emitAgent, runAbort.signal);
+    await session.runPrompt(prompt, emitAgent, runAbort.signal, { userPrompt: req.prompt });
 
     if (!firstRunComplete) {
       writeProofState(true);
+    }
+    if (isIntakeStateReady(hostState)) {
+      const pt = hostState.projectType;
+      if (pt === "game" || pt === "widget") {
+        sessionRouting = {
+          templateMode: pt === "game" ? "game-creator" : "widget-creator",
+          projectType: pt,
+          ...(pt === "widget" && hostState.widgetSize ? { widgetSize: hostState.widgetSize } : {})
+        };
+      }
     }
     return { ok: true, sessionRouting };
   } catch (error) {

@@ -20,23 +20,40 @@ describe("creationIntakeHost", () => {
     expect(parseConfWidgetSize([99, 99])).toBeUndefined();
   });
 
-  it("executeIntakeHostTool records project type and widget size", async () => {
+  it("executeIntakeHostTool records project type and widget size when user text is explicit", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-intake-host-"));
     const state = {};
+    const prompt = "Create a cute breathing widget at 128x128";
     await executeIntakeHostTool(
       { action: "set_project_type", project_type: "widget" },
       state,
-      root
+      root,
+      { lastUserPrompt: prompt }
     );
     await executeIntakeHostTool(
       { action: "set_widget_size", widget_size: "128x128" },
       state,
-      root
+      root,
+      { lastUserPrompt: prompt }
     );
     expect(state.projectType).toBe("widget");
     expect(state.widgetSize).toBe("128x128");
     const snapshot = readWorkspaceConfIntakeSnapshot(root, state);
     expect(snapshot.conf_status).toBe("missing");
+  });
+
+  it("rejects guessed widget size for vague prompts", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-intake-vague-"));
+    const state = { projectType: "widget" as const, projectTypeUserConfirmed: true };
+    const res = await executeIntakeHostTool(
+      { action: "set_widget_size", widget_size: "128x128" },
+      state,
+      root,
+      { lastUserPrompt: "surprise me" }
+    );
+    const parsed = JSON.parse(res) as { ok: boolean };
+    expect(parsed.ok).toBe(false);
+    expect(state.widgetSize).toBeUndefined();
   });
 
   it("normalizeHostIntakeActions inserts set_widget_size before read_workspace_conf", () => {
@@ -66,12 +83,15 @@ describe("creationIntakeHost", () => {
     const asks: string[] = [];
     const handlers = createIntakeHostHandlers({
       workspaceRoot: root,
+      lastUserPrompt: "I want a widget",
       onHostIntakeAction: (a) => hostActions.push(a),
       onAskQuestionInvoked: (q) => asks.push(q),
       resolveAskQuestion: async (questionId, state) => {
         if (questionId === "widget_display_size") {
           state.projectType = "widget";
+          state.projectTypeUserConfirmed = true;
           state.widgetSize = "128x128";
+          state.widgetSizeUserConfirmed = true;
           return JSON.stringify({ ok: true, recorded: { widgetSize: "128x128" } });
         }
         return JSON.stringify({ ok: false });

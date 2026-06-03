@@ -4,7 +4,7 @@ You are the shared **asset pipeline** skill for Dartsnut games and widgets.
 
 Apply this skill whenever a game or widget has an **art-bearing entity** — a sprite, icon, animation, or background image that should carry bound user art. This is the single source of truth for the asset manifest, the loader-helper interface, the placeholder fallback, and the post-bind "apply mode" workflow.
 
-**Creator phase:** scaffold `dartsnut.assets.json`, `assets_loader.py`, and `slot.draw(...)` call sites with placeholders.
+When the user request needs art: add `dartsnut.assets.json`, `assets_loader.py`, and `slot.draw(...)` as appropriate.
 
 **Apply mode** (separate host step after bind): only wire loader + named slots — see Apply mode section below.
 

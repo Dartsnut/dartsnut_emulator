@@ -4,7 +4,13 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 import type { ProjectType } from "@dartsnut/shared-ipc";
 import { Client, type Channel, type SFTPWrapper } from "ssh2";
-import { buildSyncWorkspaceScript } from "./deployMachineScripts";
+import {
+  buildDebugLaunchInner,
+  buildEnsureAppVenvScript,
+  buildSyncWorkspaceScript,
+  remoteAppPythonBin,
+  remoteLegacyPythonBin,
+} from "./deployMachineScripts";
 
 const SSH_USER = "rpi";
 const SSH_PASSWORD = "rpi";
@@ -17,7 +23,7 @@ const REMOTE_WIDGET_RUNNER = "/tmp/dartsnut_deploy_inner.sh";
 
 /** Same tree as `services/dartsnut_python.service` on `dartsnut_rpi` (WorkingDirectory + ExecStart paths). */
 const REMOTE_DARTSNUT_ROOT = "/home/rpi/dartsnut_rpi";
-const REMOTE_PYTHON_BIN = `${REMOTE_DARTSNUT_ROOT}/venv0/bin/python`;
+const REMOTE_UV_BIN = `${REMOTE_DARTSNUT_ROOT}/uv`;
 
 export type DeployLogFn = (line: string) => void;
 
@@ -147,6 +153,8 @@ export class DeployMachineSession {
 
   private tailChannel: Channel | null = null;
 
+  private remoteUsesUv = false;
+
   constructor(private readonly emitLog: DeployLogFn) { }
 
   get connected(): boolean {
@@ -221,16 +229,48 @@ export class DeployMachineSession {
         this.stopLogTail();
       }
     });
+    await this.probeRemoteUv();
     const deviceName = await this.readDeviceName();
     return { deviceName };
   }
 
   async disconnect(): Promise<void> {
     this.stopLogTail();
+    this.remoteUsesUv = false;
     if (this.client) {
       this.client.end();
       this.client = null;
     }
+  }
+
+  private async probeRemoteUv(): Promise<void> {
+    if (!this.client) {
+      this.remoteUsesUv = false;
+      return;
+    }
+    const { code } = await execSession(this.client, `bash -lc 'test -x ${REMOTE_UV_BIN}'`);
+    this.remoteUsesUv = code === 0;
+    this.emitLog(
+      this.remoteUsesUv
+        ? "[deploy] Device uses uv app venvs"
+        : "[deploy] Device uses legacy venv0",
+    );
+  }
+
+  private async ensureRemoteAppVenv(appId: string): Promise<void> {
+    if (!this.client) {
+      throw new Error("Not connected.");
+    }
+    const script = buildEnsureAppVenvScript({
+      root: REMOTE_DARTSNUT_ROOT,
+      appId,
+      password: SSH_PASSWORD,
+    });
+    const { stderr, code } = await execBashScriptStdin(this.client, script);
+    if (code !== 0) {
+      throw new Error(stderr.trim() || `ensure_app_venv failed (exit ${code})`);
+    }
+    this.emitLog(`[deploy] uv sync ready for apps/${appId}`);
   }
 
   private async readDeviceName(): Promise<string | null> {
@@ -375,8 +415,15 @@ export class DeployMachineSession {
      * `sudo tee` writes **`REMOTE_WIDGET_RUNNER`** via a quoted heredoc; the file holds plain bash:
      * base64 decode → `PARAMS`, then `exec python … --params "$PARAMS"`.
      */
+    if (this.remoteUsesUv) {
+      await this.ensureRemoteAppVenv(appId);
+    }
     const appDir = `${REMOTE_DARTSNUT_ROOT}/apps/${appId}`;
     const appMainPy = `${appDir}/main.py`;
+    const pythonBin = this.remoteUsesUv
+      ? remoteAppPythonBin(REMOTE_DARTSNUT_ROOT, appId)
+      : remoteLegacyPythonBin(REMOTE_DARTSNUT_ROOT);
+    const mainScript = this.remoteUsesUv ? "main.py" : appMainPy;
     const passAssign = "PASS=" + JSON.stringify(SSH_PASSWORD);
     const scriptHead = [
       "set -eo pipefail",
@@ -392,14 +439,13 @@ export class DeployMachineSession {
       const paramsJson = JSON.stringify(launch.widgetParams ?? {});
       const paramsB64 = Buffer.from(paramsJson, "utf8").toString("base64");
       let eofMarker = `DARTSNUT_DEPLOY_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
-      const innerBody = [
-        "#!/usr/bin/env bash",
-        "set -eo pipefail",
-        `cd ${JSON.stringify(appDir)}`,
-        "export PYTHONUNBUFFERED=1 DARTSNUT_LOG_LEVEL=INFO",
-        `PARAMS=$(printf '%s' '${paramsB64}' | base64 -d)`,
-        `exec ${JSON.stringify(REMOTE_PYTHON_BIN)} -u ${JSON.stringify(appMainPy)} --params "$PARAMS"`,
-      ].join("\n");
+      const innerBody = buildDebugLaunchInner({
+        appDir,
+        pythonBin,
+        mainScript,
+        projectType: "widget",
+        paramsB64,
+      });
       while (innerBody.includes(eofMarker)) {
         eofMarker = `DARTSNUT_DEPLOY_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
       }
@@ -413,11 +459,12 @@ export class DeployMachineSession {
         'echo $! > "$PIDFILE"',
       ].join("\n");
     } else {
-      const innerCmd = [
-        `cd ${JSON.stringify(appDir)}`,
-        `export PYTHONUNBUFFERED=1 DARTSNUT_LOG_LEVEL=INFO`,
-        `exec ${JSON.stringify(REMOTE_PYTHON_BIN)} -u ${JSON.stringify(appMainPy)}`,
-      ].join(" && ");
+      const innerCmd = buildDebugLaunchInner({
+        appDir,
+        pythonBin,
+        mainScript,
+        projectType: "game",
+      });
       script = [
         ...scriptHead,
         'echo "$PASS" | sudo -S bash -c ' + JSON.stringify(innerCmd) + ' >> "$LOG" 2>&1 &',

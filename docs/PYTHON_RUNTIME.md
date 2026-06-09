@@ -77,6 +77,48 @@ Offline env vars (set by `apps/desktop/pythonRuntime.ts`):
 
 Emulator `requirements.txt` does **not** include Raspberry Pi–only packages from `dartsnut_rpi` (`bluezero`, `dbus-python`, `pybluez-dartsnut`, `evdev`, widget `aiohttp`, firmware `fastapi`/`uvicorn`/`websockets`). Those are installed on the device via firmware `uv sync` when deploying.
 
+## Troubleshooting (Windows)
+
+### “Bundled Python runtime is not ready”
+
+The packaged app expects a **Windows-built** venv at:
+
+`resources/python-runtime/Scripts/python.exe` (next to the `.exe`)
+
+**Build on the Windows machine** (do not copy a Mac `python-runtime` folder):
+
+```bash
+pnpm bundle:python -- --target win-x64
+pnpm --dir apps/desktop run package:win
+```
+
+Verify before packaging:
+
+```text
+apps/desktop/resources/python-runtime/Scripts/python.exe
+apps/desktop/resources/python-runtime/.bundled-python.json   → "target": "win-x64"
+apps/desktop/resources/uv/uv.exe
+```
+
+After packaging, check the portable output:
+
+```text
+release/DartsnutChat.exe   (or win-unpacked/resources/python-runtime/...)
+```
+
+**Offline / flaky network:** cache downloads manually (see `scripts/build_bundled_python.mjs`):
+
+| Asset | Cache path |
+| --- | --- |
+| Python 3.12.7 standalone | `.cache/python-build-standalone/cpython-3.12.7+20241016-x86_64-pc-windows-msvc-shared-install_only_stripped.tar.gz` |
+| uv 0.11.19 | `.cache/uv/0.11.19/uv-x86_64-pc-windows-msvc.zip` |
+
+`uv pip install` still needs PyPI (or a prebuilt venv) unless you copy a completed `apps/desktop/resources/python-runtime/` from a successful build.
+
+**Shared MSVC runtime:** the Windows standalone build is `*-shared-*`; install [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if `python.exe` fails to start with a DLL error.
+
+**Wrong-platform bundle:** if `.bundled-python.json` says `darwin-arm64` inside a Windows package, rebuild `bundle:python` on Windows.
+
 ## Related files
 
 - `scripts/build_bundled_python.mjs` — download Python + uv, create venv, install deps

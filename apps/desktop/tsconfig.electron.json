@@ -12,6 +12,8 @@
   "include": [
     "main.ts",
     "preload.ts",
+    "pythonRuntime.ts",
+    "assetManager.ts",
     "communityClient.ts",
     "communityAuth.ts"
   ]

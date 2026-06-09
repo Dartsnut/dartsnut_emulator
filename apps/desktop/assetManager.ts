@@ -12,6 +12,7 @@ import type {
   UnbindSlotRequest,
   UnbindSlotResponse
 } from "@dartsnut/shared-ipc";
+import type { PythonScriptLaunch } from "./pythonRuntime";
 
 export const ASSET_MANIFEST_FILENAME = "dartsnut.assets.json";
 const MANIFEST_POLL_INTERVAL_MS = 600;
@@ -96,31 +97,16 @@ function parsePreprocessOutput(stdout: string, slotId: string): PreprocessResult
 }
 
 interface RunPreprocessorOptions {
-  pythonExec: string;
-  scriptPath: string;
+  launch: PythonScriptLaunch;
   slot: AssetSlot;
-  workspacePath: string;
-  sourcePath: string;
 }
 
 function runPreprocessor(options: RunPreprocessorOptions): Promise<PreprocessResult> {
   return new Promise((resolve) => {
-    const args = [
-      options.scriptPath,
-      "--slot",
-      options.slot.id,
-      "--kind",
-      options.slot.kind,
-      "--size",
-      `${options.slot.size[0]}x${options.slot.size[1]}`,
-      "--frames",
-      String(options.slot.frames),
-      "--source",
-      options.sourcePath,
-      "--workspace",
-      options.workspacePath
-    ];
-    const child = spawn(options.pythonExec, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(options.launch.command, options.launch.args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: options.launch.env,
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -153,7 +139,7 @@ function runPreprocessor(options: RunPreprocessorOptions): Promise<PreprocessRes
 }
 
 interface AssetManagerOptions {
-  pythonExec: () => string;
+  launchScript: (scriptPath: string, scriptArgs: string[]) => PythonScriptLaunch;
   scriptPath: string;
   onSnapshot?: (snapshot: ManifestSnapshot) => void;
 }
@@ -226,12 +212,23 @@ export class AssetManager {
       return { ok: false, error: bindError(slotId, "io_error", `source file not found: ${sourcePath}`) };
     }
 
+    const scriptArgs = [
+      "--slot",
+      slot.id,
+      "--kind",
+      slot.kind,
+      "--size",
+      `${slot.size[0]}x${slot.size[1]}`,
+      "--frames",
+      String(slot.frames),
+      "--source",
+      sourcePath,
+      "--workspace",
+      workspacePath
+    ];
     const result = await runPreprocessor({
-      pythonExec: this.options.pythonExec(),
-      scriptPath: this.options.scriptPath,
+      launch: this.options.launchScript(this.options.scriptPath, scriptArgs),
       slot,
-      workspacePath,
-      sourcePath
     });
 
     if (!result.ok) {

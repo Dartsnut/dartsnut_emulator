@@ -1,4 +1,5 @@
 import base64
+import importlib.util
 import json
 import os
 import queue
@@ -14,6 +15,22 @@ from multiprocessing import shared_memory
 from typing import Any
 
 from PIL import Image, ImageDraw
+
+_APP_ENV_MODULE: Any | None = None
+
+
+def _load_app_env():
+    global _APP_ENV_MODULE
+    if _APP_ENV_MODULE is not None:
+        return _APP_ENV_MODULE
+    module_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_env.py")
+    spec = importlib.util.spec_from_file_location("emulator_app_env", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load app_env from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _APP_ENV_MODULE = module
+    return module
 
 
 def _widget_root_fs_path(workspace_root: str, path: str) -> str:
@@ -244,6 +261,46 @@ class EmulatorCore:
         self.state.running = False
         self.state.status = "Widget stopped"
 
+    def _ensure_workspace_venv(self, launch_cwd: str) -> bool:
+        uv_bin = os.environ.get("DARTSNUT_UV_BIN", "").strip()
+        if not uv_bin or not os.path.isfile(uv_bin):
+            return True
+        app_env = _load_app_env()
+        app_type = self.state.widgetType or "widget"
+        return app_env.ensure_workspace_venv(
+            launch_cwd,
+            app_type=app_type,
+            log=self._queue_bridge_log,
+        )
+
+    def _build_widget_launch(self, launch_cwd: str) -> tuple[list[str], dict[str, str]]:
+        script_args = [
+            "--params",
+            json.dumps(self.current_params),
+            "--shm",
+            self.shm_pdi_name,
+        ]
+        if self.data_store_path:
+            script_args.extend(["--data-store", self.data_store_path])
+
+        uv_bin = os.environ.get("DARTSNUT_UV_BIN", "").strip()
+        venv_python = os.path.join(
+            launch_cwd,
+            ".venv",
+            "Scripts" if sys.platform == "win32" else "bin",
+            "python.exe" if sys.platform == "win32" else "python",
+        )
+        if uv_bin and os.path.isfile(uv_bin) and os.path.isfile(venv_python):
+            app_env = _load_app_env()
+            command = [uv_bin, "run", "--directory", launch_cwd, "main.py", *script_args]
+            child_env = app_env.workspace_launch_env()
+        else:
+            main_py = os.path.join(launch_cwd, "main.py")
+            command = [sys.executable, main_py, *script_args]
+            child_env = os.environ.copy()
+            child_env.pop("UV_NO_SYNC", None)
+        return command, child_env
+
     def start_widget_process_for_current(self) -> None:
         if not self.current_path:
             raise ValueError("No widget path is configured")
@@ -258,20 +315,11 @@ class EmulatorCore:
         self.stop_widget_process()
         time.sleep(0.2)
         launch_cwd = self.current_path
-        command = [
-            sys.executable,
-            os.path.join(launch_cwd, "main.py"),
-            "--params",
-            json.dumps(self.current_params),
-            "--shm",
-            self.shm_pdi_name,
-        ]
-        if self.data_store_path:
-            command.extend(["--data-store", self.data_store_path])
+        if not self._ensure_workspace_venv(launch_cwd):
+            raise RuntimeError("Failed to prepare workspace Python environment (uv sync)")
+        command, child_env = self._build_widget_launch(launch_cwd)
 
         self._last_launch_argv_chars = sum(len(str(a)) for a in command) + max(0, len(command) - 1)
-
-        child_env = os.environ.copy()
         # Headless video only: frames go to shared memory, not a window.
         # setdefault() would keep a host SDL_VIDEODRIVER (e.g. from Electron/shell),
         # which can block set_mode or prevent frames from reaching SHM on Windows.

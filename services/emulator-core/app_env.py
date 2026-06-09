@@ -20,6 +20,7 @@ DEFAULTS_DIR = Path(__file__).resolve().parent / "app_defaults"
 STAMP_FILENAME = ".dartsnut_stamp"
 MANAGED_PYPROJECT_HEADER = "# Dartsnut managed default app dependencies"
 LogFn = Callable[[str, str], None]
+StatusFn = Callable[[str], None]
 
 
 def _uv_bin() -> str:
@@ -167,6 +168,7 @@ def ensure_workspace_venv(
     app_type: str | None = None,
     force: bool = False,
     log: LogFn | None = None,
+    status: StatusFn | None = None,
 ) -> bool:
     """Create or refresh <workspace>/.venv using bundled uv. Returns False on failure."""
     uv = _uv_bin()
@@ -187,10 +189,16 @@ def ensure_workspace_venv(
 
     started = time.monotonic()
     try:
+        if status:
+            status("Preparing workspace environment…")
         if not os.path.isfile(_pyproject_path(workspace_dir)):
+            if status:
+                status("Setting up pyproject.toml…")
             _materialize_pyproject(workspace_dir, resolved_type, log=log)
         elif log:
             log("Syncing workspace dependencies from pyproject.toml", "stdout")
+        if status:
+            status("Syncing dependencies…")
         _uv_sync(workspace_dir)
         _write_stamp(workspace_dir, resolved_type)
         if log:

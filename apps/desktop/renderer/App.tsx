@@ -15,6 +15,7 @@ import {
   type WidgetSize,
   type CommunitySessionInfo
 } from "@dartsnut/shared-ipc";
+import { AskQuestionCard } from "./AskQuestionCard";
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { cn } from "./cn";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
@@ -1366,55 +1367,25 @@ export function App() {
 
           <div className="chat-rail-overlay chat-rail-overlay--bottom pointer-events-none absolute inset-x-0 bottom-0 z-10">
             <div className="chat-rail-chrome pointer-events-auto">
-          {/* Chip rows: host shows these while a blocking `dartsnut_ask_question` call is waiting. */}
-          {projectTypePicker.visible &&
-          projectTypePicker.types.length > 0 ? (
-            <div
-              className="flex flex-col gap-1.5"
-              role="group"
-              aria-label="Project type"
-            >
-              <span className="text-[11px] font-medium text-[var(--color-text-subtle)]">
-                Game or widget?
-              </span>
-              <div className="flex flex-wrap gap-2">
-                {projectTypePicker.types.map((pt) => (
-                  <button
-                    key={pt}
-                    type="button"
-                    className="ui-chip"
-                    onClick={() => void handleProjectTypeChip(pt)}
-                  >
-                    {projectTypeChipLabel(pt)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {widgetSizePicker.visible &&
-          widgetSizePicker.sizes.length > 0 ? (
-            <div
-              className="flex flex-col gap-1.5"
-              role="group"
-              aria-label="Widget display size"
-            >
-              <span className="text-[11px] font-medium text-[var(--color-text-subtle)]">
-                Pick display size
-              </span>
-              <div className="flex flex-wrap gap-2">
-                {widgetSizePicker.sizes.map((sz) => (
-                  <button
-                    key={sz}
-                    type="button"
-                    className="ui-chip tabular-nums"
-                    onClick={() => void handleWidgetSizeChip(sz)}
-                  >
-                    {sz}
-                  </button>
-                ))}
-              </div>
-            </div>
+          {/* Blocking `dartsnut_ask_question` UI — shown while the host waits for an answer. */}
+          {projectTypePicker.visible && projectTypePicker.types.length > 0 ? (
+            <AskQuestionCard
+              question="Are you building a game or a widget?"
+              options={projectTypePicker.types.map((pt) => ({
+                value: pt,
+                label: projectTypeChipLabel(pt),
+              }))}
+              onSubmit={(value) => void handleProjectTypeChip(value as ProjectType)}
+            />
+          ) : widgetSizePicker.visible && widgetSizePicker.sizes.length > 0 ? (
+            <AskQuestionCard
+              question="Which widget display size do you want?"
+              options={widgetSizePicker.sizes.map((sz) => ({
+                value: sz,
+                label: sz,
+              }))}
+              onSubmit={(value) => void handleWidgetSizeChip(value as WidgetSize)}
+            />
           ) : null}
 
           <section className="flex flex-col gap-3 border-0 bg-transparent p-0">

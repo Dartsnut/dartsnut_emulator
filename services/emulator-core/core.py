@@ -410,8 +410,9 @@ class EmulatorCore:
                 )
                 self.start_widget_process_for_current()
             elif action == "capture_screenshot":
-                filepath = self._capture_screenshot_png()
-                self.state.status = f"Screenshot captured: {os.path.basename(filepath)}"
+                filepaths = self._capture_screenshot_png()
+                basenames = ", ".join(os.path.basename(path) for path in filepaths)
+                self.state.status = f"Screenshot captured: {basenames}"
             elif action == "set_button":
                 mapping = {
                     "A": 0x01,
@@ -465,7 +466,24 @@ class EmulatorCore:
             self.state.status = "Command failed"
         return self.snapshot()
 
-    def _capture_screenshot_png(self) -> str:
+    def _write_capture_png(
+        self,
+        img: Image.Image,
+        *,
+        suffix: str | None = None,
+        timestamp: str,
+    ) -> str:
+        capture_dir = os.path.join(self.workspace_root, "capture")
+        os.makedirs(capture_dir, exist_ok=True)
+        if suffix:
+            filename = f"{self.capture_base_name}_{suffix}_{timestamp}.png"
+        else:
+            filename = f"{self.capture_base_name}_{timestamp}.png"
+        filepath = os.path.join(capture_dir, filename)
+        img.save(filepath, format="PNG")
+        return filepath
+
+    def _capture_screenshot_png(self) -> list[str]:
         if self._last_frame_bytes is None:
             raise ValueError("No frame available yet for screenshot capture")
         frame_w = int(self._last_frame_w)
@@ -474,15 +492,18 @@ class EmulatorCore:
             raise ValueError("Invalid frame dimensions for screenshot capture")
 
         frame_img = Image.frombytes("RGB", (frame_w, frame_h), self._last_frame_bytes)
-        canvas = self._build_capture_canvas(frame_img, frame_w, frame_h)
-
-        capture_dir = os.path.join(self.workspace_root, "capture")
-        os.makedirs(capture_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"{self.capture_base_name}_{timestamp}.png"
-        filepath = os.path.join(capture_dir, filename)
-        canvas.save(filepath, format="PNG")
-        return filepath
+        filepaths: list[str] = []
+        canvas = self._build_capture_canvas(frame_img, frame_w, frame_h)
+        filepaths.append(self._write_capture_png(canvas, timestamp=timestamp))
+        if (self.state.widgetType or "").lower() == "widget":
+            surface_scale = 4
+            surface_img = frame_img.resize(
+                (frame_w * surface_scale, frame_h * surface_scale),
+                Image.NEAREST,
+            )
+            filepaths.append(self._write_capture_png(surface_img, suffix="surface", timestamp=timestamp))
+        return filepaths
 
     def _build_capture_canvas(self, frame_img: Image.Image, frame_w: int, frame_h: int) -> Image.Image:
         base_w, base_h = 588, 800

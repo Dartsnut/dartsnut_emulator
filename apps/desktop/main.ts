@@ -2,12 +2,12 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import dotenv from "dotenv";
-import readline from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen } from "electron";
 import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
+import { buildPythonScriptLaunch, bundledPythonRuntimeDir, venvPythonPath } from "./pythonRuntime";
 import {
   IPCChannels,
   type AgentEvent,
@@ -120,8 +120,8 @@ let appQuitRequested = false;
 let pendingTempDirRemovalOnQuit: string | null = null;
 let firstRunComplete = false;
 let bridgeProcess: ReturnType<typeof spawn> | null = null;
-/** Interpreter used to spawn the current bridge (restart bridge when this changes). */
-let bridgePythonExec: string | null = null;
+/** Launch config key for the current bridge (restart bridge when this changes). */
+let bridgeRuntimeKey: string | null = null;
 /** True after graceful bridge teardown so quit does not orphan pygame/SDL audio. */
 let emulatorBridgeTeardownDone = false;
 let emulatorBridgeTeardownInFlight: Promise<void> | null = null;
@@ -136,11 +136,17 @@ if (fs.existsSync(repoEnvPath)) {
 let pythonExec = process.env.DARTSNUT_PYTHON || "python3";
 let pythonRuntimeStatus: string | null = null;
 
-const PYTHON_SETUP_LOG_PREFIX = "[python-setup]";
 let lastWidgetDir: string | null = null;
 const assetPreprocessScriptRelativePath = "scripts/asset_preprocess.py";
 const assetManager = new AssetManager({
-  pythonExec: () => pythonExec,
+  launchScript: (scriptPath, scriptArgs) =>
+    buildPythonScriptLaunch({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      pythonPath: pythonExec,
+      scriptPath,
+      scriptArgs,
+    }),
   scriptPath: path.join(repoRoot, assetPreprocessScriptRelativePath),
   onSnapshot: (snapshot: ManifestSnapshot) => {
     sendToRenderer(IPCChannels.assetsSubscribeManifest, snapshot);
@@ -304,7 +310,6 @@ const proofStatePath = () => path.join(app.getPath("userData"), "first-run-proof
 const tempWorkspaceRecordPath = () => path.join(app.getPath("userData"), "temp-workspace.json");
 const emulatorStatePath = () => path.join(app.getPath("userData"), "emulator-state.json");
 const providerSettingsPath = () => path.join(app.getPath("userData"), "provider-settings.json");
-const pythonSettingsPath = () => path.join(app.getPath("userData"), "python-settings.json");
 const windowStatePath = () => path.join(app.getPath("userData"), "window-state.json");
 
 function readWindowState(): PersistedWindowState | null {
@@ -460,26 +465,6 @@ function writeProviderSettings(input: SaveProviderSettingsRequest): ProviderSett
   const normalized = normalizeProviderSettings(input);
   fs.mkdirSync(path.dirname(providerSettingsPath()), { recursive: true });
   fs.writeFileSync(providerSettingsPath(), JSON.stringify(normalized, null, 2));
-  return normalized;
-}
-
-function readSelectedPythonPath(): string | null {
-  const file = pythonSettingsPath();
-  if (!fs.existsSync(file)) {
-    return null;
-  }
-  try {
-    const content = JSON.parse(fs.readFileSync(file, "utf-8")) as { pythonPath?: string };
-    return typeof content.pythonPath === "string" && content.pythonPath.trim() ? content.pythonPath.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeSelectedPythonPath(pythonPath: string): string {
-  const normalized = pythonPath.trim();
-  fs.mkdirSync(path.dirname(pythonSettingsPath()), { recursive: true });
-  fs.writeFileSync(pythonSettingsPath(), JSON.stringify({ pythonPath: normalized }, null, 2));
   return normalized;
 }
 
@@ -701,7 +686,7 @@ async function gracefulStopEmulatorBridge(
   }
 
   bridgeProcess = null;
-  bridgePythonExec = null;
+  bridgeRuntimeKey = null;
   emulatorState.running = false;
   emulatorState.status = "Bridge stopped";
   if (options?.permanent) {
@@ -719,7 +704,7 @@ function stopPythonBridgeProcess(): void {
     /* ignore */
   }
   bridgeProcess = null;
-  bridgePythonExec = null;
+  bridgeRuntimeKey = null;
   emulatorBridgeTeardownDone = true;
 }
 
@@ -1514,43 +1499,6 @@ function runCommandOkAsync(command: string, args: string[], cwd: string): Promis
   });
 }
 
-function emitPythonSetupLog(source: "stdout" | "stderr", phase: string, line: string): void {
-  const trimmed = line.trimEnd();
-  if (!trimmed.trim()) {
-    return;
-  }
-  emitEmulatorLog({
-    source,
-    text: `${PYTHON_SETUP_LOG_PREFIX} [${phase}] ${trimmed}`,
-    timestampMs: Date.now(),
-  });
-}
-
-function runPackagedPythonSetupCommandAsync(
-  command: string,
-  args: string[],
-  cwd: string,
-  phase: string,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const attach = (stream: NodeJS.ReadableStream | null | undefined, source: "stdout" | "stderr") => {
-      if (!stream) {
-        return;
-      }
-      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-      rl.on("line", (line) => emitPythonSetupLog(source, phase, line));
-    };
-    attach(child.stdout, "stdout");
-    attach(child.stderr, "stderr");
-    child.on("error", () => resolve(false));
-    child.on("close", (code) => resolve(code === 0));
-  });
-}
-
 function isPythonVersionSupportedAsync(executable: string): Promise<boolean> {
   return runCommandOkAsync(
     executable,
@@ -1571,116 +1519,7 @@ function isPythonVersionSupportedSync(executable: string): boolean {
   return result.status === 0;
 }
 
-function compareVersionDirsDescending(a: string, b: string): number {
-  const parse = (s: string) =>
-    s.split(".").map((part) => {
-      const n = parseInt(part, 10);
-      return Number.isNaN(n) ? -1 : n;
-    });
-  const ap = parse(a);
-  const bp = parse(b);
-  const len = Math.max(ap.length, bp.length);
-  for (let i = 0; i < len; i++) {
-    const av = ap[i] ?? -1;
-    const bv = bp[i] ?? -1;
-    if (av !== bv) return bv - av;
-  }
-  return 0;
-}
-
-// Packaged macOS Electron apps inherit launchd's minimal PATH, which breaks
-// asdf/pyenv shims (they shell out to `asdf`/`pyenv` via PATH). Resolve real
-// interpreter binaries directly so the bootstrap step doesn't depend on shims.
-function listInstalledPythonBinaries(home: string): string[] {
-  const installRoots = [
-    path.join(home, ".asdf", "installs", "python"),
-    path.join(home, ".pyenv", "versions"),
-  ];
-  const result: string[] = [];
-  for (const root of installRoots) {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    const versions = entries
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-      .sort(compareVersionDirsDescending);
-    for (const ver of versions) {
-      const binDir = path.join(root, ver, "bin");
-      for (const exe of ["python3.13", "python3.12", "python3.11", "python3.10", "python3"]) {
-        const p = path.join(binDir, exe);
-        if (fs.existsSync(p)) {
-          result.push(p);
-          break;
-        }
-      }
-    }
-  }
-  return result;
-}
-
-function pythonCandidates(): string[] {
-  const home = app.getPath("home");
-  const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
-  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
-  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
-  const windowsVersions = ["312", "311", "310"];
-  const windowsPythonCandidates = [
-    ...windowsVersions.flatMap((version) => [
-      path.join(localAppData, "Programs", "Python", `Python${version}`, "python.exe"),
-      `C:\\Python${version}\\python.exe`,
-      path.join(programFiles, "Python", `Python${version}`, "python.exe"),
-      path.join(programFilesX86, "Python", `Python${version}`, "python.exe")
-    ]),
-    path.join(localAppData, "Microsoft", "WindowsApps", "python.exe"),
-    path.join(home, "scoop", "shims", "python.exe"),
-    path.join(home, ".pyenv", "pyenv-win", "shims", "python.exe")
-  ];
-
-  return [
-    "python3.12",
-    "python3.11",
-    "python3.10",
-    "python3",
-    "python",
-    "/opt/homebrew/bin/python3.12",
-    "/opt/homebrew/bin/python3.11",
-    "/opt/homebrew/bin/python3.10",
-    "/opt/homebrew/bin/python3",
-    "/usr/local/bin/python3.12",
-    "/usr/local/bin/python3.11",
-    "/usr/local/bin/python3.10",
-    "/usr/local/bin/python3",
-    "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
-    "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
-    "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3",
-    ...listInstalledPythonBinaries(home),
-    path.join(home, ".pyenv", "shims", "python3.12"),
-    path.join(home, ".pyenv", "shims", "python3.11"),
-    path.join(home, ".pyenv", "shims", "python3.10"),
-    path.join(home, ".pyenv", "shims", "python3"),
-    path.join(home, ".pyenv", "shims", "python"),
-    path.join(home, ".asdf", "shims", "python3.12"),
-    path.join(home, ".asdf", "shims", "python3.11"),
-    path.join(home, ".asdf", "shims", "python3.10"),
-    path.join(home, ".asdf", "shims", "python3"),
-    path.join(home, ".asdf", "shims", "python"),
-    ...windowsPythonCandidates
-  ];
-}
-
-function venvPythonPath(venvDir: string): string {
-  if (process.platform === "win32") {
-    return path.join(venvDir, "Scripts", "python.exe");
-  }
-  return path.join(venvDir, "bin", "python");
-}
-
-function repoVenvPythonCandidates(): string[] {
-  const venvDir = path.join(repoRoot, ".venv");
+function venvPythonCandidatesForDir(venvDir: string): string[] {
   if (process.platform === "win32") {
     return [
       venvPythonPath(venvDir),
@@ -1697,18 +1536,8 @@ function repoVenvPythonCandidates(): string[] {
   ];
 }
 
-function pythonProcessEnv(executable: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, PYTHONUNBUFFERED: "1" };
-  const venvDir = path.join(repoRoot, ".venv");
-  for (const venvPython of repoVenvPythonCandidates()) {
-    if (path.resolve(executable) === path.resolve(venvPython)) {
-      env.VIRTUAL_ENV = venvDir;
-      const binDir = path.dirname(venvPython);
-      env.PATH = `${binDir}${path.delimiter}${env.PATH ?? ""}`;
-      break;
-    }
-  }
-  return env;
+function repoVenvPythonCandidates(): string[] {
+  return venvPythonCandidatesForDir(path.join(repoRoot, ".venv"));
 }
 
 function firstRunnablePython(candidates: string[]): string | null {
@@ -1727,75 +1556,24 @@ async function canRunEmulatorDepsAsync(executable: string): Promise<boolean> {
   return runCommandOkAsync(executable, ["-c", "import pydartsnut, pygame, PIL; print('ok')"], repoRoot);
 }
 
-async function ensurePackagedPythonRuntime(preferredPython?: string | null): Promise<string | null> {
+async function resolveBundledPythonRuntime(): Promise<string | null> {
   if (!app.isPackaged) {
     return null;
   }
-  const runtimeDir = path.join(app.getPath("userData"), "python-runtime");
-  const runtimePython = venvPythonPath(runtimeDir);
-  if ((await isPythonVersionSupportedAsync(runtimePython)) && (await canRunEmulatorDepsAsync(runtimePython))) {
-    return runtimePython;
-  }
 
-  const pythonBootstrapCandidates = preferredPython
-    ? [preferredPython, ...pythonCandidates()]
-    : pythonCandidates();
-  let bootstrapPython: string | null = null;
-  for (const candidate of pythonBootstrapCandidates) {
-    if (
-      (await runCommandOkAsync(candidate, ["--version"], repoRoot)) &&
-      (await isPythonVersionSupportedAsync(candidate))
-    ) {
-      bootstrapPython = candidate;
-      break;
-    }
-  }
-  if (!bootstrapPython) {
-    setPythonRuntimeStatus("Python runtime setup failed: Python 3.10+ is required.");
-    return null;
-  }
-
-  fs.mkdirSync(runtimeDir, { recursive: true });
-  setPythonRuntimeStatus("Setting up Python runtime (first run). This can take a minute...");
-  emitPythonSetupLog("stdout", "bootstrap", `Using interpreter: ${bootstrapPython}`);
-
-  if (!(await runPackagedPythonSetupCommandAsync(bootstrapPython, ["-m", "venv", runtimeDir], repoRoot, "venv"))) {
-    setPythonRuntimeStatus("Python runtime setup failed while creating virtual environment.");
+  const bundledPython = venvPythonPath(bundledPythonRuntimeDir(process.resourcesPath));
+  if (!fs.existsSync(bundledPython)) {
+    setPythonRuntimeStatus("Bundled Python runtime is missing. Reinstall the application.");
     return null;
   }
   if (
-    !(await runPackagedPythonSetupCommandAsync(
-      runtimePython,
-      ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
-      repoRoot,
-      "pip-upgrade",
-    ))
+    !(await isPythonVersionSupportedAsync(bundledPython)) ||
+    !(await canRunEmulatorDepsAsync(bundledPython))
   ) {
-    setPythonRuntimeStatus("Python runtime setup failed while upgrading pip.");
+    setPythonRuntimeStatus("Bundled Python runtime failed dependency checks. Reinstall the application.");
     return null;
   }
-  const requirementsPath = path.join(repoRoot, "requirements.txt");
-  if (!fs.existsSync(requirementsPath)) {
-    setPythonRuntimeStatus("Python runtime setup failed: requirements.txt is missing.");
-    return null;
-  }
-  if (
-    !(await runPackagedPythonSetupCommandAsync(
-      runtimePython,
-      ["-m", "pip", "install", "-r", requirementsPath],
-      repoRoot,
-      "pip-install",
-    ))
-  ) {
-    setPythonRuntimeStatus("Python runtime setup failed while installing dependencies.");
-    return null;
-  }
-  if (!(await canRunEmulatorDepsAsync(runtimePython))) {
-    setPythonRuntimeStatus("Python runtime setup failed: dependency check did not pass.");
-    return null;
-  }
-  setPythonRuntimeStatus(null);
-  return runtimePython;
+  return bundledPython;
 }
 
 async function resolvePythonExecutable(): Promise<string> {
@@ -1808,43 +1586,32 @@ async function resolvePythonExecutable(): Promise<string> {
       "DARTSNUT_PYTHON is set but missing emulator deps (pydartsnut/pygame-ce/Pillow)."
     );
   }
-  const selectedPythonPath = readSelectedPythonPath();
-  const packagedRuntimePython = app.isPackaged
-    ? await ensurePackagedPythonRuntime(selectedPythonPath)
-    : null;
-  if (packagedRuntimePython) {
-    setPythonRuntimeStatus(null);
-    return packagedRuntimePython;
-  }
 
-  const searchLists: string[][] = app.isPackaged
-    ? [
-      ...(selectedPythonPath ? [[selectedPythonPath]] : []),
-      repoVenvPythonCandidates(),
-      pythonCandidates()
-    ]
-    : [
-      repoVenvPythonCandidates(),
-      ...(selectedPythonPath ? [[selectedPythonPath]] : []),
-      pythonCandidates()
-    ];
-
-  for (const group of searchLists) {
-    const found = firstRunnablePython(group);
-    if (found) {
+  if (app.isPackaged) {
+    const bundledPython = await resolveBundledPythonRuntime();
+    if (bundledPython) {
       setPythonRuntimeStatus(null);
-      return found;
+      return bundledPython;
     }
+    const setupHint = "Bundled Python runtime is not ready. Reinstall the application.";
+    setPythonRuntimeStatus(setupHint);
+    emulatorState.status = setupHint;
+    emitEmulatorState();
+    return venvPythonPath(bundledPythonRuntimeDir(process.resourcesPath));
   }
 
-  const setupHint = app.isPackaged
-    ? "Python 3.10+ with pydartsnut/pygame-ce/Pillow is required. Restart the app after setup completes."
-    : "Missing Python 3.10+ or emulator deps (pydartsnut/pygame-ce/Pillow). Run: pnpm setup:python";
+  const devPython = firstRunnablePython(repoVenvPythonCandidates());
+  if (devPython) {
+    setPythonRuntimeStatus(null);
+    return devPython;
+  }
+
+  const setupHint = "Missing Python 3.10+ or emulator deps (pydartsnut/pygame-ce/Pillow). Run: pnpm setup:python";
   setPythonRuntimeStatus(setupHint);
   emulatorState.status = setupHint;
   emitEmulatorState();
   const venvFallback = repoVenvPythonCandidates().find((candidate) => fs.existsSync(candidate));
-  return venvFallback ?? (process.platform === "win32" ? "python" : "python3");
+  return venvFallback ?? venvPythonPath(path.join(repoRoot, ".venv"));
 }
 
 function startPythonBridge() {
@@ -1856,7 +1623,13 @@ function startPythonBridge() {
     emitEmulatorState();
     return;
   }
-  if (bridgeProcess && bridgePythonExec === pythonExec) {
+  const bridgeLaunch = buildPythonScriptLaunch({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    pythonPath: pythonExec,
+    scriptPath: path.join(repoRoot, "services", "emulator-core", "bridge_service.py"),
+  });
+  if (bridgeProcess && bridgeRuntimeKey === bridgeLaunch.runtimeKey) {
     return;
   }
   void gracefulStopEmulatorBridge().then(() => {
@@ -1872,13 +1645,19 @@ function spawnBridgeAfterStop() {
     return;
   }
   const bridgePath = path.join(repoRoot, "services", "emulator-core", "bridge_service.py");
-  bridgeProcess = spawn(pythonExec, [bridgePath], {
+  const launch = buildPythonScriptLaunch({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    pythonPath: pythonExec,
+    scriptPath: bridgePath,
+  });
+  bridgeProcess = spawn(launch.command, launch.args, {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: repoRoot,
-    env: pythonProcessEnv(pythonExec),
+    env: launch.env,
   });
-  bridgePythonExec = pythonExec;
-  emulatorState.status = `Bridge starting with ${pythonExec}`;
+  bridgeRuntimeKey = launch.runtimeKey;
+  emulatorState.status = `Bridge starting with ${launch.label}`;
   emitEmulatorState();
 
   let stdoutBuffer = "";
@@ -1956,7 +1735,7 @@ function spawnBridgeAfterStop() {
 
   bridgeProcess.on("close", () => {
     bridgeProcess = null;
-    bridgePythonExec = null;
+    bridgeRuntimeKey = null;
     emulatorState.running = false;
     emulatorState.status = "Bridge stopped";
     emitEmulatorState();
@@ -2521,47 +2300,9 @@ ipcMain.handle(IPCChannels.deployStop, async (): Promise<DeployActionResponse> =
 });
 ipcMain.handle(IPCChannels.getProviderSettings, () => readProviderSettings());
 ipcMain.handle(IPCChannels.getPythonRuntimeStatus, () => pythonRuntimeStatus);
-ipcMain.handle(IPCChannels.getSelectedPythonPath, () => readSelectedPythonPath());
 ipcMain.handle(IPCChannels.saveProviderSettings, (_event: unknown, request: SaveProviderSettingsRequest) =>
   writeProviderSettings(request)
 );
-ipcMain.handle(IPCChannels.pickPythonPath, async () => {
-  const result = await dialog.showOpenDialog({
-    properties: ["openFile"],
-    title: "Select Python executable",
-    defaultPath: readSelectedPythonPath() ?? app.getPath("home")
-  });
-  if (result.canceled || !result.filePaths[0]) {
-    return {
-      accepted: false,
-      selectedPath: null,
-      error: "cancelled"
-    };
-  }
-  const selectedPath = result.filePaths[0];
-  if (!isPythonVersionSupportedSync(selectedPath)) {
-    return {
-      accepted: false,
-      selectedPath,
-      error: "Python 3.10+ is required."
-    };
-  }
-  if (!canRunEmulatorDeps(selectedPath)) {
-    return {
-      accepted: false,
-      selectedPath,
-      error: "That Python is missing emulator deps (pydartsnut, pygame-ce, Pillow)."
-    };
-  }
-  const persistedPath = writeSelectedPythonPath(selectedPath);
-  pythonExec = await resolvePythonExecutable();
-  await gracefulStopEmulatorBridge();
-  startPythonBridge();
-  return {
-    accepted: true,
-    selectedPath: persistedPath
-  };
-});
 
 ipcMain.handle(IPCChannels.startNewProject, async () => {
   const proceed = await ensureTemporaryWorkspaceResolvedForGuard("new_project");

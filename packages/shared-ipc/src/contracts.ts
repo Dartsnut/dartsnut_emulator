@@ -22,8 +22,6 @@ export const IPCChannels = {
   saveProviderSettings: "agent:save-provider-settings",
   getPythonRuntimeStatus: "agent:get-python-runtime-status",
   subscribePythonRuntimeStatus: "agent:subscribe-python-runtime-status",
-  getSelectedPythonPath: "agent:get-selected-python-path",
-  pickPythonPath: "agent:pick-python-path",
   assetsGetManifest: "assets:get-manifest",
   assetsSubscribeManifest: "assets:subscribe-manifest",
   assetsBindSlot: "assets:bind-slot",

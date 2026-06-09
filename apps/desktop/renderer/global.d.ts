@@ -61,8 +61,6 @@ declare global {
       cancelAgent: () => Promise<{ ok: boolean }>;
       getProviderSettings: () => Promise<ProviderSettings>;
       getPythonRuntimeStatus: () => Promise<string | null>;
-      getSelectedPythonPath: () => Promise<string | null>;
-      pickPythonPath: () => Promise<{ accepted: boolean; selectedPath: string | null; error?: string }>;
       saveProviderSettings: (request: SaveProviderSettingsRequest) => Promise<ProviderSettings>;
       onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
       onMainProcessConsoleMirror: (listener: (payload: MainProcessConsoleMirrorPayload) => void) => () => void;

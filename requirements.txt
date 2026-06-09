@@ -1,6 +1,4 @@
-pydartsnut
-pygame-ce
-Pillow
-numpy
-python-dotenv
-aiohttp
+pydartsnut==1.2.1
+pygame-ce==2.5.7
+Pillow==12.1.1
+numpy==2.4.2

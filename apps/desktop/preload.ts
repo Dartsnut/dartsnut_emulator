@@ -70,14 +70,6 @@ const api = {
     ipcRenderer.invoke(IPCChannels.getProviderSettings) as Promise<ProviderSettings>,
   getPythonRuntimeStatus: () =>
     ipcRenderer.invoke(IPCChannels.getPythonRuntimeStatus) as Promise<string | null>,
-  getSelectedPythonPath: () =>
-    ipcRenderer.invoke(IPCChannels.getSelectedPythonPath) as Promise<string | null>,
-  pickPythonPath: () =>
-    ipcRenderer.invoke(IPCChannels.pickPythonPath) as Promise<{
-      accepted: boolean;
-      selectedPath: string | null;
-      error?: string;
-    }>,
   saveProviderSettings: (request: SaveProviderSettingsRequest) =>
     ipcRenderer.invoke(IPCChannels.saveProviderSettings, request) as Promise<ProviderSettings>,
   onAgentEvent: (listener: (event: AgentEvent) => void) => {

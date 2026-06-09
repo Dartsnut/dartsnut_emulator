@@ -10,12 +10,13 @@
     "dev:electron:tsc": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
     "dev:electron:run": "wait-on tcp:5173 file:dist-electron/main.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js",
     "build": "pnpm --dir ../../packages/shared-ipc run build && pnpm --dir ../../packages/emulator-protocol run build && pnpm --dir ../../packages/agent-runtime run build && tsc -p tsconfig.electron.json && vite build",
-    "package": "pnpm run build && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --win portable:x64 --publish never",
-    "package:dir": "pnpm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac --dir -c.mac.identity=null --publish never",
-    "package:dir:win": "pnpm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --win --dir --publish never",
+    "bundle:python": "node ../../scripts/build_bundled_python.mjs",
+    "package": "pnpm run build && pnpm run bundle:python && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --win portable:x64 --publish never",
+    "package:dir": "pnpm run build && pnpm run bundle:python && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac --dir -c.mac.identity=null --publish never",
+    "package:dir:win": "pnpm run build && pnpm run bundle:python -- --target win-x64 && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --win --dir --publish never",
     "start:packaged": "open release/mac-arm64/DartsnutChat.app",
-    "package:mac": "pnpm run build && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --publish never",
-    "package:win": "pnpm run build && pnpm exec electron-builder --win portable:x64 --publish never"
+    "package:mac": "pnpm run build && pnpm run bundle:python && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --publish never",
+    "package:win": "pnpm run build && pnpm run bundle:python -- --target win-x64 && pnpm exec electron-builder --win portable:x64 --publish never"
   },
   "dependencies": {
     "@dartsnut/agent-runtime": "workspace:*",
@@ -60,6 +61,20 @@
       "package.json"
     ],
     "extraResources": [
+      {
+        "from": "resources/python-runtime",
+        "to": "python-runtime",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/uv",
+        "to": "uv",
+        "filter": [
+          "**/*"
+        ]
+      },
       {
         "from": "../../services/emulator-core",
         "to": "services/emulator-core"

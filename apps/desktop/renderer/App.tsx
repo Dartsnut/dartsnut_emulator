@@ -226,7 +226,6 @@ export function App() {
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>({
     userDefine: EMPTY_USER_DEFINE
   });
-  const [selectedPythonPath, setSelectedPythonPath] = useState<string | null>(null);
   const [providerSettingsError, setProviderSettingsError] = useState<string | null>(null);
   const [providerSettingsNotice, setProviderSettingsNotice] = useState<string | null>(null);
   const [savingProviderSettings, setSavingProviderSettings] = useState(false);
@@ -483,9 +482,6 @@ export function App() {
     api.getProviderSettings().then(setProviderSettings).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Failed to load provider settings.";
       setProviderSettingsError(message);
-    });
-    api.getSelectedPythonPath().then(setSelectedPythonPath).catch(() => {
-      setSelectedPythonPath(null);
     });
     api.getPythonRuntimeStatus().then(setPythonRuntimeStatus).catch(() => {
       setPythonRuntimeStatus(null);
@@ -1010,28 +1006,6 @@ export function App() {
       setProviderSettingsError(message);
     } finally {
       setSavingProviderSettings(false);
-    }
-  }
-
-  async function handlePickPythonPath() {
-    if (!api) {
-      return;
-    }
-    setProviderSettingsError(null);
-    setProviderSettingsNotice(null);
-    try {
-      const result = await api.pickPythonPath();
-      if (!result.accepted) {
-        if (result.error && result.error !== "cancelled") {
-          setProviderSettingsError(result.error);
-        }
-        return;
-      }
-      setSelectedPythonPath(result.selectedPath);
-      setProviderSettingsNotice("Python executable updated.");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to set Python executable.";
-      setProviderSettingsError(message);
     }
   }
 
@@ -1624,19 +1598,6 @@ export function App() {
                 >
                   {savingProviderSettings ? "Saving..." : "Save"}
                 </button>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <span>Python executable</span>
-                <div className="text-xs text-fg-muted">{selectedPythonPath ?? "(auto detect)"}</div>
-                <div className="flex justify-start">
-                  <button
-                    type="button"
-                    className="ui-btn-secondary mt-0 disabled:cursor-not-allowed disabled:opacity-55"
-                    onClick={() => void handlePickPythonPath()}
-                  >
-                    Choose Python
-                  </button>
-                </div>
               </div>
             </div>
           </section>

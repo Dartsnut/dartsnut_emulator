@@ -11,6 +11,9 @@
 .DS_Store
 __pycache__
 .venv
+.cache/
+apps/desktop/resources/python-runtime/
+apps/desktop/resources/uv/
 
 **/release/
 openspec/

@@ -70,6 +70,60 @@ class LifecycleLoggingTests(unittest.TestCase):
             self.assertTrue(any("spawn broken" in text for text in texts), texts)
 
 
+class WidgetLaunchCommandTests(unittest.TestCase):
+    def test_widget_launch_uses_uv_workspace_run_when_venv_ready(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            demo_dir = workspace / "demo"
+            _write_widget_conf(workspace, "demo")
+            (demo_dir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            venv_python = demo_dir / ".venv" / "bin" / "python"
+            venv_python.parent.mkdir(parents=True, exist_ok=True)
+            venv_python.write_text("", encoding="utf-8")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+
+            core.apply_command({"type": "set_path", "path": "demo"})
+            uv_bin = "/tmp/dartsnut-uv-test"
+            captured: dict[str, object] = {}
+
+            def fake_isfile(path: str) -> bool:
+                normalized = str(path)
+                return normalized == uv_bin or normalized == str(venv_python)
+
+            def fake_popen(command, **kwargs):
+                captured["command"] = command
+                captured["env"] = kwargs.get("env")
+                raise OSError("spawn broken")
+
+            with (
+                mock.patch.object(module.time, "sleep", lambda _: None),
+                mock.patch.object(module.os.path, "isfile", side_effect=fake_isfile),
+                mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=True),
+                mock.patch.dict(
+                    module.os.environ,
+                    {
+                        "DARTSNUT_UV_BIN": uv_bin,
+                        "UV_PYTHON": "/tmp/dartsnut-python-test",
+                        "UV_NO_SYNC": "1",
+                    },
+                    clear=False,
+                ),
+                mock.patch.object(module.subprocess, "Popen", side_effect=fake_popen),
+            ):
+                core.apply_command({"type": "reload_widget"})
+
+            command = captured.get("command", [])
+            child_env = captured.get("env", {})
+            self.assertNotIn("UV_NO_SYNC", child_env)
+            self.assertNotIn("UV_NO_PROJECT", child_env)
+            self.assertEqual(command[0], uv_bin)
+            self.assertEqual(command[1:4], ["run", "--directory", str(demo_dir)])
+            self.assertEqual(command[4], "main.py")
+
+
 class ShutdownCommandTests(unittest.TestCase):
     def test_shutdown_stops_widget(self):
         module = _load_core_module()

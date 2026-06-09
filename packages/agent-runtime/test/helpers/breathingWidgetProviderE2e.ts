@@ -5,7 +5,6 @@ import { spawnSync } from "node:child_process";
 import {
   validateDeployWorkspaceConf,
   type AgentEvent,
-  type LlmProviderId,
   type WidgetSize
 } from "@dartsnut/shared-ipc";
 import {
@@ -26,18 +25,16 @@ import { WorkspacePolicy } from "../../src/workspacePolicy";
 
 export const INITIAL_BREATHING_WIDGET_PROMPT = "我想要一个可爱的呼吸小组件";
 export const BREATHING_WIDGET_SIZE: WidgetSize = "128x128";
-export const BUILTIN_E2E_PROVIDERS = ["xiaomi", "gpt", "gemini", "claude"] as const satisfies readonly LlmProviderId[];
 
 const DEFAULT_E2E_TIMEOUT_MS = 600_000;
-const SLOW_PROVIDER_E2E_TIMEOUT_MS = 1_200_000;
 
-/** Per-provider Vitest timeout; override with `E2E_PROVIDER_TIMEOUT_MS`. */
-export function e2eTimeoutMsForProvider(providerId: LlmProviderId): number {
+/** Vitest timeout; override with `E2E_PROVIDER_TIMEOUT_MS`. */
+export function e2eTimeoutMs(): number {
   const fromEnv = process.env.E2E_PROVIDER_TIMEOUT_MS?.trim();
   if (fromEnv && Number.isFinite(Number(fromEnv))) {
     return Number(fromEnv);
   }
-  return providerId === "claude" ? SLOW_PROVIDER_E2E_TIMEOUT_MS : DEFAULT_E2E_TIMEOUT_MS;
+  return DEFAULT_E2E_TIMEOUT_MS;
 }
 
 export interface BreathingWidgetE2eBaseline {
@@ -51,7 +48,6 @@ export interface BreathingWidgetE2eBaseline {
 }
 
 export interface BreathingWidgetFlowResult {
-  providerId: LlmProviderId;
   hostIntakeActions: string[];
   askQuestions: string[];
   intakeToolNames: string[];
@@ -177,14 +173,14 @@ function wrapProviderForE2eLogging(
   return wrapped as ProviderClient;
 }
 
-export function providerConfigForE2e(providerId: LlmProviderId): ProviderConfig {
+export function providerConfigForE2e(): ProviderConfig {
   ensureE2eRepoRoot();
-  return loadProviderConfig({ activeProvider: providerId });
+  return loadProviderConfig();
 }
 
-export function canRunProviderE2e(providerId: LlmProviderId): boolean {
-  const config = providerConfigForE2e(providerId);
-  return validateProviderConfig(config, providerId).ok;
+export function canRunProviderE2e(): boolean {
+  const config = providerConfigForE2e();
+  return validateProviderConfig(config).ok;
 }
 
 function resolveSkillsDir(): string {
@@ -440,17 +436,14 @@ async function withE2eRetry<T>(fn: () => Promise<T>): Promise<T> {
   throw lastError;
 }
 
-export async function runBreathingWidgetFlow(
-  providerId: LlmProviderId,
-  config: ProviderConfig
-): Promise<BreathingWidgetFlowResult> {
+export async function runBreathingWidgetFlow(config: ProviderConfig): Promise<BreathingWidgetFlowResult> {
   const log = (phase: string) => {
     if (process.env.E2E_VERBOSE === "1") {
-      console.log(`[e2e ${providerId}] ${phase}`);
+      console.log(`[e2e breathing-widget] ${phase}`);
     }
   };
   log("start");
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `dartsnut-breathing-e2e-${providerId}-`));
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-breathing-e2e-"));
   const skillsDir = resolveSkillsDir();
   const persistence = new AgentSessionPersistence(tempRoot);
   const events: AgentEvent[] = [];
@@ -490,7 +483,7 @@ export async function runBreathingWidgetFlow(
     }
   });
 
-  const provider = wrapProviderForE2eLogging(new ProviderClient(config), providerId);
+  const provider = wrapProviderForE2eLogging(new ProviderClient(config), "breathing-widget");
 
   const unifiedEngine = new SessionEngine({
     provider,
@@ -558,7 +551,6 @@ export async function runBreathingWidgetFlow(
   log("done");
 
   return {
-    providerId,
     hostIntakeActions,
     askQuestions,
     intakeToolNames,

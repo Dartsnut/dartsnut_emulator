@@ -28,10 +28,8 @@ import {
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
-  type PrepareWorkspaceForProviderSwitchResponse,
   type ProjectType,
   type PromptRequest,
-  type LlmProviderId,
   type ProviderSettings,
   type ReadPreviewRequest,
   type ReadPreviewResponse,
@@ -48,6 +46,11 @@ import {
   type MainProcessConsoleMirrorPayload,
   type IntakeSubmitQuestionAnswerRequest,
   type IntakeSubmitQuestionAnswerResponse,
+  type CommunitySessionInfo,
+  type CommunityLoginRequest,
+  type CommunityLoginResponse,
+  type CommunityLogoutResponse,
+  type CommunityListDeployDevicesResponse,
   type AgentSessionWorkspaceSummary,
   resolveSessionUserLocale,
   type UserLocale,
@@ -58,6 +61,8 @@ import {
 import {
   loadProviderConfig,
   validateProviderConfig,
+  mergeUserDefineWithEnvDefaults,
+  readUserDefineDefaultsFromEnv,
   buildAgentModelConfig,
   SessionEngine,
   AgentSessionRuntime,
@@ -87,6 +92,8 @@ import {
 } from "@dartsnut/emulator-protocol";
 import { AssetManager } from "./assetManager";
 import { DeployMachineSession } from "./deployMachine";
+import { createCommunityClient, type CommunityClient } from "./communityClient";
+import { clearCommunityAuth, readCommunityAuth, writeCommunityAuth } from "./communityAuth";
 import {
   DEFAULT_WINDOW_HEIGHT,
   DEFAULT_WINDOW_WIDTH,
@@ -353,20 +360,6 @@ function writeWindowState(state: PersistedWindowState): void {
   );
 }
 
-const LLM_PROVIDER_IDS: readonly LlmProviderId[] = ["gpt", "gemini", "xiaomi", "claude", "user-define"];
-
-/** Hidden from settings UI and remapped on load until Claude tool streaming is stable. */
-const UI_DISABLED_LLM_PROVIDERS = new Set<LlmProviderId>(["claude"]);
-const UI_FALLBACK_LLM_PROVIDER: LlmProviderId = "gpt";
-
-function isLlmProviderId(value: unknown): value is LlmProviderId {
-  return typeof value === "string" && (LLM_PROVIDER_IDS as readonly string[]).includes(value);
-}
-
-function resolveUiSelectableProvider(id: LlmProviderId): LlmProviderId {
-  return UI_DISABLED_LLM_PROVIDERS.has(id) ? UI_FALLBACK_LLM_PROVIDER : id;
-}
-
 function normalizeUserDefineSettings(input?: Partial<UserDefineProviderSettings> | null): UserDefineProviderSettings {
   return {
     baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl.trim() : "",
@@ -376,6 +369,7 @@ function normalizeUserDefineSettings(input?: Partial<UserDefineProviderSettings>
 }
 
 type LegacyProviderSettingsFile = Partial<ProviderSettings> & {
+  activeProvider?: string;
   baseUrl?: string;
   apiKey?: string;
   model?: string;
@@ -390,52 +384,30 @@ function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): P
     input.userDefine == null;
 
   if (legacyFlat) {
-    const userDefine = normalizeUserDefineSettings({
-      baseUrl: input.baseUrl,
-      apiKey: input.apiKey,
-      model: input.model
-    });
-    const hasLegacyCredentials = Boolean(userDefine.apiKey || userDefine.model || userDefine.baseUrl);
     return {
-      activeProvider: hasLegacyCredentials ? "user-define" : "gpt",
-      userDefine
+      userDefine: mergeUserDefineWithEnvDefaults(
+        normalizeUserDefineSettings({
+          baseUrl: input.baseUrl,
+          apiKey: input.apiKey,
+          model: input.model
+        })
+      )
     };
   }
 
   const userDefine = normalizeUserDefineSettings(input?.userDefine);
-  const hasUserDefineCredentials = Boolean(userDefine.apiKey || userDefine.model || userDefine.baseUrl);
-  const rawProvider = isLlmProviderId(input?.activeProvider)
-    ? input.activeProvider
-    : hasUserDefineCredentials
-      ? "user-define"
-      : "gpt";
+  const hadBuiltinProvider =
+    typeof input?.activeProvider === "string" &&
+    input.activeProvider !== "user-define" &&
+    !userDefine.apiKey &&
+    !userDefine.model &&
+    !userDefine.baseUrl;
 
-  return { activeProvider: resolveUiSelectableProvider(rawProvider), userDefine };
-}
+  if (hadBuiltinProvider) {
+    return { userDefine: readUserDefineDefaultsFromEnv() };
+  }
 
-function maskApiKeyForPreview(value: string): string {
-  if (!value) {
-    return "";
-  }
-  if (value.length <= 8) {
-    return "••••••••";
-  }
-  return `${value.slice(0, 4)}…${value.slice(-4)}`;
-}
-
-function enrichProviderSettingsForRenderer(stored: ProviderSettings): ProviderSettings {
-  if (stored.activeProvider === "user-define") {
-    return stored;
-  }
-  const config = loadProviderConfig({ activeProvider: stored.activeProvider });
-  return {
-    ...stored,
-    resolvedPreview: {
-      baseUrl: config.baseUrl,
-      apiKeyMasked: maskApiKeyForPreview(config.apiKey),
-      model: config.model
-    }
-  };
+  return { userDefine: mergeUserDefineWithEnvDefaults(userDefine) };
 }
 
 function readProviderSettings(): ProviderSettings {
@@ -446,7 +418,13 @@ function readProviderSettings(): ProviderSettings {
   try {
     const content = JSON.parse(fs.readFileSync(file, "utf-8")) as LegacyProviderSettingsFile;
     const normalized = normalizeProviderSettings(content);
-    if (isLlmProviderId(content.activeProvider) && UI_DISABLED_LLM_PROVIDERS.has(content.activeProvider)) {
+    const hadLegacyShape =
+      typeof content.activeProvider === "string" ||
+      (content.userDefine == null &&
+        (typeof content.baseUrl === "string" ||
+          typeof content.apiKey === "string" ||
+          typeof content.model === "string"));
+    if (hadLegacyShape) {
       writeProviderSettings(normalized);
     }
     return normalized;
@@ -457,15 +435,6 @@ function readProviderSettings(): ProviderSettings {
 
 function validateProviderSettingsInput(input: SaveProviderSettingsRequest): { ok: true } | { ok: false; error: string } {
   const normalized = normalizeProviderSettings(input);
-  if (!isLlmProviderId(normalized.activeProvider)) {
-    return { ok: false, error: "Invalid provider selection." };
-  }
-  if (UI_DISABLED_LLM_PROVIDERS.has(input.activeProvider)) {
-    return { ok: false, error: "Claude is not available in the app right now." };
-  }
-  if (normalized.activeProvider !== "user-define") {
-    return { ok: true };
-  }
   const ud = normalized.userDefine;
   if (!ud.apiKey) {
     return { ok: false, error: "API key is required." };
@@ -491,7 +460,7 @@ function writeProviderSettings(input: SaveProviderSettingsRequest): ProviderSett
   const normalized = normalizeProviderSettings(input);
   fs.mkdirSync(path.dirname(providerSettingsPath()), { recursive: true });
   fs.writeFileSync(providerSettingsPath(), JSON.stringify(normalized, null, 2));
-  return enrichProviderSettingsForRenderer(normalized);
+  return normalized;
 }
 
 function readSelectedPythonPath(): string | null {
@@ -885,10 +854,9 @@ async function maybeRecoverTrackedTempWorkspaceAtLaunch(): Promise<void> {
 function providerStatus(): BootstrapState["providerStatus"] {
   const stored = readProviderSettings();
   const config = loadProviderConfig({
-    activeProvider: stored.activeProvider,
     userDefine: stored.userDefine
   });
-  const validation = validateProviderConfig(config, stored.activeProvider);
+  const validation = validateProviderConfig(config);
   return validation.ok ? "ready" : "missing_config";
 }
 
@@ -2049,10 +2017,9 @@ function buildSession(
   }
   const providerSettings = readProviderSettings();
   const config = loadProviderConfig({
-    activeProvider: providerSettings.activeProvider,
     userDefine: providerSettings.userDefine
   });
-  const validation = validateProviderConfig(config, providerSettings.activeProvider);
+  const validation = validateProviderConfig(config);
   if (!validation.ok) {
     throw new Error(validation.error);
   }
@@ -2066,7 +2033,6 @@ function buildSession(
       : null);
   const engine = new SessionEngine({
     agentModelConfig: buildAgentModelConfig({
-      activeProvider: providerSettings.activeProvider,
       model: config.model,
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
@@ -2316,23 +2282,84 @@ ipcMain.handle(
   }
 );
 
+let communityClientSingleton: CommunityClient | null = null;
+
+function getCommunityClient(): CommunityClient {
+  if (!communityClientSingleton) {
+    communityClientSingleton = createCommunityClient();
+  }
+  return communityClientSingleton;
+}
+
+function getCommunityUserDataPath(): string {
+  return app.getPath("userData");
+}
+
+ipcMain.handle(IPCChannels.communityGetSession, (): CommunitySessionInfo => {
+  const config = getCommunityClient().getConfig();
+  const auth = readCommunityAuth(getCommunityUserDataPath());
+  return {
+    loggedIn: Boolean(auth?.token),
+    account: auth?.account ?? null,
+    hasSupabase: config.hasSupabase,
+    googleClientId: config.googleClientId
+  };
+});
+
 ipcMain.handle(
-  IPCChannels.prepareWorkspaceForProviderSwitch,
-  async (): Promise<PrepareWorkspaceForProviderSwitchResponse> => {
-    if (isTemporaryWorkspaceActiveNow()) {
-      await discardTrackedTemporaryProject();
-      return { ok: true, state: getBootstrapState() };
+  IPCChannels.communityLogin,
+  async (_event: unknown, request: CommunityLoginRequest): Promise<CommunityLoginResponse> => {
+    const client = getCommunityClient();
+    if (request.method === "password") {
+      const account = String(request.account || "").trim();
+      const password = String(request.password || "");
+      if (!account || !password) {
+        return { ok: false, code: "invalid_credentials", message: "Please enter account and password." };
+      }
+      const result = await client.loginWithPassword(account, password);
+      if (!result.ok) {
+        return { ok: false, code: result.code, message: result.message };
+      }
+      writeCommunityAuth(getCommunityUserDataPath(), { token: result.token, account: result.account });
+      return { ok: true, account: result.account };
     }
-    const ws = workspaceRoot;
-    if (!ws) {
-      return { ok: false, reason: "no_workspace" };
+    const idToken = String(request.idToken || "").trim();
+    if (!idToken) {
+      return { ok: false, code: "invalid_credentials", message: "Google sign-in did not return a token." };
     }
-    const persistence = buildWorkspaceSessionPersistence(ws);
-    if (!persistence) {
-      return { ok: false, reason: "persistence_disabled" };
+    const result = await client.loginWithGoogleIdToken(idToken);
+    if (!result.ok) {
+      return { ok: false, code: result.code, message: result.message };
     }
-    persistence.archiveOrResetSession("provider-switch");
-    return { ok: true, state: getBootstrapState() };
+    writeCommunityAuth(getCommunityUserDataPath(), { token: result.token, account: result.account });
+    return { ok: true, account: result.account };
+  }
+);
+
+ipcMain.handle(IPCChannels.communityLogout, (): CommunityLogoutResponse => {
+  clearCommunityAuth(getCommunityUserDataPath());
+  return { ok: true };
+});
+
+ipcMain.handle(
+  IPCChannels.communityListDeployDevices,
+  async (): Promise<CommunityListDeployDevicesResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    const result = await getCommunityClient().listDeployDevices(auth.token);
+    if (!result.ok) {
+      if (result.code === "session_expired") {
+        clearCommunityAuth(getCommunityUserDataPath());
+      }
+      return { ok: false, code: result.code, message: result.message };
+    }
+    return {
+      ok: true,
+      devices: result.devices,
+      supabaseConfigured: result.supabaseConfigured
+    };
   }
 );
 
@@ -2492,9 +2519,7 @@ ipcMain.handle(IPCChannels.deployStop, async (): Promise<DeployActionResponse> =
     return { ok: false, error: message };
   }
 });
-ipcMain.handle(IPCChannels.getProviderSettings, () =>
-  enrichProviderSettingsForRenderer(readProviderSettings())
-);
+ipcMain.handle(IPCChannels.getProviderSettings, () => readProviderSettings());
 ipcMain.handle(IPCChannels.getPythonRuntimeStatus, () => pythonRuntimeStatus);
 ipcMain.handle(IPCChannels.getSelectedPythonPath, () => readSelectedPythonPath());
 ipcMain.handle(IPCChannels.saveProviderSettings, (_event: unknown, request: SaveProviderSettingsRequest) =>
@@ -2819,7 +2844,6 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
           ? "game"
           : undefined);
     const routedWidgetSize = req.widgetSize ?? hintedRouting?.widgetSize;
-    const intakeReadyNow = isIntakeStateReady(hostState);
     const session = buildSession(req.templateMode, {
       completionTools: AGENT_TOOL_SCHEMAS,
       hostIntakeToolHandler: sharedIntakeHandler,
@@ -2829,8 +2853,8 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
       initialConversation,
       latestUserTextForLocale: req.prompt,
       intakeState: hostState,
-      projectType: intakeReadyNow ? routedProjectType : undefined,
-      widgetSize: intakeReadyNow ? routedWidgetSize : undefined,
+      projectType: routedProjectType ?? hintedRouting?.projectType,
+      widgetSize: routedWidgetSize ?? hintedRouting?.widgetSize,
       getIntakeState: () => hostState
     });
     if (routedTemplateMode) {

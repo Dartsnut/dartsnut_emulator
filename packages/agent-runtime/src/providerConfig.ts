@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
-import type { LlmProviderId, UserDefineProviderSettings } from "@dartsnut/shared-ipc";
+import type { UserDefineProviderSettings } from "@dartsnut/shared-ipc";
 
-export type { LlmProviderId, UserDefineProviderSettings };
+export type { UserDefineProviderSettings };
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -21,23 +21,14 @@ export interface ProviderConfigOverrides {
 }
 
 export interface LoadProviderConfigInput {
-  activeProvider: LlmProviderId;
   userDefine?: UserDefineProviderSettings;
   fetchImpl?: typeof fetch;
 }
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_GPT_MODEL = "gpt-4.1-mini";
-const DEFAULT_XIAOMI_MODEL = "mimo-v2.5-pro";
 
 type ProcessWithResourcesPath = NodeJS.Process & { resourcesPath?: string };
-
-const PROVIDER_ENV_PREFIX: Record<Exclude<LlmProviderId, "user-define">, string> = {
-  gpt: "GPT",
-  gemini: "GEMINI",
-  xiaomi: "XIAOMI",
-  claude: "CLAUDE"
-};
 
 /**
  * Ensure base URL joins SDK paths like `/chat/completions` as `.../v1/chat/completions`.
@@ -96,7 +87,9 @@ function readEnvTriple(
   return { baseUrl, apiKey, model };
 }
 
-function resolveGptEnvTriple(): { baseUrl: string; apiKey: string; model: string } {
+/** Reads GPT_* with OPENAI_* fallback from the repo `.env` (not a selectable provider preset). */
+export function readUserDefineDefaultsFromEnv(): UserDefineProviderSettings {
+  loadEnvFromDisk();
   const gpt = readEnvTriple("GPT", {
     baseUrl: DEFAULT_OPENAI_BASE_URL,
     model: DEFAULT_GPT_MODEL
@@ -106,7 +99,7 @@ function resolveGptEnvTriple(): { baseUrl: string; apiKey: string; model: string
     Boolean(process.env.GPT_API_KEY?.trim()) ||
     Boolean(process.env.GPT_MODEL?.trim());
   if (hasGpt) {
-    return gpt;
+    return { baseUrl: gpt.baseUrl, apiKey: gpt.apiKey, model: gpt.model };
   }
   const legacy = readEnvTriple("OPENAI", {
     baseUrl: DEFAULT_OPENAI_BASE_URL,
@@ -119,39 +112,31 @@ function resolveGptEnvTriple(): { baseUrl: string; apiKey: string; model: string
   };
 }
 
-export function resolveProviderConfigForProvider(
-  providerId: LlmProviderId,
-  userDefine?: UserDefineProviderSettings
-): ProviderConfig {
-  if (providerId === "user-define") {
-    const ud = userDefine ?? { baseUrl: "", apiKey: "", model: "" };
-    return {
-      baseUrl: normalizeProviderBaseUrl(ud.baseUrl),
-      apiKey: ud.apiKey.trim(),
-      model: ud.model.trim()
-    };
-  }
-
-  let triple: { baseUrl: string; apiKey: string; model: string };
-  if (providerId === "gpt") {
-    triple = resolveGptEnvTriple();
-  } else if (providerId === "xiaomi") {
-    triple = readEnvTriple("XIAOMI", { model: DEFAULT_XIAOMI_MODEL });
-  } else {
-    const prefix = PROVIDER_ENV_PREFIX[providerId];
-    triple = readEnvTriple(prefix);
-  }
-
+export function mergeUserDefineWithEnvDefaults(
+  userDefine: UserDefineProviderSettings
+): UserDefineProviderSettings {
+  const envDefaults = readUserDefineDefaultsFromEnv();
   return {
-    baseUrl: normalizeProviderBaseUrl(triple.baseUrl || DEFAULT_OPENAI_BASE_URL),
-    apiKey: triple.apiKey,
-    model: triple.model
+    baseUrl: userDefine.baseUrl.trim() || envDefaults.baseUrl,
+    apiKey: userDefine.apiKey.trim() || envDefaults.apiKey,
+    model: userDefine.model.trim() || envDefaults.model
   };
 }
 
-/** @deprecated Use {@link resolveProviderConfigForProvider} with an explicit provider id. */
+export function resolveUserDefineConfig(userDefine?: UserDefineProviderSettings): ProviderConfig {
+  const merged = mergeUserDefineWithEnvDefaults(
+    userDefine ?? { baseUrl: "", apiKey: "", model: "" }
+  );
+  return {
+    baseUrl: normalizeProviderBaseUrl(merged.baseUrl),
+    apiKey: merged.apiKey,
+    model: merged.model
+  };
+}
+
+/** @deprecated Use {@link resolveUserDefineConfig}. */
 export function resolveProviderConfig(overrides?: ProviderConfigOverrides): ProviderConfig {
-  const base = resolveProviderConfigForProvider("gpt");
+  const base = resolveUserDefineConfig();
   const mergedBase = overrides?.baseUrl?.trim() || base.baseUrl;
   return {
     baseUrl: normalizeProviderBaseUrl(mergedBase),
@@ -162,56 +147,24 @@ export function resolveProviderConfig(overrides?: ProviderConfigOverrides): Prov
 }
 
 export function loadProviderConfig(input?: LoadProviderConfigInput | ProviderConfigOverrides): ProviderConfig {
-  loadEnvFromDisk();
-  if (input && "activeProvider" in input) {
+  if (input && "userDefine" in input) {
     return {
-      ...resolveProviderConfigForProvider(input.activeProvider, input.userDefine),
+      ...resolveUserDefineConfig(input.userDefine),
       fetchImpl: input.fetchImpl
     };
   }
   return resolveProviderConfig(input);
 }
 
-function apiKeyEnvLabel(providerId: LlmProviderId): string {
-  if (providerId === "user-define") {
-    return "User define API key";
-  }
-  if (providerId === "gpt") {
-    const hasGpt =
-      Boolean(process.env.GPT_API_KEY?.trim()) ||
-      Boolean(process.env.GPT_BASE_URL?.trim()) ||
-      Boolean(process.env.GPT_MODEL?.trim());
-    return hasGpt ? "GPT_API_KEY" : "OPENAI_API_KEY";
-  }
-  return `${PROVIDER_ENV_PREFIX[providerId]}_API_KEY`;
-}
-
-function modelEnvLabel(providerId: LlmProviderId): string {
-  if (providerId === "user-define") {
-    return "User define model";
-  }
-  if (providerId === "gpt") {
-    const hasGpt =
-      Boolean(process.env.GPT_API_KEY?.trim()) ||
-      Boolean(process.env.GPT_BASE_URL?.trim()) ||
-      Boolean(process.env.GPT_MODEL?.trim());
-    return hasGpt ? "GPT_MODEL" : "OPENAI_MODEL";
-  }
-  return `${PROVIDER_ENV_PREFIX[providerId]}_MODEL`;
-}
-
-export function validateProviderConfig(
-  config: ProviderConfig,
-  activeProvider: LlmProviderId = "gpt"
-): {
+export function validateProviderConfig(config: ProviderConfig): {
   ok: boolean;
   error?: string;
 } {
   if (!config.apiKey) {
-    return { ok: false, error: `${apiKeyEnvLabel(activeProvider)} is not set.` };
+    return { ok: false, error: "API key is not set." };
   }
   if (!config.model) {
-    return { ok: false, error: `${modelEnvLabel(activeProvider)} is not set.` };
+    return { ok: false, error: "Model is not set." };
   }
   return { ok: true };
 }

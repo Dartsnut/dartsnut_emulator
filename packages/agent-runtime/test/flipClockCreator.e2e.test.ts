@@ -11,8 +11,8 @@ import { allowedDeferredSkillIdsForMode, resolveSkillRouterPrompt } from "../src
 import { SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
 
-const config = loadProviderConfig({ activeProvider: "gpt" });
-const canRunLive = validateProviderConfig(config, "gpt").ok;
+const config = loadProviderConfig();
+const canRunLive = validateProviderConfig(config).ok;
 
 function buildFlipClockRoutedPrompt(workspacePath: string): string {
   const buildPlan = formatCreatorBuildPlanMessage({

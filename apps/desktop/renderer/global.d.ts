@@ -25,10 +25,14 @@ import type {
   DeployEligibility,
   DeployActionResponse,
   DeployLaunchRequest,
+  CommunitySessionInfo,
+  CommunityLoginRequest,
+  CommunityLoginResponse,
+  CommunityLogoutResponse,
+  CommunityListDeployDevicesResponse,
   WindowChromeInsets,
   type ShellUiTheme,
-  type MainProcessConsoleMirrorPayload,
-  type PrepareWorkspaceForProviderSwitchResponse
+  type MainProcessConsoleMirrorPayload
 } from "@dartsnut/shared-ipc";
 import type {
   EmulatorCommand,
@@ -45,7 +49,6 @@ declare global {
       resetWorkspaceSession: () => Promise<
         { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" }
       >;
-      prepareWorkspaceForProviderSwitch: () => Promise<PrepareWorkspaceForProviderSwitchResponse>;
       getWindowChromeInsets: () => Promise<WindowChromeInsets>;
       setShellUiTheme: (theme: ShellUiTheme) => Promise<void>;
       startNewProject: () => Promise<BootstrapState>;
@@ -83,6 +86,10 @@ declare global {
       deployReload: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
       deployStop: () => Promise<DeployActionResponse>;
       onDeployLog: (listener: (line: string) => void) => () => void;
+      communityGetSession: () => Promise<CommunitySessionInfo>;
+      communityLogin: (request: CommunityLoginRequest) => Promise<CommunityLoginResponse>;
+      communityLogout: () => Promise<CommunityLogoutResponse>;
+      communityListDeployDevices: () => Promise<CommunityListDeployDevicesResponse>;
       assets: {
         getManifest: (workspacePath: string) => Promise<ManifestSnapshot>;
         onManifest: (listener: (snapshot: ManifestSnapshot) => void) => () => void;

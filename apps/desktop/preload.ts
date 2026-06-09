@@ -12,7 +12,6 @@ import {
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
-  type PrepareWorkspaceForProviderSwitchResponse,
   type IntakeSubmitQuestionAnswerRequest,
   type IntakeSubmitQuestionAnswerResponse,
   type PromptRequest,
@@ -28,6 +27,11 @@ import {
   type DeployEligibility,
   type DeployActionResponse,
   type DeployLaunchRequest,
+  type CommunitySessionInfo,
+  type CommunityLoginRequest,
+  type CommunityLoginResponse,
+  type CommunityLogoutResponse,
+  type CommunityListDeployDevicesResponse,
   type WindowChromeInsets,
   type ShellUiTheme,
   type AgentSessionWorkspaceSummary
@@ -48,10 +52,6 @@ const api = {
     ipcRenderer.invoke(IPCChannels.resetWorkspaceSession) as Promise<
       { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" }
     >,
-  prepareWorkspaceForProviderSwitch: () =>
-    ipcRenderer.invoke(
-      IPCChannels.prepareWorkspaceForProviderSwitch
-    ) as Promise<PrepareWorkspaceForProviderSwitchResponse>,
   getWindowChromeInsets: () =>
     ipcRenderer.invoke(IPCChannels.windowChromeInsets) as Promise<WindowChromeInsets>,
   setShellUiTheme: (theme: ShellUiTheme) =>
@@ -159,6 +159,14 @@ const api = {
     ipcRenderer.on(IPCChannels.deployLog, handler);
     return () => ipcRenderer.removeListener(IPCChannels.deployLog, handler);
   },
+  communityGetSession: () =>
+    ipcRenderer.invoke(IPCChannels.communityGetSession) as Promise<CommunitySessionInfo>,
+  communityLogin: (request: CommunityLoginRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityLogin, request) as Promise<CommunityLoginResponse>,
+  communityLogout: () =>
+    ipcRenderer.invoke(IPCChannels.communityLogout) as Promise<CommunityLogoutResponse>,
+  communityListDeployDevices: () =>
+    ipcRenderer.invoke(IPCChannels.communityListDeployDevices) as Promise<CommunityListDeployDevicesResponse>,
   assets: {
     getManifest: (workspacePath: string) =>
       ipcRenderer.invoke(IPCChannels.assetsGetManifest, workspacePath) as Promise<ManifestSnapshot>,

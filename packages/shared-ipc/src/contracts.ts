@@ -18,8 +18,6 @@ export const IPCChannels = {
   subscribeEvents: "agent:subscribe-events",
   getWorkspaceSessionSummary: "agent:get-workspace-session-summary",
   resetWorkspaceSession: "agent:reset-workspace-session",
-  /** Wipe unsaved temp project or archive agent session when switching LLM provider. */
-  prepareWorkspaceForProviderSwitch: "agent:prepare-workspace-for-provider-switch",
   getProviderSettings: "agent:get-provider-settings",
   saveProviderSettings: "agent:save-provider-settings",
   getPythonRuntimeStatus: "agent:get-python-runtime-status",
@@ -48,6 +46,10 @@ export const IPCChannels = {
   deployStop: "deploy:stop",
   /** Main → renderer: remote debug log line or status message. */
   deployLog: "deploy:log",
+  communityGetSession: "community:get-session",
+  communityLogin: "community:login",
+  communityLogout: "community:logout",
+  communityListDeployDevices: "community:list-deploy-devices",
   /**
    * Main → renderer: mirror main-process terminal lines into DevTools.
    * Payload must stay free of raw LLM request/response bodies (metadata and safe summaries only).
@@ -103,11 +105,6 @@ export type SaveTempWorkspaceResponse =
     | "missing_workspace";
     message?: string;
   };
-
-/** IPC return from `prepareWorkspaceForProviderSwitch`. */
-export type PrepareWorkspaceForProviderSwitchResponse =
-  | { ok: true; state: BootstrapState }
-  | { ok: false; reason: "no_workspace" | "persistence_disabled" };
 
 export type AgentSessionIntent = "auto" | "resume" | "fresh";
 
@@ -283,32 +280,17 @@ export interface PickWorkspaceResponse {
   reason?: "cancelled" | "non_empty";
 }
 
-export type LlmProviderId = "gpt" | "gemini" | "xiaomi" | "claude" | "user-define";
-
 export interface UserDefineProviderSettings {
   baseUrl: string;
   apiKey: string;
   model: string;
 }
 
-/** Env-resolved credentials for built-in presets (API key is masked for renderer). */
-export interface ProviderEnvPreview {
-  baseUrl: string;
-  apiKeyMasked: string;
-  model: string;
-}
-
 export interface ProviderSettings {
-  activeProvider: LlmProviderId;
   userDefine: UserDefineProviderSettings;
-  /** Present when `activeProvider` is not `user-define`. */
-  resolvedPreview?: ProviderEnvPreview;
 }
 
-export interface SaveProviderSettingsRequest {
-  activeProvider: LlmProviderId;
-  userDefine: UserDefineProviderSettings;
-}
+export type SaveProviderSettingsRequest = ProviderSettings;
 
 export type AgentEvent =
   | {
@@ -500,6 +482,36 @@ export interface DeployLaunchRequest {
  * Validates workspace `conf.json` content for the debug deploy module.
  * Requires parseable JSON object with non-empty `id` and `type` of widget or game.
  */
+export type CommunitySessionInfo = {
+  loggedIn: boolean;
+  account: string | null;
+  hasSupabase: boolean;
+  googleClientId: string;
+};
+
+export type CommunityLoginRequest =
+  | { method: "password"; account: string; password: string }
+  | { method: "google"; idToken: string };
+
+export type CommunityLoginResponse =
+  | { ok: true; account: string }
+  | { ok: false; code: string; message: string };
+
+export type CommunityLogoutResponse = { ok: true };
+
+export type CommunityDeployDevice = {
+  deviceId: string;
+  name: string;
+  model: string;
+  ipAddress: string;
+  ssid: string;
+  updatedAt: string | null;
+};
+
+export type CommunityListDeployDevicesResponse =
+  | { ok: true; devices: CommunityDeployDevice[]; supabaseConfigured: boolean }
+  | { ok: false; code: string; message: string };
+
 export function validateDeployWorkspaceConf(raw: unknown): DeployEligibility {
   if (!raw || typeof raw !== "object") {
     return { ok: false, reason: "invalid_conf" };

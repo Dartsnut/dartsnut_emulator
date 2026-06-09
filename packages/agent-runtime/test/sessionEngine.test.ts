@@ -118,7 +118,6 @@ describe("SessionEngine (@openai/agents)", () => {
     const engine = new SessionEngine({
       runFn,
       agentModelConfig: buildAgentModelConfig({
-        activeProvider: "gpt",
         model: "gpt-4.1-mini",
         apiKey: "test-key"
       }),
@@ -179,7 +178,6 @@ describe("SessionEngine (@openai/agents)", () => {
     const engine = new SessionEngine({
       runFn,
       agentModelConfig: buildAgentModelConfig({
-        activeProvider: "gpt",
         model: "gpt-4.1-mini",
         apiKey: "test-key"
       }),
@@ -203,7 +201,6 @@ describe("SessionEngine (@openai/agents)", () => {
     const engine = new SessionEngine({
       runFn: async () => createMockStream({ finalOutput: "nope" }),
       agentModelConfig: buildAgentModelConfig({
-        activeProvider: "gpt",
         model: "gpt-4.1-mini",
         apiKey: "test-key"
       }),

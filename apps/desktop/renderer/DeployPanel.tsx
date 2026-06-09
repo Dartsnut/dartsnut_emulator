@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { DeployConnectResponse } from "@dartsnut/shared-ipc";
-import { cn } from "./cn";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import type {
+  CommunityDeployDevice,
+  CommunitySessionInfo,
+  DeployConnectResponse
+} from "@dartsnut/shared-ipc";
 import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
 const toolbarBtn = "ui-toolbar-btn";
+const MANUAL_DEVICE_VALUE = "__manual__";
 
 export type DeployPanelProps = {
   showWidgetParams: boolean;
@@ -12,7 +16,23 @@ export type DeployPanelProps = {
   setWidgetParamsText: Dispatch<SetStateAction<string>>;
   widgetParamsError: string | null;
   setWidgetParamsError: Dispatch<SetStateAction<string | null>>;
+  communitySession: CommunitySessionInfo;
+  communitySessionVersion: number;
+  onCommunitySessionChange: () => Promise<void>;
 };
+
+function formatDeviceOptionLabel(device: CommunityDeployDevice): string {
+  const parts = [device.name || device.deviceId];
+  if (device.ssid) {
+    parts.push(device.ssid);
+  }
+  if (device.ipAddress) {
+    parts.push(device.ipAddress);
+  } else {
+    parts.push("no IP");
+  }
+  return parts.join(" · ");
+}
 
 export function DeployPanel({
   showWidgetParams,
@@ -20,6 +40,9 @@ export function DeployPanel({
   setWidgetParamsText,
   widgetParamsError,
   setWidgetParamsError,
+  communitySession,
+  communitySessionVersion,
+  onCommunitySessionChange
 }: DeployPanelProps) {
   const api = window.dartsnutApi;
   const [host, setHost] = useState("");
@@ -30,7 +53,65 @@ export function DeployPanel({
   const [logLines, setLogLines] = useState<string[]>([]);
   const logRef = useRef<HTMLPreElement | null>(null);
 
+  const [devices, setDevices] = useState<CommunityDeployDevice[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+  const [supabaseConfigured, setSupabaseConfigured] = useState(false);
+  const [selectedDeviceKey, setSelectedDeviceKey] = useState("");
+  const [signingOut, setSigningOut] = useState(false);
+
   const bridgeReady = Boolean(api?.sendEmulatorCommand);
+  const loggedIn = communitySession.loggedIn;
+  const manualIpMode =
+    !loggedIn || selectedDeviceKey === MANUAL_DEVICE_VALUE || selectedDeviceKey === "";
+  const selectedDevice =
+    selectedDeviceKey && selectedDeviceKey !== MANUAL_DEVICE_VALUE
+      ? devices.find((d) => d.deviceId === selectedDeviceKey) ?? null
+      : null;
+  const selectedMissingIp = Boolean(selectedDevice && !selectedDevice.ipAddress.trim());
+  const hostInputDisabled =
+    busyAction !== null || connected || (Boolean(selectedDevice?.ipAddress) && !manualIpMode);
+
+  const loadDevices = useCallback(async () => {
+    if (!api?.communityListDeployDevices || !loggedIn) {
+      setDevices([]);
+      setDevicesError(null);
+      setSupabaseConfigured(false);
+      return;
+    }
+    setDevicesLoading(true);
+    setDevicesError(null);
+    try {
+      const res = await api.communityListDeployDevices();
+      if (!res.ok) {
+        setDevices([]);
+        setDevicesError(res.message);
+        if (res.code === "session_expired") {
+          await onCommunitySessionChange();
+        }
+        return;
+      }
+      setDevices(res.devices);
+      setSupabaseConfigured(res.supabaseConfigured);
+      if (
+        selectedDeviceKey &&
+        selectedDeviceKey !== MANUAL_DEVICE_VALUE &&
+        !res.devices.some((d) => d.deviceId === selectedDeviceKey)
+      ) {
+        setSelectedDeviceKey("");
+        setHost("");
+      }
+    } catch (e) {
+      setDevices([]);
+      setDevicesError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDevicesLoading(false);
+    }
+  }, [api, loggedIn, onCommunitySessionChange, selectedDeviceKey]);
+
+  useEffect(() => {
+    void loadDevices();
+  }, [loadDevices, communitySessionVersion]);
 
   useEffect(() => {
     if (!api?.onDeployLog) {
@@ -48,6 +129,45 @@ export function DeployPanel({
     }
     el.scrollTop = el.scrollHeight;
   }, [logLines]);
+
+  useEffect(() => {
+    if (manualIpMode || !selectedDevice) {
+      return;
+    }
+    const ip = selectedDevice.ipAddress.trim();
+    if (ip) {
+      setHost(ip);
+    }
+  }, [manualIpMode, selectedDevice]);
+
+  function handleDeviceSelectChange(value: string) {
+    setSelectedDeviceKey(value);
+    setLastError(null);
+    if (value === MANUAL_DEVICE_VALUE || value === "") {
+      return;
+    }
+    const device = devices.find((d) => d.deviceId === value);
+    if (device?.ipAddress.trim()) {
+      setHost(device.ipAddress.trim());
+    } else {
+      setHost("");
+    }
+  }
+
+  async function handleSignOut() {
+    if (!api?.communityLogout) {
+      return;
+    }
+    setSigningOut(true);
+    try {
+      await api.communityLogout();
+      setSelectedDeviceKey("");
+      setDevices([]);
+      await onCommunitySessionChange();
+    } finally {
+      setSigningOut(false);
+    }
+  }
 
   async function handleConnect() {
     if (!api?.deployConnect) {
@@ -125,7 +245,7 @@ export function DeployPanel({
     const normalized = await applyWidgetParamsAndReload({
       widgetParamsText,
       setWidgetParamsText,
-      setWidgetParamsError,
+      setWidgetParamsError
     });
     if (normalized === undefined) {
       return;
@@ -155,9 +275,73 @@ export function DeployPanel({
     );
   }
 
+  const canConnect = connected || host.trim().length > 0;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
       <h2 className="ui-panel-title">Deploy</h2>
+
+      {loggedIn ? (
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-edge bg-[var(--color-surface-elevated)] px-3 py-2 text-[13px]">
+          <span className="text-[var(--color-text-subtle)]">
+            Signed in as{" "}
+            <span className="font-medium text-[var(--color-text-primary)]">
+              {communitySession.account || "—"}
+            </span>
+          </span>
+          <button
+            type="button"
+            className={toolbarBtn}
+            disabled={signingOut || busyAction !== null || connected}
+            onClick={() => void handleSignOut()}
+          >
+            {signingOut ? "Signing out…" : "Sign out"}
+          </button>
+        </div>
+      ) : null}
+
+      {loggedIn ? (
+        <label className="flex shrink-0 flex-col gap-1.5 text-[13px]">
+          <span className="text-[var(--color-text-subtle)]">Bound device</span>
+          <select
+            className="ui-input"
+            value={selectedDeviceKey}
+            disabled={busyAction !== null || connected || devicesLoading}
+            onChange={(e) => handleDeviceSelectChange(e.target.value)}
+          >
+            <option value="">— Select a device —</option>
+            {devices.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {formatDeviceOptionLabel(device)}
+              </option>
+            ))}
+            <option value={MANUAL_DEVICE_VALUE}>Enter IP manually</option>
+          </select>
+          {devicesLoading ? (
+            <span className="text-xs text-[var(--color-text-subtle)]">Loading devices…</span>
+          ) : null}
+          {devicesError ? (
+            <span className="text-xs text-[var(--color-error-text)]">{devicesError}</span>
+          ) : null}
+          {!devicesLoading && !devices.length && !devicesError ? (
+            <span className="text-xs text-[var(--color-text-subtle)]">
+              No devices bound to this account yet.
+            </span>
+          ) : null}
+          {loggedIn && !supabaseConfigured && devices.length > 0 ? (
+            <span className="text-xs text-[var(--color-text-subtle)]">
+              Supabase is not configured in .env (DARTSNUT_SUPABASE_ANON_KEY); device names only, no
+              auto IP.
+            </span>
+          ) : null}
+          {selectedMissingIp ? (
+            <span className="text-xs text-[var(--color-error-text)]">
+              This device has not reported an IP yet. Enter an IP below or wait for the device to sync.
+            </span>
+          ) : null}
+        </label>
+      ) : null}
+
       <label className="flex shrink-0 flex-col gap-1.5 text-[13px]">
         <span className="text-[var(--color-text-subtle)]">Device IP or hostname</span>
         <input
@@ -165,7 +349,7 @@ export function DeployPanel({
           className="ui-input font-mono"
           placeholder="192.168.x.x"
           value={host}
-          disabled={busyAction !== null || connected}
+          disabled={hostInputDisabled}
           onChange={(e) => setHost(e.target.value)}
         />
       </label>
@@ -174,7 +358,7 @@ export function DeployPanel({
         <button
           type="button"
           className={toolbarBtn}
-          disabled={busyAction !== null || (!connected && !host.trim())}
+          disabled={busyAction !== null || (!connected && !canConnect)}
           onClick={() => {
             if (connected) {
               void handleDisconnect();

@@ -1,11 +1,10 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   type AgentEvent,
   type AssetManifest,
   type BootstrapState,
   type DeployEligibility,
   type ManifestSnapshot,
-  type LlmProviderId,
   type ProviderSettings,
   type ProjectType,
   type UserDefineProviderSettings,
@@ -13,11 +12,13 @@ import {
   type SendPromptResponse,
   type SaveTempWorkspaceResponse,
   type MainProcessConsoleMirrorPayload,
-  type WidgetSize
+  type WidgetSize,
+  type CommunitySessionInfo
 } from "@dartsnut/shared-ipc";
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { cn } from "./cn";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
+import { DeployAuthGate, isDeployAuthSkippedForSession } from "./DeployAuthGate";
 import { DeployPanel } from "./DeployPanel";
 import { EmulatorPanel } from "./EmulatorPanel";
 import {
@@ -61,13 +62,6 @@ const EMPTY_USER_DEFINE: UserDefineProviderSettings = {
   apiKey: "",
   model: ""
 };
-
-const LLM_PROVIDER_OPTIONS: { id: LlmProviderId; label: string }[] = [
-  { id: "gpt", label: "GPT 5.5" },
-  { id: "gemini", label: "Gemini 3 Flash" },
-  { id: "xiaomi", label: "Mimo V2.5 Pro" },
-  { id: "user-define", label: "User define" }
-];
 
 const chromeIconBtnClass = "ui-chrome-btn";
 
@@ -230,14 +224,12 @@ export function App() {
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [composerExpandedSticky, setComposerExpandedSticky] = useState(false);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>({
-    activeProvider: "gpt",
     userDefine: EMPTY_USER_DEFINE
   });
   const [selectedPythonPath, setSelectedPythonPath] = useState<string | null>(null);
   const [providerSettingsError, setProviderSettingsError] = useState<string | null>(null);
   const [providerSettingsNotice, setProviderSettingsNotice] = useState<string | null>(null);
   const [savingProviderSettings, setSavingProviderSettings] = useState(false);
-  const [switchingProvider, setSwitchingProvider] = useState(false);
   const [assetManifest, setAssetManifest] = useState<AssetManifest | null>(null);
   const [pendingChangeSlotIds, setPendingChangeSlotIds] = useState<string[]>([]);
   const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>("emulator");
@@ -248,8 +240,46 @@ export function App() {
   const [widgetParamsText, setWidgetParamsText] = useState("{}");
   const [widgetParamsError, setWidgetParamsError] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeId>(() => resolveThemeFromEnvironment());
+  const [communitySession, setCommunitySession] = useState<CommunitySessionInfo>({
+    loggedIn: false,
+    account: null,
+    hasSupabase: false,
+    googleClientId: ""
+  });
+  const [deployAuthGateOpen, setDeployAuthGateOpen] = useState(false);
+  const [communitySessionVersion, setCommunitySessionVersion] = useState(0);
 
   const api = window.dartsnutApi;
+
+  const refreshCommunitySession = useCallback(async () => {
+    if (!api?.communityGetSession) {
+      return;
+    }
+    try {
+      const session = await api.communityGetSession();
+      setCommunitySession(session);
+      setCommunitySessionVersion((v) => v + 1);
+    } catch {
+      // keep previous session snapshot
+    }
+  }, [api]);
+
+  useEffect(() => {
+    void refreshCommunitySession();
+  }, [refreshCommunitySession]);
+
+  useEffect(() => {
+    if (communitySession.loggedIn) {
+      setDeployAuthGateOpen(false);
+    }
+  }, [communitySession.loggedIn]);
+
+  const openDeployTab = useCallback(() => {
+    setRightPaneTab("deploy");
+    if (!communitySession.loggedIn && !isDeployAuthSkippedForSession()) {
+      setDeployAuthGateOpen(true);
+    }
+  }, [communitySession.loggedIn]);
 
   useLayoutEffect(() => {
     applyTheme(theme);
@@ -938,73 +968,9 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  async function handleProviderChange(nextId: LlmProviderId) {
-    if (!api || nextId === providerSettings.activeProvider || switchingProvider) {
-      return;
-    }
-    setProviderSettingsError(null);
-    setProviderSettingsNotice(null);
-    const isTempWorkspace = Boolean(bootstrap?.isTemporaryWorkspace);
-    const nonEmpty = await isChatSectionNonEmpty();
-    if (isTempWorkspace || nonEmpty) {
-      const confirmed = window.confirm(
-        isTempWorkspace
-          ? "Switch LLM provider?\n\n" +
-              "This wipes your unsaved temporary project, clears chat, and opens a fresh temporary workspace."
-          : "Switch LLM provider?\n\n" +
-              "This clears the current chat history for this workspace. Your project files on disk are not deleted."
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
-    setSwitchingProvider(true);
-    try {
-      if (sending) {
-        await api.cancelAgent();
-        setSending(false);
-      }
-      const prep = await api.prepareWorkspaceForProviderSwitch();
-      if (!prep.ok) {
-        if (prep.reason === "persistence_disabled") {
-          resetChatSessionUi();
-        } else {
-          setProviderSettingsError("No workspace is open. Open or create a project, then switch provider again.");
-          return;
-        }
-      } else {
-        setBootstrap(prep.state);
-        if (!isTempWorkspace) {
-          resetChatSessionUi();
-        }
-      }
-      const saved = await api.saveProviderSettings({
-        activeProvider: nextId,
-        userDefine: providerSettings.userDefine
-      });
-      setProviderSettings(saved);
-      setProviderSettingsNotice(
-        nextId === "user-define"
-          ? "Switched to User define. Save API credentials below when ready."
-          : `Switched to ${LLM_PROVIDER_OPTIONS.find((o) => o.id === nextId)?.label ?? nextId}. Credentials come from .env.`
-      );
-      const refreshed = await api.getBootstrapState();
-      setBootstrap(refreshed);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to switch provider.";
-      setProviderSettingsError(message);
-    } finally {
-      setSwitchingProvider(false);
-    }
-  }
-
   async function handleSaveProviderSettings() {
     if (!api) {
       setProviderSettingsError("Desktop bridge is unavailable.");
-      return;
-    }
-    if (providerSettings.activeProvider !== "user-define") {
-      setProviderSettingsError("Built-in providers use .env credentials. Select User define to save custom API settings.");
       return;
     }
     setProviderSettingsError(null);
@@ -1029,7 +995,6 @@ export function App() {
     setSavingProviderSettings(true);
     try {
       const saved = await api.saveProviderSettings({
-        activeProvider: "user-define",
         userDefine: {
           baseUrl: ud.baseUrl,
           apiKey: ud.apiKey,
@@ -1603,38 +1568,11 @@ export function App() {
             </nav>
             <div className="flex min-h-0 flex-col gap-3 overflow-auto p-4 text-[13px]">
               <label className="flex flex-col gap-1.5">
-                <span className="text-[var(--color-text-subtle)]">Provider</span>
-                <select
-                  className="ui-input [font:inherit]"
-                  value={providerSettings.activeProvider}
-                  disabled={switchingProvider || savingProviderSettings}
-                  onChange={(event) => void handleProviderChange(event.target.value as LlmProviderId)}
-                >
-                  {LLM_PROVIDER_OPTIONS.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {providerSettings.activeProvider !== "user-define" ? (
-                <p className="m-0 text-xs text-fg-muted">
-                  Credentials for this provider are read from <code className="text-[12px]">.env</code> (
-                  {providerSettings.activeProvider === "gpt" ? "GPT_* or OPENAI_*" : `${providerSettings.activeProvider.toUpperCase()}_*`}
-                  ).
-                </p>
-              ) : null}
-              <label className="flex flex-col gap-1.5">
                 <span className="text-[var(--color-text-subtle)]">API endpoint</span>
                 <input
                   type="url"
-                  readOnly={providerSettings.activeProvider !== "user-define"}
-                  className="ui-input disabled:opacity-80"
-                  value={
-                    providerSettings.activeProvider === "user-define"
-                      ? providerSettings.userDefine.baseUrl
-                      : (providerSettings.resolvedPreview?.baseUrl ?? "")
-                  }
+                  className="ui-input"
+                  value={providerSettings.userDefine.baseUrl}
                   onChange={(event) =>
                     setProviderSettings((prev) => ({
                       ...prev,
@@ -1647,14 +1585,9 @@ export function App() {
               <label className="flex flex-col gap-1.5">
                 <span className="text-[var(--color-text-subtle)]">API key</span>
                 <input
-                  type={providerSettings.activeProvider === "user-define" ? "password" : "text"}
-                  readOnly={providerSettings.activeProvider !== "user-define"}
-                  className="ui-input disabled:opacity-80"
-                  value={
-                    providerSettings.activeProvider === "user-define"
-                      ? providerSettings.userDefine.apiKey
-                      : (providerSettings.resolvedPreview?.apiKeyMasked ?? "")
-                  }
+                  type="password"
+                  className="ui-input"
+                  value={providerSettings.userDefine.apiKey}
                   onChange={(event) =>
                     setProviderSettings((prev) => ({
                       ...prev,
@@ -1664,22 +1597,15 @@ export function App() {
                   placeholder="sk-..."
                 />
               </label>
-              {providerSettings.activeProvider === "user-define" ? (
-                <div className="text-xs text-fg-muted">
-                  Stored key preview: {maskApiKey(providerSettings.userDefine.apiKey) || "(empty)"}
-                </div>
-              ) : null}
+              <div className="text-xs text-fg-muted">
+                Stored key preview: {maskApiKey(providerSettings.userDefine.apiKey) || "(empty)"}
+              </div>
               <label className="flex flex-col gap-1.5">
                 <span className="text-[var(--color-text-subtle)]">Model</span>
                 <input
                   type="text"
-                  readOnly={providerSettings.activeProvider !== "user-define"}
-                  className="ui-input disabled:opacity-80"
-                  value={
-                    providerSettings.activeProvider === "user-define"
-                      ? providerSettings.userDefine.model
-                      : (providerSettings.resolvedPreview?.model ?? "")
-                  }
+                  className="ui-input"
+                  value={providerSettings.userDefine.model}
                   onChange={(event) =>
                     setProviderSettings((prev) => ({
                       ...prev,
@@ -1689,18 +1615,16 @@ export function App() {
                   placeholder="gpt-4.1-mini"
                 />
               </label>
-              {providerSettings.activeProvider === "user-define" ? (
-                <div className="flex justify-start">
-                  <button
-                    type="button"
-                    className="ui-btn-primary mt-0 disabled:cursor-not-allowed disabled:opacity-55"
-                    onClick={() => void handleSaveProviderSettings()}
-                    disabled={savingProviderSettings || switchingProvider}
-                  >
-                    {savingProviderSettings ? "Saving..." : "Save"}
-                  </button>
-                </div>
-              ) : null}
+              <div className="flex justify-start">
+                <button
+                  type="button"
+                  className="ui-btn-primary mt-0 disabled:cursor-not-allowed disabled:opacity-55"
+                  onClick={() => void handleSaveProviderSettings()}
+                  disabled={savingProviderSettings}
+                >
+                  {savingProviderSettings ? "Saving..." : "Save"}
+                </button>
+              </div>
               <div className="flex flex-col gap-1.5">
                 <span>Python executable</span>
                 <div className="text-xs text-fg-muted">{selectedPythonPath ?? "(auto detect)"}</div>
@@ -1741,7 +1665,7 @@ export function App() {
                 className={cn("ui-tab", rightPaneTab === "deploy" && "ui-tab--active")}
                 role="tab"
                 aria-selected={rightPaneTab === "deploy"}
-                onClick={() => setRightPaneTab("deploy")}
+                onClick={() => openDeployTab()}
               >
                 Deploy
               </button>
@@ -1791,6 +1715,9 @@ export function App() {
                 setWidgetParamsText={setWidgetParamsText}
                 widgetParamsError={widgetParamsError}
                 setWidgetParamsError={setWidgetParamsError}
+                communitySession={communitySession}
+                communitySessionVersion={communitySessionVersion}
+                onCommunitySessionChange={refreshCommunitySession}
               />
             </div>
           ) : null}
@@ -1808,6 +1735,16 @@ export function App() {
           ) : null}
         </div>
       </aside>
+      <DeployAuthGate
+        open={deployAuthGateOpen}
+        googleClientId={communitySession.googleClientId}
+        onSkip={() => setDeployAuthGateOpen(false)}
+        onSuccess={async (account) => {
+          setDeployAuthGateOpen(false);
+          await refreshCommunitySession();
+          devLog("[deploy] Signed in as", account);
+        }}
+      />
     </main>
   );
 }

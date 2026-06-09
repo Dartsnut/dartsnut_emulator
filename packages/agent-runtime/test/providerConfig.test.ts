@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   findEnvFile,
   loadProviderConfig,
+  mergeUserDefineWithEnvDefaults,
   normalizeProviderBaseUrl,
+  readUserDefineDefaultsFromEnv,
   resolveProviderConfig,
-  resolveProviderConfigForProvider,
+  resolveUserDefineConfig,
   validateProviderConfig
 } from "../src/providerConfig";
 
@@ -24,41 +26,22 @@ describe("normalizeProviderBaseUrl", () => {
 
 describe("validateProviderConfig", () => {
   it("fails when config fields are missing", () => {
-    const result = validateProviderConfig(
-      {
-        baseUrl: "",
-        apiKey: "",
-        model: ""
-      },
-      "gpt"
-    );
+    const result = validateProviderConfig({
+      baseUrl: "",
+      apiKey: "",
+      model: ""
+    });
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("API_KEY");
+    expect(result.error).toContain("API key");
   });
 
   it("passes when baseUrl is empty but key and model exist", () => {
-    const result = validateProviderConfig(
-      {
-        baseUrl: "",
-        apiKey: "sk-test",
-        model: "gpt-test"
-      },
-      "user-define"
-    );
+    const result = validateProviderConfig({
+      baseUrl: "",
+      apiKey: "sk-test",
+      model: "gpt-test"
+    });
     expect(result.ok).toBe(true);
-  });
-
-  it("names gemini env vars in errors", () => {
-    const result = validateProviderConfig(
-      {
-        baseUrl: "https://api.example.com/v1",
-        apiKey: "",
-        model: "gemini-pro"
-      },
-      "gemini"
-    );
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("GEMINI_API_KEY is not set.");
   });
 });
 
@@ -120,8 +103,11 @@ describe("findEnvFile", () => {
   });
 });
 
-describe("resolveProviderConfigForProvider", () => {
+describe("readUserDefineDefaultsFromEnv", () => {
   const envBackup: Record<string, string | undefined> = {};
+  const tempDirs: string[] = [];
+  let originalRepoRoot: string | undefined;
+  let originalCwd: string;
 
   const keys = [
     "GPT_BASE_URL",
@@ -129,16 +115,7 @@ describe("resolveProviderConfigForProvider", () => {
     "GPT_MODEL",
     "OPENAI_BASE_URL",
     "OPENAI_API_KEY",
-    "OPENAI_MODEL",
-    "GEMINI_BASE_URL",
-    "GEMINI_API_KEY",
-    "GEMINI_MODEL",
-    "XIAOMI_BASE_URL",
-    "XIAOMI_API_KEY",
-    "XIAOMI_MODEL",
-    "CLAUDE_BASE_URL",
-    "CLAUDE_API_KEY",
-    "CLAUDE_MODEL"
+    "OPENAI_MODEL"
   ];
 
   afterEach(() => {
@@ -149,22 +126,37 @@ describe("resolveProviderConfigForProvider", () => {
         process.env[key] = envBackup[key];
       }
     }
+    for (const dir of tempDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    tempDirs.length = 0;
+    if (originalRepoRoot === undefined) {
+      delete process.env.DARTSNUT_REPO_ROOT;
+    } else {
+      process.env.DARTSNUT_REPO_ROOT = originalRepoRoot;
+    }
+    process.chdir(originalCwd);
   });
 
   function saveEnv() {
+    originalCwd = process.cwd();
+    originalRepoRoot = process.env.DARTSNUT_REPO_ROOT;
+    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "provider-config-env-"));
+    tempDirs.push(isolatedRoot);
+    process.env.DARTSNUT_REPO_ROOT = isolatedRoot;
+    process.chdir(isolatedRoot);
     for (const key of keys) {
       envBackup[key] = process.env[key];
       delete process.env[key];
     }
   }
 
-  it("resolves gpt from GPT_* env", () => {
+  it("reads GPT_* env values", () => {
     saveEnv();
     process.env.GPT_BASE_URL = "https://gpt.example.com/v1";
     process.env.GPT_API_KEY = "gpt-key";
     process.env.GPT_MODEL = "gpt-model";
-    const resolved = resolveProviderConfigForProvider("gpt");
-    expect(resolved).toEqual({
+    expect(readUserDefineDefaultsFromEnv()).toEqual({
       baseUrl: "https://gpt.example.com/v1",
       apiKey: "gpt-key",
       model: "gpt-model"
@@ -176,30 +168,17 @@ describe("resolveProviderConfigForProvider", () => {
     process.env.OPENAI_BASE_URL = "https://legacy.example.com/v1";
     process.env.OPENAI_API_KEY = "legacy-key";
     process.env.OPENAI_MODEL = "legacy-model";
-    const resolved = resolveProviderConfigForProvider("gpt");
-    expect(resolved).toEqual({
+    expect(readUserDefineDefaultsFromEnv()).toEqual({
       baseUrl: "https://legacy.example.com/v1",
       apiKey: "legacy-key",
       model: "legacy-model"
     });
   });
+});
 
-  it("resolves gemini, xiaomi, and claude prefixes", () => {
-    saveEnv();
-    process.env.GEMINI_API_KEY = "g-key";
-    process.env.GEMINI_MODEL = "gemini-pro";
-    process.env.XIAOMI_API_KEY = "x-key";
-    process.env.CLAUDE_API_KEY = "c-key";
-    process.env.CLAUDE_MODEL = "claude-sonnet";
-    expect(resolveProviderConfigForProvider("gemini").apiKey).toBe("g-key");
-    expect(resolveProviderConfigForProvider("gemini").model).toBe("gemini-pro");
-    expect(resolveProviderConfigForProvider("xiaomi").apiKey).toBe("x-key");
-    expect(resolveProviderConfigForProvider("claude").model).toBe("claude-sonnet");
-  });
-
-  it("resolves user-define from saved settings", () => {
-    saveEnv();
-    const resolved = resolveProviderConfigForProvider("user-define", {
+describe("resolveUserDefineConfig", () => {
+  it("resolves saved settings and normalizes base URL", () => {
+    const resolved = resolveUserDefineConfig({
       baseUrl: "https://custom.example.com",
       apiKey: "user-key",
       model: "user-model"
@@ -210,25 +189,111 @@ describe("resolveProviderConfigForProvider", () => {
       model: "user-model"
     });
   });
+
+  it("fills empty fields from env defaults", () => {
+    const originalRepoRoot = process.env.DARTSNUT_REPO_ROOT;
+    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "provider-config-env-"));
+    process.env.DARTSNUT_REPO_ROOT = isolatedRoot;
+    const originalApiKey = process.env.GPT_API_KEY;
+    process.env.GPT_API_KEY = "env-key";
+    try {
+      const resolved = resolveUserDefineConfig({
+        baseUrl: "",
+        apiKey: "",
+        model: "saved-model"
+      });
+      expect(resolved.apiKey).toBe("env-key");
+      expect(resolved.model).toBe("saved-model");
+    } finally {
+      process.env.GPT_API_KEY = originalApiKey;
+      fs.rmSync(isolatedRoot, { recursive: true, force: true });
+      if (originalRepoRoot === undefined) {
+        delete process.env.DARTSNUT_REPO_ROOT;
+      } else {
+        process.env.DARTSNUT_REPO_ROOT = originalRepoRoot;
+      }
+    }
+  });
+});
+
+describe("mergeUserDefineWithEnvDefaults", () => {
+  it("keeps saved values over env defaults", () => {
+    const originalRepoRoot = process.env.DARTSNUT_REPO_ROOT;
+    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "provider-config-env-"));
+    process.env.DARTSNUT_REPO_ROOT = isolatedRoot;
+    const originalApiKey = process.env.GPT_API_KEY;
+    process.env.GPT_API_KEY = "env-key";
+    try {
+      expect(
+        mergeUserDefineWithEnvDefaults({
+          baseUrl: "https://saved.example.com/v1",
+          apiKey: "saved-key",
+          model: "saved-model"
+        })
+      ).toEqual({
+        baseUrl: "https://saved.example.com/v1",
+        apiKey: "saved-key",
+        model: "saved-model"
+      });
+    } finally {
+      process.env.GPT_API_KEY = originalApiKey;
+      fs.rmSync(isolatedRoot, { recursive: true, force: true });
+      if (originalRepoRoot === undefined) {
+        delete process.env.DARTSNUT_REPO_ROOT;
+      } else {
+        process.env.DARTSNUT_REPO_ROOT = originalRepoRoot;
+      }
+    }
+  });
 });
 
 describe("resolveProviderConfig", () => {
   const originalBaseUrl = process.env.GPT_BASE_URL;
   const originalApiKey = process.env.GPT_API_KEY;
   const originalModel = process.env.GPT_MODEL;
+  const originalOpenAiBaseUrl = process.env.OPENAI_BASE_URL;
   const originalOpenAiKey = process.env.OPENAI_API_KEY;
+  const originalOpenAiModel = process.env.OPENAI_MODEL;
+  let originalRepoRoot: string | undefined;
+  let originalCwd: string;
+  const tempDirs: string[] = [];
 
   afterEach(() => {
     process.env.GPT_BASE_URL = originalBaseUrl;
     process.env.GPT_API_KEY = originalApiKey;
     process.env.GPT_MODEL = originalModel;
+    process.env.OPENAI_BASE_URL = originalOpenAiBaseUrl;
     process.env.OPENAI_API_KEY = originalOpenAiKey;
+    process.env.OPENAI_MODEL = originalOpenAiModel;
+    for (const dir of tempDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    tempDirs.length = 0;
+    if (originalRepoRoot === undefined) {
+      delete process.env.DARTSNUT_REPO_ROOT;
+    } else {
+      process.env.DARTSNUT_REPO_ROOT = originalRepoRoot;
+    }
+    process.chdir(originalCwd);
   });
 
-  it("uses env values when override fields are missing", () => {
+  function isolateEnv() {
+    originalCwd = process.cwd();
+    originalRepoRoot = process.env.DARTSNUT_REPO_ROOT;
+    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "provider-config-env-"));
+    tempDirs.push(isolatedRoot);
+    process.env.DARTSNUT_REPO_ROOT = isolatedRoot;
+    process.chdir(isolatedRoot);
     delete process.env.GPT_BASE_URL;
     delete process.env.GPT_API_KEY;
     delete process.env.GPT_MODEL;
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_MODEL;
+  }
+
+  it("uses env values when override fields are missing", () => {
+    isolateEnv();
     process.env.OPENAI_BASE_URL = "https://env.example.com/v1";
     process.env.OPENAI_API_KEY = "env-key";
     process.env.OPENAI_MODEL = "env-model";
@@ -241,6 +306,7 @@ describe("resolveProviderConfig", () => {
   });
 
   it("uses override values when provided", () => {
+    isolateEnv();
     process.env.GPT_BASE_URL = "https://env.example.com/v1";
     process.env.GPT_API_KEY = "env-key";
     process.env.GPT_MODEL = "env-model";
@@ -258,9 +324,8 @@ describe("resolveProviderConfig", () => {
 });
 
 describe("loadProviderConfig", () => {
-  it("loads by activeProvider", () => {
+  it("loads userDefine settings", () => {
     const resolved = loadProviderConfig({
-      activeProvider: "user-define",
       userDefine: { baseUrl: "", apiKey: "k", model: "m" }
     });
     expect(resolved.apiKey).toBe("k");

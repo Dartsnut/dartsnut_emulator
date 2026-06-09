@@ -22,6 +22,21 @@ export type EmulatorCommand =
   | { type: "clear_darts" }
   | { type: "capture_screenshot" };
 
+/** Bridge sets `status` to `venv:<message>` while `uv sync` prepares the workspace `.venv`. */
+export const VENV_PREP_STATUS_PREFIX = "venv:";
+
+export function isVenvPrepStatus(status: string): boolean {
+  return status.startsWith(VENV_PREP_STATUS_PREFIX);
+}
+
+export function venvPrepStatusMessage(status: string): string {
+  if (!isVenvPrepStatus(status)) {
+    return status;
+  }
+  const message = status.slice(VENV_PREP_STATUS_PREFIX.length).trim();
+  return message || "Preparing workspace environment…";
+}
+
 export type EmulatorStateSnapshot = {
   widgetPath: string | null;
   widgetId?: string | null;

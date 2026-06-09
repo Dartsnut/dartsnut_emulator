@@ -137,6 +137,19 @@ class EmulatorCore:
         self._last_launch_argv_chars = -1
         self._init_shared_memory()
 
+    _VENV_PREP_STATUS_PREFIX = "venv:"
+
+    def _emit_interim_state(self) -> None:
+        """Push state to Electron while a blocking command (e.g. uv sync) is in progress."""
+        print(
+            json.dumps({"event": "state", "payload": asdict(self.state)}),
+            flush=True,
+        )
+
+    def _on_venv_status(self, message: str) -> None:
+        self.state.status = f"{self._VENV_PREP_STATUS_PREFIX}{message}"
+        self._emit_interim_state()
+
     def _queue_bridge_log(self, text: str, source: str = "stdout") -> None:
         trimmed = text.strip()
         if not trimmed:
@@ -271,6 +284,7 @@ class EmulatorCore:
             launch_cwd,
             app_type=app_type,
             log=self._queue_bridge_log,
+            status=self._on_venv_status,
         )
 
     def _build_widget_launch(self, launch_cwd: str) -> tuple[list[str], dict[str, str]]:

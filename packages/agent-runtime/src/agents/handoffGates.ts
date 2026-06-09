@@ -26,7 +26,7 @@ export function isModificationAgent(name: string | undefined): boolean {
 }
 
 export function handoffToInfoGathererEnabled(ctx: DartsnutRunContext): boolean {
-  return !ctx.intakeReady && !ctx.assetApplierMode;
+  return !ctx.intakeReady && !ctx.artifacts.initialPassComplete && !ctx.assetApplierMode;
 }
 
 export function handoffToWidgetCreatorEnabled(ctx: DartsnutRunContext): boolean {

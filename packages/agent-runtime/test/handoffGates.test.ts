@@ -34,6 +34,17 @@ describe("handoff gates", () => {
     expect(handoffToInfoGathererEnabled(ctx({ assetApplierMode: true }))).toBe(false);
   });
 
+  it("blocks info gatherer after initial scaffold exists", () => {
+    expect(
+      handoffToInfoGathererEnabled(
+        ctx({
+          intakeReady: false,
+          artifacts: { confJson: true, mainPy: true, initialPassComplete: true }
+        })
+      )
+    ).toBe(false);
+  });
+
   it("routes widget creator during initial scaffold when size is recorded", () => {
     const ready = ctx({
       intakeReady: true,

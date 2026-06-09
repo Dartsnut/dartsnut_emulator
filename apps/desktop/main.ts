@@ -1480,31 +1480,82 @@ function setPythonRuntimeStatus(status: string | null) {
 }
 
 function canRunEmulatorDeps(executable: string): boolean {
-  const probe = spawnSync(executable, ["-c", "import pydartsnut, pygame, PIL; print('ok')"], {
+  return probePythonExecutable(executable).ok;
+}
+
+type BundledPythonMarker = {
+  target?: string;
+  pythonVersion?: string;
+};
+
+function expectedBundledPythonTarget(): string {
+  if (process.platform === "win32") {
+    return "win-x64";
+  }
+  if (process.platform === "darwin" && process.arch === "arm64") {
+    return "darwin-arm64";
+  }
+  return `${process.platform}-${process.arch}`;
+}
+
+function readBundledPythonMarker(runtimeDir: string): BundledPythonMarker | null {
+  try {
+    const markerPath = path.join(runtimeDir, ".bundled-python.json");
+    if (!fs.existsSync(markerPath)) {
+      return null;
+    }
+    return JSON.parse(fs.readFileSync(markerPath, "utf8")) as BundledPythonMarker;
+  } catch {
+    return null;
+  }
+}
+
+function probePythonExecutable(executable: string): { ok: true } | { ok: false; detail: string } {
+  const spawnOpts = {
     cwd: repoRoot,
-    stdio: "pipe",
-    encoding: "utf-8",
-  });
-  return probe.status === 0;
-}
+    stdio: "pipe" as const,
+    encoding: "utf-8" as const,
+    windowsHide: true,
+  };
 
-function runCommandOkAsync(command: string, args: string[], cwd: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: "ignore",
-    });
-    child.on("error", () => resolve(false));
-    child.on("close", (code) => resolve(code === 0));
-  });
-}
-
-function isPythonVersionSupportedAsync(executable: string): Promise<boolean> {
-  return runCommandOkAsync(
+  const versionProbe = spawnSync(
     executable,
     ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
-    repoRoot,
+    spawnOpts,
   );
+  if (versionProbe.error) {
+    return {
+      ok: false,
+      detail: `Could not start ${executable}: ${versionProbe.error.message}`,
+    };
+  }
+  if (versionProbe.status !== 0) {
+    const err = `${versionProbe.stderr ?? ""}${versionProbe.stdout ?? ""}`.trim();
+    return {
+      ok: false,
+      detail: err || `Python version check failed (exit ${versionProbe.status ?? "unknown"})`,
+    };
+  }
+
+  const depsProbe = spawnSync(
+    executable,
+    ["-c", "import pydartsnut, pygame, PIL; print('ok')"],
+    spawnOpts,
+  );
+  if (depsProbe.error) {
+    return {
+      ok: false,
+      detail: `Could not start ${executable}: ${depsProbe.error.message}`,
+    };
+  }
+  if (depsProbe.status !== 0) {
+    const err = `${depsProbe.stderr ?? ""}${depsProbe.stdout ?? ""}`.trim();
+    return {
+      ok: false,
+      detail: err || "Missing pydartsnut, pygame-ce, or Pillow in bundled runtime",
+    };
+  }
+  return { ok: true };
 }
 
 function isPythonVersionSupportedSync(executable: string): boolean {
@@ -1514,6 +1565,7 @@ function isPythonVersionSupportedSync(executable: string): boolean {
     {
       cwd: repoRoot,
       stdio: "pipe",
+      windowsHide: true,
     },
   );
   return result.status === 0;
@@ -1542,18 +1594,11 @@ function repoVenvPythonCandidates(): string[] {
 
 function firstRunnablePython(candidates: string[]): string | null {
   for (const candidate of candidates) {
-    if (
-      canRunEmulatorDeps(candidate) &&
-      isPythonVersionSupportedSync(candidate)
-    ) {
+    if (probePythonExecutable(candidate).ok) {
       return candidate;
     }
   }
   return null;
-}
-
-async function canRunEmulatorDepsAsync(executable: string): Promise<boolean> {
-  return runCommandOkAsync(executable, ["-c", "import pydartsnut, pygame, PIL; print('ok')"], repoRoot);
 }
 
 async function resolveBundledPythonRuntime(): Promise<string | null> {
@@ -1561,16 +1606,30 @@ async function resolveBundledPythonRuntime(): Promise<string | null> {
     return null;
   }
 
-  const bundledPython = venvPythonPath(bundledPythonRuntimeDir(process.resourcesPath));
+  const runtimeDir = bundledPythonRuntimeDir(process.resourcesPath);
+  const bundledPython = venvPythonPath(runtimeDir);
   if (!fs.existsSync(bundledPython)) {
-    setPythonRuntimeStatus("Bundled Python runtime is missing. Reinstall the application.");
+    setPythonRuntimeStatus(
+      `Bundled Python not found at ${bundledPython}. Run pnpm bundle:python on Windows before pnpm package:win.`,
+    );
+    devLog.warn("[python-runtime] missing bundled interpreter", bundledPython);
     return null;
   }
-  if (
-    !(await isPythonVersionSupportedAsync(bundledPython)) ||
-    !(await canRunEmulatorDepsAsync(bundledPython))
-  ) {
-    setPythonRuntimeStatus("Bundled Python runtime failed dependency checks. Reinstall the application.");
+
+  const marker = readBundledPythonMarker(runtimeDir);
+  const expectedTarget = expectedBundledPythonTarget();
+  if (marker?.target && marker.target !== expectedTarget) {
+    setPythonRuntimeStatus(
+      `Bundled Python was built for ${marker.target}, but this install needs ${expectedTarget}. Rebuild with: pnpm bundle:python -- --target ${expectedTarget}`,
+    );
+    devLog.warn("[python-runtime] target mismatch", { expected: expectedTarget, marker });
+    return null;
+  }
+
+  const probe = probePythonExecutable(bundledPython);
+  if (!probe.ok) {
+    setPythonRuntimeStatus(`Bundled Python failed: ${probe.detail.slice(0, 320)}`);
+    devLog.warn("[python-runtime] probe failed", probe.detail);
     return null;
   }
   return bundledPython;
@@ -1593,7 +1652,9 @@ async function resolvePythonExecutable(): Promise<string> {
       setPythonRuntimeStatus(null);
       return bundledPython;
     }
-    const setupHint = "Bundled Python runtime is not ready. Reinstall the application.";
+    const setupHint =
+      pythonRuntimeStatus ??
+      "Bundled Python runtime is not ready. Reinstall the application.";
     setPythonRuntimeStatus(setupHint);
     emulatorState.status = setupHint;
     emitEmulatorState();

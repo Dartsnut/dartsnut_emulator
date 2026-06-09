@@ -42,7 +42,7 @@ export function parseConfWidgetSize(size: unknown): WidgetSize | undefined {
   return WIDGET_DISPLAY_SIZES.includes(key) ? key : undefined;
 }
 
-function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
+export function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
   templateMode: "widget-creator" | "game-creator";
   projectType: ProjectType;
   widgetSize?: WidgetSize;

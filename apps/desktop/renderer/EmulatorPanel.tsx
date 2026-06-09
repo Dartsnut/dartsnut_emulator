@@ -629,7 +629,11 @@ export function EmulatorPanel({
               disabled={!bridgeReady}
               onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "capture_screenshot" })}
               aria-label="Capture screenshot"
-              title="Capture screenshot"
+              title={
+                normalizedWidgetType === "widget"
+                  ? "Capture device mockup and widget surface"
+                  : "Capture screenshot"
+              }
             >
               <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
                 <path

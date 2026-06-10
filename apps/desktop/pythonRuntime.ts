@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 
 export interface PythonScriptLaunch {
@@ -41,14 +40,6 @@ export function bundledUvBin(resourcesPath: string): string {
   return path.join(resourcesPath, "uv", binName);
 }
 
-export function shouldUseUvRunner(isPackaged: boolean, resourcesPath: string): boolean {
-  if (!isPackaged) {
-    return false;
-  }
-  const uvBin = bundledUvBin(resourcesPath);
-  return fs.existsSync(uvBin);
-}
-
 function venvDirForPython(pythonPath: string): string | null {
   const normalized = path.resolve(pythonPath);
   const binDir = path.dirname(normalized);
@@ -73,6 +64,9 @@ export function buildUvOfflineEnv(
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     PYTHONUNBUFFERED: "1",
+    // Prevent Python from writing .pyc files into the signed .app bundle, which
+    // would modify sealed resources and break codesign --verify.
+    PYTHONDONTWRITEBYTECODE: "1",
     UV_NO_PYTHON_DOWNLOADS: "never",
     UV_NO_MANAGED_PYTHON: "1",
     UV_NO_PROJECT: "1",
@@ -84,14 +78,41 @@ export function buildUvOfflineEnv(
   const venvDir = venvDirForPython(pythonPath);
   if (venvDir) {
     env.VIRTUAL_ENV = venvDir;
+    // python-build-standalone binaries have /install hardcoded as sys.base_prefix.
+    // Setting PYTHONHOME to the venv dir makes Python find its stdlib at
+    // <venvDir>/lib/python3.x instead of the nonexistent /install/lib/python3.x.
+    env.PYTHONHOME = venvDir;
     const binDir = path.dirname(pythonPath);
     env.PATH = `${binDir}${path.delimiter}${env.PATH ?? ""}`;
   }
   return sanitizeUvNoProjectEnv(env);
 }
 
+/**
+ * Build a minimal env for probing a Python executable directly (without uv).
+ * Sets PYTHONHOME so that python-build-standalone binaries find their stdlib
+ * inside the venv dir rather than the hardcoded /install prefix.
+ */
+export function buildPythonProbeEnv(
+  pythonPath: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    PYTHONUNBUFFERED: "1",
+    PYTHONDONTWRITEBYTECODE: "1",
+  };
+  const venvDir = venvDirForPython(pythonPath);
+  if (venvDir) {
+    env.VIRTUAL_ENV = venvDir;
+    env.PYTHONHOME = venvDir;
+    const binDir = path.dirname(pythonPath);
+    env.PATH = `${binDir}${path.delimiter}${env.PATH ?? ""}`;
+  }
+  return env;
+}
+
 export function buildPythonScriptLaunch(options: {
-  isPackaged: boolean;
   resourcesPath: string;
   pythonPath: string;
   scriptPath: string;
@@ -99,32 +120,14 @@ export function buildPythonScriptLaunch(options: {
   baseEnv?: NodeJS.ProcessEnv;
 }): PythonScriptLaunch {
   const scriptArgs = options.scriptArgs ?? [];
-  const useUv = shouldUseUvRunner(options.isPackaged, options.resourcesPath);
-  if (useUv) {
-    const uvBin = bundledUvBin(options.resourcesPath);
-    const env = buildUvOfflineEnv(options.pythonPath, options.baseEnv, uvBin);
-    return {
-      command: uvBin,
-      args: ["run", "--no-project", "--python", options.pythonPath, options.scriptPath, ...scriptArgs],
-      env,
-      runtimeKey: `uv:${uvBin}:${options.pythonPath}`,
-      label: `uv run (${options.pythonPath})`,
-      pythonPath: options.pythonPath,
-    };
-  }
-  const env: NodeJS.ProcessEnv = { ...options.baseEnv, PYTHONUNBUFFERED: "1" };
-  const venvDir = venvDirForPython(options.pythonPath);
-  if (venvDir) {
-    env.VIRTUAL_ENV = venvDir;
-    const binDir = path.dirname(options.pythonPath);
-    env.PATH = `${binDir}${path.delimiter}${env.PATH ?? ""}`;
-  }
+  const uvBin = bundledUvBin(options.resourcesPath);
+  const env = buildUvOfflineEnv(options.pythonPath, options.baseEnv, uvBin);
   return {
-    command: options.pythonPath,
-    args: [options.scriptPath, ...scriptArgs],
+    command: uvBin,
+    args: ["run", "--no-project", "--python", options.pythonPath, options.scriptPath, ...scriptArgs],
     env,
-    runtimeKey: options.pythonPath,
-    label: options.pythonPath,
+    runtimeKey: `uv:${uvBin}:${options.pythonPath}`,
+    label: `uv run (${options.pythonPath})`,
     pythonPath: options.pythonPath,
   };
 }

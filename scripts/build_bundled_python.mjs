@@ -238,14 +238,117 @@ async function main() {
     throw new Error(`Expected venv interpreter at ${runtimePython}`);
   }
 
+  // Fix python symlinks in the venv bin directory that point outside the bundle.
+  // uv venv creates bin/python -> <absolute-path-to-standalone-cache>/python3 which
+  // codesign --verify --deep --strict rejects.  We copy the real interpreter binary
+  // into the venv's bin dir and repoint all python* symlinks at it so the whole
+  // runtime is self-contained.
+  if (process.platform !== "win32") {
+    console.log("Fixing python symlinks in venv bin...");
+    const binDir = path.join(runtimeOutputDir, "bin");
+
+    // Resolve the chain of symlinks to find the real interpreter binary.
+    // standalonePython = <cache>/python/bin/python3 (a real file, not a symlink)
+    const realPythonSrc = fs.realpathSync(standalonePython);
+
+    // Copy the real binary into the venv bin dir under its versioned name.
+    // Remove any existing entry first (it may be a symlink like python3.12 -> python).
+    const versionedName = `python${PYTHON_VERSION.split(".").slice(0, 2).join(".")}`;
+    const versionedDest = path.join(binDir, versionedName);
+    try { fs.unlinkSync(versionedDest); } catch { /* may not exist */ }
+    console.log(`  Copying ${realPythonSrc} -> ${versionedDest}`);
+    fs.copyFileSync(realPythonSrc, versionedDest);
+    fs.chmodSync(versionedDest, 0o755);
+
+    // The standalone Python binary is dynamically linked to libpython3.12.dylib via
+    // @executable_path/../lib/libpython3.12.dylib.  Copy the dylib into the venv's lib/
+    // dir so the binary can find it when run from inside the app bundle.
+    const standaloneLibDir = path.join(path.dirname(path.dirname(realPythonSrc)), "lib");
+    const dylibName = `libpython${PYTHON_VERSION.split(".").slice(0, 2).join(".")}.dylib`;
+    const dylibSrc = path.join(standaloneLibDir, dylibName);
+    if (fs.existsSync(dylibSrc)) {
+      const venvLibDir = path.join(runtimeOutputDir, "lib");
+      fs.mkdirSync(venvLibDir, { recursive: true });
+      const dylibDest = path.join(venvLibDir, dylibName);
+      console.log(`  Copying ${dylibSrc} -> ${dylibDest}`);
+      fs.copyFileSync(dylibSrc, dylibDest);
+      fs.chmodSync(dylibDest, 0o755);
+      // Fix the dylib's own install name so codesign is happy.
+      run("install_name_tool", ["-id", `@executable_path/../lib/${dylibName}`, dylibDest]);
+      // Fix the binary's reference to the dylib.
+      run("install_name_tool", [
+        "-change", `/install/lib/${dylibName}`,
+        `@executable_path/../lib/${dylibName}`,
+        versionedDest,
+      ]);
+    } else {
+      console.log(`  Warning: ${dylibSrc} not found, skipping dylib copy`);
+    }
+
+    // Repoint python and python3 symlinks to the copied binary (versionedName is now a real file).
+    for (const alias of ["python", "python3"]) {
+      const linkPath = path.join(binDir, alias);
+      try { fs.unlinkSync(linkPath); } catch { /* may not exist */ }
+      fs.symlinkSync(versionedName, linkPath);
+      console.log(`  ${alias} -> ${versionedName}`);
+    }
+
+    // Copy the Python stdlib from the standalone distribution into the venv's lib/ dir.
+    // Without this, Python in the packaged app cannot find its standard library and fails
+    // with "Could not find platform independent libraries <prefix>".
+    const pyMinor = PYTHON_VERSION.split(".").slice(0, 2).join(".");
+    const stdlibSrc = path.join(standaloneLibDir, `python${pyMinor}`);
+    if (fs.existsSync(stdlibSrc)) {
+      const venvLibDir = path.join(runtimeOutputDir, "lib");
+      fs.mkdirSync(venvLibDir, { recursive: true });
+      const stdlibDest = path.join(venvLibDir, `python${pyMinor}`);
+      console.log(`  Copying stdlib ${stdlibSrc} -> ${stdlibDest}`);
+      // Remove destination first: if uv venv already created lib/python3.12/ (with
+      // just site-packages), cp -a would merge into it rather than replace it, leaving
+      // the stdlib modules (encodings, etc.) missing.
+      if (fs.existsSync(stdlibDest)) {
+        fs.rmSync(stdlibDest, { recursive: true, force: true });
+      }
+      // Use cp -a to preserve permissions and symlinks inside the stdlib.
+      run("cp", ["-a", stdlibSrc, stdlibDest]);
+      // Remove __pycache__ dirs: Python writes .pyc files on first import, which would
+      // modify files inside the signed .app bundle and break codesign --verify.
+      // Starting with an empty cache means Python regenerates them at runtime outside
+      // the sealed bundle (or we suppress writes via PYTHONDONTWRITEBYTECODE).
+      run("find", [stdlibDest, "-type", "d", "-name", "__pycache__", "-exec", "rm", "-rf", "{}", "+"]);
+      console.log(`  Stripped __pycache__ from stdlib`);
+    } else {
+      console.warn(`  Warning: stdlib not found at ${stdlibSrc}`);
+    }
+
+    // Fix pyvenv.cfg: the 'home' key points to the dev-machine standalone cache path.
+    // Rewrite it to point to the venv's own bin/ so Python can locate itself in the
+    // packaged app without any reference to the build machine's filesystem.
+    const pyvenvCfg = path.join(runtimeOutputDir, "pyvenv.cfg");
+    if (fs.existsSync(pyvenvCfg)) {
+      let cfg = fs.readFileSync(pyvenvCfg, "utf8");
+      cfg = cfg.replace(/^home\s*=\s*.+$/m, `home = ${binDir}`);
+      fs.writeFileSync(pyvenvCfg, cfg);
+      console.log(`  Fixed pyvenv.cfg home -> ${binDir}`);
+    }
+  }
+
+  // The python-build-standalone binary has /install hardcoded as sys.base_prefix.
+  // Setting PYTHONHOME to runtimeOutputDir makes Python find its stdlib at
+  // <runtimeOutputDir>/lib/python3.12 instead of /install/lib/python3.12.
+  const pythonEnv = { ...process.env, PYTHONHOME: runtimeOutputDir };
+
   console.log("Installing emulator dependencies with uv...");
-  run(uvBin, ["pip", "install", "--python", runtimePython, "-r", requirementsPath], { cwd: repoRoot });
+  run(uvBin, ["pip", "install", "--python", runtimePython, "-r", requirementsPath], {
+    cwd: repoRoot,
+    env: pythonEnv,
+  });
 
   console.log("Verifying bundled runtime...");
   run(
     runtimePython,
     ["-c", "import sys; import pydartsnut, pygame, PIL; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
-    { cwd: repoRoot },
+    { cwd: repoRoot, env: pythonEnv },
   );
 
   console.log("Verifying uv run launcher...");
@@ -265,6 +368,7 @@ async function main() {
       env: (() => {
         const env = {
           ...process.env,
+          PYTHONHOME: runtimeOutputDir,
           UV_NO_PYTHON_DOWNLOADS: "never",
           UV_NO_MANAGED_PYTHON: "1",
           UV_NO_PROJECT: "1",

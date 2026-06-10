@@ -7,7 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen } from "electr
 import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
-import { buildPythonScriptLaunch, bundledPythonRuntimeDir, venvPythonPath } from "./pythonRuntime";
+import { buildPythonProbeEnv, buildPythonScriptLaunch, bundledPythonRuntimeDir, bundledUvBin, venvPythonPath } from "./pythonRuntime";
 import {
   IPCChannels,
   type AgentEvent,
@@ -128,12 +128,17 @@ let emulatorBridgeTeardownInFlight: Promise<void> | null = null;
 const repoRoot = app.isPackaged
   ? process.resourcesPath
   : path.resolve(__dirname, "../../..");
+// In dev mode process.resourcesPath points inside Electron's own bundle.
+// The bundled python-runtime and uv live under apps/desktop/resources/ in the repo.
+const appResourcesPath = app.isPackaged
+  ? process.resourcesPath
+  : path.resolve(__dirname, "../resources");
 process.env.DARTSNUT_REPO_ROOT = repoRoot;
 const repoEnvPath = path.join(repoRoot, ".env");
 if (fs.existsSync(repoEnvPath)) {
   dotenv.config({ path: repoEnvPath });
 }
-let pythonExec = process.env.DARTSNUT_PYTHON || "python3";
+let pythonExec: string = venvPythonPath(bundledPythonRuntimeDir(appResourcesPath));
 let pythonRuntimeStatus: string | null = null;
 
 let lastWidgetDir: string | null = null;
@@ -141,8 +146,7 @@ const assetPreprocessScriptRelativePath = "scripts/asset_preprocess.py";
 const assetManager = new AssetManager({
   launchScript: (scriptPath, scriptArgs) =>
     buildPythonScriptLaunch({
-      isPackaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
+      resourcesPath: appResourcesPath,
       pythonPath: pythonExec,
       scriptPath,
       scriptArgs,
@@ -1479,10 +1483,6 @@ function setPythonRuntimeStatus(status: string | null) {
   emitPythonRuntimeStatus();
 }
 
-function canRunEmulatorDeps(executable: string): boolean {
-  return probePythonExecutable(executable).ok;
-}
-
 type BundledPythonMarker = {
   target?: string;
   pythonVersion?: string;
@@ -1511,11 +1511,13 @@ function readBundledPythonMarker(runtimeDir: string): BundledPythonMarker | null
 }
 
 function probePythonExecutable(executable: string): { ok: true } | { ok: false; detail: string } {
+  const env = buildPythonProbeEnv(executable);
   const spawnOpts = {
     cwd: repoRoot,
     stdio: "pipe" as const,
     encoding: "utf-8" as const,
     windowsHide: true,
+    env,
   };
 
   const versionProbe = spawnSync(
@@ -1558,135 +1560,54 @@ function probePythonExecutable(executable: string): { ok: true } | { ok: false; 
   return { ok: true };
 }
 
-function isPythonVersionSupportedSync(executable: string): boolean {
-  const result = spawnSync(
-    executable,
-    ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
-    {
-      cwd: repoRoot,
-      stdio: "pipe",
-      windowsHide: true,
-    },
-  );
-  return result.status === 0;
-}
-
-function venvPythonCandidatesForDir(venvDir: string): string[] {
-  if (process.platform === "win32") {
-    return [
-      venvPythonPath(venvDir),
-      path.join(venvDir, "Scripts", "python3.12.exe"),
-      path.join(venvDir, "Scripts", "python3.11.exe"),
-      path.join(venvDir, "Scripts", "python3.10.exe")
-    ];
-  }
-  return [
-    venvPythonPath(venvDir),
-    path.join(venvDir, "bin", "python3.12"),
-    path.join(venvDir, "bin", "python3.11"),
-    path.join(venvDir, "bin", "python3.10")
-  ];
-}
-
-function repoVenvPythonCandidates(): string[] {
-  return venvPythonCandidatesForDir(path.join(repoRoot, ".venv"));
-}
-
-function firstRunnablePython(candidates: string[]): string | null {
-  for (const candidate of candidates) {
-    if (probePythonExecutable(candidate).ok) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
-async function resolveBundledPythonRuntime(): Promise<string | null> {
-  if (!app.isPackaged) {
-    return null;
-  }
-
-  const runtimeDir = bundledPythonRuntimeDir(process.resourcesPath);
+async function resolvePythonExecutable(): Promise<string> {
+  const runtimeDir = bundledPythonRuntimeDir(appResourcesPath);
   const bundledPython = venvPythonPath(runtimeDir);
+
   if (!fs.existsSync(bundledPython)) {
-    setPythonRuntimeStatus(
-      `Bundled Python not found at ${bundledPython}. Run pnpm bundle:python on Windows before pnpm package:win.`,
-    );
+    const msg = `Bundled Python not found at ${bundledPython}. Reinstall the application.`;
+    setPythonRuntimeStatus(msg);
     devLog.warn("[python-runtime] missing bundled interpreter", bundledPython);
-    return null;
+    emulatorState.status = msg;
+    emitEmulatorState();
+    return bundledPython;
   }
 
   const marker = readBundledPythonMarker(runtimeDir);
   const expectedTarget = expectedBundledPythonTarget();
   if (marker?.target && marker.target !== expectedTarget) {
-    setPythonRuntimeStatus(
-      `Bundled Python was built for ${marker.target}, but this install needs ${expectedTarget}. Rebuild with: pnpm bundle:python -- --target ${expectedTarget}`,
-    );
+    const msg = `Bundled Python was built for ${marker.target}, but this install needs ${expectedTarget}. Rebuild with: pnpm bundle:python -- --target ${expectedTarget}`;
+    setPythonRuntimeStatus(msg);
     devLog.warn("[python-runtime] target mismatch", { expected: expectedTarget, marker });
-    return null;
+    emulatorState.status = msg;
+    emitEmulatorState();
+    return bundledPython;
   }
 
   const probe = probePythonExecutable(bundledPython);
   if (!probe.ok) {
-    setPythonRuntimeStatus(`Bundled Python failed: ${probe.detail.slice(0, 320)}`);
+    const msg = `Bundled Python failed: ${probe.detail.slice(0, 320)}`;
+    setPythonRuntimeStatus(msg);
     devLog.warn("[python-runtime] probe failed", probe.detail);
-    return null;
+    emulatorState.status = msg;
+    emitEmulatorState();
+    return bundledPython;
   }
+
+  setPythonRuntimeStatus(null);
+  devLog.info("[python-runtime] resolved bundled interpreter", bundledPython);
   return bundledPython;
 }
 
-async function resolvePythonExecutable(): Promise<string> {
-  const envOverride = process.env.DARTSNUT_PYTHON?.trim();
-  if (envOverride) {
-    if (canRunEmulatorDeps(envOverride) && isPythonVersionSupportedSync(envOverride)) {
-      return envOverride;
-    }
-    setPythonRuntimeStatus(
-      "DARTSNUT_PYTHON is set but missing emulator deps (pydartsnut/pygame-ce/Pillow)."
-    );
-  }
-
-  if (app.isPackaged) {
-    const bundledPython = await resolveBundledPythonRuntime();
-    if (bundledPython) {
-      setPythonRuntimeStatus(null);
-      return bundledPython;
-    }
-    const setupHint =
-      pythonRuntimeStatus ??
-      "Bundled Python runtime is not ready. Reinstall the application.";
-    setPythonRuntimeStatus(setupHint);
-    emulatorState.status = setupHint;
-    emitEmulatorState();
-    return venvPythonPath(bundledPythonRuntimeDir(process.resourcesPath));
-  }
-
-  const devPython = firstRunnablePython(repoVenvPythonCandidates());
-  if (devPython) {
-    setPythonRuntimeStatus(null);
-    return devPython;
-  }
-
-  const setupHint = "Missing Python 3.10+ or emulator deps (pydartsnut/pygame-ce/Pillow). Run: pnpm setup:python";
-  setPythonRuntimeStatus(setupHint);
-  emulatorState.status = setupHint;
-  emitEmulatorState();
-  const venvFallback = repoVenvPythonCandidates().find((candidate) => fs.existsSync(candidate));
-  return venvFallback ?? venvPythonPath(path.join(repoRoot, ".venv"));
-}
-
 function startPythonBridge() {
-  if (!canRunEmulatorDeps(pythonExec) || !isPythonVersionSupportedSync(pythonExec)) {
-    emulatorState.status =
-      pythonRuntimeStatus ??
-      "Python runtime is not ready (pydartsnut/pygame-ce/Pillow). Run: pnpm setup:python";
+  if (pythonRuntimeStatus !== null) {
+    emulatorState.status = pythonRuntimeStatus;
     emulatorState.running = false;
     emitEmulatorState();
     return;
   }
   const bridgeLaunch = buildPythonScriptLaunch({
-    isPackaged: app.isPackaged,
-    resourcesPath: process.resourcesPath,
+    resourcesPath: appResourcesPath,
     pythonPath: pythonExec,
     scriptPath: path.join(repoRoot, "services", "emulator-core", "bridge_service.py"),
   });
@@ -1707,8 +1628,7 @@ function spawnBridgeAfterStop() {
   }
   const bridgePath = path.join(repoRoot, "services", "emulator-core", "bridge_service.py");
   const launch = buildPythonScriptLaunch({
-    isPackaged: app.isPackaged,
-    resourcesPath: process.resourcesPath,
+    resourcesPath: appResourcesPath,
     pythonPath: pythonExec,
     scriptPath: bridgePath,
   });

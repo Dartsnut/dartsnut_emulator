@@ -1,6 +1,6 @@
 # Deploy to machine (debug)
 
-The **Deploy** panel in Dartsnut Chat appears when the open workspace has a valid root `conf.json` (`id`, `type`: `widget` | `game`). It syncs the workspace to a Raspberry Pi-style host under **`~/dartsnut_rpi/apps/<id>/`** over SSH (default dev credential **`rpi` / `rpi`**).
+The **Deploy** panel in Dartsnut Agent appears when the open workspace has a valid root `conf.json` (`id`, `type`: `widget` | `game`). It syncs the workspace to a Raspberry Pi-style host under **`~/dartsnut_rpi/apps/<id>/`** over SSH (default dev credential **`rpi` / `rpi`**).
 
 **Desktop OS:** Bundling uses the **`tar`** CLI on your machine (Electron main process). **Windows 10+** ships **`tar.exe`** (BSD/libarchive) with the flags we use (`--format ustar`, gzip); **macOS** and typical Linux installs are supported. **ssh2** is pure Node and works on Windows without OpenSSH being required for the app (TCP from Electron to the Pi).
 

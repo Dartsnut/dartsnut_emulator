@@ -1,6 +1,6 @@
-# Python runtime (Dartsnut Chat desktop)
+# Python runtime (Dartsnut Agent desktop)
 
-Packaged Dartsnut Chat ships its own Python stack so users do not install Python separately.
+Packaged Dartsnut Agent ships its own Python stack so users do not install Python separately.
 
 ## What is bundled
 
@@ -103,7 +103,7 @@ apps/desktop/resources/uv/uv.exe
 After packaging, check the portable output:
 
 ```text
-release/DartsnutChat.exe   (or win-unpacked/resources/python-runtime/...)
+release/Dartsnut Agent.exe   (or win-unpacked/resources/python-runtime/...)
 ```
 
 **Offline / flaky network:** cache downloads manually (see `scripts/build_bundled_python.mjs`):

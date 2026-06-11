@@ -6,7 +6,7 @@ Load **before** writing or heavily editing **`main.py`**. Type-specific loop det
 
 Integration with the **Dartsnut machine** via **`pydartsnut`** — not generic Python apps or pygame demos without machine I/O.
 
-## Run / preview (Dartsnut Chat)
+## Run / preview (Dartsnut Agent)
 
 In README or final replies:
 

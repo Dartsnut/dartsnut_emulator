@@ -7,7 +7,9 @@ describe("buildCreationIntakeUserPrompt", () => {
     expect(prompt).toContain("我想要一个可爱的呼吸小组件");
     expect(prompt).toContain("dartsnut_ask_question");
     expect(prompt).toContain("widget_display_size");
-    expect(prompt).toContain("hand off");
+    expect(prompt).toContain("build it now");
+    expect(prompt).toContain("get_emulator_logs");
+    expect(prompt).not.toContain("hand off");
     expect(prompt).not.toContain("will run next");
   });
 

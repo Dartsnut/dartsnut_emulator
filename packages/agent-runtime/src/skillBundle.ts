@@ -185,7 +185,7 @@ function formatCreatorRouterBody(skillsDir: string, allowed: readonly DeferredSk
   const always = CREATOR_ALWAYS_LOAD.filter((id) => allowed.includes(id));
   const optional = CREATOR_OPTIONAL_SKILLS.filter((id) => allowed.includes(id));
   return [
-    "You are the Dartsnut Chat coding agent for **games** and **widgets** on Dartsnut hardware (`pydartsnut`, `conf.json`).",
+    "You are the Dartsnut Agent coding agent for **games** and **widgets** on Dartsnut hardware (`pydartsnut`, `conf.json`).",
     "",
     "**Language:** Users may write in **English**, **Simplified Chinese (zh-Hans)**, or **Traditional Chinese (zh-Hant)**. Decide which **`get_dartsnut_skill`** ids to load from **meaning**, not exact keywords. Skill ids and tool names stay English.",
     "",

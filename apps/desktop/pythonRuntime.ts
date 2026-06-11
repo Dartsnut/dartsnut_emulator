@@ -1,4 +1,7 @@
 import path from "node:path";
+import fs from "node:fs";
+import { app } from "electron";
+import { PYTHON_VERSION, UV_VERSION } from "./pythonRuntimeDownloader";
 
 export interface PythonScriptLaunch {
   command: string;
@@ -18,8 +21,30 @@ export function venvPythonPath(venvDir: string): string {
   return path.join(venvDir, "bin", "python");
 }
 
-export function bundledPythonRuntimeDir(resourcesPath: string): string {
-  return path.join(resourcesPath, "python-runtime");
+export function runtimeDir(): string {
+  return path.join(app.getPath("userData"), "runtime");
+}
+
+export function pythonRuntimeDir(): string {
+  return path.join(runtimeDir(), `python-${PYTHON_VERSION}`);
+}
+
+export function uvBinaryPath(): string {
+  const binName = process.platform === "win32" ? "uv.exe" : "uv";
+  return path.join(runtimeDir(), `uv-${UV_VERSION}`, binName);
+}
+
+export function getPreferredPypiIndexUrl(): string | undefined {
+  try {
+    const metadataPath = path.join(runtimeDir(), ".metadata.json");
+    if (!fs.existsSync(metadataPath)) {
+      return undefined;
+    }
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    return metadata.pypiIndexUrl;
+  } catch {
+    return undefined;
+  }
 }
 
 export const DARTSNUT_UV_BIN_ENV = "DARTSNUT_UV_BIN";
@@ -33,11 +58,6 @@ export function sanitizeUvNoProjectEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEn
     delete sanitized[key];
   }
   return sanitized;
-}
-
-export function bundledUvBin(resourcesPath: string): string {
-  const binName = process.platform === "win32" ? "uv.exe" : "uv";
-  return path.join(resourcesPath, "uv", binName);
 }
 
 function venvDirForPython(pythonPath: string): string | null {
@@ -75,6 +95,13 @@ export function buildUvOfflineEnv(
   if (uvBin) {
     env[DARTSNUT_UV_BIN_ENV] = uvBin;
   }
+
+  // Add preferred PyPI index URL if we have one
+  const pypiIndexUrl = getPreferredPypiIndexUrl();
+  if (pypiIndexUrl) {
+    env.DARTSNUT_PYPI_INDEX_URL = pypiIndexUrl;
+  }
+
   const venvDir = venvDirForPython(pythonPath);
   if (venvDir) {
     env.VIRTUAL_ENV = venvDir;
@@ -113,14 +140,13 @@ export function buildPythonProbeEnv(
 }
 
 export function buildPythonScriptLaunch(options: {
-  resourcesPath: string;
   pythonPath: string;
   scriptPath: string;
   scriptArgs?: string[];
   baseEnv?: NodeJS.ProcessEnv;
 }): PythonScriptLaunch {
   const scriptArgs = options.scriptArgs ?? [];
-  const uvBin = bundledUvBin(options.resourcesPath);
+  const uvBin = uvBinaryPath();
   const env = buildUvOfflineEnv(options.pythonPath, options.baseEnv, uvBin);
   return {
     command: uvBin,

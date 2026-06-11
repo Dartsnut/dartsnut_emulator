@@ -124,21 +124,94 @@ export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "grep_files",
+      description:
+        "Search workspace file contents with a regular expression. Returns matching lines with their workspace-relative path and 1-based line number. Use this to find where something is defined or used before reading or editing. Binary files, `.dartsnut/`, and `node_modules/` are skipped.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: {
+            type: "string",
+            description: "JavaScript regular expression to match against each line."
+          },
+          glob: {
+            type: "string",
+            description:
+              "Optional filename glob to restrict the search (e.g. `**/*.py`, `assets/**`). Matches the workspace-relative path."
+          },
+          path: {
+            type: "string",
+            description: "Optional workspace-relative subdirectory to search within. Defaults to the workspace root."
+          },
+          ignore_case: {
+            type: "boolean",
+            description: "Case-insensitive matching when true. Defaults to false."
+          },
+          max_results: {
+            type: "number",
+            description: "Maximum number of matching lines to return (default 200, hard cap 1000)."
+          }
+        },
+        required: ["pattern"],
+        additionalProperties: false
+      },
+      strict: false
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "glob_files",
+      description:
+        "List workspace files whose relative path matches a glob pattern (e.g. `**/*.py`, `fonts/**`, `conf.json`). Returns sorted workspace-relative paths. Use to discover files by name/extension before reading them.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: {
+            type: "string",
+            description: "Glob pattern matched against the workspace-relative path. Supports `*`, `?`, and `**`."
+          },
+          path: {
+            type: "string",
+            description: "Optional workspace-relative subdirectory to search within. Defaults to the workspace root."
+          },
+          max_results: {
+            type: "number",
+            description: "Maximum number of paths to return (default 500, hard cap 2000)."
+          }
+        },
+        required: ["pattern"],
+        additionalProperties: false
+      },
+      strict: false
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "read_file",
       description:
-        "Read the UTF-8 contents of a workspace file. Do not use for binary assets — use copy_asset_file for fonts and images.",
+        "Read the UTF-8 contents of a workspace file. Omit offset/limit to read the whole file (use this before replace_in_file so your `find` text matches exactly). Pass offset/limit to read a line range of a large file; ranged reads come back with line-number prefixes for reference only — strip them before using the text in edits. Do not use for binary assets — use copy_asset_file for fonts and images.",
       parameters: {
         type: "object",
         properties: {
           path: {
             type: "string",
             description: "Workspace-relative file path to read."
+          },
+          offset: {
+            type: "number",
+            description: "1-based line number to start reading from. When set, the response is a numbered slice rather than the raw whole file."
+          },
+          limit: {
+            type: "number",
+            description: "Maximum number of lines to read starting at offset. Defaults to 2000 when offset is set."
           }
         },
         required: ["path"],
         additionalProperties: false
       },
-      strict: true
+      strict: false
     }
   },
   {
@@ -170,7 +243,7 @@ export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
     function: {
       name: "replace_in_file",
       description:
-        "Replace the first occurrence of `find` with `replace` inside an existing workspace file. Fails if `find` is not present. Prefer this over write_file when editing existing files.",
+        "Replace `find` with `replace` inside an existing workspace file. By default replaces a single occurrence and FAILS if `find` is not present or matches more than once — when that happens, include more surrounding context in `find` to make it unique, or set replace_all to true. Prefer this over write_file when editing existing files.",
       parameters: {
         type: "object",
         properties: {
@@ -181,17 +254,21 @@ export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
           find: {
             type: "string",
             description:
-              "Exact text to locate inside the file. Must be non-empty and unique enough to identify a single occurrence."
+              "Exact text to locate inside the file. Must be non-empty. Unless replace_all is true, it must match exactly one occurrence."
           },
           replace: {
             type: "string",
             description: "Replacement text. May be empty to delete the matched span."
+          },
+          replace_all: {
+            type: "boolean",
+            description: "When true, replace every occurrence of `find` instead of requiring a unique match. Defaults to false."
           }
         },
         required: ["path", "find", "replace"],
         additionalProperties: false
       },
-      strict: true
+      strict: false
     }
   },
   {
@@ -255,18 +332,40 @@ const GET_EMULATOR_LOGS_TOOL: ChatCompletionTool = {
   }
 };
 
-/** Default tool surface: workspace file tools + deferred skills + project intake helper. */
+const CHECK_PYTHON_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "check_python",
+    description:
+      "Host-executed **syntax check** (no execution): runs `python -m py_compile` on the given workspace file(s). Use it as a fast check after writing/editing `main.py` (and before `reload_emulator`) to catch SyntaxError early. Returns `{ ok, errors }`; an empty `errors` array means the files parse. This does NOT run the program — use `reload_emulator` + `get_emulator_logs` to verify runtime behavior.",
+    parameters: {
+      type: "object",
+      properties: {
+        paths: {
+          type: "array",
+          items: { type: "string" },
+          description: "Workspace-relative Python files to compile. Defaults to [\"main.py\"] when omitted."
+        }
+      },
+      additionalProperties: false
+    },
+    strict: false
+  }
+};
+
+const SEARCH_TOOL_NAMES = ["grep_files", "glob_files"] as const;
+
+function fileTool(name: string): ChatCompletionTool {
+  return AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === name)!;
+}
+
+/** Default / full tool surface: file + search tools, deferred skills, emulator verify, check_python, project intake. */
 export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
   ...AGENT_FILE_TOOL_SCHEMAS,
   GET_DARTSNUT_SKILL_TOOL,
   RELOAD_EMULATOR_TOOL,
   GET_EMULATOR_LOGS_TOOL,
-  DARTSNUT_ASK_QUESTION_TOOL,
-  DARTSNUT_PROJECT_INTAKE_TOOL
-];
-
-/** Intake-only session: host tools only (no file writes). */
-export const AGENT_CREATION_INTAKE_TOOL_SCHEMAS: ChatCompletionTool[] = [
+  CHECK_PYTHON_TOOL,
   DARTSNUT_ASK_QUESTION_TOOL,
   DARTSNUT_PROJECT_INTAKE_TOOL
 ];
@@ -276,49 +375,21 @@ export type AgentToolSchemaDefinition = {
   parameters: Record<string, unknown>;
 };
 
-/** Creator profile: file tools + skills + emulator (no intake host tools). */
-export const AGENT_CREATOR_TOOL_SCHEMAS: ChatCompletionTool[] = [
-  ...AGENT_FILE_TOOL_SCHEMAS,
-  GET_DARTSNUT_SKILL_TOOL,
-  RELOAD_EMULATOR_TOOL,
-  GET_EMULATOR_LOGS_TOOL
-];
-
-/** Modification pass: edit existing projects without intake tools. */
-export const AGENT_MODIFIER_TOOL_SCHEMAS: ChatCompletionTool[] = [
-  ...AGENT_FILE_TOOL_SCHEMAS,
-  GET_DARTSNUT_SKILL_TOOL,
-  RELOAD_EMULATOR_TOOL,
-  GET_EMULATOR_LOGS_TOOL
-];
-
-/** Surgical fix: read/replace focused; no write_file or copy_asset_file. */
-export const AGENT_SURGICAL_TOOL_SCHEMAS: ChatCompletionTool[] = [
-  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "list_files")!,
-  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "read_file")!,
-  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "replace_in_file")!,
-  GET_DARTSNUT_SKILL_TOOL,
-  RELOAD_EMULATOR_TOOL,
-  GET_EMULATOR_LOGS_TOOL
-];
-
-/** Asset applier: bind art to existing slots. */
+/** Asset applier: bind art to existing slots (no copy_asset_file, no intake). */
 export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: ChatCompletionTool[] = [
-  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "list_files")!,
-  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "read_file")!,
-  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "write_file")!,
-  AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === "replace_in_file")!,
+  fileTool("list_files"),
+  ...SEARCH_TOOL_NAMES.map(fileTool),
+  fileTool("read_file"),
+  fileTool("write_file"),
+  fileTool("replace_in_file"),
   GET_DARTSNUT_SKILL_TOOL,
   RELOAD_EMULATOR_TOOL,
-  GET_EMULATOR_LOGS_TOOL
+  GET_EMULATOR_LOGS_TOOL,
+  CHECK_PYTHON_TOOL
 ];
 
 const ALL_TOOL_SCHEMAS: ChatCompletionTool[] = [
   ...AGENT_TOOL_SCHEMAS,
-  ...AGENT_CREATION_INTAKE_TOOL_SCHEMAS,
-  ...AGENT_CREATOR_TOOL_SCHEMAS,
-  ...AGENT_MODIFIER_TOOL_SCHEMAS,
-  ...AGENT_SURGICAL_TOOL_SCHEMAS,
   ...AGENT_ASSET_APPLIER_TOOL_SCHEMAS
 ];
 

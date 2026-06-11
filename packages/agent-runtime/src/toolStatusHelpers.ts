@@ -71,6 +71,10 @@ export function buildToolStatusMessage(
   switch (name) {
     case "list_files":
       return { text: phase === "call" ? "Listing files…" : "Listed files.", meta: baseMeta };
+    case "grep_files":
+      return { text: phase === "call" ? "Searching files…" : "Searched files.", meta: baseMeta };
+    case "glob_files":
+      return { text: phase === "call" ? "Finding files…" : "Found files.", meta: baseMeta };
     case "read_file":
       return {
         text: phase === "call" ? `Reading ${filePath ?? "file"}…` : `Read ${filePath ?? "file"}.`,
@@ -106,6 +110,8 @@ export function buildToolStatusMessage(
       return { text: phase === "call" ? "Reloading emulator…" : "Reloaded emulator.", meta: baseMeta };
     case "get_emulator_logs":
       return { text: phase === "call" ? "Fetching emulator logs…" : "Fetched emulator logs.", meta: baseMeta };
+    case "check_python":
+      return { text: phase === "call" ? "Checking Python…" : "Checked Python.", meta: baseMeta };
     default:
       return { text: phase === "call" ? `Running ${name}…` : `Finished ${name}.`, meta: baseMeta };
   }

@@ -12,14 +12,13 @@ import {
   nextAfterProjectType
 } from "../../src/creationIntakeHost";
 import { AgentSessionPersistence } from "../../src/agentSessionPersistence";
-import { ProviderClient } from "../../src/providerClient";
 import type { ProviderConfig } from "../../src/providerConfig";
 import { loadProviderConfig, validateProviderConfig } from "../../src/providerConfig";
 import {
-  allowedDeferredSkillIdsForMode,
-  resolveSkillRouterPrompt
+  allowedDeferredSkillIdsForMode
 } from "../../src/skillBundle";
 import { SessionEngine } from "../../src/sessionEngine";
+import { buildAgentModelConfig } from "../../src/agentProviderConfig";
 import { AGENT_TOOL_SCHEMAS } from "../../src/toolSchemas";
 import { WorkspacePolicy } from "../../src/workspacePolicy";
 
@@ -145,32 +144,6 @@ export function ensureE2eRepoRoot(): string {
     process.env.AGENT_TOOL_LOOP_MAX = "24";
   }
   return repoRoot;
-}
-
-function wrapProviderForE2eLogging(
-  inner: ProviderClient,
-  label: string
-): ProviderClient {
-  if (process.env.E2E_VERBOSE !== "1") {
-    return inner;
-  }
-  let call = 0;
-  const wrapped = {
-    complete: async (
-      messages: Parameters<ProviderClient["complete"]>[0],
-      options?: Parameters<ProviderClient["complete"]>[1]
-    ) => {
-      call += 1;
-      const started = Date.now();
-      console.log(`[e2e ${label}] completion #${call} (${messages.length} messages)`);
-      const result = await inner.complete(messages, options);
-      console.log(
-        `[e2e ${label}] completion #${call} done in ${Date.now() - started}ms — tools=${result.toolCalls.length} contentChars=${result.content.length} reasoningChars=${result.reasoningContent?.length ?? 0}`
-      );
-      return result;
-    }
-  };
-  return wrapped as ProviderClient;
 }
 
 export function providerConfigForE2e(): ProviderConfig {
@@ -483,12 +456,13 @@ export async function runBreathingWidgetFlow(config: ProviderConfig): Promise<Br
     }
   });
 
-  const provider = wrapProviderForE2eLogging(new ProviderClient(config), "breathing-widget");
-
   const unifiedEngine = new SessionEngine({
-    provider,
+    agentModelConfig: buildAgentModelConfig({
+      model: config.model,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey
+    }),
     workspacePolicy: new WorkspacePolicy(tempRoot),
-    skillPrompt: resolveSkillRouterPrompt(skillsDir, null),
     completionTools: AGENT_TOOL_SCHEMAS,
     skillLibrary: {
       skillsDir,
@@ -499,6 +473,7 @@ export async function runBreathingWidgetFlow(config: ProviderConfig): Promise<Br
     hostReloadEmulatorHandler: async () => "reload_emulator ok (e2e noop)",
     hostGetEmulatorLogsHandler: async () =>
       JSON.stringify({ ok: true, lines: [], emulator: { running: false, status: "Idle" } }),
+    hostCheckPythonHandler: async () => JSON.stringify({ ok: true, errors: [] }),
     sessionPersistence: persistence,
     sessionTemplateMode: null
   });

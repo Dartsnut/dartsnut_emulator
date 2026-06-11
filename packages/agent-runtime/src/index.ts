@@ -12,7 +12,6 @@ export * from "./agentProviderConfig";
 export * from "./sessionRuntime";
 export * from "./creationIntakeHost";
 export * from "./dartsnutRunContext";
-export * from "./agents/handoffGates";
 export * from "./agents/buildDartsnutAgents";
 export * from "./modificationWorkflow";
 export * from "./projectArtifacts";

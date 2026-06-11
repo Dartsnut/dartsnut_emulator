@@ -80,7 +80,7 @@ export function createSplashWindow(logoPath?: string): BrowserWindow {
 </head>
 <body>
   <div id="logo"></div>
-  <h1>DartsnutChat</h1>
+  <h1>Dartsnut Agent</h1>
   <div id="progress-container">
     <div id="progress-bar">
       <div id="progress-fill"></div>

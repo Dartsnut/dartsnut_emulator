@@ -1108,7 +1108,7 @@ export function App() {
                 <span className="block truncate">
                   {bootstrap?.workspaceRoot && !bootstrap.isTemporaryWorkspace
                     ? workspaceFolderBasename(bootstrap.workspaceRoot)
-                    : "Dartsnut Chat"}
+                    : "Dartsnut Agent"}
                 </span>
               </h1>
               <button
@@ -1274,7 +1274,7 @@ export function App() {
                 {entry.role === "agent" && entry.id.startsWith("greeting") ? (
                   <div className="greeting-card" role="status">
                     <p className="greeting-card__eyebrow">Neon Pit · ready</p>
-                    <p className="greeting-card__title">Dartsnut Chat</p>
+                    <p className="greeting-card__title">Dartsnut Agent</p>
                     <p className="greeting-card__body">{entry.text}</p>
                   </div>
                 ) : entry.role === "user" ? (

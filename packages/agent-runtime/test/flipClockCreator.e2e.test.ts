@@ -5,10 +5,10 @@ import { describe, expect, it } from "vitest";
 import { formatCreatorBuildPlanMessage } from "@dartsnut/shared-ipc";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
-import { ProviderClient } from "../src/providerClient";
 import { loadProviderConfig, validateProviderConfig } from "../src/providerConfig";
-import { allowedDeferredSkillIdsForMode, resolveSkillRouterPrompt } from "../src/skillBundle";
+import { allowedDeferredSkillIdsForMode } from "../src/skillBundle";
 import { SessionEngine } from "../src/sessionEngine";
+import { buildAgentModelConfig } from "../src/agentProviderConfig";
 import { WorkspacePolicy } from "../src/workspacePolicy";
 
 const config = loadProviderConfig();
@@ -66,9 +66,12 @@ describe.skipIf(!canRunLive)("flip-clock creator live e2e", () => {
       let streamedReasoning = "";
 
       const engine = new SessionEngine({
-        provider: new ProviderClient(config),
+        agentModelConfig: buildAgentModelConfig({
+          model: config.model,
+          baseUrl: config.baseUrl,
+          apiKey: config.apiKey
+        }),
         workspacePolicy: new WorkspacePolicy(tempRoot),
-        skillPrompt: resolveSkillRouterPrompt(skillsDir, "widget-creator"),
         skillLibrary: {
           skillsDir,
           allowedIds: allowedDeferredSkillIdsForMode("widget-creator")
@@ -76,9 +79,16 @@ describe.skipIf(!canRunLive)("flip-clock creator live e2e", () => {
         hostReloadEmulatorHandler: async () => "reload_emulator ok (e2e noop)",
         hostGetEmulatorLogsHandler: async () =>
           JSON.stringify({ ok: true, lines: [], emulator: { running: false, status: "Idle" } }),
+        hostCheckPythonHandler: async () => JSON.stringify({ ok: true, errors: [] }),
         sessionPersistence: persistence,
         sessionTemplateMode: "widget-creator",
-        sessionSection: "widget-creator"
+        sessionSection: "widget-creator",
+        runContextSeed: {
+          projectType: "widget",
+          widgetSize: "128x128",
+          templateMode: "widget-creator",
+          intakeState: { projectType: "widget", widgetSize: "128x128" }
+        }
       });
 
       const prompt = buildFlipClockRoutedPrompt(tempRoot);

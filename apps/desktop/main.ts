@@ -305,6 +305,53 @@ async function executeHostReloadEmulatorForAgent(): Promise<string> {
   });
 }
 
+/** Agent tool `check_python`: `python -m py_compile` syntax check (no execution) on workspace files. */
+function executeHostCheckPythonForAgent(args?: { paths?: string[] }): string {
+  if (!workspaceRoot) {
+    return JSON.stringify({ ok: false, error: "No workspace is selected." });
+  }
+  if (!pythonExec) {
+    return JSON.stringify({ ok: false, error: "Python runtime is not ready yet." });
+  }
+  const requested =
+    Array.isArray(args?.paths) && args!.paths!.length > 0
+      ? args!.paths!.filter((p) => typeof p === "string" && p.trim().length > 0)
+      : ["main.py"];
+  const baseRoot = getEmulatorWorkspaceRoot();
+  const absPaths: string[] = [];
+  for (const rel of requested) {
+    const abs = path.isAbsolute(rel) ? rel : path.join(workspaceRoot, rel);
+    if (!isWithinDirectory(workspaceRoot, abs)) {
+      return JSON.stringify({ ok: false, error: `Path escapes workspace: ${rel}` });
+    }
+    if (!fs.existsSync(abs)) {
+      return JSON.stringify({ ok: false, error: `File not found: ${rel}` });
+    }
+    absPaths.push(abs);
+  }
+  const launch = buildPythonScriptLaunch({
+    pythonPath: pythonExec,
+    scriptPath: "-m",
+    scriptArgs: ["py_compile", ...absPaths]
+  });
+  const result = spawnSync(launch.command, launch.args, {
+    cwd: baseRoot,
+    env: launch.env,
+    encoding: "utf-8",
+    timeout: 30_000
+  });
+  const errorText = `${result.stderr ?? ""}${result.stdout ?? ""}`.trim();
+  if (result.status === 0) {
+    return JSON.stringify({ ok: true, errors: [], checked: requested });
+  }
+  return JSON.stringify({
+    ok: false,
+    errors: errorText ? [errorText] : ["py_compile failed"],
+    checked: requested,
+    hint: "Fix the SyntaxError above, then re-run check_python."
+  });
+}
+
 const emulatorState: EmulatorStateSnapshot = {
   widgetPath: null,
   running: false,
@@ -1695,6 +1742,7 @@ function buildSession(
     hostIntakeReadyToFinish: extras?.hostIntakeReadyToFinish,
     hostReloadEmulatorHandler: () => executeHostReloadEmulatorForAgent(),
     hostGetEmulatorLogsHandler: (args) => Promise.resolve(executeHostGetEmulatorLogsForAgent(args)),
+    hostCheckPythonHandler: (args) => Promise.resolve(executeHostCheckPythonForAgent(args)),
     skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve,
     sessionPersistence: extras?.sessionPersistence,
     initialConversation: extras?.initialConversation,

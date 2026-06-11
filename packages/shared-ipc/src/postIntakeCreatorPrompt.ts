@@ -7,7 +7,8 @@ export interface BuildPostIntakeCreatorUserPromptOptions {
 
 /**
  * Optional user message when chaining a separate creator run after intake (legacy).
- * Prefer a single orchestrator run with handoff; when used, pass through the original user text only.
+ * The current runtime uses a single agent that builds in the same run, so this is
+ * unused on the live path; kept only for the transcript prefix constant.
  */
 export function buildPostIntakeCreatorUserPrompt(
   originalUserPrompt: string,

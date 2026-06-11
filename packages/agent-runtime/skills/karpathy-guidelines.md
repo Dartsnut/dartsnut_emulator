@@ -66,4 +66,4 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
-When editing Dartsnut workspace files, prefer **tool-first** turns and load domain skills via **`get_dartsnut_skill`** (`conf-contract`, `pydartsnut-core`, etc.) before you need them.
+When editing Dartsnut workspace files, prefer **tool-first** turns: investigate with **`grep_files`** / **`glob_files`** / **`read_file`**, load domain skills via **`get_dartsnut_skill`** (`conf-contract`, `pydartsnut-core`, etc.) before you need them, and run **`check_python`** as a fast syntax check before `reload_emulator`.

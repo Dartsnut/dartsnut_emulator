@@ -6,8 +6,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run --exclude '**/*.e2e.test.ts'",
-    "test:e2e": "vitest run test/breathingWidgetProvider.e2e.test.ts test/flipClockCreator.e2e.test.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@dartsnut/shared-ipc": "workspace:*",

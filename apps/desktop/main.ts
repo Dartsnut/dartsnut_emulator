@@ -130,7 +130,7 @@ let emulatorBridgeTeardownInFlight: Promise<void> | null = null;
 
 // Ensure consistent app name for getPath('userData') in both dev and packaged modes
 if (!app.isPackaged) {
-  app.setName("DartsnutChat-Dev");
+  app.setName("DartsnutAgent-Dev");
 }
 
 const repoRoot = app.isPackaged

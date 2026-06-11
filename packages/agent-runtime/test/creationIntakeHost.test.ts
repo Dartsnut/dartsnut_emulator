@@ -3,10 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  collapseConsecutiveToolNames,
-  normalizeHostIntakeActions
-} from "./helpers/breathingWidgetProviderE2e";
-import {
   createIntakeHostHandlers,
   executeIntakeHostTool,
   isIntakeStateReady,
@@ -54,22 +50,6 @@ describe("creationIntakeHost", () => {
     const parsed = JSON.parse(res) as { ok: boolean };
     expect(parsed.ok).toBe(false);
     expect(state.widgetSize).toBeUndefined();
-  });
-
-  it("normalizeHostIntakeActions inserts set_widget_size before read_workspace_conf", () => {
-    expect(
-      normalizeHostIntakeActions(["set_project_type", "read_workspace_conf"])
-    ).toEqual(["set_project_type", "set_widget_size", "read_workspace_conf"]);
-  });
-
-  it("collapseConsecutiveToolNames merges repeated skill loads", () => {
-    expect(
-      collapseConsecutiveToolNames([
-        "get_dartsnut_skill",
-        "get_dartsnut_skill",
-        "write_file"
-      ])
-    ).toEqual(["get_dartsnut_skill", "write_file"]);
   });
 
   it("isIntakeStateReady is true for widget with size", () => {

@@ -1,5 +1,5 @@
 {
-  "name": "dartsnut-chat",
+  "name": "dartsnut-agent",
   "version": "0.8.0",
   "private": true,
   "main": "dist-electron/main.js",
@@ -13,7 +13,7 @@
     "package": "pnpm run build && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --win portable:x64 --publish never",
     "package:dir": "pnpm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac --dir -c.mac.identity=null --publish never",
     "package:dir:win": "pnpm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --win --dir --publish never",
-    "start:packaged": "open release/mac-arm64/DartsnutChat.app",
+    "start:packaged": "open release/mac-arm64/Dartsnut\\ Agent.app",
     "package:mac": "pnpm run build && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --publish never",
     "package:win": "pnpm run build && pnpm exec electron-builder --win portable:x64 --publish never"
   },
@@ -49,8 +49,8 @@
     "xmlbuilder": "^15.1.1"
   },
   "build": {
-    "appId": "com.dartsnut.chat",
-    "productName": "DartsnutChat",
+    "appId": "com.dartsnut.agent",
+    "productName": "Dartsnut Agent",
     "directories": {
       "output": "release"
     },

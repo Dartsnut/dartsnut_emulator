@@ -16,7 +16,7 @@ import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import { WorkspacePolicy } from "./workspacePolicy";
 import { AGENT_STOPPED_MESSAGE } from "./providerClient";
 import { configureAgentsSdk } from "./agentsBootstrap";
-import { buildDartsnutAgentGraph } from "./agents/buildDartsnutAgents";
+import { buildDartsnutAgent } from "./agents/buildDartsnutAgents";
 import {
   refreshDartsnutRunContext,
   seedDartsnutRunContext,
@@ -33,6 +33,7 @@ export type HostIntakeToolHandler = (args: Record<string, unknown>) => Promise<s
 export type HostAskQuestionHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostReloadEmulatorHandler = () => Promise<string>;
 export type HostGetEmulatorLogsHandler = (args: { max_lines?: number }) => Promise<string>;
+export type HostCheckPythonHandler = (args: { paths?: string[] }) => Promise<string>;
 
 export interface AgentSkillLibrary {
   skillsDir: string;
@@ -52,6 +53,7 @@ export interface SessionEngineOptions {
   hostAskQuestionHandler?: HostAskQuestionHandler;
   hostReloadEmulatorHandler?: HostReloadEmulatorHandler;
   hostGetEmulatorLogsHandler?: HostGetEmulatorLogsHandler;
+  hostCheckPythonHandler?: HostCheckPythonHandler;
   skipInitialWorkspaceResolve?: boolean;
   sessionPersistence?: AgentSessionPersistence;
   sessionTemplateMode?: string | null;
@@ -75,7 +77,7 @@ export interface RunPromptOptions {
 }
 
 export class SessionEngine {
-  private static readonly ORCHESTRATOR_SDK_MAX_TURNS = 128;
+  private static readonly MAIN_AGENT_MAX_TURNS = 128;
 
   private sessionId: string = randomUUID();
   private stoppedOnCleanEmulator = false;
@@ -155,7 +157,8 @@ export class SessionEngine {
           }
         : undefined,
       hostReloadEmulatorHandler: this.options.hostReloadEmulatorHandler,
-      hostGetEmulatorLogsHandler: this.options.hostGetEmulatorLogsHandler
+      hostGetEmulatorLogsHandler: this.options.hostGetEmulatorLogsHandler,
+      hostCheckPythonHandler: this.options.hostCheckPythonHandler
     };
   }
 
@@ -208,11 +211,12 @@ export class SessionEngine {
     );
 
     const toolsBase = this.toolsBaseForRun(runContext);
-    const graph = buildDartsnutAgentGraph({
+    const agent = buildDartsnutAgent({
       model: cfg.model,
       toolsBase,
       contextSnapshot: runContext,
-      preferredUserLocale: this.options.preferredUserLocale ?? null
+      preferredUserLocale: this.options.preferredUserLocale ?? null,
+      getRunContext: () => runContext
     });
 
     const session = new DartsnutAgentsSession({
@@ -225,18 +229,18 @@ export class SessionEngine {
     });
 
     this.persistTranscript("user", prompt);
-    onEvent({ type: "status", at: Date.now(), message: "Dartsnut orchestrator run started." });
+    onEvent({ type: "status", at: Date.now(), message: "Dartsnut Agent run started." });
 
     try {
       if (abortSignal?.aborted) {
         throw new Error(AGENT_STOPPED_MESSAGE);
       }
 
-      const stream = (await this.runFn(graph.orchestrator, prompt, {
+      const stream = (await this.runFn(agent, prompt, {
         session,
         stream: true,
         signal: abortSignal,
-        maxTurns: SessionEngine.ORCHESTRATOR_SDK_MAX_TURNS,
+        maxTurns: SessionEngine.MAIN_AGENT_MAX_TURNS,
         context: runContext,
         callModelInputFilter: fixReasoningContentEcho
       })) as StreamedRunResult<DartsnutRunContext, any>;

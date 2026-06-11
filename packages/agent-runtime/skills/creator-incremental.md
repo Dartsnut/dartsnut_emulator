@@ -20,11 +20,11 @@ Technical constraints for workspace files. Load **`karpathy-guidelines`** for ed
 
 ## Editing existing files
 
-When `conf.json` and `main.py` already exist: **`read_file` them before edits**; prefer **`replace_in_file`**. Do not rescaffold unless the user asks.
+When `conf.json` and `main.py` already exist: use **`glob_files`** / **`grep_files`** to locate the relevant code, **`read_file`** before edits; prefer **`replace_in_file`** (make `find` unique, or `replace_all`). Do not rescaffold unless the user asks.
 
 ## Verify
 
-Use **`reload_emulator`** then **`get_emulator_logs`** after material changes. Stop when logs are clean **and** the user's request is met — do not declare done after a partial skeleton unless that satisfies what they asked for.
+Use **`check_python`** (fast syntax check, no run) after writing/editing Python, then **`reload_emulator`** then **`get_emulator_logs`** after material changes. Stop when logs are clean **and** the user's request is met — do not declare done after a partial skeleton unless that satisfies what they asked for.
 
 ## Anti-duplication
 

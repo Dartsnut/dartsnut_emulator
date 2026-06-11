@@ -19,6 +19,11 @@ _log = logging.getLogger(__name__)
 DEFAULTS_DIR = Path(__file__).resolve().parent / "app_defaults"
 STAMP_FILENAME = ".dartsnut_stamp"
 MANAGED_PYPROJECT_HEADER = "# Dartsnut managed default app dependencies"
+PYPI_MIRRORS = [
+    "https://pypi.org/simple",
+    "https://mirrors.ustc.edu.cn/pypi/simple",
+]
+RETRIES_PER_MIRROR = 3
 LogFn = Callable[[str, str], None]
 StatusFn = Callable[[str], None]
 
@@ -139,20 +144,67 @@ def _uv_env() -> dict[str, str]:
     python_exe = _bundled_python()
     if python_exe:
         env["UV_PYTHON"] = python_exe
+
+    # Use preferred PyPI index URL if available (set by TypeScript side)
+    pypi_index = os.environ.get("DARTSNUT_PYPI_INDEX_URL", "").strip()
+    if pypi_index:
+        env["UV_INDEX_URL"] = pypi_index
+
     return env
 
 
 def _uv_sync(workspace_dir: str) -> None:
+    """Run uv sync with automatic mirror fallback on PyPI failures."""
     uv = _uv_bin()
     if not uv:
         raise RuntimeError("DARTSNUT_UV_BIN is not configured")
-    subprocess.run(
-        [uv, "sync", "--directory", workspace_dir],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=_uv_env(),
-    )
+
+    env = _uv_env()
+    preferred_mirror = env.get("UV_INDEX_URL", "").strip()
+
+    # Try preferred mirror first if we have one, otherwise try all mirrors
+    mirrors_to_try = []
+    if preferred_mirror and preferred_mirror in PYPI_MIRRORS:
+        mirrors_to_try.append(preferred_mirror)
+        mirrors_to_try.extend([m for m in PYPI_MIRRORS if m != preferred_mirror])
+    else:
+        mirrors_to_try = PYPI_MIRRORS[:]
+
+    last_error = None
+
+    for mirror in mirrors_to_try:
+        for attempt in range(1, RETRIES_PER_MIRROR + 1):
+            try:
+                mirror_env = dict(env)
+                mirror_env["UV_INDEX_URL"] = mirror
+
+                subprocess.run(
+                    [uv, "sync", "--directory", workspace_dir],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=mirror_env,
+                )
+                return  # Success!
+
+            except subprocess.CalledProcessError as e:
+                last_error = e
+                stderr = (e.stderr or "").strip()
+
+                # Wait before retry (exponential backoff: 1s, 2s, 4s)
+                if attempt < RETRIES_PER_MIRROR:
+                    time.sleep(2 ** (attempt - 1))
+
+    # All mirrors exhausted
+    if last_error:
+        stderr = (last_error.stderr or "").strip()
+        raise RuntimeError(
+            f"Failed to sync dependencies after trying all PyPI mirrors.\n"
+            f"Mirrors attempted: {', '.join(mirrors_to_try)}\n"
+            f"Last error: {stderr or str(last_error)}"
+        )
+    else:
+        raise RuntimeError("uv sync failed with unknown error")
 
 
 def _write_stamp(workspace_dir: str, app_type: str) -> None:

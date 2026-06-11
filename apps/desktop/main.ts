@@ -7,7 +7,9 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen } from "electr
 import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
-import { buildPythonProbeEnv, buildPythonScriptLaunch, bundledPythonRuntimeDir, bundledUvBin, venvPythonPath } from "./pythonRuntime";
+import { buildPythonScriptLaunch, pythonRuntimeDir, runtimeDir, uvBinaryPath, venvPythonPath } from "./pythonRuntime";
+import { ensureRuntime } from "./pythonRuntimeDownloader";
+import { createSplashWindow, updateSplashProgress, closeSplashWindow } from "./splashWindow";
 import {
   IPCChannels,
   type AgentEvent,
@@ -125,20 +127,21 @@ let bridgeRuntimeKey: string | null = null;
 /** True after graceful bridge teardown so quit does not orphan pygame/SDL audio. */
 let emulatorBridgeTeardownDone = false;
 let emulatorBridgeTeardownInFlight: Promise<void> | null = null;
+
+// Ensure consistent app name for getPath('userData') in both dev and packaged modes
+if (!app.isPackaged) {
+  app.setName("DartsnutChat-Dev");
+}
+
 const repoRoot = app.isPackaged
   ? process.resourcesPath
   : path.resolve(__dirname, "../../..");
-// In dev mode process.resourcesPath points inside Electron's own bundle.
-// The bundled python-runtime and uv live under apps/desktop/resources/ in the repo.
-const appResourcesPath = app.isPackaged
-  ? process.resourcesPath
-  : path.resolve(__dirname, "../resources");
 process.env.DARTSNUT_REPO_ROOT = repoRoot;
 const repoEnvPath = path.join(repoRoot, ".env");
 if (fs.existsSync(repoEnvPath)) {
   dotenv.config({ path: repoEnvPath });
 }
-let pythonExec: string = venvPythonPath(bundledPythonRuntimeDir(appResourcesPath));
+let pythonExec: string | null = null;
 let pythonRuntimeStatus: string | null = null;
 
 let lastWidgetDir: string | null = null;
@@ -146,8 +149,7 @@ const assetPreprocessScriptRelativePath = "scripts/asset_preprocess.py";
 const assetManager = new AssetManager({
   launchScript: (scriptPath, scriptArgs) =>
     buildPythonScriptLaunch({
-      resourcesPath: appResourcesPath,
-      pythonPath: pythonExec,
+      pythonPath: pythonExec!,
       scriptPath,
       scriptArgs,
     }),
@@ -1483,122 +1485,6 @@ function setPythonRuntimeStatus(status: string | null) {
   emitPythonRuntimeStatus();
 }
 
-type BundledPythonMarker = {
-  target?: string;
-  pythonVersion?: string;
-};
-
-function expectedBundledPythonTarget(): string {
-  if (process.platform === "win32") {
-    return "win-x64";
-  }
-  if (process.platform === "darwin" && process.arch === "arm64") {
-    return "darwin-arm64";
-  }
-  return `${process.platform}-${process.arch}`;
-}
-
-function readBundledPythonMarker(runtimeDir: string): BundledPythonMarker | null {
-  try {
-    const markerPath = path.join(runtimeDir, ".bundled-python.json");
-    if (!fs.existsSync(markerPath)) {
-      return null;
-    }
-    return JSON.parse(fs.readFileSync(markerPath, "utf8")) as BundledPythonMarker;
-  } catch {
-    return null;
-  }
-}
-
-function probePythonExecutable(executable: string): { ok: true } | { ok: false; detail: string } {
-  const env = buildPythonProbeEnv(executable);
-  const spawnOpts = {
-    cwd: repoRoot,
-    stdio: "pipe" as const,
-    encoding: "utf-8" as const,
-    windowsHide: true,
-    env,
-  };
-
-  const versionProbe = spawnSync(
-    executable,
-    ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
-    spawnOpts,
-  );
-  if (versionProbe.error) {
-    return {
-      ok: false,
-      detail: `Could not start ${executable}: ${versionProbe.error.message}`,
-    };
-  }
-  if (versionProbe.status !== 0) {
-    const err = `${versionProbe.stderr ?? ""}${versionProbe.stdout ?? ""}`.trim();
-    return {
-      ok: false,
-      detail: err || `Python version check failed (exit ${versionProbe.status ?? "unknown"})`,
-    };
-  }
-
-  const depsProbe = spawnSync(
-    executable,
-    ["-c", "import pydartsnut, pygame, PIL; print('ok')"],
-    spawnOpts,
-  );
-  if (depsProbe.error) {
-    return {
-      ok: false,
-      detail: `Could not start ${executable}: ${depsProbe.error.message}`,
-    };
-  }
-  if (depsProbe.status !== 0) {
-    const err = `${depsProbe.stderr ?? ""}${depsProbe.stdout ?? ""}`.trim();
-    return {
-      ok: false,
-      detail: err || "Missing pydartsnut, pygame-ce, or Pillow in bundled runtime",
-    };
-  }
-  return { ok: true };
-}
-
-async function resolvePythonExecutable(): Promise<string> {
-  const runtimeDir = bundledPythonRuntimeDir(appResourcesPath);
-  const bundledPython = venvPythonPath(runtimeDir);
-
-  if (!fs.existsSync(bundledPython)) {
-    const msg = `Bundled Python not found at ${bundledPython}. Reinstall the application.`;
-    setPythonRuntimeStatus(msg);
-    devLog.warn("[python-runtime] missing bundled interpreter", bundledPython);
-    emulatorState.status = msg;
-    emitEmulatorState();
-    return bundledPython;
-  }
-
-  const marker = readBundledPythonMarker(runtimeDir);
-  const expectedTarget = expectedBundledPythonTarget();
-  if (marker?.target && marker.target !== expectedTarget) {
-    const msg = `Bundled Python was built for ${marker.target}, but this install needs ${expectedTarget}. Rebuild with: pnpm bundle:python -- --target ${expectedTarget}`;
-    setPythonRuntimeStatus(msg);
-    devLog.warn("[python-runtime] target mismatch", { expected: expectedTarget, marker });
-    emulatorState.status = msg;
-    emitEmulatorState();
-    return bundledPython;
-  }
-
-  const probe = probePythonExecutable(bundledPython);
-  if (!probe.ok) {
-    const msg = `Bundled Python failed: ${probe.detail.slice(0, 320)}`;
-    setPythonRuntimeStatus(msg);
-    devLog.warn("[python-runtime] probe failed", probe.detail);
-    emulatorState.status = msg;
-    emitEmulatorState();
-    return bundledPython;
-  }
-
-  setPythonRuntimeStatus(null);
-  devLog.info("[python-runtime] resolved bundled interpreter", bundledPython);
-  return bundledPython;
-}
-
 function startPythonBridge() {
   if (pythonRuntimeStatus !== null) {
     emulatorState.status = pythonRuntimeStatus;
@@ -1607,8 +1493,7 @@ function startPythonBridge() {
     return;
   }
   const bridgeLaunch = buildPythonScriptLaunch({
-    resourcesPath: appResourcesPath,
-    pythonPath: pythonExec,
+    pythonPath: pythonExec!,
     scriptPath: path.join(repoRoot, "services", "emulator-core", "bridge_service.py"),
   });
   if (bridgeProcess && bridgeRuntimeKey === bridgeLaunch.runtimeKey) {
@@ -1628,8 +1513,7 @@ function spawnBridgeAfterStop() {
   }
   const bridgePath = path.join(repoRoot, "services", "emulator-core", "bridge_service.py");
   const launch = buildPythonScriptLaunch({
-    resourcesPath: appResourcesPath,
-    pythonPath: pythonExec,
+    pythonPath: pythonExec!,
     scriptPath: bridgePath,
   });
   bridgeProcess = spawn(launch.command, launch.args, {
@@ -1939,13 +1823,40 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  // Resolve Python before workspace recovery — recovery can start the bridge via applyWorkspaceRoot.
-  pythonExec = await resolvePythonExecutable();
-  await maybeRecoverTrackedTempWorkspaceAtLaunch();
-  ensureTemporaryWorkspaceRootAllocated();
-  startPythonBridge();
-  await createWindow();
-  emitBootstrapStateToRenderer();
+  const logoPath = path.join(repoRoot, "PixelDarts.png");
+  const splash = createSplashWindow(fs.existsSync(logoPath) ? logoPath : undefined);
+
+  try {
+    devLog.info("[runtime] Starting runtime initialization");
+    const runtime = await ensureRuntime(
+      runtimeDir(),
+      path.join(repoRoot, "requirements.txt"),
+      (progress) => {
+        updateSplashProgress(progress.stage, progress.percent, progress.message);
+        devLog.info("[runtime] Progress", { stage: progress.stage, percent: progress.percent });
+      }
+    );
+
+    pythonExec = runtime.pythonPath;
+    devLog.info("[runtime] Runtime ready", { pythonPath: pythonExec, uvPath: runtime.uvPath });
+
+    await maybeRecoverTrackedTempWorkspaceAtLaunch();
+    ensureTemporaryWorkspaceRootAllocated();
+    startPythonBridge();
+    await createWindow();
+    emitBootstrapStateToRenderer();
+
+    closeSplashWindow();
+  } catch (error) {
+    closeSplashWindow();
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    devLog.error("[runtime] Initialization failed", errorMessage);
+    dialog.showErrorBox(
+      "Runtime Initialization Failed",
+      `Failed to set up Python runtime: ${errorMessage}\n\nTry clearing app data or reinstalling the application.`
+    );
+    app.quit();
+  }
 });
 
 app.on("window-all-closed", () => {

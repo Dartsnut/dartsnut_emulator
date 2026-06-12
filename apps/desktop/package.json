@@ -51,6 +51,7 @@
   "build": {
     "appId": "com.dartsnut.agent",
     "productName": "Dartsnut Agent",
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },

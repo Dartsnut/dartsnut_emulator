@@ -106,9 +106,17 @@ export function buildUvOfflineEnv(
   if (venvDir) {
     env.VIRTUAL_ENV = venvDir;
     // python-build-standalone binaries have /install hardcoded as sys.base_prefix.
-    // Setting PYTHONHOME to the venv dir makes Python find its stdlib at
-    // <venvDir>/lib/python3.x instead of the nonexistent /install/lib/python3.x.
-    env.PYTHONHOME = venvDir;
+    // On macOS we copy the stdlib into the venv dir and point PYTHONHOME there so
+    // Python finds its stdlib at <venvDir>/lib/python3.x instead of /install/...
+    //
+    // On Windows the venv contains no stdlib of its own; the interpreter resolves
+    // it via pyvenv.cfg's `home =` line (the extracted base interpreter). Forcing
+    // PYTHONHOME to the venv there makes Python look for the stdlib in
+    // <venvDir>\Lib, which doesn't exist, and init fails with
+    // "No module named 'encodings'". So only set PYTHONHOME off-Windows.
+    if (process.platform !== "win32") {
+      env.PYTHONHOME = venvDir;
+    }
     const binDir = path.dirname(pythonPath);
     env.PATH = `${binDir}${path.delimiter}${env.PATH ?? ""}`;
   }
@@ -132,7 +140,12 @@ export function buildPythonProbeEnv(
   const venvDir = venvDirForPython(pythonPath);
   if (venvDir) {
     env.VIRTUAL_ENV = venvDir;
-    env.PYTHONHOME = venvDir;
+    // See buildUvOfflineEnv: PYTHONHOME must not point at the venv on Windows,
+    // where the venv carries no stdlib and the interpreter resolves it via
+    // pyvenv.cfg instead.
+    if (process.platform !== "win32") {
+      env.PYTHONHOME = venvDir;
+    }
     const binDir = path.dirname(pythonPath);
     env.PATH = `${binDir}${path.delimiter}${env.PATH ?? ""}`;
   }

@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { app } from "electron";
 import { PYTHON_VERSION, UV_VERSION } from "./pythonRuntimeDownloader";
+import { stripInheritedPythonHome } from "./pythonEnvSanitize";
 
 export interface PythonScriptLaunch {
   command: string;
@@ -120,6 +121,7 @@ export function buildUvOfflineEnv(
     const binDir = path.dirname(pythonPath);
     env.PATH = `${binDir}${path.delimiter}${env.PATH ?? ""}`;
   }
+  stripInheritedPythonHome(env);
   return sanitizeUvNoProjectEnv(env);
 }
 
@@ -149,6 +151,7 @@ export function buildPythonProbeEnv(
     const binDir = path.dirname(pythonPath);
     env.PATH = `${binDir}${path.delimiter}${env.PATH ?? ""}`;
   }
+  stripInheritedPythonHome(env);
   return env;
 }
 

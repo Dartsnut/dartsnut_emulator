@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { stripInheritedPythonHome } from "./pythonEnvSanitize";
 
 export const PYTHON_VERSION = "3.12.7";
 export const PYTHON_RELEASE = "20241016";
@@ -103,10 +104,21 @@ function venvPythonPath(venvDir: string): string {
   return path.join(venvDir, "bin", "python");
 }
 
+// An inherited PYTHONHOME/PYTHONPATH from the user's machine breaks the bundled
+// python-build-standalone interpreter during `uv venv` ("No module named
+// 'encodings'"). Strip it on Windows; off-Windows the venv stdlib is configured
+// explicitly by callers, so leave the env untouched.
+function runtimeBaseEnv(): NodeJS.ProcessEnv {
+  if (process.platform !== "win32") {
+    return process.env;
+  }
+  return stripInheritedPythonHome({ ...process.env });
+}
+
 function run(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): void {
   const result = spawnSync(command, args, {
     stdio: "pipe",
-    env: options.env ?? process.env,
+    env: options.env ?? runtimeBaseEnv(),
     cwd: options.cwd,
   });
   if (result.status !== 0) {
@@ -212,11 +224,12 @@ async function installDependencies(
 ): Promise<string> {
   // On macOS the venv carries a copied stdlib and PYTHONHOME must point at it.
   // On Windows the venv has no stdlib; the interpreter resolves it via
-  // pyvenv.cfg, and forcing PYTHONHOME to the venv breaks interpreter init
-  // ("No module named 'encodings'"). So only set it off-Windows.
+  // pyvenv.cfg, and an inherited PYTHONHOME/PYTHONPATH from the user's machine
+  // overrides that and breaks interpreter init ("No module named 'encodings'").
+  // So strip any inherited value on Windows; set it explicitly off-Windows.
   const pythonEnv =
     process.platform === "win32"
-      ? { ...process.env }
+      ? stripInheritedPythonHome({ ...process.env })
       : { ...process.env, PYTHONHOME: pythonRuntimeDir };
 
   // Try preferred mirror first if we have one

@@ -210,7 +210,14 @@ async function installDependencies(
   preferredIndexUrl: string | undefined,
   onProgress: ProgressCallback
 ): Promise<string> {
-  const pythonEnv = { ...process.env, PYTHONHOME: pythonRuntimeDir };
+  // On macOS the venv carries a copied stdlib and PYTHONHOME must point at it.
+  // On Windows the venv has no stdlib; the interpreter resolves it via
+  // pyvenv.cfg, and forcing PYTHONHOME to the venv breaks interpreter init
+  // ("No module named 'encodings'"). So only set it off-Windows.
+  const pythonEnv =
+    process.platform === "win32"
+      ? { ...process.env }
+      : { ...process.env, PYTHONHOME: pythonRuntimeDir };
 
   // Try preferred mirror first if we have one
   const mirrorsToTry = preferredIndexUrl

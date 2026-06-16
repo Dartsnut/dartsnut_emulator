@@ -1842,16 +1842,25 @@ async function createWindow() {
   // Guard quit here while the window is still alive; async native dialogs during `before-quit`
   // caused unstable macOS teardown behavior.
   win.on("close", (event) => {
+    devLog.info("[quit] win.close fired", {
+      t: Date.now(),
+      allowWithoutPrompt: allowWindowCloseWithoutTempPrompt,
+      isTempWorkspace: isTemporaryWorkspaceActiveNow(),
+      appQuitRequested,
+    });
     persistWindowState();
     if (allowWindowCloseWithoutTempPrompt || !isTemporaryWorkspaceActiveNow()) {
       allowWindowCloseWithoutTempPrompt = false;
+      devLog.info("[quit] win.close → allowing close immediately");
       return;
     }
     event.preventDefault();
+    devLog.info("[quit] win.close → prevented; running temp-workspace guard");
     // `close` can run before `before-quit` on macOS; mark quit intent now so one Cmd+Q finishes after the guard.
     appQuitRequested = true;
     void (async () => {
       const proceed = await ensureTemporaryWorkspaceResolvedForGuard("quit");
+      devLog.info("[quit] win.close → guard resolved", { proceed });
       if (!proceed) {
         appQuitRequested = false;
         return;
@@ -1862,6 +1871,7 @@ async function createWindow() {
     })();
   });
   win.on("closed", () => {
+    devLog.info("[quit] win.closed fired", { t: Date.now() });
     allowWindowCloseWithoutTempPrompt = false;
     chromeInsetInsertedCssKey = undefined;
     win = null;
@@ -1925,11 +1935,37 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", (event) => {
   appQuitRequested = true;
+  const winState = win && !win.isDestroyed()
+    ? { visible: win.isVisible(), isTempWorkspace: isTemporaryWorkspaceActiveNow() }
+    : { visible: false, isTempWorkspace: isTemporaryWorkspaceActiveNow() };
+  devLog.info("[quit] before-quit fired", { t: Date.now(), ...winState });
+  // Hide immediately so quit feels responsive. Only keep the window visible if the
+  // temp-workspace guard will actually need to show a save/discard dialog — i.e. the
+  // workspace exists and is non-empty. An empty workspace auto-discards without any
+  // dialog (mirrors the condition in ensureTemporaryWorkspaceResolvedForGuard).
+  const needsTempWorkspaceDialog = isTemporaryWorkspaceActiveNow() && !(
+    workspaceRoot != null &&
+    fs.existsSync(workspaceRoot) &&
+    fs.statSync(workspaceRoot).isDirectory() &&
+    isDirectoryEmpty(workspaceRoot)
+  );
+  if (win && !win.isDestroyed() && win.isVisible() && !needsTempWorkspaceDialog) {
+    devLog.info("[quit] before-quit → hiding window now", { needsTempWorkspaceDialog });
+    win.hide();
+  } else {
+    devLog.info("[quit] before-quit → skipping hide", {
+      winNull: !win,
+      destroyed: win ? win.isDestroyed() : true,
+      visible: win && !win.isDestroyed() ? win.isVisible() : false,
+      needsTempWorkspaceDialog,
+    });
+  }
   const action = decideBeforeQuitBridgeAction({
     teardownDone: emulatorBridgeTeardownDone,
     hasBridgeProcess: !!bridgeProcess,
     teardownInFlight: !!emulatorBridgeTeardownInFlight
   });
+  devLog.info("[quit] before-quit → bridge action", { action });
   if (action === "proceed") {
     return;
   }
@@ -1938,18 +1974,21 @@ app.on("before-quit", (event) => {
     return;
   }
   event.preventDefault();
+  devLog.info("[quit] before-quit → prevented; starting bridge teardown");
   if (action === "wait_for_inflight_teardown") {
     return;
   }
   emulatorBridgeTeardownInFlight = gracefulStopEmulatorBridge(3000, { permanent: true })
     .catch(() => undefined)
     .finally(() => {
+      devLog.info("[quit] before-quit → bridge teardown complete, re-quitting", { t: Date.now() });
       emulatorBridgeTeardownInFlight = null;
       app.quit();
     });
 });
 
 app.on("will-quit", () => {
+  devLog.info("[quit] will-quit fired", { t: Date.now() });
   stopPythonBridgeProcess();
   assetManager.stop();
   void disconnectDeployMachine();

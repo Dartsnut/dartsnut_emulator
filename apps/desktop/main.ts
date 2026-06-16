@@ -1,9 +1,10 @@
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
+import dgram from "node:dgram";
 import dotenv from "dotenv";
 import { spawn, spawnSync } from "node:child_process";
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
 import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
@@ -26,6 +27,7 @@ import {
   type DeployConnectRequest,
   type DeployConnectResponse,
   type DeployEligibility,
+  type DeployLocalNetworkPermissionResponse,
   type DeployLaunchRequest,
   type ManifestSnapshot,
   type PickWorkspaceRequest,
@@ -167,6 +169,7 @@ const assetManager = new AssetManager({
 const widgetFontManifestRelativePath = "assets/fonts/widgets/font_manifest.json";
 
 let deployMachineSession: DeployMachineSession | null = null;
+let localNetworkPermissionCheckInFlight: Promise<DeployLocalNetworkPermissionResponse> | null = null;
 
 /** Set while `sendPrompt` is running; used to abort the provider + tool loop from the renderer Stop control. */
 let sendPromptAbortController: AbortController | null = null;
@@ -209,6 +212,84 @@ function getDeployMachineSession(): DeployMachineSession {
     deployMachineSession = new DeployMachineSession(emitDeployLog);
   }
   return deployMachineSession;
+}
+
+function probeMacLocalNetworkPermission(): Promise<DeployLocalNetworkPermissionResponse> {
+  if (process.platform !== "darwin") {
+    return Promise.resolve({ ok: true, platform: "unsupported" });
+  }
+  if (localNetworkPermissionCheckInFlight) {
+    return localNetworkPermissionCheckInFlight;
+  }
+
+  const checkPromise: Promise<DeployLocalNetworkPermissionResponse> = new Promise((resolve) => {
+    const socket = dgram.createSocket({ type: "udp4", reuseAddr: true });
+    let settled = false;
+    const timeout = setTimeout(() => {
+      finish({
+        ok: false,
+        platform: "darwin",
+        reason: "denied_or_unavailable",
+        message: "macOS did not allow the local network probe to complete."
+      });
+    }, 1600);
+
+    function finish(result: DeployLocalNetworkPermissionResponse): void {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      try {
+        socket.close();
+      } catch {
+        // ignore
+      }
+      resolve(result);
+    }
+
+    socket.once("error", (error) => {
+      finish({
+        ok: false,
+        platform: "darwin",
+        reason: "check_failed",
+        message: error.message
+      });
+    });
+
+    socket.bind(0, () => {
+      try {
+        socket.setMulticastTTL(1);
+        socket.addMembership("224.0.0.251");
+      } catch (error) {
+        finish({
+          ok: false,
+          platform: "darwin",
+          reason: "check_failed",
+          message: error instanceof Error ? error.message : String(error)
+        });
+        return;
+      }
+      const message = Buffer.from("dartsnut-local-network-permission-check");
+      socket.send(message, 5353, "224.0.0.251", (error) => {
+        finish(
+          error
+            ? {
+              ok: false,
+              platform: "darwin",
+              reason: "denied_or_unavailable",
+              message: error.message
+            }
+            : { ok: true, platform: "darwin" }
+        );
+      });
+    });
+  });
+  localNetworkPermissionCheckInFlight = checkPromise.finally(() => {
+    localNetworkPermissionCheckInFlight = null;
+  });
+
+  return checkPromise;
 }
 
 async function disconnectDeployMachine(): Promise<void> {
@@ -2134,6 +2215,31 @@ ipcMain.handle(
 );
 
 ipcMain.handle(IPCChannels.deployGetEligibility, (): DeployEligibility => readDeployEligibilityFromWorkspace());
+
+ipcMain.handle(
+  IPCChannels.deployCheckLocalNetworkPermission,
+  async (): Promise<DeployLocalNetworkPermissionResponse> => probeMacLocalNetworkPermission()
+);
+
+ipcMain.handle(IPCChannels.deployOpenLocalNetworkSettings, async (): Promise<DeployActionResponse> => {
+  if (process.platform !== "darwin") {
+    return { ok: false, error: "Local Network privacy settings are only available on macOS." };
+  }
+
+  const urls = [
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork",
+    "x-apple.systempreferences:com.apple.preference.security?Privacy"
+  ];
+  for (const url of urls) {
+    try {
+      await shell.openExternal(url);
+      return { ok: true };
+    } catch {
+      // Try the broader fallback below.
+    }
+  }
+  return { ok: false, error: "Could not open macOS Privacy settings." };
+});
 
 function parseDeployWidgetParamsJson(raw: string | undefined): Record<string, unknown> {
   const text = (raw ?? "").trim() || "{}";

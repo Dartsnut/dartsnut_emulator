@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
-import type { UserDefineProviderSettings } from "@dartsnut/shared-ipc";
+import type { ProviderSettings, UserDefineProviderSettings } from "@dartsnut/shared-ipc";
 
-export type { UserDefineProviderSettings };
+export type { ProviderSettings, UserDefineProviderSettings };
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -21,6 +21,7 @@ export interface ProviderConfigOverrides {
 }
 
 export interface LoadProviderConfigInput {
+  providerSettings?: ProviderSettings;
   userDefine?: UserDefineProviderSettings;
   fetchImpl?: typeof fetch;
 }
@@ -63,7 +64,11 @@ export function findEnvFile(cwd: string = process.cwd()): string | undefined {
     path.join(cwd, "..", "..", "..", ".env")
   );
   const resourcesPath = (process as ProcessWithResourcesPath).resourcesPath;
-  if (typeof resourcesPath === "string" && resourcesPath.trim()) {
+  if (
+    process.env.DARTSNUT_ALLOW_RESOURCES_ENV_FILE !== "0" &&
+    typeof resourcesPath === "string" &&
+    resourcesPath.trim()
+  ) {
     candidates.push(path.join(resourcesPath, ".env"));
   }
   return candidates.find((candidate) => fs.existsSync(candidate));
@@ -112,6 +117,12 @@ export function readUserDefineDefaultsFromEnv(): UserDefineProviderSettings {
   };
 }
 
+/** Reads the bundled Dartsnut LLM (Xiaomi MiMo) OpenAI-compatible endpoint from env. */
+export function readDartsnutLlmDefaultsFromEnv(): UserDefineProviderSettings {
+  loadEnvFromDisk();
+  return readEnvTriple("XIAOMI");
+}
+
 export function mergeUserDefineWithEnvDefaults(
   userDefine: UserDefineProviderSettings
 ): UserDefineProviderSettings {
@@ -134,6 +145,27 @@ export function resolveUserDefineConfig(userDefine?: UserDefineProviderSettings)
   };
 }
 
+export function resolveCustomProviderConfig(custom?: UserDefineProviderSettings): ProviderConfig {
+  const userValues = custom ?? { baseUrl: "", apiKey: "", model: "" };
+  return {
+    baseUrl: normalizeProviderBaseUrl(userValues.baseUrl.trim()),
+    apiKey: userValues.apiKey.trim(),
+    model: userValues.model.trim()
+  };
+}
+
+export function resolveProviderSettingsConfig(providerSettings?: ProviderSettings): ProviderConfig {
+  if (providerSettings?.activeProvider === "dartsnut-llm") {
+    const builtin = readDartsnutLlmDefaultsFromEnv();
+    return {
+      baseUrl: normalizeProviderBaseUrl(builtin.baseUrl),
+      apiKey: builtin.apiKey,
+      model: builtin.model
+    };
+  }
+  return resolveCustomProviderConfig(providerSettings?.custom ?? providerSettings?.userDefine);
+}
+
 /** @deprecated Use {@link resolveUserDefineConfig}. */
 export function resolveProviderConfig(overrides?: ProviderConfigOverrides): ProviderConfig {
   const base = resolveUserDefineConfig();
@@ -147,6 +179,12 @@ export function resolveProviderConfig(overrides?: ProviderConfigOverrides): Prov
 }
 
 export function loadProviderConfig(input?: LoadProviderConfigInput | ProviderConfigOverrides): ProviderConfig {
+  if (input && "providerSettings" in input) {
+    return {
+      ...resolveProviderSettingsConfig(input.providerSettings),
+      fetchImpl: input.fetchImpl
+    };
+  }
   if (input && "userDefine" in input) {
     return {
       ...resolveUserDefineConfig(input.userDefine),

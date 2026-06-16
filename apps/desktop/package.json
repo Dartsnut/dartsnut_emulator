@@ -9,7 +9,8 @@
     "dev:renderer": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "dev:electron:tsc": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
     "dev:electron:run": "wait-on tcp:5173 file:dist-electron/main.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js",
-    "build": "pnpm --dir ../../packages/shared-ipc run build && pnpm --dir ../../packages/emulator-protocol run build && pnpm --dir ../../packages/agent-runtime run build && tsc -p tsconfig.electron.json && vite build",
+    "generate:packaged-env": "node ../../scripts/generate_packaged_env.mjs",
+    "build": "pnpm run generate:packaged-env && pnpm --dir ../../packages/shared-ipc run build && pnpm --dir ../../packages/emulator-protocol run build && pnpm --dir ../../packages/agent-runtime run build && tsc -p tsconfig.electron.json && vite build",
     "package": "pnpm run build && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --win portable:x64 --publish never",
     "package:dir": "pnpm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac --dir -c.mac.identity=null --publish never",
     "package:dir:win": "pnpm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --win --dir --publish never",
@@ -84,10 +85,6 @@
       {
         "from": "../../requirements.txt",
         "to": "requirements.txt"
-      },
-      {
-        "from": "../../.env",
-        "to": ".env"
       }
     ],
     "mac": {

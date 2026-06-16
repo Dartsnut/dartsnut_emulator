@@ -4,6 +4,7 @@
 **/.vite
 .env
 .env.macos-notarize
+apps/desktop/packagedEnv.generated.ts
 .electron-cache
 .cursor
 # Per-workspace agent session + transaction logs (when a project folder is opened in-repo)

@@ -44,4 +44,26 @@ describe("configureAgentsSdk", () => {
 
     expect(clientB).toBe(clientA);
   });
+
+  it("rebinds when forced even if base URL and API key are unchanged", () => {
+    resetAgentsBootstrapForTests();
+    configureAgentsSdk({
+      model: "model-a",
+      apiKey: "key-shared",
+      baseUrl: "https://gateway-a.example.com/v1"
+    });
+    const clientA = getLastConfiguredOpenAIClientForTests();
+
+    configureAgentsSdk(
+      {
+        model: "model-a",
+        apiKey: "key-shared",
+        baseUrl: "https://gateway-a.example.com/v1"
+      },
+      { force: true }
+    );
+    const clientB = getLastConfiguredOpenAIClientForTests();
+
+    expect(clientB).not.toBe(clientA);
+  });
 });

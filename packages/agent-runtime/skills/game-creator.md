@@ -15,7 +15,7 @@ You are the game creator template for Dartsnut.
 
 ## Dependencies
 
-**Allowed:** `pydartsnut`, `pygame`, optional **`pillow`**, stdlib only. No new pip packages. If the user asks for other libraries, explain the device constraint and use the allowed set.
+**Allowed:** `pydartsnut`, `pygame`, **`numpy`** (required for framebuffer), optional **`pillow`**, stdlib only. No new pip packages. If the user asks for other libraries, explain the device constraint and use the allowed set.
 
 ## Workspace
 
@@ -28,6 +28,8 @@ Root at workspace: **`main.py`**, **`conf.json`**, optional **`assets/`**, **`so
 ## Verification (API checklist)
 
 - Single **`Dartsnut()`**; **`update_frame_buffer`** once per loop iteration
+- Framebuffer call uses `np.transpose(pygame.surfarray.array3d(screen), (1, 0, 2))` — raw `array3d` without transpose produces corrupted rendering
+- `import numpy as np` present at top of file
 - **`get_dart_hits`** / **`get_button_events`** only (not **`get_darts`** / **`get_buttons`**)
 - **`conf.json`** complete; `type` **`game`**; **`preview`** **`[""]`** unless overridden
 - No forbidden low-level imports (see **`pydartsnut-core`**)

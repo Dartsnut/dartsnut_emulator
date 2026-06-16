@@ -139,6 +139,7 @@ def _uv_env() -> dict[str, str]:
     env = dict(os.environ)
     env.pop("UV_NO_SYNC", None)
     env.pop("UV_NO_PROJECT", None)
+    env.pop("VIRTUAL_ENV", None)  # Avoid mismatch warning with workspace .venv
     env["UV_NO_PYTHON_DOWNLOADS"] = "never"
     env["UV_NO_MANAGED_PYTHON"] = "1"
     python_exe = _bundled_python()
@@ -277,6 +278,7 @@ def workspace_launch_env(base_env: dict[str, str] | None = None) -> dict[str, st
     env = dict(base_env or os.environ)
     env.pop("UV_NO_SYNC", None)
     env.pop("UV_NO_PROJECT", None)
+    env.pop("VIRTUAL_ENV", None)  # Avoid mismatch warning with workspace .venv
     env.setdefault("PYTHONUNBUFFERED", "1")
     env["UV_NO_PYTHON_DOWNLOADS"] = "never"
     env["UV_NO_MANAGED_PYTHON"] = "1"

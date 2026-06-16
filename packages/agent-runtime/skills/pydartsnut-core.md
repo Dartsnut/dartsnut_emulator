@@ -38,7 +38,15 @@ In README or final replies:
 ## Frame types
 
 - **Widgets:** Pillow `Image` sized to `conf.json` `size`.
-- **Games:** pygame `Surface` → transpose `pygame.surfarray.array3d(screen)` before `update_frame_buffer`.
+- **Games:** pygame `Surface` — always convert with **numpy transpose** before pushing:
+
+```python
+import numpy as np          # required — add to imports at top of file
+# ... inside main loop, after pygame.display.flip() ...
+engine.update_frame_buffer(np.transpose(pygame.surfarray.array3d(screen), (1, 0, 2)))
+```
+
+> **Warning:** `array3d()` returns shape `(W, H, 3)` (column-major). Passing it directly — without `np.transpose(..., (1, 0, 2))` — swaps rows and columns, producing a corrupted scrolling-noise render. The transpose is **mandatory**, not optional.
 
 **Layout, panels, clipping, fonts on canvas:** load **`dartsnut-display-mapping`** when needed.
 

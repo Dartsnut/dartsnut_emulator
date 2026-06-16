@@ -1172,8 +1172,8 @@ export function App() {
                 className={chromeIconBtnClass}
                 onClick={() => void handlePickWorkspace()}
                 disabled={sending}
-                aria-label="Choose workspace folder"
-                title="Choose workspace folder"
+                aria-label="Open an existing project"
+                title="Open an existing project"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
                   <path

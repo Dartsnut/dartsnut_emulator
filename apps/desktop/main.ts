@@ -873,9 +873,9 @@ async function maybeRecoverTrackedTempWorkspaceAtLaunch(): Promise<void> {
     return;
   }
   if (isDirectoryEmpty(tp)) {
-    const toRemove = path.resolve(tp);
-    writeTempWorkspaceRecordToDisk(null);
-    removeDirectoryBestEffort(toRemove);
+    const resolved = path.resolve(tp);
+    writeTempWorkspaceRecordToDisk(resolved);
+    applyWorkspaceRoot(resolved);
     return;
   }
   const { response } = await showAppMessageBox({

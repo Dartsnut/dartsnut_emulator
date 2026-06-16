@@ -6,17 +6,16 @@
 
 ---
 
-## Full-frame `128×160` (games and full-size widgets)
+## Full-frame `128×160` layout (games and full-size widgets)
 
-- The **framebuffer** passed to `update_frame_buffer` is the full **`128×160`** rectangle (**`width` × `height`**).
-- On the **physical machine**, that image maps to **two** displays:
-  - **Main:** **`128×128`**, top portion of the buffer (primary playfield / primary UI).
-  - **Secondary:** **`64×32`**, hardware panel driven from a **mapped band** of the same framebuffer (status strip / auxiliary UI).
+The **framebuffer** passed to `update_frame_buffer` is always **`128` wide × `160` tall**. It maps to two physical displays:
 
-### Firmware coordinate note (secondary panel)
+| Surface   | Image pixels (Pillow / pygame)      | Physical size |
+|-----------|-------------------------------------|---------------|
+| **Main**  | `x ∈ [0, 127]`, `y ∈ [0, 127]`     | 128 × 128     |
+| **Secondary** | `x ∈ [0, 63]`, `y ∈ [128, 159]` | 64 × 32       |
 
-- The secondary panel shows the crop corresponding to **`[129, 0]` → `[160, 64]`** in the **machine / firmware** coordinate space.
-- That range is **not** literal **`x`** indices in a **`128`**-pixel-wide Pillow/pygame image. When drawing, stay within **`x ∈ [0, 127]`**, **`y ∈ [0, 159]`** and place content intended for the small panel in the **lower band** that firmware maps onto the **`64×32`** display. Treat exact alignment as **firmware-defined** when pixel-perfect placement matters.
+The secondary panel is **left-aligned** in the lower band of the image. Its hardware firmware address origin is `(129, 0)` in the machine's own coordinate space — that does **not** map to image `x`/`y` directly. Always use the image pixel ranges in the table above when drawing.
 
 ### Main vs secondary content
 

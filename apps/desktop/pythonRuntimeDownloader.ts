@@ -207,7 +207,9 @@ function isRuntimeValid(runtimeDir: string, platform: Platform): boolean {
     return (
       metadata.pythonVersion === PYTHON_VERSION &&
       metadata.uvVersion === UV_VERSION &&
-      metadata.platform === platform
+      metadata.platform === platform &&
+      // Configuration is only complete if dependencies are installed
+      Boolean(metadata.depsInstalledAt)
     );
   } catch {
     return false;
@@ -363,6 +365,7 @@ export async function ensureRuntime(
   onProgress({ stage: "check", percent: 0, message: "Checking runtime..." });
 
   // Check if valid runtime already exists
+  // If metadata matches our locked versions, consider it fully configured - skip all network calls
   if (isRuntimeValid(runtimeDir, platform)) {
     const pythonRuntimeDir = path.join(runtimeDir, `python-${PYTHON_VERSION}`);
     const uvBinName = process.platform === "win32" ? "uv.exe" : "uv";
@@ -370,29 +373,7 @@ export async function ensureRuntime(
     const pythonPath = venvPythonPath(pythonRuntimeDir);
 
     if (fs.existsSync(pythonPath) && fs.existsSync(uvPath)) {
-      // Runtime exists, but check if we need to reinstall dependencies
-      const metadataPath = path.join(runtimeDir, ".metadata.json");
-      const metadata: RuntimeMetadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
-
-      if (!metadata.depsInstalledAt) {
-        // Python/uv are good, but deps failed last time - retry pip install only
-        onProgress({ stage: "install_deps", percent: 0, message: "Retrying dependency installation..." });
-
-        const workingMirror = await installDependencies(
-          uvPath,
-          pythonPath,
-          requirementsPath,
-          pythonRuntimeDir,
-          metadata.pypiIndexUrl,
-          onProgress
-        );
-
-        // Update metadata with successful install
-        metadata.depsInstalledAt = new Date().toISOString();
-        metadata.pypiIndexUrl = workingMirror;
-        fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
-      }
-
+      // Metadata matches locked versions - runtime is valid, skip all network operations
       onProgress({ stage: "complete", percent: 100, message: "Runtime ready" });
       return { pythonPath, uvPath };
     }

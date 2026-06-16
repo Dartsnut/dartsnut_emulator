@@ -133,6 +133,12 @@ if (!app.isPackaged) {
   app.setName("DartsnutAgent-Dev");
 }
 
+// Bypass system proxy/VPN for localhost in development to prevent SSL interception
+// of the Vite dev server connection by tools like Surge Enhanced Mode
+if (!app.isPackaged && process.env.VITE_DEV_SERVER_URL) {
+  app.commandLine.appendSwitch('proxy-bypass-list', '127.0.0.1,localhost');
+}
+
 const repoRoot = app.isPackaged
   ? process.resourcesPath
   : path.resolve(__dirname, "../../..");
@@ -1892,13 +1898,15 @@ app.whenReady().then(async () => {
     pythonExec = runtime.pythonPath;
     devLog.info("[runtime] Runtime ready", { pythonPath: pythonExec, uvPath: runtime.uvPath });
 
+    // Create main window first so dialogs have a proper parent
+    await createWindow();
+    closeSplashWindow();
+
+    // Now handle workspace recovery - dialogs will be properly visible
     await maybeRecoverTrackedTempWorkspaceAtLaunch();
     ensureTemporaryWorkspaceRootAllocated();
     startPythonBridge();
-    await createWindow();
     emitBootstrapStateToRenderer();
-
-    closeSplashWindow();
   } catch (error) {
     closeSplashWindow();
     const errorMessage = error instanceof Error ? error.message : String(error);

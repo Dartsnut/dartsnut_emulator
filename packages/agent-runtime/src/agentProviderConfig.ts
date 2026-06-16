@@ -1,4 +1,3 @@
-import type { UserDefineProviderSettings } from "./providerConfig";
 import { normalizeProviderBaseUrl } from "./providerConfig";
 
 export type AgentEndpointKind = "openai" | "openai-compatible";
@@ -17,7 +16,6 @@ export function buildAgentModelConfig(input: {
   model: string;
   baseUrl?: string;
   apiKey?: string;
-  userDefine?: UserDefineProviderSettings;
 }): AgentModelConfig {
   const isOpenAiFirstParty = (url: string | undefined): boolean => {
     if (!url) {
@@ -31,9 +29,9 @@ export function buildAgentModelConfig(input: {
     }
   };
 
-  const model = input.userDefine?.model?.trim() || input.model;
-  const baseUrl = input.userDefine?.baseUrl?.trim() || input.baseUrl;
-  const apiKey = input.userDefine?.apiKey?.trim() || input.apiKey;
+  const model = input.model;
+  const baseUrl = input.baseUrl;
+  const apiKey = input.apiKey;
   return {
     model,
     baseUrl,

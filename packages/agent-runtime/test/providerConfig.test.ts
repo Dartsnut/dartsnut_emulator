@@ -7,8 +7,10 @@ import {
   loadProviderConfig,
   mergeUserDefineWithEnvDefaults,
   normalizeProviderBaseUrl,
+  readDartsnutLlmDefaultsFromEnv,
   readUserDefineDefaultsFromEnv,
   resolveProviderConfig,
+  resolveProviderSettingsConfig,
   resolveUserDefineConfig,
   validateProviderConfig
 } from "../src/providerConfig";
@@ -48,6 +50,7 @@ describe("validateProviderConfig", () => {
 describe("findEnvFile", () => {
   const tempDirs: string[] = [];
   const originalResourcesPath = process.resourcesPath;
+  const originalAllowResourcesEnvFile = process.env.DARTSNUT_ALLOW_RESOURCES_ENV_FILE;
 
   afterEach(() => {
     for (const dir of tempDirs) {
@@ -58,6 +61,11 @@ describe("findEnvFile", () => {
       value: originalResourcesPath,
       configurable: true
     });
+    if (originalAllowResourcesEnvFile === undefined) {
+      delete process.env.DARTSNUT_ALLOW_RESOURCES_ENV_FILE;
+    } else {
+      process.env.DARTSNUT_ALLOW_RESOURCES_ENV_FILE = originalAllowResourcesEnvFile;
+    }
   });
 
   it("prefers .env in current working directory", () => {
@@ -101,6 +109,23 @@ describe("findEnvFile", () => {
       }
     }
   });
+
+  it("skips resources .env when packaged env file loading is disabled", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "provider-config-"));
+    const cwd = path.join(root, "cwd");
+    const resourcesDir = path.join(root, "resources");
+    tempDirs.push(root);
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.mkdirSync(resourcesDir, { recursive: true });
+    fs.writeFileSync(path.join(resourcesDir, ".env"), "GPT_API_KEY=packaged");
+    process.env.DARTSNUT_ALLOW_RESOURCES_ENV_FILE = "0";
+    Object.defineProperty(process, "resourcesPath", {
+      value: resourcesDir,
+      configurable: true
+    });
+
+    expect(findEnvFile(cwd)).toBeUndefined();
+  });
 });
 
 describe("readUserDefineDefaultsFromEnv", () => {
@@ -113,6 +138,9 @@ describe("readUserDefineDefaultsFromEnv", () => {
     "GPT_BASE_URL",
     "GPT_API_KEY",
     "GPT_MODEL",
+    "XIAOMI_BASE_URL",
+    "XIAOMI_API_KEY",
+    "XIAOMI_MODEL",
     "OPENAI_BASE_URL",
     "OPENAI_API_KEY",
     "OPENAI_MODEL"
@@ -172,6 +200,18 @@ describe("readUserDefineDefaultsFromEnv", () => {
       baseUrl: "https://legacy.example.com/v1",
       apiKey: "legacy-key",
       model: "legacy-model"
+    });
+  });
+
+  it("reads XIAOMI_* values for Dartsnut LLM", () => {
+    saveEnv();
+    process.env.XIAOMI_BASE_URL = "https://mimo.example.com/v1";
+    process.env.XIAOMI_API_KEY = "mimo-key";
+    process.env.XIAOMI_MODEL = "mimo-model";
+    expect(readDartsnutLlmDefaultsFromEnv()).toEqual({
+      baseUrl: "https://mimo.example.com/v1",
+      apiKey: "mimo-key",
+      model: "mimo-model"
     });
   });
 });
@@ -330,5 +370,72 @@ describe("loadProviderConfig", () => {
     });
     expect(resolved.apiKey).toBe("k");
     expect(resolved.model).toBe("m");
+  });
+
+  it("loads active Dartsnut LLM settings from XIAOMI_*", () => {
+    const originalBaseUrl = process.env.XIAOMI_BASE_URL;
+    const originalApiKey = process.env.XIAOMI_API_KEY;
+    const originalModel = process.env.XIAOMI_MODEL;
+    process.env.XIAOMI_BASE_URL = "https://mimo.example.com";
+    process.env.XIAOMI_API_KEY = "mimo-key";
+    process.env.XIAOMI_MODEL = "mimo-model";
+    try {
+      expect(
+        resolveProviderSettingsConfig({
+          activeProvider: "dartsnut-llm",
+          custom: { baseUrl: "https://custom.example.com/v1", apiKey: "custom-key", model: "custom-model" }
+        })
+      ).toEqual({
+        baseUrl: "https://mimo.example.com/v1",
+        apiKey: "mimo-key",
+        model: "mimo-model"
+      });
+    } finally {
+      process.env.XIAOMI_BASE_URL = originalBaseUrl;
+      process.env.XIAOMI_API_KEY = originalApiKey;
+      process.env.XIAOMI_MODEL = originalModel;
+    }
+  });
+
+  it("loads active custom provider settings", () => {
+    const resolved = loadProviderConfig({
+      providerSettings: {
+        activeProvider: "custom",
+        custom: { baseUrl: "https://custom.example.com", apiKey: "custom-key", model: "custom-model" }
+      }
+    });
+    expect(resolved).toEqual({
+      baseUrl: "https://custom.example.com/v1",
+      apiKey: "custom-key",
+      model: "custom-model",
+      fetchImpl: undefined
+    });
+  });
+
+  it("does not fill active custom settings from Dartsnut LLM env", () => {
+    const originalBaseUrl = process.env.XIAOMI_BASE_URL;
+    const originalApiKey = process.env.XIAOMI_API_KEY;
+    const originalModel = process.env.XIAOMI_MODEL;
+    process.env.XIAOMI_BASE_URL = "https://mimo.example.com";
+    process.env.XIAOMI_API_KEY = "mimo-key";
+    process.env.XIAOMI_MODEL = "mimo-model";
+    try {
+      const resolved = loadProviderConfig({
+        providerSettings: {
+          activeProvider: "custom",
+          custom: { baseUrl: "", apiKey: "", model: "" }
+        }
+      });
+      expect(resolved).toEqual({
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "",
+        model: "",
+        fetchImpl: undefined
+      });
+    } finally {
+      process.env.XIAOMI_BASE_URL = originalBaseUrl;
+      process.env.XIAOMI_API_KEY = originalApiKey;
+      process.env.XIAOMI_MODEL = originalModel;
+    }
   });
 });

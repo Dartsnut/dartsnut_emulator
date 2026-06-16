@@ -1642,6 +1642,7 @@ export function App() {
               className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "deploy" && "hidden")}
             >
               <DeployPanel
+                active={rightPaneTab === "deploy"}
                 showWidgetParams={deployPanelShowsWidgetParams}
                 widgetParamsText={widgetParamsText}
                 setWidgetParamsText={setWidgetParamsText}
@@ -1674,7 +1675,7 @@ export function App() {
         onSuccess={async (account) => {
           setDeployAuthGateOpen(false);
           await refreshCommunitySession();
-          devLog("[deploy] Signed in as", account);
+          devLog.log("[deploy] Signed in as", account);
         }}
       />
     </main>

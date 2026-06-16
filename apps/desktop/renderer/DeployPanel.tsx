@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateA
 import type {
   CommunityDeployDevice,
   CommunitySessionInfo,
-  DeployConnectResponse
+  DeployConnectResponse,
+  DeployLocalNetworkPermissionResponse
 } from "@dartsnut/shared-ipc";
 import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
@@ -11,6 +12,7 @@ const toolbarBtn = "ui-toolbar-btn";
 const MANUAL_DEVICE_VALUE = "__manual__";
 
 export type DeployPanelProps = {
+  active: boolean;
   showWidgetParams: boolean;
   widgetParamsText: string;
   setWidgetParamsText: Dispatch<SetStateAction<string>>;
@@ -35,6 +37,7 @@ function formatDeviceOptionLabel(device: CommunityDeployDevice): string {
 }
 
 export function DeployPanel({
+  active,
   showWidgetParams,
   widgetParamsText,
   setWidgetParamsText,
@@ -52,6 +55,11 @@ export function DeployPanel({
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
   const logRef = useRef<HTMLPreElement | null>(null);
+  const permissionCheckSeq = useRef(0);
+  const [localNetworkPermission, setLocalNetworkPermission] =
+    useState<DeployLocalNetworkPermissionResponse | null>(null);
+  const [localNetworkChecking, setLocalNetworkChecking] = useState(false);
+  const [settingsOpenError, setSettingsOpenError] = useState<string | null>(null);
 
   const [devices, setDevices] = useState<CommunityDeployDevice[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
@@ -121,6 +129,38 @@ export function DeployPanel({
       setLogLines((prev) => [...prev.slice(-499), line]);
     });
   }, [api]);
+
+  useEffect(() => {
+    if (!active || !api?.deployCheckLocalNetworkPermission) {
+      return;
+    }
+    const seq = permissionCheckSeq.current + 1;
+    permissionCheckSeq.current = seq;
+    setLocalNetworkChecking(true);
+    setSettingsOpenError(null);
+    void api.deployCheckLocalNetworkPermission()
+      .then((result) => {
+        if (permissionCheckSeq.current === seq) {
+          setLocalNetworkPermission(result);
+        }
+      })
+      .catch((error) => {
+        if (permissionCheckSeq.current !== seq) {
+          return;
+        }
+        setLocalNetworkPermission({
+          ok: false,
+          platform: "darwin",
+          reason: "check_failed",
+          message: error instanceof Error ? error.message : String(error)
+        });
+      })
+      .finally(() => {
+        if (permissionCheckSeq.current === seq) {
+          setLocalNetworkChecking(false);
+        }
+      });
+  }, [active, api]);
 
   useEffect(() => {
     const el = logRef.current;
@@ -267,6 +307,17 @@ export function DeployPanel({
     }
   }
 
+  async function handleOpenLocalNetworkSettings() {
+    if (!api?.deployOpenLocalNetworkSettings) {
+      return;
+    }
+    setSettingsOpenError(null);
+    const result = await api.deployOpenLocalNetworkSettings();
+    if (!result.ok) {
+      setSettingsOpenError(result.error);
+    }
+  }
+
   if (!api?.deployConnect || !api?.deployDisconnect) {
     return (
       <div className="flex flex-col gap-2 p-4 text-sm text-[var(--color-text-subtle)]">
@@ -276,10 +327,38 @@ export function DeployPanel({
   }
 
   const canConnect = connected || host.trim().length > 0;
+  const showLocalNetworkBanner =
+    !localNetworkChecking &&
+    localNetworkPermission !== null &&
+    !localNetworkPermission.ok &&
+    localNetworkPermission.platform === "darwin";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
       <h2 className="ui-panel-title">Deploy</h2>
+
+      {showLocalNetworkBanner ? (
+        <div className="flex shrink-0 flex-col gap-2 rounded-lg border border-[rgba(245,158,11,0.42)] bg-[rgba(245,158,11,0.10)] px-3 py-2 text-[13px] text-[var(--color-text-primary)]">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[var(--color-warning-text)]">
+              Local Network access may be disabled. Dartsnut needs it to connect to your device over SSH.
+            </span>
+            <button
+              type="button"
+              className={toolbarBtn}
+              onClick={() => void handleOpenLocalNetworkSettings()}
+            >
+              Open System Settings
+            </button>
+          </div>
+          <span className="text-xs text-[var(--color-text-subtle)]">
+            If it does not open directly, go to System Settings → Privacy &amp; Security → Local Network and enable Dartsnut Agent.
+          </span>
+          {settingsOpenError ? (
+            <span className="text-xs text-[var(--color-error-text)]">{settingsOpenError}</span>
+          ) : null}
+        </div>
+      ) : null}
 
       {loggedIn ? (
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-edge bg-[var(--color-surface-elevated)] px-3 py-2 text-[13px]">

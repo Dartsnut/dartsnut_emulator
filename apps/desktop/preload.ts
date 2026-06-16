@@ -26,6 +26,7 @@ import {
   type DeployConnectResponse,
   type DeployEligibility,
   type DeployActionResponse,
+  type DeployLocalNetworkPermissionResponse,
   type DeployLaunchRequest,
   type CommunitySessionInfo,
   type CommunityLoginRequest,
@@ -146,6 +147,10 @@ const api = {
   deployReload: (request?: DeployLaunchRequest) =>
     ipcRenderer.invoke(IPCChannels.deployReload, request) as Promise<DeployActionResponse>,
   deployStop: () => ipcRenderer.invoke(IPCChannels.deployStop) as Promise<DeployActionResponse>,
+  deployCheckLocalNetworkPermission: () =>
+    ipcRenderer.invoke(IPCChannels.deployCheckLocalNetworkPermission) as Promise<DeployLocalNetworkPermissionResponse>,
+  deployOpenLocalNetworkSettings: () =>
+    ipcRenderer.invoke(IPCChannels.deployOpenLocalNetworkSettings) as Promise<DeployActionResponse>,
   onDeployLog: (listener: (line: string) => void) => {
     const handler = (_: unknown, line: string) => listener(line);
     ipcRenderer.on(IPCChannels.deployLog, handler);

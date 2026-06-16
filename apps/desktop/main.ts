@@ -830,17 +830,15 @@ async function ensureTemporaryWorkspaceResolvedForGuard(reason: TempWorkspaceGua
   if (!isTemporaryWorkspaceActiveNow()) {
     return true;
   }
-  if (reason === "quit") {
-    const ws = workspaceRoot;
-    if (
-      ws &&
-      fs.existsSync(ws) &&
-      fs.statSync(ws).isDirectory() &&
-      isDirectoryEmpty(ws)
-    ) {
-      await discardTrackedTemporaryProject(reason);
-      return true;
-    }
+  const ws = workspaceRoot;
+  if (
+    ws &&
+    fs.existsSync(ws) &&
+    fs.statSync(ws).isDirectory() &&
+    isDirectoryEmpty(ws)
+  ) {
+    await discardTrackedTemporaryProject(reason);
+    return true;
   }
   for (; ;) {
     const choice = await promptSaveDiscardCancel(reason);
@@ -866,6 +864,12 @@ async function maybeRecoverTrackedTempWorkspaceAtLaunch(): Promise<void> {
   }
   if (!fs.existsSync(tp) || !fs.statSync(tp).isDirectory()) {
     writeTempWorkspaceRecordToDisk(null);
+    return;
+  }
+  if (isDirectoryEmpty(tp)) {
+    const toRemove = path.resolve(tp);
+    writeTempWorkspaceRecordToDisk(null);
+    removeDirectoryBestEffort(toRemove);
     return;
   }
   const { response } = await showAppMessageBox({
@@ -2245,6 +2249,17 @@ ipcMain.handle(IPCChannels.saveProviderSettings, (_event: unknown, request: Save
 );
 
 ipcMain.handle(IPCChannels.startNewProject, async () => {
+  const ws = workspaceRoot;
+  if (
+    isTemporaryWorkspaceActiveNow() &&
+    ws &&
+    fs.existsSync(ws) &&
+    fs.statSync(ws).isDirectory() &&
+    isDirectoryEmpty(ws)
+  ) {
+    performSessionCleanup({ clearWorkspace: false });
+    return getBootstrapState();
+  }
   const proceed = await ensureTemporaryWorkspaceResolvedForGuard("new_project");
   if (!proceed) {
     return getBootstrapState();

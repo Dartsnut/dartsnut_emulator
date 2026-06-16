@@ -92,6 +92,12 @@
     ],
     "mac": {
       "notarize": false,
+      "hardenedRuntime": true,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.inherit.plist",
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "Dartsnut needs local network access to connect to your Dartsnut over SSH."
+      },
       "target": [
         {
           "target": "dmg",

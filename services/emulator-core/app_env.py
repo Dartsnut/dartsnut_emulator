@@ -139,6 +139,7 @@ def _uv_env() -> dict[str, str]:
     env = dict(os.environ)
     env.pop("UV_NO_SYNC", None)
     env.pop("UV_NO_PROJECT", None)
+    env.pop("VIRTUAL_ENV", None)  # Avoid mismatch warning with workspace .venv
     env["UV_NO_PYTHON_DOWNLOADS"] = "never"
     env["UV_NO_MANAGED_PYTHON"] = "1"
     python_exe = _bundled_python()

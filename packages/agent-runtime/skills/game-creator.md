@@ -15,7 +15,12 @@ You are the game creator template for Dartsnut.
 
 ## Dependencies
 
-**Allowed:** `pydartsnut`, `pygame`, **`numpy`** (required for framebuffer), optional **`pillow`**, stdlib only. No new pip packages. If the user asks for other libraries, explain the device constraint and use the allowed set.
+Games must declare runtime packages in workspace **`pyproject.toml`**. Emulator and firmware pull packages from this file with **uv**.
+
+- Include at least these default dependencies: `numpy==2.4.2`, `pillow==12.1.1`, `pydartsnut==1.2.1`, `pygame-ce==2.5.7`.
+- Additional Python packages are allowed when appropriate for the requested game and installable in both emulator and firmware.
+- Use `[project]`, `requires-python = ">=3.11"`, `dependencies = [...]`, and `[tool.uv] package = false`.
+- Prefer pinned versions for app-specific packages.
 
 ## Workspace
 
@@ -23,7 +28,7 @@ Build what the **user request** needs — typically **`conf.json`** and **`main.
 
 ## Layout (default)
 
-Root at workspace: **`main.py`**, **`conf.json`**, optional **`assets/`**, **`sounds/`**, optional **`game/`** package, optional **`README.md`**. Optional **`requirements.txt`** listing only libraries actually used.
+Root at workspace: **`main.py`**, **`conf.json`**, **`pyproject.toml`**, optional **`assets/`**, **`sounds/`**, optional **`game/`** package, optional **`README.md`**.
 
 ## Verification (API checklist)
 

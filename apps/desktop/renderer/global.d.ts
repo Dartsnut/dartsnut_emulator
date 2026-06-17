@@ -24,7 +24,6 @@ import type {
   DeployConnectResponse,
   DeployEligibility,
   DeployActionResponse,
-  DeployLocalNetworkPermissionResponse,
   DeployLaunchRequest,
   CommunitySessionInfo,
   CommunityLoginRequest,
@@ -84,7 +83,6 @@ declare global {
       deployRun: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
       deployReload: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
       deployStop: () => Promise<DeployActionResponse>;
-      deployCheckLocalNetworkPermission: () => Promise<DeployLocalNetworkPermissionResponse>;
       deployOpenLocalNetworkSettings: () => Promise<DeployActionResponse>;
       onDeployLog: (listener: (line: string) => void) => () => void;
       communityGetSession: () => Promise<CommunitySessionInfo>;

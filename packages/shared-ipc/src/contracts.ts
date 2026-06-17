@@ -42,7 +42,6 @@ export const IPCChannels = {
   deployRun: "deploy:run",
   deployReload: "deploy:reload",
   deployStop: "deploy:stop",
-  deployCheckLocalNetworkPermission: "deploy:check-local-network-permission",
   deployOpenLocalNetworkSettings: "deploy:open-local-network-settings",
   /** Main → renderer: remote debug log line or status message. */
   deployLog: "deploy:log",
@@ -468,18 +467,9 @@ export interface DeployConnectRequest {
 
 export type DeployConnectResponse =
   | { ok: true; deviceName: string | null }
-  | { ok: false; error: string };
+  | { ok: false; error: string; needsLocalNetworkPermission?: true; canRetry?: true };
 
 export type DeployActionResponse = { ok: true } | { ok: false; error: string };
-
-export type DeployLocalNetworkPermissionResponse =
-  | { ok: true; platform: "darwin" | "unsupported" }
-  | {
-    ok: false;
-    platform: "darwin";
-    reason: "denied_or_unavailable" | "check_failed";
-    message?: string;
-  };
 
 /** Optional payload for `deploy:run` / `deploy:reload` when the workspace is a widget. */
 export interface DeployLaunchRequest {

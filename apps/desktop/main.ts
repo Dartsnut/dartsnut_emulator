@@ -1,7 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
-import dgram from "node:dgram";
 import dotenv from "dotenv";
 import { spawn, spawnSync } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
@@ -27,7 +26,6 @@ import {
   type DeployConnectRequest,
   type DeployConnectResponse,
   type DeployEligibility,
-  type DeployLocalNetworkPermissionResponse,
   type DeployLaunchRequest,
   type ManifestSnapshot,
   type PickWorkspaceRequest,
@@ -169,7 +167,6 @@ const assetManager = new AssetManager({
 const widgetFontManifestRelativePath = "assets/fonts/widgets/font_manifest.json";
 
 let deployMachineSession: DeployMachineSession | null = null;
-let localNetworkPermissionCheckInFlight: Promise<DeployLocalNetworkPermissionResponse> | null = null;
 
 /** Set while `sendPrompt` is running; used to abort the provider + tool loop from the renderer Stop control. */
 let sendPromptAbortController: AbortController | null = null;
@@ -214,82 +211,23 @@ function getDeployMachineSession(): DeployMachineSession {
   return deployMachineSession;
 }
 
-function probeMacLocalNetworkPermission(): Promise<DeployLocalNetworkPermissionResponse> {
+function isLikelyMacLocalNetworkPermissionFailure(message: string): boolean {
   if (process.platform !== "darwin") {
-    return Promise.resolve({ ok: true, platform: "unsupported" });
+    return false;
   }
-  if (localNetworkPermissionCheckInFlight) {
-    return localNetworkPermissionCheckInFlight;
-  }
-
-  const checkPromise: Promise<DeployLocalNetworkPermissionResponse> = new Promise((resolve) => {
-    const socket = dgram.createSocket({ type: "udp4", reuseAddr: true });
-    let settled = false;
-    const timeout = setTimeout(() => {
-      finish({
-        ok: false,
-        platform: "darwin",
-        reason: "denied_or_unavailable",
-        message: "macOS did not allow the local network probe to complete."
-      });
-    }, 1600);
-
-    function finish(result: DeployLocalNetworkPermissionResponse): void {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      try {
-        socket.close();
-      } catch {
-        // ignore
-      }
-      resolve(result);
-    }
-
-    socket.once("error", (error) => {
-      finish({
-        ok: false,
-        platform: "darwin",
-        reason: "check_failed",
-        message: error.message
-      });
-    });
-
-    socket.bind(0, () => {
-      try {
-        socket.setMulticastTTL(1);
-        socket.addMembership("224.0.0.251");
-      } catch (error) {
-        finish({
-          ok: false,
-          platform: "darwin",
-          reason: "check_failed",
-          message: error instanceof Error ? error.message : String(error)
-        });
-        return;
-      }
-      const message = Buffer.from("dartsnut-local-network-permission-check");
-      socket.send(message, 5353, "224.0.0.251", (error) => {
-        finish(
-          error
-            ? {
-              ok: false,
-              platform: "darwin",
-              reason: "denied_or_unavailable",
-              message: error.message
-            }
-            : { ok: true, platform: "darwin" }
-        );
-      });
-    });
-  });
-  localNetworkPermissionCheckInFlight = checkPromise.finally(() => {
-    localNetworkPermissionCheckInFlight = null;
-  });
-
-  return checkPromise;
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("timed out") ||
+    normalized.includes("timeout") ||
+    normalized.includes("handshake") ||
+    normalized.includes("connection lost before handshake") ||
+    normalized.includes("ehostunreach") ||
+    normalized.includes("enetwork") ||
+    normalized.includes("econnrefused") ||
+    normalized.includes("econnreset") ||
+    normalized.includes("socket") ||
+    normalized.includes("permission")
+  );
 }
 
 async function disconnectDeployMachine(): Promise<void> {
@@ -2216,11 +2154,6 @@ ipcMain.handle(
 
 ipcMain.handle(IPCChannels.deployGetEligibility, (): DeployEligibility => readDeployEligibilityFromWorkspace());
 
-ipcMain.handle(
-  IPCChannels.deployCheckLocalNetworkPermission,
-  async (): Promise<DeployLocalNetworkPermissionResponse> => probeMacLocalNetworkPermission()
-);
-
 ipcMain.handle(IPCChannels.deployOpenLocalNetworkSettings, async (): Promise<DeployActionResponse> => {
   if (process.platform !== "darwin") {
     return { ok: false, error: "Local Network privacy settings are only available on macOS." };
@@ -2273,6 +2206,14 @@ ipcMain.handle(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       emitDeployLog(`[deploy] Connect failed: ${message}`);
+      if (isLikelyMacLocalNetworkPermissionFailure(message)) {
+        return {
+          ok: false,
+          error: "macOS may be waiting for Local Network approval. Allow Dartsnut Agent in the system prompt, then retry the connection.",
+          needsLocalNetworkPermission: true,
+          canRetry: true
+        };
+      }
       return { ok: false, error: message };
     }
   },

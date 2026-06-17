@@ -19,8 +19,11 @@ In README or final replies:
 
 - **No** low-level device imports (`bluezero`, `dbus-python`, `RPi.GPIO`, `evdev`, etc.).
 - **All** hardware access through **`pydartsnut.Dartsnut`**.
-- Games: only `pydartsnut`, `pygame`, optional `pillow`, stdlib (see game-creator template).
-- Widgets: `pydartsnut`, `Pillow`, stdlib only.
+- Agents may use additional Python packages when they fit the requested app and can be installed by both emulator and firmware.
+- If `main.py` imports anything beyond stdlib/local modules, ensure the workspace has a valid **`pyproject.toml`**. Emulator and firmware pull dependencies with **uv** from that file.
+- Use uv project metadata: `[project]`, `requires-python = ">=3.11"`, a `dependencies = [...]` list, and `[tool.uv] package = false`.
+- Generated app `pyproject.toml` must include at least the matching default app dependency set listed in the game/widget creator skill, then append app-specific packages.
+- Prefer pinned versions for app-specific packages.
 
 ## Instance and framebuffer
 

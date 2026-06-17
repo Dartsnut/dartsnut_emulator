@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = path.join(repoRoot, ".env");
 const outputPath = path.join(repoRoot, "apps", "desktop", "packagedEnv.generated.ts");
 

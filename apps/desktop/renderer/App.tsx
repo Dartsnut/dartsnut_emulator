@@ -1674,7 +1674,7 @@ export function App() {
         onSuccess={async (account) => {
           setDeployAuthGateOpen(false);
           await refreshCommunitySession();
-          devLog("[deploy] Signed in as", account);
+          devLog.log("[deploy] Signed in as", account);
         }}
       />
     </main>

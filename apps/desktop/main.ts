@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import dotenv from "dotenv";
 import { spawn, spawnSync } from "node:child_process";
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
 import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
@@ -209,6 +209,25 @@ function getDeployMachineSession(): DeployMachineSession {
     deployMachineSession = new DeployMachineSession(emitDeployLog);
   }
   return deployMachineSession;
+}
+
+function isLikelyMacLocalNetworkPermissionFailure(message: string): boolean {
+  if (process.platform !== "darwin") {
+    return false;
+  }
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("timed out") ||
+    normalized.includes("timeout") ||
+    normalized.includes("handshake") ||
+    normalized.includes("connection lost before handshake") ||
+    normalized.includes("ehostunreach") ||
+    normalized.includes("enetwork") ||
+    normalized.includes("econnrefused") ||
+    normalized.includes("econnreset") ||
+    normalized.includes("socket") ||
+    normalized.includes("permission")
+  );
 }
 
 async function disconnectDeployMachine(): Promise<void> {
@@ -2135,6 +2154,26 @@ ipcMain.handle(
 
 ipcMain.handle(IPCChannels.deployGetEligibility, (): DeployEligibility => readDeployEligibilityFromWorkspace());
 
+ipcMain.handle(IPCChannels.deployOpenLocalNetworkSettings, async (): Promise<DeployActionResponse> => {
+  if (process.platform !== "darwin") {
+    return { ok: false, error: "Local Network privacy settings are only available on macOS." };
+  }
+
+  const urls = [
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork",
+    "x-apple.systempreferences:com.apple.preference.security?Privacy"
+  ];
+  for (const url of urls) {
+    try {
+      await shell.openExternal(url);
+      return { ok: true };
+    } catch {
+      // Try the broader fallback below.
+    }
+  }
+  return { ok: false, error: "Could not open macOS Privacy settings." };
+});
+
 function parseDeployWidgetParamsJson(raw: string | undefined): Record<string, unknown> {
   const text = (raw ?? "").trim() || "{}";
   let parsed: unknown;
@@ -2167,6 +2206,14 @@ ipcMain.handle(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       emitDeployLog(`[deploy] Connect failed: ${message}`);
+      if (isLikelyMacLocalNetworkPermissionFailure(message)) {
+        return {
+          ok: false,
+          error: "macOS may be waiting for Local Network approval. Allow Dartsnut Agent in the system prompt, then retry the connection.",
+          needsLocalNetworkPermission: true,
+          canRetry: true
+        };
+      }
       return { ok: false, error: message };
     }
   },

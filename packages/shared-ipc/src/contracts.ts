@@ -42,6 +42,7 @@ export const IPCChannels = {
   deployRun: "deploy:run",
   deployReload: "deploy:reload",
   deployStop: "deploy:stop",
+  deployOpenLocalNetworkSettings: "deploy:open-local-network-settings",
   /** Main → renderer: remote debug log line or status message. */
   deployLog: "deploy:log",
   communityGetSession: "community:get-session",
@@ -466,7 +467,7 @@ export interface DeployConnectRequest {
 
 export type DeployConnectResponse =
   | { ok: true; deviceName: string | null }
-  | { ok: false; error: string };
+  | { ok: false; error: string; needsLocalNetworkPermission?: true; canRetry?: true };
 
 export type DeployActionResponse = { ok: true } | { ok: false; error: string };
 

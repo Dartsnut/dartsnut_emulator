@@ -146,6 +146,8 @@ const api = {
   deployReload: (request?: DeployLaunchRequest) =>
     ipcRenderer.invoke(IPCChannels.deployReload, request) as Promise<DeployActionResponse>,
   deployStop: () => ipcRenderer.invoke(IPCChannels.deployStop) as Promise<DeployActionResponse>,
+  deployOpenLocalNetworkSettings: () =>
+    ipcRenderer.invoke(IPCChannels.deployOpenLocalNetworkSettings) as Promise<DeployActionResponse>,
   onDeployLog: (listener: (line: string) => void) => {
     const handler = (_: unknown, line: string) => listener(line);
     ipcRenderer.on(IPCChannels.deployLog, handler);

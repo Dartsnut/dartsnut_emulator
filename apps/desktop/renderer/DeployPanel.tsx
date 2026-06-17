@@ -52,6 +52,8 @@ export function DeployPanel({
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
   const logRef = useRef<HTMLPreElement | null>(null);
+  const [localNetworkRetryPrompt, setLocalNetworkRetryPrompt] = useState(false);
+  const [settingsOpenError, setSettingsOpenError] = useState<string | null>(null);
 
   const [devices, setDevices] = useState<CommunityDeployDevice[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
@@ -143,6 +145,8 @@ export function DeployPanel({
   function handleDeviceSelectChange(value: string) {
     setSelectedDeviceKey(value);
     setLastError(null);
+    setLocalNetworkRetryPrompt(false);
+    setSettingsOpenError(null);
     if (value === MANUAL_DEVICE_VALUE || value === "") {
       return;
     }
@@ -174,18 +178,22 @@ export function DeployPanel({
       return;
     }
     setLastError(null);
+    setSettingsOpenError(null);
     setBusyAction("connect");
     setDeviceName(null);
     setConnected(false);
     try {
       const result: DeployConnectResponse = await api.deployConnect({ host });
       if (!result.ok) {
+        setLocalNetworkRetryPrompt(Boolean(result.needsLocalNetworkPermission));
         setLastError(result.error);
         return;
       }
+      setLocalNetworkRetryPrompt(false);
       setConnected(true);
       setDeviceName(result.deviceName ?? null);
     } catch (e) {
+      setLocalNetworkRetryPrompt(false);
       setLastError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusyAction(null);
@@ -267,6 +275,17 @@ export function DeployPanel({
     }
   }
 
+  async function handleOpenLocalNetworkSettings() {
+    if (!api?.deployOpenLocalNetworkSettings) {
+      return;
+    }
+    setSettingsOpenError(null);
+    const result = await api.deployOpenLocalNetworkSettings();
+    if (!result.ok) {
+      setSettingsOpenError(result.error);
+    }
+  }
+
   if (!api?.deployConnect || !api?.deployDisconnect) {
     return (
       <div className="flex flex-col gap-2 p-4 text-sm text-[var(--color-text-subtle)]">
@@ -276,10 +295,44 @@ export function DeployPanel({
   }
 
   const canConnect = connected || host.trim().length > 0;
+  const showLocalNetworkBanner = localNetworkRetryPrompt;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
       <h2 className="ui-panel-title">Deploy</h2>
+
+      {showLocalNetworkBanner ? (
+        <div className="flex shrink-0 flex-col gap-2 rounded-lg border border-[rgba(245,158,11,0.42)] bg-[rgba(245,158,11,0.10)] px-3 py-2 text-[13px] text-[var(--color-text-primary)]">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[var(--color-warning-text)]">
+              macOS may have shown a Local Network prompt. Allow Dartsnut Agent, then retry the connection.
+            </span>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={toolbarBtn}
+                disabled={busyAction !== null || !canConnect}
+                onClick={() => void handleConnect()}
+              >
+                Retry Connect
+              </button>
+              <button
+                type="button"
+                className={toolbarBtn}
+                onClick={() => void handleOpenLocalNetworkSettings()}
+              >
+                Open System Settings
+              </button>
+            </div>
+          </div>
+          <span className="text-xs text-[var(--color-text-subtle)]">
+            If it does not open directly, go to System Settings → Privacy &amp; Security → Local Network and enable Dartsnut Agent.
+          </span>
+          {settingsOpenError ? (
+            <span className="text-xs text-[var(--color-error-text)]">{settingsOpenError}</span>
+          ) : null}
+        </div>
+      ) : null}
 
       {loggedIn ? (
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-edge bg-[var(--color-surface-elevated)] px-3 py-2 text-[13px]">

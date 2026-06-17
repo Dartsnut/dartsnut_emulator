@@ -83,6 +83,7 @@ declare global {
       deployRun: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
       deployReload: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
       deployStop: () => Promise<DeployActionResponse>;
+      deployOpenLocalNetworkSettings: () => Promise<DeployActionResponse>;
       onDeployLog: (listener: (line: string) => void) => () => void;
       communityGetSession: () => Promise<CommunitySessionInfo>;
       communityLogin: (request: CommunityLoginRequest) => Promise<CommunityLoginResponse>;

@@ -285,8 +285,13 @@ export interface UserDefineProviderSettings {
   model: string;
 }
 
+export type ProviderId = "dartsnut-llm" | "custom";
+
 export interface ProviderSettings {
-  userDefine: UserDefineProviderSettings;
+  activeProvider: ProviderId;
+  custom: UserDefineProviderSettings;
+  /** @deprecated Legacy alias for `custom`; kept for older callers during migration. */
+  userDefine?: UserDefineProviderSettings;
 }
 
 export type SaveProviderSettingsRequest = ProviderSettings;

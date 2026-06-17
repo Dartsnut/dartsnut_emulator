@@ -5,6 +5,7 @@ import {
   type BootstrapState,
   type DeployEligibility,
   type ManifestSnapshot,
+  type ProviderId,
   type ProviderSettings,
   type ProjectType,
   type UserDefineProviderSettings,
@@ -64,6 +65,12 @@ const EMPTY_USER_DEFINE: UserDefineProviderSettings = {
   model: ""
 };
 
+const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
+  activeProvider: "dartsnut-llm",
+  custom: EMPTY_USER_DEFINE,
+  userDefine: EMPTY_USER_DEFINE
+};
+
 const chromeIconBtnClass = "ui-chrome-btn";
 
 function hasPrimaryShortcutModifier(event: { metaKey: boolean; ctrlKey: boolean }): boolean {
@@ -93,6 +100,28 @@ function maskApiKey(value: string): string {
   return `${"*".repeat(Math.max(4, value.length - 4))}${suffix}`;
 }
 
+function withProviderCustom(
+  settings: ProviderSettings,
+  updater: (custom: UserDefineProviderSettings) => UserDefineProviderSettings
+): ProviderSettings {
+  const custom = updater(settings.custom ?? settings.userDefine ?? EMPTY_USER_DEFINE);
+  return {
+    ...settings,
+    custom,
+    userDefine: custom
+  };
+}
+
+function withProviderId(settings: ProviderSettings, activeProvider: ProviderId): ProviderSettings {
+  return {
+    ...settings,
+    activeProvider
+  };
+}
+
+function providerCustom(settings: ProviderSettings): UserDefineProviderSettings {
+  return settings.custom ?? settings.userDefine ?? EMPTY_USER_DEFINE;
+}
 
 function workspaceFolderBasename(workspaceRoot: string): string {
   const normalized = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -224,9 +253,7 @@ export function App() {
   const timelineRef = useRef<HTMLElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [composerExpandedSticky, setComposerExpandedSticky] = useState(false);
-  const [providerSettings, setProviderSettings] = useState<ProviderSettings>({
-    userDefine: EMPTY_USER_DEFINE
-  });
+  const [providerSettings, setProviderSettings] = useState<ProviderSettings>(DEFAULT_PROVIDER_SETTINGS);
   const [providerSettingsError, setProviderSettingsError] = useState<string | null>(null);
   const [providerSettingsNotice, setProviderSettingsNotice] = useState<string | null>(null);
   const [savingProviderSettings, setSavingProviderSettings] = useState(false);
@@ -972,34 +999,37 @@ export function App() {
     }
     setProviderSettingsError(null);
     setProviderSettingsNotice(null);
-    const ud = providerSettings.userDefine;
-    if (!ud.apiKey.trim()) {
-      setProviderSettingsError("API key is required.");
-      return;
-    }
-    if (!ud.model.trim()) {
-      setProviderSettingsError("Model is required.");
-      return;
-    }
-    if (ud.baseUrl.trim()) {
-      try {
-        new URL(ud.baseUrl.trim());
-      } catch {
-        setProviderSettingsError("Endpoint must be a valid URL.");
+    const custom = providerCustom(providerSettings);
+    if (providerSettings.activeProvider === "custom") {
+      if (!custom.apiKey.trim()) {
+        setProviderSettingsError("API key is required.");
         return;
+      }
+      if (!custom.model.trim()) {
+        setProviderSettingsError("Model is required.");
+        return;
+      }
+      if (custom.baseUrl.trim()) {
+        try {
+          new URL(custom.baseUrl.trim());
+        } catch {
+          setProviderSettingsError("Endpoint must be a valid URL.");
+          return;
+        }
       }
     }
     setSavingProviderSettings(true);
     try {
       const saved = await api.saveProviderSettings({
-        userDefine: {
-          baseUrl: ud.baseUrl,
-          apiKey: ud.apiKey,
-          model: ud.model
+        activeProvider: providerSettings.activeProvider,
+        custom: {
+          baseUrl: custom.baseUrl,
+          apiKey: custom.apiKey,
+          model: custom.model
         }
       });
       setProviderSettings(saved);
-      setProviderSettingsNotice("Settings saved. New LLM calls will use these values.");
+      setProviderSettingsNotice("Settings saved. The LLM client was refreshed.");
       const refreshed = await api.getBootstrapState();
       setBootstrap(refreshed);
     } catch (error) {
@@ -1508,58 +1538,75 @@ export function App() {
                 type="button"
                 className="w-full rounded-[var(--radius-md)] border-0 bg-[var(--color-settings-menu-active)] px-3 py-2 text-left text-[13px] font-medium text-fg [app-region:no-drag] [-webkit-app-region:no-drag]"
               >
-                OpenAI key configure
+                Provider configuration
               </button>
             </nav>
             <div className="flex min-h-0 flex-col gap-3 overflow-auto p-4 text-[13px]">
               <label className="flex flex-col gap-1.5">
-                <span className="text-[var(--color-text-subtle)]">API endpoint</span>
-                <input
-                  type="url"
+                <span className="text-[var(--color-text-subtle)]">Provider</span>
+                <select
                   className="ui-input"
-                  value={providerSettings.userDefine.baseUrl}
+                  value={providerSettings.activeProvider}
                   onChange={(event) =>
-                    setProviderSettings((prev) => ({
-                      ...prev,
-                      userDefine: { ...prev.userDefine, baseUrl: event.target.value }
-                    }))
+                    setProviderSettings((prev) =>
+                      withProviderId(prev, event.target.value === "custom" ? "custom" : "dartsnut-llm")
+                    )
                   }
-                  placeholder="https://api.openai.com/v1"
-                />
+                >
+                  <option value="dartsnut-llm">Dartsnut LLM</option>
+                  <option value="custom">Custom</option>
+                </select>
               </label>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[var(--color-text-subtle)]">API key</span>
-                <input
-                  type="password"
-                  className="ui-input"
-                  value={providerSettings.userDefine.apiKey}
-                  onChange={(event) =>
-                    setProviderSettings((prev) => ({
-                      ...prev,
-                      userDefine: { ...prev.userDefine, apiKey: event.target.value }
-                    }))
-                  }
-                  placeholder="sk-..."
-                />
-              </label>
-              <div className="text-xs text-fg-muted">
-                Stored key preview: {maskApiKey(providerSettings.userDefine.apiKey) || "(empty)"}
-              </div>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[var(--color-text-subtle)]">Model</span>
-                <input
-                  type="text"
-                  className="ui-input"
-                  value={providerSettings.userDefine.model}
-                  onChange={(event) =>
-                    setProviderSettings((prev) => ({
-                      ...prev,
-                      userDefine: { ...prev.userDefine, model: event.target.value }
-                    }))
-                  }
-                  placeholder="gpt-4.1-mini"
-                />
-              </label>
+              {providerSettings.activeProvider === "custom" ? (
+                <>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-[var(--color-text-subtle)]">API endpoint</span>
+                    <input
+                      type="url"
+                      className="ui-input"
+                      value={providerCustom(providerSettings).baseUrl}
+                      onChange={(event) =>
+                        setProviderSettings((prev) =>
+                          withProviderCustom(prev, (custom) => ({ ...custom, baseUrl: event.target.value }))
+                        )
+                      }
+                      placeholder="https://api.openai.com/v1"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-[var(--color-text-subtle)]">API key</span>
+                    <input
+                      type="password"
+                      className="ui-input"
+                      value={providerCustom(providerSettings).apiKey}
+                      onChange={(event) =>
+                        setProviderSettings((prev) =>
+                          withProviderCustom(prev, (custom) => ({ ...custom, apiKey: event.target.value }))
+                        )
+                      }
+                      placeholder="sk-..."
+                    />
+                  </label>
+                  <div className="text-xs text-fg-muted">
+                    Stored key preview:{" "}
+                    {maskApiKey(providerCustom(providerSettings).apiKey) || "(empty)"}
+                  </div>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-[var(--color-text-subtle)]">Model</span>
+                    <input
+                      type="text"
+                      className="ui-input"
+                      value={providerCustom(providerSettings).model}
+                      onChange={(event) =>
+                        setProviderSettings((prev) =>
+                          withProviderCustom(prev, (custom) => ({ ...custom, model: event.target.value }))
+                        )
+                      }
+                      placeholder="gpt-4.1-mini"
+                    />
+                  </label>
+                </>
+              ) : null}
               <div className="flex justify-start">
                 <button
                   type="button"

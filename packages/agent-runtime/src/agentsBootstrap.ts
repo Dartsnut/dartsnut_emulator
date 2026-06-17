@@ -25,13 +25,13 @@ setTraceProcessors([]);
  * key changes. The SDK's global OpenAIProvider caches its first client; updating the client
  * alone is not enough after switching LLM providers in the desktop selector.
  */
-export function configureAgentsSdk(config: AgentModelConfig): void {
+export function configureAgentsSdk(config: AgentModelConfig, options?: { force?: boolean }): void {
   if (!config.model || !config.apiKey) {
     throw new Error("Provider config missing: model and apiKey are required.");
   }
   const baseUrl = normalizeProviderBaseUrl(config.baseUrl ?? "https://api.openai.com/v1");
   const cacheKey = `${baseUrl}\0${config.apiKey}`;
-  if (configuredKey === cacheKey) {
+  if (!options?.force && configuredKey === cacheKey) {
     return;
   }
   const timeoutMs = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS) || 180_000;

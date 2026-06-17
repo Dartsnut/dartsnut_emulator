@@ -32,6 +32,7 @@ import {
   type PickWorkspaceResponse,
   type ProjectType,
   type PromptRequest,
+  type ProviderId,
   type ProviderSettings,
   type ReadPreviewRequest,
   type ReadPreviewResponse,
@@ -63,8 +64,8 @@ import {
 import {
   loadProviderConfig,
   validateProviderConfig,
-  mergeUserDefineWithEnvDefaults,
-  readUserDefineDefaultsFromEnv,
+  readDartsnutLlmDefaultsFromEnv,
+  configureAgentsSdk,
   buildAgentModelConfig,
   SessionEngine,
   AgentSessionRuntime,
@@ -85,6 +86,7 @@ import {
   type ChatMessage
 } from "@dartsnut/agent-runtime";
 import { formatAgentEventForConsole } from "./agentEventConsole";
+import { PACKAGED_ENV } from "./packagedEnv.generated";
 import {
   EMULATOR_IPC_CHANNELS,
   type EmulatorCommand,
@@ -143,8 +145,15 @@ const repoRoot = app.isPackaged
   ? process.resourcesPath
   : path.resolve(__dirname, "../../..");
 process.env.DARTSNUT_REPO_ROOT = repoRoot;
+process.env.DARTSNUT_ALLOW_RESOURCES_ENV_FILE = app.isPackaged ? "0" : "1";
 const repoEnvPath = path.join(repoRoot, ".env");
-if (fs.existsSync(repoEnvPath)) {
+if (app.isPackaged) {
+  for (const [key, value] of Object.entries(PACKAGED_ENV)) {
+    if (!process.env[key]) {
+      process.env[key] = value;
+    }
+  }
+} else if (fs.existsSync(repoEnvPath)) {
   dotenv.config({ path: repoEnvPath });
 }
 let pythonExec: string | null = null;
@@ -451,12 +460,33 @@ function normalizeUserDefineSettings(input?: Partial<UserDefineProviderSettings>
   };
 }
 
-type LegacyProviderSettingsFile = Partial<ProviderSettings> & {
+type LegacyProviderSettingsFile = Omit<Partial<ProviderSettings>, "activeProvider" | "custom"> & {
   activeProvider?: string;
+  custom?: Partial<UserDefineProviderSettings>;
   baseUrl?: string;
   apiKey?: string;
   model?: string;
 };
+
+function normalizeProviderId(value: unknown): ProviderId {
+  return value === "custom" ? "custom" : "dartsnut-llm";
+}
+
+function providerSettingsForDisk(settings: ProviderSettings): Omit<ProviderSettings, "userDefine"> {
+  return {
+    activeProvider: settings.activeProvider,
+    custom: settings.custom
+  };
+}
+
+function persistProviderSettings(settings: ProviderSettings): void {
+  fs.mkdirSync(path.dirname(providerSettingsPath()), { recursive: true });
+  fs.writeFileSync(providerSettingsPath(), JSON.stringify(providerSettingsForDisk(settings), null, 2));
+}
+
+function sameProviderSettings(a: UserDefineProviderSettings, b: UserDefineProviderSettings): boolean {
+  return a.baseUrl === b.baseUrl && a.apiKey === b.apiKey && a.model === b.model;
+}
 
 function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): ProviderSettings {
   const legacyFlat =
@@ -467,30 +497,52 @@ function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): P
     input.userDefine == null;
 
   if (legacyFlat) {
+    const custom = normalizeUserDefineSettings({
+      baseUrl: input.baseUrl,
+      apiKey: input.apiKey,
+      model: input.model
+    });
     return {
-      userDefine: mergeUserDefineWithEnvDefaults(
-        normalizeUserDefineSettings({
-          baseUrl: input.baseUrl,
-          apiKey: input.apiKey,
-          model: input.model
-        })
-      )
+      activeProvider: "custom",
+      custom,
+      userDefine: custom
     };
   }
 
-  const userDefine = normalizeUserDefineSettings(input?.userDefine);
-  const hadBuiltinProvider =
-    typeof input?.activeProvider === "string" &&
-    input.activeProvider !== "user-define" &&
-    !userDefine.apiKey &&
-    !userDefine.model &&
-    !userDefine.baseUrl;
-
-  if (hadBuiltinProvider) {
-    return { userDefine: readUserDefineDefaultsFromEnv() };
+  const legacyUserDefine = normalizeUserDefineSettings(input?.userDefine);
+  const customSource = input?.custom ?? input?.userDefine;
+  let custom = normalizeUserDefineSettings(customSource);
+  const builtin = normalizeUserDefineSettings(readDartsnutLlmDefaultsFromEnv());
+  if (custom.apiKey && sameProviderSettings(custom, builtin)) {
+    custom = normalizeUserDefineSettings();
   }
-
-  return { userDefine: mergeUserDefineWithEnvDefaults(userDefine) };
+  const activeProvider =
+    input == null
+      ? "dartsnut-llm"
+      : input.activeProvider === "user-define"
+        ? "custom"
+        : normalizeProviderId(input.activeProvider);
+  const legacyBuiltinProvider =
+    input != null &&
+    typeof input.activeProvider === "string" &&
+    input.activeProvider !== "user-define" &&
+    input.custom == null &&
+    !legacyUserDefine.apiKey &&
+    !legacyUserDefine.model &&
+    !legacyUserDefine.baseUrl;
+  if (legacyBuiltinProvider) {
+    const envCustom = normalizeUserDefineSettings();
+    return {
+      activeProvider: "dartsnut-llm",
+      custom: envCustom,
+      userDefine: envCustom
+    };
+  }
+  return {
+    activeProvider,
+    custom,
+    userDefine: custom
+  };
 }
 
 function readProviderSettings(): ProviderSettings {
@@ -502,13 +554,17 @@ function readProviderSettings(): ProviderSettings {
     const content = JSON.parse(fs.readFileSync(file, "utf-8")) as LegacyProviderSettingsFile;
     const normalized = normalizeProviderSettings(content);
     const hadLegacyShape =
-      typeof content.activeProvider === "string" ||
+      content.activeProvider === "user-define" ||
+      (typeof content.activeProvider === "string" &&
+        content.activeProvider !== "dartsnut-llm" &&
+        content.activeProvider !== "custom") ||
       (content.userDefine == null &&
         (typeof content.baseUrl === "string" ||
           typeof content.apiKey === "string" ||
-          typeof content.model === "string"));
+          typeof content.model === "string")) ||
+      content.userDefine != null;
     if (hadLegacyShape) {
-      writeProviderSettings(normalized);
+      persistProviderSettings(normalized);
     }
     return normalized;
   } catch {
@@ -518,7 +574,10 @@ function readProviderSettings(): ProviderSettings {
 
 function validateProviderSettingsInput(input: SaveProviderSettingsRequest): { ok: true } | { ok: false; error: string } {
   const normalized = normalizeProviderSettings(input);
-  const ud = normalized.userDefine;
+  const ud =
+    normalized.activeProvider === "dartsnut-llm"
+      ? readDartsnutLlmDefaultsFromEnv()
+      : normalized.custom;
   if (!ud.apiKey) {
     return { ok: false, error: "API key is required." };
   }
@@ -541,9 +600,21 @@ function writeProviderSettings(input: SaveProviderSettingsRequest): ProviderSett
     throw new Error(validation.error);
   }
   const normalized = normalizeProviderSettings(input);
-  fs.mkdirSync(path.dirname(providerSettingsPath()), { recursive: true });
-  fs.writeFileSync(providerSettingsPath(), JSON.stringify(normalized, null, 2));
+  persistProviderSettings(normalized);
   return normalized;
+}
+
+function buildAgentModelConfigFromProviderSettings(providerSettings: ProviderSettings) {
+  const config = loadProviderConfig({ providerSettings });
+  return buildAgentModelConfig({
+    model: config.model,
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey
+  });
+}
+
+function reconfigureAgentsSdkFromProviderSettings(providerSettings: ProviderSettings): void {
+  configureAgentsSdk(buildAgentModelConfigFromProviderSettings(providerSettings), { force: true });
 }
 
 function readProofState() {
@@ -920,9 +991,7 @@ async function maybeRecoverTrackedTempWorkspaceAtLaunch(): Promise<void> {
 
 function providerStatus(): BootstrapState["providerStatus"] {
   const stored = readProviderSettings();
-  const config = loadProviderConfig({
-    userDefine: stored.userDefine
-  });
+  const config = loadProviderConfig({ providerSettings: stored });
   const validation = validateProviderConfig(config);
   return validation.ok ? "ready" : "missing_config";
 }
@@ -1736,9 +1805,7 @@ function buildSession(
     throw new Error("Workspace is not selected.");
   }
   const providerSettings = readProviderSettings();
-  const config = loadProviderConfig({
-    userDefine: providerSettings.userDefine
-  });
+  const config = loadProviderConfig({ providerSettings });
   const validation = validateProviderConfig(config);
   if (!validation.ok) {
     throw new Error(validation.error);
@@ -1755,8 +1822,7 @@ function buildSession(
     agentModelConfig: buildAgentModelConfig({
       model: config.model,
       baseUrl: config.baseUrl,
-      apiKey: config.apiKey,
-      userDefine: providerSettings.userDefine
+      apiKey: config.apiKey
     }),
     workspacePolicy: new WorkspacePolicy(workspacePath),
     skillPrompt,
@@ -2338,9 +2404,12 @@ ipcMain.handle(IPCChannels.deployStop, async (): Promise<DeployActionResponse> =
 });
 ipcMain.handle(IPCChannels.getProviderSettings, () => readProviderSettings());
 ipcMain.handle(IPCChannels.getPythonRuntimeStatus, () => pythonRuntimeStatus);
-ipcMain.handle(IPCChannels.saveProviderSettings, (_event: unknown, request: SaveProviderSettingsRequest) =>
-  writeProviderSettings(request)
-);
+ipcMain.handle(IPCChannels.saveProviderSettings, (_event: unknown, request: SaveProviderSettingsRequest) => {
+  const saved = writeProviderSettings(request);
+  reconfigureAgentsSdkFromProviderSettings(saved);
+  emitBootstrapStateToRenderer();
+  return saved;
+});
 
 ipcMain.handle(IPCChannels.startNewProject, async () => {
   const ws = workspaceRoot;

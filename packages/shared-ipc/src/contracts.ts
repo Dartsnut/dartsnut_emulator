@@ -22,6 +22,8 @@ export const IPCChannels = {
   saveProviderSettings: "agent:save-provider-settings",
   getPythonRuntimeStatus: "agent:get-python-runtime-status",
   subscribePythonRuntimeStatus: "agent:subscribe-python-runtime-status",
+  getPythonRuntimeProgress: "agent:get-python-runtime-progress",
+  subscribePythonRuntimeProgress: "agent:subscribe-python-runtime-progress",
   assetsGetManifest: "assets:get-manifest",
   assetsSubscribeManifest: "assets:subscribe-manifest",
   assetsBindSlot: "assets:bind-slot",
@@ -80,6 +82,14 @@ export interface WindowChromeInsets {
 export type ShellUiTheme = "dark" | "light";
 
 export type ProviderStatus = "ready" | "missing_config" | "invalid";
+
+export interface PythonRuntimeProgress {
+  running: boolean;
+  stage: string | null;
+  percent: number;
+  message: string | null;
+  error?: string;
+}
 
 export interface BootstrapState {
   workspaceRoot: string | null;

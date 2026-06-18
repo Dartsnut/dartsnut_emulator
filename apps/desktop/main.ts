@@ -8,8 +8,7 @@ import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
 import { buildPythonScriptLaunch, pythonRuntimeDir, runtimeDir, uvBinaryPath, venvPythonPath } from "./pythonRuntime";
-import { ensureRuntime } from "./pythonRuntimeDownloader";
-import { createSplashWindow, updateSplashProgress, closeSplashWindow } from "./splashWindow";
+import { ensureRuntime, type DownloadProgress } from "./pythonRuntimeDownloader";
 import {
   IPCChannels,
   type AgentEvent,
@@ -34,6 +33,7 @@ import {
   type PromptRequest,
   type ProviderId,
   type ProviderSettings,
+  type PythonRuntimeProgress,
   type ReadPreviewRequest,
   type ReadPreviewResponse,
   type SaveProviderSettingsRequest,
@@ -158,6 +158,12 @@ if (app.isPackaged) {
 }
 let pythonExec: string | null = null;
 let pythonRuntimeStatus: string | null = null;
+let pythonRuntimeProgress: PythonRuntimeProgress = {
+  running: false,
+  stage: null,
+  percent: 0,
+  message: null
+};
 
 let lastWidgetDir: string | null = null;
 const assetPreprocessScriptRelativePath = "scripts/asset_preprocess.py";
@@ -1626,9 +1632,27 @@ function emitPythonRuntimeStatus() {
   sendToRenderer(IPCChannels.subscribePythonRuntimeStatus, pythonRuntimeStatus);
 }
 
+function emitPythonRuntimeProgress() {
+  sendToRenderer(IPCChannels.subscribePythonRuntimeProgress, pythonRuntimeProgress);
+}
+
 function setPythonRuntimeStatus(status: string | null) {
   pythonRuntimeStatus = status;
   emitPythonRuntimeStatus();
+}
+
+function setPythonRuntimeProgress(progress: PythonRuntimeProgress) {
+  pythonRuntimeProgress = progress;
+  emitPythonRuntimeProgress();
+}
+
+function setPythonRuntimeProgressFromDownload(progress: DownloadProgress) {
+  setPythonRuntimeProgress({
+    running: progress.stage !== "complete",
+    stage: progress.stage,
+    percent: progress.percent,
+    message: progress.message
+  });
 }
 
 function startPythonBridge() {
@@ -1980,16 +2004,20 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  const logoPath = path.join(repoRoot, "PixelDarts.png");
-  const splash = createSplashWindow(fs.existsSync(logoPath) ? logoPath : undefined);
-
   try {
+    await createWindow();
+    setPythonRuntimeProgress({
+      running: true,
+      stage: "check",
+      percent: 0,
+      message: "Checking runtime..."
+    });
     devLog.info("[runtime] Starting runtime initialization");
     const runtime = await ensureRuntime(
       runtimeDir(),
       path.join(repoRoot, "requirements.txt"),
       (progress) => {
-        updateSplashProgress(progress.stage, progress.percent, progress.message);
+        setPythonRuntimeProgressFromDownload(progress);
         devLog.info("[runtime] Progress", { stage: progress.stage, percent: progress.percent });
       }
     );
@@ -1997,18 +2025,29 @@ app.whenReady().then(async () => {
     pythonExec = runtime.pythonPath;
     devLog.info("[runtime] Runtime ready", { pythonPath: pythonExec, uvPath: runtime.uvPath });
 
-    // Create main window first so dialogs have a proper parent
-    await createWindow();
-    closeSplashWindow();
+    setPythonRuntimeStatus(null);
+    setPythonRuntimeProgress({
+      running: false,
+      stage: "complete",
+      percent: 100,
+      message: "Runtime ready"
+    });
 
-    // Now handle workspace recovery - dialogs will be properly visible
+    // Workspace recovery dialogs now have the main window as a proper parent.
     await maybeRecoverTrackedTempWorkspaceAtLaunch();
     ensureTemporaryWorkspaceRootAllocated();
     startPythonBridge();
     emitBootstrapStateToRenderer();
   } catch (error) {
-    closeSplashWindow();
     const errorMessage = error instanceof Error ? error.message : String(error);
+    setPythonRuntimeStatus(errorMessage);
+    setPythonRuntimeProgress({
+      running: false,
+      stage: "error",
+      percent: 100,
+      message: "Runtime initialization failed",
+      error: errorMessage
+    });
     devLog.error("[runtime] Initialization failed", errorMessage);
     dialog.showErrorBox(
       "Runtime Initialization Failed",
@@ -2408,6 +2447,7 @@ ipcMain.handle(IPCChannels.deployStop, async (): Promise<DeployActionResponse> =
 });
 ipcMain.handle(IPCChannels.getProviderSettings, () => readProviderSettings());
 ipcMain.handle(IPCChannels.getPythonRuntimeStatus, () => pythonRuntimeStatus);
+ipcMain.handle(IPCChannels.getPythonRuntimeProgress, () => pythonRuntimeProgress);
 ipcMain.handle(IPCChannels.saveProviderSettings, (_event: unknown, request: SaveProviderSettingsRequest) => {
   const saved = writeProviderSettings(request);
   reconfigureAgentsSdkFromProviderSettings(saved);

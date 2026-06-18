@@ -13,6 +13,7 @@ import type {
   IntakeSubmitQuestionAnswerResponse,
   PromptRequest,
   ProviderSettings,
+  PythonRuntimeProgress,
   ReadPreviewRequest,
   ReadPreviewResponse,
   SaveProviderSettingsRequest,
@@ -61,6 +62,7 @@ declare global {
       cancelAgent: () => Promise<{ ok: boolean }>;
       getProviderSettings: () => Promise<ProviderSettings>;
       getPythonRuntimeStatus: () => Promise<string | null>;
+      getPythonRuntimeProgress: () => Promise<PythonRuntimeProgress>;
       saveProviderSettings: (request: SaveProviderSettingsRequest) => Promise<ProviderSettings>;
       onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
       onMainProcessConsoleMirror: (listener: (payload: MainProcessConsoleMirrorPayload) => void) => () => void;
@@ -68,6 +70,7 @@ declare global {
       onSessionReset: (listener: () => void) => () => void;
       onBootstrapStateChanged: (listener: (state: BootstrapState) => void) => () => void;
       onPythonRuntimeStatus: (listener: (status: string | null) => void) => () => void;
+      onPythonRuntimeProgress: (listener: (progress: PythonRuntimeProgress) => void) => () => void;
       sendEmulatorCommand: (command: EmulatorCommand) => Promise<{ ok: boolean }>;
       pickWidgetPath: () => Promise<{ path: string | null }>;
       getLastWidgetPath: () => Promise<{ path: string | null }>;

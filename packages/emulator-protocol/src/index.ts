@@ -8,6 +8,7 @@ export const EMULATOR_IPC_CHANNELS = {
   emulatorLog: "emulator:log",
   /** Main → renderer: clear buffered log UI before a widget reload. */
   emulatorLogsClear: "emulator:logs-clear",
+  emulatorOpenCaptureFolder: "emulator:openCaptureFolder",
 } as const;
 
 export type EmulatorCommand =
@@ -45,6 +46,7 @@ export type EmulatorStateSnapshot = {
   fps: number;
   status: string;
   lastError?: string;
+  lastCapturePath?: string | null;
 };
 
 export type EmulatorFrame = {

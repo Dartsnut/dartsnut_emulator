@@ -76,6 +76,7 @@ export function EmulatorPanel({
   const [logsPaused, setLogsPaused] = useState(false);
   const [emulatorLogs, setEmulatorLogs] = useState<UiEmulatorLogEntry[]>([]);
   const [captureToast, setCaptureToast] = useState<string | null>(null);
+  const [captureFolder, setCaptureFolder] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const zoomCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const logsBodyRef = useRef<HTMLDivElement | null>(null);
@@ -331,11 +332,13 @@ export function EmulatorPanel({
       }
       if (typeof nextState.status === "string" && nextState.status.startsWith("Screenshot captured: ")) {
         setCaptureToast(nextState.status);
+        setCaptureFolder(nextState.lastCapturePath || null);
         if (captureToastTimerRef.current !== null) {
           window.clearTimeout(captureToastTimerRef.current);
         }
         captureToastTimerRef.current = window.setTimeout(() => {
           setCaptureToast(null);
+          setCaptureFolder(null);
           captureToastTimerRef.current = null;
         }, 3500);
       }
@@ -756,8 +759,26 @@ export function EmulatorPanel({
           </div>
         ) : null}
         {captureToast ? (
-          <div className="absolute bottom-4 left-1/2 z-10 max-w-[calc(100%-24px)] -translate-x-1/2 rounded-lg border border-[var(--color-toast-border)] bg-[var(--color-toast-backdrop)] px-3 py-2 text-xs text-[var(--color-toast-text)]">
-            {captureToast}
+          <div className="absolute bottom-4 left-1/2 z-10 flex max-w-[calc(100%-24px)] -translate-x-1/2 items-stretch overflow-hidden rounded-lg bg-[var(--color-toast-backdrop)] text-xs text-[var(--color-toast-text)]">
+            <div className="flex items-center px-3 py-2">
+              <span>{captureToast}</span>
+            </div>
+            {captureFolder && (
+              <>
+                <div className="w-px bg-[var(--color-toast-border)]"></div>
+                <button
+                  type="button"
+                  className="flex items-center rounded-r-lg border-0 bg-transparent px-3 outline-none transition-colors hover:bg-[rgba(0,0,0,0.15)] active:bg-[rgba(0,0,0,0.25)]"
+                  onClick={() => {
+                    if (captureFolder) {
+                      window.dartsnutApi.openCaptureFolder(captureFolder);
+                    }
+                  }}
+                >
+                  Show in Folder
+                </button>
+              </>
+            )}
           </div>
         ) : null}
       </div>

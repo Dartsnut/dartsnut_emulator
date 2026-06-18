@@ -7,6 +7,7 @@ import {
   type ManifestSnapshot,
   type ProviderId,
   type ProviderSettings,
+  type PythonRuntimeProgress,
   type ProjectType,
   type UserDefineProviderSettings,
   type PromptRequest,
@@ -229,6 +230,12 @@ export function App() {
   const [sending, setSending] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [pythonRuntimeStatus, setPythonRuntimeStatus] = useState<string | null>(null);
+  const [pythonRuntimeProgress, setPythonRuntimeProgress] = useState<PythonRuntimeProgress>({
+    running: false,
+    stage: null,
+    percent: 0,
+    message: null
+  });
   const [screen, setScreen] = useState<AppScreen>("main");
   /** Preserves widget/game creator routing for follow-up prompts after the first send. */
   const [sessionTemplateMode, setSessionTemplateMode] = useState<
@@ -522,6 +529,9 @@ export function App() {
     api.getPythonRuntimeStatus().then(setPythonRuntimeStatus).catch(() => {
       setPythonRuntimeStatus(null);
     });
+    api.getPythonRuntimeProgress().then(setPythonRuntimeProgress).catch(() => {
+      setPythonRuntimeProgress({ running: false, stage: null, percent: 0, message: null });
+    });
     const unsubscribe = api.onAgentEvent((event) => {
       if (discardAgentEventsRef.current) {
         return;
@@ -718,6 +728,12 @@ export function App() {
         devLog.info("[python-runtime]", status);
       }
     });
+    const unsubscribePythonRuntimeProgress = api.onPythonRuntimeProgress((progress) => {
+      setPythonRuntimeProgress(progress);
+      if (progress.message) {
+        devLog.info("[python-runtime-progress]", progress);
+      }
+    });
     const unsubscribeMainConsoleMirror = isDevLoggingEnabled()
       ? api.onMainProcessConsoleMirror((payload) => {
           printMainProcessMirrorToDevtools(payload);
@@ -727,6 +743,7 @@ export function App() {
       unsubscribe();
       unsubscribeBootstrap();
       unsubscribePythonRuntime();
+      unsubscribePythonRuntimeProgress();
       unsubscribeMainConsoleMirror();
     };
   }, [api]);
@@ -864,6 +881,8 @@ export function App() {
     }
     return sending;
   }, [bootstrap, sending]);
+  const showRuntimeSetup = pythonRuntimeProgress.running || Boolean(pythonRuntimeProgress.error);
+  const runtimeProgressPercent = Math.min(100, Math.max(0, Math.round(pythonRuntimeProgress.percent)));
 
   useEffect(() => {
     if (!api) {
@@ -1274,7 +1293,36 @@ export function App() {
           </>
         )}
       </header>
-      {screen === "main" ? (
+      {screen === "main" && showRuntimeSetup ? (
+        <section
+          className="runtime-config-main col-start-1 col-end-3 row-start-2 min-h-0 h-full overflow-auto bg-[var(--gradient-rail)] max-[1100px]:col-end-2"
+          aria-live="polite"
+        >
+          <div className="runtime-config-main__inner">
+            <div className="runtime-setup-panel" role={pythonRuntimeProgress.error ? "alert" : "status"}>
+              <div className="runtime-setup-panel__header">
+                <p className="runtime-setup-panel__eyebrow">Runtime configuration</p>
+                <h2 className="runtime-setup-panel__title">
+                  {pythonRuntimeProgress.error ? "Runtime setup failed" : "Preparing runtime"}
+                </h2>
+              </div>
+              <div className="runtime-setup-panel__progress" aria-hidden>
+                <div
+                  className="runtime-setup-panel__progress-fill"
+                  style={{ width: `${runtimeProgressPercent}%` }}
+                />
+              </div>
+              <div className="runtime-setup-panel__meta">
+                <span>{pythonRuntimeProgress.message ?? "Initializing..."}</span>
+                <span className="tabular-nums">{runtimeProgressPercent}%</span>
+              </div>
+              {pythonRuntimeProgress.error ? (
+                <div className="runtime-setup-panel__error">{pythonRuntimeProgress.error}</div>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      ) : screen === "main" ? (
         <section
           className={cn(
             "left-rail left-rail--chat col-start-1 row-start-2 relative min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
@@ -1633,94 +1681,94 @@ export function App() {
       <aside
         className={cn(
           "right-pane col-start-2 row-start-2 flex min-h-0 h-full min-w-[460px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
-          "max-[1100px]:hidden"
+          showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
         )}
       >
         {assetManifest || deployEligible ? (
-          <div className="flex gap-0.5 border-b border-edge px-3 pb-0 pt-2" role="tablist" aria-label="Right pane view">
-            <button
-              type="button"
-              className={cn("ui-tab", rightPaneTab === "emulator" && "ui-tab--active")}
-              role="tab"
-              aria-selected={rightPaneTab === "emulator"}
-              onClick={() => setRightPaneTab("emulator")}
-            >
-              Emulator
-            </button>
-            {deployEligible ? (
+            <div className="flex gap-0.5 border-b border-edge px-3 pb-0 pt-2" role="tablist" aria-label="Right pane view">
               <button
                 type="button"
-                className={cn("ui-tab", rightPaneTab === "deploy" && "ui-tab--active")}
+                className={cn("ui-tab", rightPaneTab === "emulator" && "ui-tab--active")}
                 role="tab"
-                aria-selected={rightPaneTab === "deploy"}
-                onClick={() => openDeployTab()}
+                aria-selected={rightPaneTab === "emulator"}
+                onClick={() => setRightPaneTab("emulator")}
               >
-                Deploy
+                Emulator
               </button>
-            ) : null}
-            {assetManifest ? (
-              <button
-                type="button"
-                className={cn("ui-tab", rightPaneTab === "assets" && "ui-tab--active")}
-                role="tab"
-                aria-selected={rightPaneTab === "assets"}
-                onClick={() => setRightPaneTab("assets")}
-              >
-                Assets
-                {pendingChangeSlotIds.length > 0 ? (
-                  <span
-                    className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-badge-bg)] px-1.5 text-[11px] font-semibold text-[var(--color-badge-text)]"
-                    aria-label={`${pendingChangeSlotIds.length} pending`}
-                  >
-                    {pendingChangeSlotIds.length}
-                  </span>
-                ) : null}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+              {deployEligible ? (
+                <button
+                  type="button"
+                  className={cn("ui-tab", rightPaneTab === "deploy" && "ui-tab--active")}
+                  role="tab"
+                  aria-selected={rightPaneTab === "deploy"}
+                  onClick={() => openDeployTab()}
+                >
+                  Deploy
+                </button>
+              ) : null}
+              {assetManifest ? (
+                <button
+                  type="button"
+                  className={cn("ui-tab", rightPaneTab === "assets" && "ui-tab--active")}
+                  role="tab"
+                  aria-selected={rightPaneTab === "assets"}
+                  onClick={() => setRightPaneTab("assets")}
+                >
+                  Assets
+                  {pendingChangeSlotIds.length > 0 ? (
+                    <span
+                      className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-badge-bg)] px-1.5 text-[11px] font-semibold text-[var(--color-badge-text)]"
+                      aria-label={`${pendingChangeSlotIds.length} pending`}
+                    >
+                      {pendingChangeSlotIds.length}
+                    </span>
+                  ) : null}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         <div className="flex min-h-0 flex-1 flex-col">
-          <div
-            className={cn(
-              "flex min-h-0 flex-1 flex-col",
-              (Boolean(assetManifest) || deployEligible) && rightPaneTab !== "emulator" && "hidden"
-            )}
-          >
-            <EmulatorPanel
-              widgetParamsText={widgetParamsText}
-              setWidgetParamsText={setWidgetParamsText}
-              widgetParamsError={widgetParamsError}
-              setWidgetParamsError={setWidgetParamsError}
-            />
-          </div>
-          {deployEligible ? (
             <div
-              className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "deploy" && "hidden")}
+              className={cn(
+                "flex min-h-0 flex-1 flex-col",
+                (Boolean(assetManifest) || deployEligible) && rightPaneTab !== "emulator" && "hidden"
+              )}
             >
-              <DeployPanel
-                showWidgetParams={deployPanelShowsWidgetParams}
+              <EmulatorPanel
                 widgetParamsText={widgetParamsText}
                 setWidgetParamsText={setWidgetParamsText}
                 widgetParamsError={widgetParamsError}
                 setWidgetParamsError={setWidgetParamsError}
-                communitySession={communitySession}
-                communitySessionVersion={communitySessionVersion}
-                onCommunitySessionChange={refreshCommunitySession}
               />
             </div>
-          ) : null}
+          {deployEligible ? (
+              <div
+                className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "deploy" && "hidden")}
+              >
+                <DeployPanel
+                  showWidgetParams={deployPanelShowsWidgetParams}
+                  widgetParamsText={widgetParamsText}
+                  setWidgetParamsText={setWidgetParamsText}
+                  widgetParamsError={widgetParamsError}
+                  setWidgetParamsError={setWidgetParamsError}
+                  communitySession={communitySession}
+                  communitySessionVersion={communitySessionVersion}
+                  onCommunitySessionChange={refreshCommunitySession}
+                />
+              </div>
+            ) : null}
           {assetManifest && bootstrap?.workspaceRoot ? (
-            <div className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "assets" && "hidden")}>
-              <AssetManagerPanel
-                workspacePath={bootstrap.workspaceRoot}
-                manifest={assetManifest}
-                pendingChangeSlotIds={pendingChangeSlotIds}
-                onAllowAgentIngress={() => {
-                  discardAgentEventsRef.current = false;
-                }}
-              />
-            </div>
-          ) : null}
+              <div className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "assets" && "hidden")}>
+                <AssetManagerPanel
+                  workspacePath={bootstrap.workspaceRoot}
+                  manifest={assetManifest}
+                  pendingChangeSlotIds={pendingChangeSlotIds}
+                  onAllowAgentIngress={() => {
+                    discardAgentEventsRef.current = false;
+                  }}
+                />
+              </div>
+            ) : null}
         </div>
       </aside>
       <DeployAuthGate

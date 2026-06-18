@@ -129,6 +129,14 @@ function workspaceFolderBasename(workspaceRoot: string): string {
   return segments.length > 0 ? segments[segments.length - 1]! : workspaceRoot;
 }
 
+function isLikelyTempWorkspace(workspaceRoot: string | null | undefined): boolean {
+  if (!workspaceRoot) {
+    return false;
+  }
+  const basename = workspaceFolderBasename(workspaceRoot);
+  return basename.startsWith("dartsnut-chat-");
+}
+
 function AgentMarkdownBody({ source, className }: { source: string; className?: string }) {
   const fallbackClass = className ?? "entry-text";
   return (
@@ -1131,12 +1139,13 @@ export function App() {
               <h1
                 className="m-0 min-w-0 p-0 font-[family-name:var(--font-display)] text-[13px] font-semibold leading-snug tracking-tight text-fg-strong"
                 title={
-                  bootstrap?.workspaceRoot ??
-                  "Embedded assistant for pygame + pydartsnut"
+                  bootstrap?.workspaceRoot && !bootstrap.isTemporaryWorkspace && !isLikelyTempWorkspace(bootstrap.workspaceRoot)
+                    ? bootstrap.workspaceRoot
+                    : "Embedded assistant for pygame + pydartsnut"
                 }
               >
                 <span className="block truncate">
-                  {bootstrap?.workspaceRoot && !bootstrap.isTemporaryWorkspace
+                  {bootstrap?.workspaceRoot && !bootstrap.isTemporaryWorkspace && !isLikelyTempWorkspace(bootstrap.workspaceRoot)
                     ? workspaceFolderBasename(bootstrap.workspaceRoot)
                     : "Dartsnut Agent"}
                 </span>

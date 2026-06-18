@@ -16,6 +16,7 @@ import {
   type IntakeSubmitQuestionAnswerResponse,
   type PromptRequest,
   type ProviderSettings,
+  type PythonRuntimeProgress,
   type ReadPreviewRequest,
   type ReadPreviewResponse,
   type SaveProviderSettingsRequest,
@@ -70,6 +71,8 @@ const api = {
     ipcRenderer.invoke(IPCChannels.getProviderSettings) as Promise<ProviderSettings>,
   getPythonRuntimeStatus: () =>
     ipcRenderer.invoke(IPCChannels.getPythonRuntimeStatus) as Promise<string | null>,
+  getPythonRuntimeProgress: () =>
+    ipcRenderer.invoke(IPCChannels.getPythonRuntimeProgress) as Promise<PythonRuntimeProgress>,
   saveProviderSettings: (request: SaveProviderSettingsRequest) =>
     ipcRenderer.invoke(IPCChannels.saveProviderSettings, request) as Promise<ProviderSettings>,
   onAgentEvent: (listener: (event: AgentEvent) => void) => {
@@ -101,6 +104,11 @@ const api = {
     const handler = (_: unknown, status: string | null) => listener(status);
     ipcRenderer.on(IPCChannels.subscribePythonRuntimeStatus, handler);
     return () => ipcRenderer.removeListener(IPCChannels.subscribePythonRuntimeStatus, handler);
+  },
+  onPythonRuntimeProgress: (listener: (progress: PythonRuntimeProgress) => void) => {
+    const handler = (_: unknown, progress: PythonRuntimeProgress) => listener(progress);
+    ipcRenderer.on(IPCChannels.subscribePythonRuntimeProgress, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.subscribePythonRuntimeProgress, handler);
   },
   sendEmulatorCommand: (command: EmulatorCommand) =>
     ipcRenderer.invoke(EMULATOR_IPC_CHANNELS.emulatorCommand, command) as Promise<{ ok: boolean }>,

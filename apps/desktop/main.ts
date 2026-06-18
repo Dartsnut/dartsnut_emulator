@@ -391,6 +391,7 @@ const emulatorState: EmulatorStateSnapshot = {
   running: false,
   fps: 0,
   status: "Idle",
+  lastCapturePath: null,
 };
 
 const proofStatePath = () => path.join(app.getPath("userData"), "first-run-proof.json");
@@ -1723,6 +1724,9 @@ function spawnBridgeAfterStop() {
         if (typeof payload.lastError === "string") {
           emulatorState.lastError = payload.lastError;
         }
+        if (typeof payload.lastCapturePath !== "undefined") {
+          emulatorState.lastCapturePath = payload.lastCapturePath ?? null;
+        }
         emitEmulatorState();
       } catch {
         emulatorState.status = jsonLine.trim();
@@ -2826,5 +2830,13 @@ ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorGetBackground, async () => {
     return { url: `data:image/png;base64,${bytes.toString("base64")}` };
   } catch {
     return { url: null };
+  }
+});
+
+ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorOpenCaptureFolder, async (_event, folderPath: string) => {
+  try {
+    await shell.openPath(folderPath);
+  } catch (err) {
+    console.error("Failed to open capture folder:", err);
   }
 });

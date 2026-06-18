@@ -110,6 +110,8 @@ const api = {
     ipcRenderer.invoke(EMULATOR_IPC_CHANNELS.emulatorGetLastPath) as Promise<{ path: string | null }>,
   getEmulatorBackground: () =>
     ipcRenderer.invoke(EMULATOR_IPC_CHANNELS.emulatorGetBackground) as Promise<{ url: string | null }>,
+  openCaptureFolder: (folderPath: string) =>
+    ipcRenderer.invoke(EMULATOR_IPC_CHANNELS.emulatorOpenCaptureFolder, folderPath) as Promise<void>,
   onEmulatorState: (listener: (state: EmulatorStateSnapshot) => void) => {
     const handler = (_: unknown, payload: EmulatorStateSnapshot) => listener(payload);
     ipcRenderer.on(EMULATOR_IPC_CHANNELS.emulatorState, handler);

@@ -12,6 +12,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from multiprocessing import shared_memory
+from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw
@@ -107,6 +108,7 @@ class EmulatorState:
     fps: int = 60
     status: str = "Idle"
     lastError: str | None = None
+    lastCapturePath: str | None = None
 
 
 class EmulatorCore:
@@ -475,6 +477,8 @@ class EmulatorCore:
                 filepaths = self._capture_screenshot_png()
                 basenames = ", ".join(os.path.basename(path) for path in filepaths)
                 self.state.status = f"Screenshot captured: {basenames}"
+                # Store the directory path (parent of first file) so UI can open it
+                self.state.lastCapturePath = os.path.dirname(filepaths[0]) if filepaths else None
             elif action == "set_button":
                 mapping = {
                     "A": 0x01,
@@ -535,14 +539,45 @@ class EmulatorCore:
         suffix: str | None = None,
         timestamp: str,
     ) -> str:
-        capture_dir = os.path.join(self.workspace_root, "capture")
-        os.makedirs(capture_dir, exist_ok=True)
+        # Use user's Downloads folder for cross-platform compatibility
+        downloads_dir = Path.home() / "Downloads" / "Dartsnut"
+        try:
+            downloads_dir.mkdir(parents=True, exist_ok=True)
+            capture_dir = str(downloads_dir)
+        except (OSError, PermissionError) as e:
+            # Fallback to workspace if Downloads is not accessible
+            # This is rare - Downloads folder is usually accessible on both macOS and Windows
+            error_msg = (
+                f"Cannot write to Downloads folder: {e}. "
+                "Using workspace fallback directory for screenshots."
+            )
+            self._queue_bridge_log(error_msg, source="stderr")
+            # Fallback to workspace capture directory
+            capture_dir = os.path.join(self.workspace_root, "capture")
+            os.makedirs(capture_dir, exist_ok=True)
+
         if suffix:
             filename = f"{self.capture_base_name}_{suffix}_{timestamp}.png"
         else:
             filename = f"{self.capture_base_name}_{timestamp}.png"
         filepath = os.path.join(capture_dir, filename)
-        img.save(filepath, format="PNG")
+
+        try:
+            img.save(filepath, format="PNG")
+        except (OSError, PermissionError) as e:
+            # Final fallback: try workspace directory if Downloads write failed
+            if "Downloads" in filepath:
+                self._queue_bridge_log(
+                    f"Failed to save screenshot to Downloads: {e}. Using workspace fallback.",
+                    source="stderr"
+                )
+                capture_dir = os.path.join(self.workspace_root, "capture")
+                os.makedirs(capture_dir, exist_ok=True)
+                filepath = os.path.join(capture_dir, filename)
+                img.save(filepath, format="PNG")
+            else:
+                raise
+
         return filepath
 
     def _capture_screenshot_png(self) -> list[str]:

@@ -52,9 +52,10 @@ export const IPCChannels = {
   communityLogout: "community:logout",
   communityListDeployDevices: "community:list-deploy-devices",
   communityListMyGames: "community:list-my-games",
-  communityGetGamePublishOptions: "community:get-game-publish-options",
-  communityCreateGame: "community:create-game",
-  communitySubmitGameVersion: "community:submit-game-version",
+  communityGetPublishOptions: "community:get-publish-options",
+  communityCreateApp: "community:create-app",
+  communitySubmitAppVersion: "community:submit-app-version",
+  communityWithdrawAppVersion: "community:withdraw-app-version",
   communityUploadNativeImage: "community:upload-native-image",
   /**
    * Main → renderer: mirror main-process terminal lines into DevTools.
@@ -545,46 +546,81 @@ export type CommunityListMyGamesResponse =
   | { ok: true; games: CommunityGameSummary[]; total: number }
   | { ok: false; code: string; message: string; authRequired?: boolean };
 
-export type CommunityGameCategoryOption = {
+export type CommunityAppSummary = {
+  id: number | string;
+  appId: string;
+  appName: string;
+  projectType: ProjectType;
+  mainCover: string;
+  description: string;
+  status: string;
+  createdAt: string | null;
+};
+
+export type CommunityCategoryOption = {
   id: number | string;
   name: string;
 };
 
-export type CommunityGameControlOption = {
+export type CommunityControlOption = {
   value: string;
   label: string;
 };
 
-export type CommunityGameWorkspaceDefaults = {
+export type CommunitySizeOption = {
+  value: string;
+  label: string;
+};
+
+export type CommunityVersionSummary = {
+  id: number | string;
+  appSystemId: number | string;
+  projectType: ProjectType;
+  version: string;
+  description: string;
+  status: string;
+  createdAt: string | null;
+};
+
+export type CommunityWorkspaceDefaults = {
   eligible: boolean;
   appId: string;
   projectType: ProjectType | null;
-  gameName: string;
+  appName: string;
   version: string;
   description: string;
+  widgetSize: string;
 };
 
-export type CommunityGetGamePublishOptionsResponse =
+export type CommunityGetPublishOptionsResponse =
   | {
       ok: true;
-      categories: CommunityGameCategoryOption[];
-      controls: CommunityGameControlOption[];
-      workspace: CommunityGameWorkspaceDefaults;
+      games: CommunityAppSummary[];
+      widgets: CommunityAppSummary[];
+      gameCategories: CommunityCategoryOption[];
+      widgetCategories: CommunityCategoryOption[];
+      gameControls: CommunityControlOption[];
+      widgetControls: CommunityControlOption[];
+      widgetSizes: CommunitySizeOption[];
+      currentVersions: CommunityVersionSummary[];
+      workspace: CommunityWorkspaceDefaults;
     }
   | { ok: false; code: string; message: string; authRequired?: boolean };
 
-export type CommunityCreateGameRequest = {
+export type CommunityCreateAppRequest = {
+  projectType: ProjectType;
   mainCover: string;
-  gameName: string;
-  gameId: string;
-  gameCateId: number | string;
+  appName: string;
+  appId: string;
+  categoryId: number | string;
   minPersonal?: number | null;
   maxPersonal?: number | null;
   control: string[];
+  widgetSize?: string;
 };
 
-export type CommunityCreateGameResponse =
-  | { ok: true; game: CommunityGameSummary }
+export type CommunityCreateAppResponse =
+  | { ok: true; app: CommunityAppSummary }
   | { ok: false; code: string; message: string; authRequired?: boolean };
 
 export type CommunityUploadNativeImageRequest = {
@@ -595,22 +631,33 @@ export type CommunityUploadNativeImageResponse =
   | { ok: true; url: string }
   | { ok: false; code: string; message: string; authRequired?: boolean };
 
-export type CommunitySubmitGameVersionRequest = {
-  gameSystemId: number | string;
+export type CommunitySubmitAppVersionRequest = {
+  projectType: ProjectType;
+  appSystemId: number | string;
   version: string;
   description: string;
   fields?: string;
   preview: string[];
 };
 
-export type CommunitySubmitGameVersionResponse =
+export type CommunitySubmitAppVersionResponse =
   | {
       ok: true;
       versionId: number | string | null;
       status: string;
-      gameDownloadUrl: string;
-      gameDownloadMd5: string;
+      downloadUrl: string;
+      downloadMd5: string;
     }
+  | { ok: false; code: string; message: string; authRequired?: boolean };
+
+export type CommunityWithdrawAppVersionRequest = {
+  projectType: ProjectType;
+  versionId: number | string;
+  appSystemId: number | string;
+};
+
+export type CommunityWithdrawAppVersionResponse =
+  | { ok: true; status: string }
   | { ok: false; code: string; message: string; authRequired?: boolean };
 
 export function validateDeployWorkspaceConf(raw: unknown): DeployEligibility {

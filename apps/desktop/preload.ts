@@ -34,13 +34,15 @@ import {
   type CommunityLogoutResponse,
   type CommunityListDeployDevicesResponse,
   type CommunityListMyGamesResponse,
-  type CommunityGetGamePublishOptionsResponse,
-  type CommunityCreateGameRequest,
-  type CommunityCreateGameResponse,
+  type CommunityGetPublishOptionsResponse,
+  type CommunityCreateAppRequest,
+  type CommunityCreateAppResponse,
   type CommunityUploadNativeImageRequest,
   type CommunityUploadNativeImageResponse,
-  type CommunitySubmitGameVersionRequest,
-  type CommunitySubmitGameVersionResponse,
+  type CommunitySubmitAppVersionRequest,
+  type CommunitySubmitAppVersionResponse,
+  type CommunityWithdrawAppVersionRequest,
+  type CommunityWithdrawAppVersionResponse,
   type WindowChromeInsets,
   type ShellUiTheme,
   type AgentSessionWorkspaceSummary
@@ -187,14 +189,16 @@ const api = {
     ipcRenderer.invoke(IPCChannels.communityListDeployDevices) as Promise<CommunityListDeployDevicesResponse>,
   communityListMyGames: () =>
     ipcRenderer.invoke(IPCChannels.communityListMyGames) as Promise<CommunityListMyGamesResponse>,
-  communityGetGamePublishOptions: () =>
-    ipcRenderer.invoke(IPCChannels.communityGetGamePublishOptions) as Promise<CommunityGetGamePublishOptionsResponse>,
-  communityCreateGame: (request: CommunityCreateGameRequest) =>
-    ipcRenderer.invoke(IPCChannels.communityCreateGame, request) as Promise<CommunityCreateGameResponse>,
+  communityGetPublishOptions: () =>
+    ipcRenderer.invoke(IPCChannels.communityGetPublishOptions) as Promise<CommunityGetPublishOptionsResponse>,
+  communityCreateApp: (request: CommunityCreateAppRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityCreateApp, request) as Promise<CommunityCreateAppResponse>,
   communityUploadNativeImage: (request: CommunityUploadNativeImageRequest) =>
     ipcRenderer.invoke(IPCChannels.communityUploadNativeImage, request) as Promise<CommunityUploadNativeImageResponse>,
-  communitySubmitGameVersion: (request: CommunitySubmitGameVersionRequest) =>
-    ipcRenderer.invoke(IPCChannels.communitySubmitGameVersion, request) as Promise<CommunitySubmitGameVersionResponse>,
+  communitySubmitAppVersion: (request: CommunitySubmitAppVersionRequest) =>
+    ipcRenderer.invoke(IPCChannels.communitySubmitAppVersion, request) as Promise<CommunitySubmitAppVersionResponse>,
+  communityWithdrawAppVersion: (request: CommunityWithdrawAppVersionRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityWithdrawAppVersion, request) as Promise<CommunityWithdrawAppVersionResponse>,
   assets: {
     getManifest: (workspacePath: string) =>
       ipcRenderer.invoke(IPCChannels.assetsGetManifest, workspacePath) as Promise<ManifestSnapshot>,

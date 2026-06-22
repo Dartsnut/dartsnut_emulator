@@ -9,6 +9,10 @@ const {
   mergeDeployDevices,
   normalizeApiJson,
   normalizeBoundDevices,
+  normalizeCommunityGameCategories,
+  normalizeCommunityGameControls,
+  pickUploadMd5,
+  pickUploadUrl,
   readCommunityConfig
 } = require("./dist-electron/communityClient.js");
 
@@ -45,6 +49,37 @@ test("normalizeBoundDevices maps device_id and name", () => {
   ]);
   assert.equal(rows.length, 1);
   assert.deepEqual(rows[0], { deviceId: "d1", name: "Kitchen", model: "X1" });
+});
+
+test("normalizeCommunityGameCategories maps category rows", () => {
+  const rows = normalizeCommunityGameCategories([
+    { id: 3, game_cate_name: "Arcade" },
+    { game_cate_id: "4", name: "Practice" },
+    { id: "", game_cate_name: "skip" }
+  ]);
+  assert.deepEqual(rows, [
+    { id: 3, name: "Arcade" },
+    { id: "4", name: "Practice" }
+  ]);
+});
+
+test("normalizeCommunityGameControls maps control options", () => {
+  const rows = normalizeCommunityGameControls([
+    { value: "dart", label: "Dart" },
+    { id: "button" },
+    { value: "" }
+  ]);
+  assert.deepEqual(rows, [
+    { value: "dart", label: "Dart" },
+    { value: "button", label: "button" }
+  ]);
+});
+
+test("upload result helpers accept community response aliases", () => {
+  assert.equal(pickUploadUrl({ url: "https://cdn.example/game.tar.gz" }), "https://cdn.example/game.tar.gz");
+  assert.equal(pickUploadUrl({ game_download_url: "https://cdn.example/game.tar.gz" }), "https://cdn.example/game.tar.gz");
+  assert.equal(pickUploadMd5({ md5: "abc" }), "abc");
+  assert.equal(pickUploadMd5({ game_download_md5: "def" }), "def");
 });
 
 test("mergeDeployDevices pulls ip and ssid from state", () => {

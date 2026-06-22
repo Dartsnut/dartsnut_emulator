@@ -34,6 +34,13 @@ import {
   type CommunityLogoutResponse,
   type CommunityListDeployDevicesResponse,
   type CommunityListMyGamesResponse,
+  type CommunityGetGamePublishOptionsResponse,
+  type CommunityCreateGameRequest,
+  type CommunityCreateGameResponse,
+  type CommunityUploadNativeImageRequest,
+  type CommunityUploadNativeImageResponse,
+  type CommunitySubmitGameVersionRequest,
+  type CommunitySubmitGameVersionResponse,
   type WindowChromeInsets,
   type ShellUiTheme,
   type AgentSessionWorkspaceSummary
@@ -180,6 +187,14 @@ const api = {
     ipcRenderer.invoke(IPCChannels.communityListDeployDevices) as Promise<CommunityListDeployDevicesResponse>,
   communityListMyGames: () =>
     ipcRenderer.invoke(IPCChannels.communityListMyGames) as Promise<CommunityListMyGamesResponse>,
+  communityGetGamePublishOptions: () =>
+    ipcRenderer.invoke(IPCChannels.communityGetGamePublishOptions) as Promise<CommunityGetGamePublishOptionsResponse>,
+  communityCreateGame: (request: CommunityCreateGameRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityCreateGame, request) as Promise<CommunityCreateGameResponse>,
+  communityUploadNativeImage: (request: CommunityUploadNativeImageRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityUploadNativeImage, request) as Promise<CommunityUploadNativeImageResponse>,
+  communitySubmitGameVersion: (request: CommunitySubmitGameVersionRequest) =>
+    ipcRenderer.invoke(IPCChannels.communitySubmitGameVersion, request) as Promise<CommunitySubmitGameVersionResponse>,
   assets: {
     getManifest: (workspacePath: string) =>
       ipcRenderer.invoke(IPCChannels.assetsGetManifest, workspacePath) as Promise<ManifestSnapshot>,

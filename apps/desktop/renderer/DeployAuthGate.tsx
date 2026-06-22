@@ -11,6 +11,8 @@ export function isDeployAuthSkippedForSession(): boolean {
   }
 }
 
+export const isCommunityAuthSkippedForSession = isDeployAuthSkippedForSession;
+
 export function setDeployAuthSkippedForSession(): void {
   try {
     sessionStorage.setItem(DEPLOY_AUTH_SKIPPED_KEY, "1");
@@ -18,6 +20,8 @@ export function setDeployAuthSkippedForSession(): void {
     // ignore
   }
 }
+
+export const setCommunityAuthSkippedForSession = setDeployAuthSkippedForSession;
 
 type GoogleCredentialResponse = {
   credential?: string;
@@ -44,6 +48,8 @@ declare global {
 export type DeployAuthGateProps = {
   open: boolean;
   googleClientId: string;
+  title?: string;
+  description?: string;
   onSkip: () => void;
   onSuccess: (account: string) => void;
 };
@@ -73,7 +79,14 @@ function loadGoogleScript(): Promise<void> {
   });
 }
 
-export function DeployAuthGate({ open, googleClientId, onSkip, onSuccess }: DeployAuthGateProps) {
+export function DeployAuthGate({
+  open,
+  googleClientId,
+  title = "Sign in to Dartsnut",
+  description = "Log in with your Dartsnut account to use community features. You can continue without signing in and enter an IP manually.",
+  onSkip,
+  onSuccess
+}: DeployAuthGateProps) {
   const api = window.dartsnutApi;
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
@@ -189,11 +202,10 @@ export function DeployAuthGate({ open, googleClientId, onSkip, onSuccess }: Depl
       >
         <div>
           <h2 id="deploy-auth-title" className="ui-panel-title">
-            Sign in to pick a device
+            {title}
           </h2>
           <p className="mt-1 text-[13px] text-[var(--color-text-subtle)]">
-            Log in with your Dartsnut account to select a bound machine and use its IP automatically. You can
-            continue without signing in and enter an IP manually.
+            {description}
           </p>
         </div>
 

@@ -31,6 +31,16 @@ import type {
   CommunityLoginResponse,
   CommunityLogoutResponse,
   CommunityListDeployDevicesResponse,
+  CommunityListMyGamesResponse,
+  CommunityGetPublishOptionsResponse,
+  CommunityCreateAppRequest,
+  CommunityCreateAppResponse,
+  CommunityUploadNativeImageRequest,
+  CommunityUploadNativeImageResponse,
+  CommunitySubmitAppVersionRequest,
+  CommunitySubmitAppVersionResponse,
+  CommunityWithdrawAppVersionRequest,
+  CommunityWithdrawAppVersionResponse,
   WindowChromeInsets,
   type ShellUiTheme,
   type MainProcessConsoleMirrorPayload
@@ -92,6 +102,18 @@ declare global {
       communityLogin: (request: CommunityLoginRequest) => Promise<CommunityLoginResponse>;
       communityLogout: () => Promise<CommunityLogoutResponse>;
       communityListDeployDevices: () => Promise<CommunityListDeployDevicesResponse>;
+      communityListMyGames: () => Promise<CommunityListMyGamesResponse>;
+      communityGetPublishOptions: () => Promise<CommunityGetPublishOptionsResponse>;
+      communityCreateApp: (request: CommunityCreateAppRequest) => Promise<CommunityCreateAppResponse>;
+      communityUploadNativeImage: (
+        request: CommunityUploadNativeImageRequest
+      ) => Promise<CommunityUploadNativeImageResponse>;
+      communitySubmitAppVersion: (
+        request: CommunitySubmitAppVersionRequest
+      ) => Promise<CommunitySubmitAppVersionResponse>;
+      communityWithdrawAppVersion: (
+        request: CommunityWithdrawAppVersionRequest
+      ) => Promise<CommunityWithdrawAppVersionResponse>;
       assets: {
         getManifest: (workspacePath: string) => Promise<ManifestSnapshot>;
         onManifest: (listener: (snapshot: ManifestSnapshot) => void) => () => void;

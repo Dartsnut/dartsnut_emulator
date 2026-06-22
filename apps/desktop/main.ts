@@ -7,6 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from 
 import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
+import { createPublishTarball } from "./publishPackage";
 import { buildPythonScriptLaunch, pythonRuntimeDir, runtimeDir, uvBinaryPath, venvPythonPath } from "./pythonRuntime";
 import { ensureRuntime, type DownloadProgress } from "./pythonRuntimeDownloader";
 import {
@@ -54,6 +55,19 @@ import {
   type CommunityLoginResponse,
   type CommunityLogoutResponse,
   type CommunityListDeployDevicesResponse,
+  type CommunityListMyGamesResponse,
+  type CommunityGetPublishOptionsResponse,
+  type CommunityCreateAppRequest,
+  type CommunityCreateAppResponse,
+  type CommunityUploadNativeImageRequest,
+  type CommunityUploadNativeImageResponse,
+  type CommunitySubmitAppVersionRequest,
+  type CommunitySubmitAppVersionResponse,
+  type CommunityWithdrawAppVersionRequest,
+  type CommunityWithdrawAppVersionResponse,
+  type CommunityAppSummary,
+  type CommunityVersionSummary,
+  type CommunityWorkspaceDefaults,
   type AgentSessionWorkspaceSummary,
   resolveSessionUserLocale,
   type UserLocale,
@@ -266,6 +280,59 @@ function readDeployEligibilityFromWorkspace(): DeployEligibility {
   } catch {
     return { ok: false, reason: "invalid_conf" };
   }
+}
+
+function readCommunityWorkspaceDefaults(): CommunityWorkspaceDefaults {
+  const elig = readDeployEligibilityFromWorkspace();
+  const fallback = {
+    eligible: false,
+    appId: "",
+    projectType: null,
+    appName: "",
+    version: "",
+    description: "",
+    widgetSize: ""
+  };
+  if (!workspaceRoot || !elig.ok) {
+    return fallback;
+  }
+  const confPath = path.join(workspaceRoot, "conf.json");
+  try {
+    const conf = JSON.parse(fs.readFileSync(confPath, "utf-8")) as Record<string, unknown>;
+    return {
+      eligible: elig.projectType === "game" || elig.projectType === "widget",
+      appId: elig.appId,
+      projectType: elig.projectType,
+      appName: String(conf.name || elig.appId).trim(),
+      version: String(conf.version || "1.0.0").trim(),
+      description: String(conf.description || "").trim(),
+      widgetSize: String(conf.size || "").trim()
+    };
+  } catch {
+    return { ...fallback, appId: elig.appId, projectType: elig.projectType };
+  }
+}
+
+function fileBlobFromPath(filePath: string, mimeType = "application/octet-stream"): Blob {
+  return new Blob([fs.readFileSync(filePath)], { type: mimeType });
+}
+
+function authRequiredResponse(code: string, message: string): { ok: false; code: string; message: string; authRequired?: boolean } {
+  return { ok: false, code, message, authRequired: code === "session_expired" };
+}
+
+function clearAuthIfExpired(code: string): void {
+  if (code === "session_expired") {
+    clearCommunityAuth(getCommunityUserDataPath());
+  }
+}
+
+function hasResolvableCommunityAppSystemId(id: number | string): boolean {
+  if (typeof id === "number") {
+    return Number.isFinite(id) && id > 0;
+  }
+  const parsed = Number(String(id).trim());
+  return Number.isFinite(parsed) && parsed > 0;
 }
 
 const EMULATOR_LOG_RING_MAX = 200;
@@ -2244,20 +2311,328 @@ ipcMain.handle(
   async (): Promise<CommunityListDeployDevicesResponse> => {
     const auth = readCommunityAuth(getCommunityUserDataPath());
     if (!auth?.token) {
-      return { ok: false, code: "session_expired", message: "Please sign in first." };
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
     }
     const result = await getCommunityClient().listDeployDevices(auth.token);
     if (!result.ok) {
       if (result.code === "session_expired") {
         clearCommunityAuth(getCommunityUserDataPath());
       }
-      return { ok: false, code: result.code, message: result.message };
+      return {
+        ok: false,
+        code: result.code,
+        message: result.message,
+        authRequired: result.code === "session_expired"
+      };
     }
     return {
       ok: true,
       devices: result.devices,
       supabaseConfigured: result.supabaseConfigured
     };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communityListMyGames,
+  async (): Promise<CommunityListMyGamesResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const result = await getCommunityClient().listMyGames(auth.token);
+    if (!result.ok) {
+      if (result.code === "session_expired") {
+        clearCommunityAuth(getCommunityUserDataPath());
+      }
+      return {
+        ok: false,
+        code: result.code,
+        message: result.message,
+        authRequired: result.code === "session_expired"
+      };
+    }
+    return { ok: true, games: result.games, total: result.total };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communityGetPublishOptions,
+  async (): Promise<CommunityGetPublishOptionsResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const client = getCommunityClient();
+    const [games, widgets, gameCategories, widgetCategories, gameControls, widgetStatus] = await Promise.all([
+      client.listMyGames(auth.token),
+      client.listMyWidgets(auth.token),
+      client.listGameCategories(auth.token),
+      client.listWidgetCategories(auth.token),
+      client.listGameControls(auth.token),
+      client.listWidgetStatusOptions(auth.token)
+    ]);
+    if (!games.ok) {
+      clearAuthIfExpired(games.code);
+      return authRequiredResponse(games.code, games.message);
+    }
+    if (!widgets.ok) {
+      clearAuthIfExpired(widgets.code);
+      return authRequiredResponse(widgets.code, widgets.message);
+    }
+    if (!gameCategories.ok) {
+      clearAuthIfExpired(gameCategories.code);
+      return authRequiredResponse(gameCategories.code, gameCategories.message);
+    }
+    if (!widgetCategories.ok) {
+      clearAuthIfExpired(widgetCategories.code);
+      return authRequiredResponse(widgetCategories.code, widgetCategories.message);
+    }
+    if (!gameControls.ok) {
+      clearAuthIfExpired(gameControls.code);
+      return authRequiredResponse(gameControls.code, gameControls.message);
+    }
+    if (!widgetStatus.ok) {
+      clearAuthIfExpired(widgetStatus.code);
+      return authRequiredResponse(widgetStatus.code, widgetStatus.message);
+    }
+    const workspace = readCommunityWorkspaceDefaults();
+    const normalizedGames: CommunityAppSummary[] = games.games.map((game) => ({
+      id: game.id,
+      appId: game.gameId,
+      appName: game.gameName,
+      projectType: "game",
+      mainCover: game.mainCover,
+      description: game.description,
+      status: game.status,
+      createdAt: game.createdAt
+    }));
+    const currentApp = workspace.projectType
+      ? [...normalizedGames, ...widgets.widgets].find(
+          (appRow) => appRow.projectType === workspace.projectType && appRow.appId === workspace.appId
+        ) || null
+      : null;
+    let currentVersions: CommunityVersionSummary[] = [];
+    if (currentApp && hasResolvableCommunityAppSystemId(currentApp.id)) {
+      const versions = await client.listAppVersions(auth.token, currentApp.projectType, currentApp.id);
+      if (!versions.ok) {
+        clearAuthIfExpired(versions.code);
+        return authRequiredResponse(versions.code, versions.message);
+      }
+      currentVersions = versions.versions;
+    }
+    return {
+      ok: true,
+      games: normalizedGames,
+      widgets: widgets.widgets,
+      gameCategories: gameCategories.categories,
+      widgetCategories: widgetCategories.categories,
+      gameControls: gameControls.controls,
+      widgetControls: widgetStatus.controls,
+      widgetSizes: widgetStatus.sizes,
+      currentVersions,
+      workspace
+    };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communityUploadNativeImage,
+  async (_event, request: CommunityUploadNativeImageRequest): Promise<CommunityUploadNativeImageResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const filePath = String(request?.filePath || "").trim();
+    if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      return { ok: false, code: "api_error", message: "Image file does not exist." };
+    }
+    const result = await getCommunityClient().uploadNativeImage(
+      auth.token,
+      fileBlobFromPath(filePath, "application/octet-stream"),
+      path.basename(filePath)
+    );
+    if (!result.ok) {
+      clearAuthIfExpired(result.code);
+      return authRequiredResponse(result.code, result.message);
+    }
+    return { ok: true, url: result.url };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communityCreateApp,
+  async (_event, request: CommunityCreateAppRequest): Promise<CommunityCreateAppResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const projectType = request?.projectType === "widget" ? "widget" : "game";
+    const appId = String(request?.appId || "").trim();
+    const client = getCommunityClient();
+    let existingApps: CommunityAppSummary[];
+    if (projectType === "widget") {
+      const existing = await client.listMyWidgets(auth.token);
+      if (!existing.ok) {
+        clearAuthIfExpired(existing.code);
+        return authRequiredResponse(existing.code, existing.message);
+      }
+      existingApps = existing.widgets;
+    } else {
+      const existing = await client.listMyGames(auth.token);
+      if (!existing.ok) {
+        clearAuthIfExpired(existing.code);
+        return authRequiredResponse(existing.code, existing.message);
+      }
+      existingApps = existing.games.map((game) => ({
+          id: game.id,
+          appId: game.gameId,
+          appName: game.gameName,
+          projectType: "game" as const,
+          mainCover: game.mainCover,
+          description: game.description,
+          status: game.status,
+          createdAt: game.createdAt
+        }));
+    }
+    const found = existingApps.find((appRow) => appRow.appId === appId);
+    if (found) {
+      if (!hasResolvableCommunityAppSystemId(found.id)) {
+        return { ok: false, code: "api_error", message: `Could not resolve backend ${projectType} id for this app.` };
+      }
+      return { ok: true, app: found };
+    }
+    const result = await client.createApp(auth.token, request);
+    if (!result.ok) {
+      clearAuthIfExpired(result.code);
+      return authRequiredResponse(result.code, result.message);
+    }
+    let refreshedApps: CommunityAppSummary[] | null = null;
+    if (projectType === "widget") {
+      const refreshed = await client.listMyWidgets(auth.token);
+      if (refreshed.ok) {
+        refreshedApps = refreshed.widgets;
+      }
+    } else {
+      const refreshed = await client.listMyGames(auth.token);
+      if (refreshed.ok) {
+        refreshedApps = refreshed.games.map((game) => ({
+            id: game.id,
+            appId: game.gameId,
+            appName: game.gameName,
+            projectType: "game" as const,
+            mainCover: game.mainCover,
+            description: game.description,
+            status: game.status,
+            createdAt: game.createdAt
+          }));
+      }
+    }
+    if (refreshedApps) {
+      const created = refreshedApps.find((appRow) => appRow.appId === appId);
+      if (created) {
+        if (!hasResolvableCommunityAppSystemId(created.id)) {
+          return { ok: false, code: "api_error", message: `Could not resolve backend ${projectType} id after creating app.` };
+        }
+        return { ok: true, app: created };
+      }
+    }
+    if (!hasResolvableCommunityAppSystemId(result.app.id)) {
+      return { ok: false, code: "api_error", message: `${projectType} app was created, but the backend id was not returned.` };
+    }
+    return { ok: true, app: result.app };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communitySubmitAppVersion,
+  async (_event, request: CommunitySubmitAppVersionRequest): Promise<CommunitySubmitAppVersionResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const projectType = request?.projectType === "widget" ? "widget" : "game";
+    const elig = readDeployEligibilityFromWorkspace();
+    if (!workspaceRoot || !elig.ok || elig.projectType !== projectType) {
+      return { ok: false, code: "api_error", message: `Select a valid ${projectType} workspace before submitting.` };
+    }
+    if (!hasResolvableCommunityAppSystemId(request.appSystemId)) {
+      return { ok: false, code: "api_error", message: `Could not resolve backend ${projectType} id for version submission.` };
+    }
+    const preview = Array.isArray(request?.preview) ? request.preview.map((url) => String(url).trim()).filter(Boolean) : [];
+    if (!preview.length) {
+      return { ok: false, code: "api_error", message: "Upload at least one preview image before submitting." };
+    }
+    let tarballPath: string | null = null;
+    try {
+      tarballPath = await createPublishTarball(workspaceRoot, elig.appId);
+      const client = getCommunityClient();
+      const packageUpload =
+        projectType === "widget"
+          ? await client.uploadWidgetZip(auth.token, fileBlobFromPath(tarballPath, "application/gzip"), `${elig.appId}.tar.gz`)
+          : await client.uploadGameZip(auth.token, fileBlobFromPath(tarballPath, "application/gzip"), `${elig.appId}.tar.gz`);
+      if (!packageUpload.ok) {
+        clearAuthIfExpired(packageUpload.code);
+        return authRequiredResponse(packageUpload.code, packageUpload.message);
+      }
+      const submit = await client.submitAppVersion(auth.token, {
+        projectType,
+        appSystemId: request.appSystemId,
+        version: String(request.version || "").trim(),
+        description: String(request.description || "").trim(),
+        fields: String(request.fields || "").trim(),
+        preview,
+        downloadUrl: packageUpload.upload.url,
+        downloadMd5: packageUpload.upload.md5
+      });
+      if (!submit.ok) {
+        clearAuthIfExpired(submit.code);
+        return authRequiredResponse(submit.code, submit.message);
+      }
+      return {
+        ok: true,
+        versionId: submit.result.versionId,
+        status: submit.result.status,
+        downloadUrl: packageUpload.upload.url,
+        downloadMd5: packageUpload.upload.md5
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, code: "network_error", message };
+    } finally {
+      if (tarballPath) {
+        fs.unlink(tarballPath, () => {});
+      }
+    }
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communityWithdrawAppVersion,
+  async (_event, request: CommunityWithdrawAppVersionRequest): Promise<CommunityWithdrawAppVersionResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const projectType = request?.projectType === "widget" ? "widget" : "game";
+    if (!hasResolvableCommunityAppSystemId(request.appSystemId)) {
+      return { ok: false, code: "api_error", message: `Could not resolve backend ${projectType} id for this app.` };
+    }
+    const versionId =
+      typeof request.versionId === "number" ? request.versionId : String(request.versionId || "").trim();
+    if (!versionId) {
+      return { ok: false, code: "api_error", message: "Could not resolve version id for review withdrawal." };
+    }
+    const result = await getCommunityClient().withdrawAppVersion(auth.token, {
+      projectType,
+      versionId,
+      appSystemId: request.appSystemId
+    });
+    if (!result.ok) {
+      clearAuthIfExpired(result.code);
+      return authRequiredResponse(result.code, result.message);
+    }
+    return { ok: true, status: result.status };
   }
 );
 

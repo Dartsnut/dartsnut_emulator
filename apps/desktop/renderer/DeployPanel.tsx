@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type {
   CommunityDeployDevice,
   CommunitySessionInfo,
   DeployConnectResponse
 } from "@dartsnut/shared-ipc";
+import { isCommunityAuthSkippedForSession } from "./DeployAuthGate";
 import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
@@ -11,6 +12,7 @@ const toolbarBtn = "ui-toolbar-btn";
 const MANUAL_DEVICE_VALUE = "__manual__";
 
 export type DeployPanelProps = {
+  active: boolean;
   showWidgetParams: boolean;
   widgetParamsText: string;
   setWidgetParamsText: Dispatch<SetStateAction<string>>;
@@ -19,6 +21,7 @@ export type DeployPanelProps = {
   communitySession: CommunitySessionInfo;
   communitySessionVersion: number;
   onCommunitySessionChange: () => Promise<void>;
+  onAuthRequired: () => void;
 };
 
 function formatDeviceOptionLabel(device: CommunityDeployDevice): string {
@@ -34,7 +37,8 @@ function formatDeviceOptionLabel(device: CommunityDeployDevice): string {
   return parts.join(" · ");
 }
 
-export function DeployPanel({
+export const DeployPanel = memo(function DeployPanel({
+  active,
   showWidgetParams,
   widgetParamsText,
   setWidgetParamsText,
@@ -42,7 +46,8 @@ export function DeployPanel({
   setWidgetParamsError,
   communitySession,
   communitySessionVersion,
-  onCommunitySessionChange
+  onCommunitySessionChange,
+  onAuthRequired
 }: DeployPanelProps) {
   const api = window.dartsnutApi;
   const [host, setHost] = useState("");
@@ -60,7 +65,7 @@ export function DeployPanel({
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [supabaseConfigured, setSupabaseConfigured] = useState(false);
   const [selectedDeviceKey, setSelectedDeviceKey] = useState("");
-  const [signingOut, setSigningOut] = useState(false);
+  const selectedDeviceKeyRef = useRef("");
 
   const bridgeReady = Boolean(api?.sendEmulatorCommand);
   const loggedIn = communitySession.loggedIn;
@@ -75,7 +80,7 @@ export function DeployPanel({
     busyAction !== null || connected || (Boolean(selectedDevice?.ipAddress) && !manualIpMode);
 
   const loadDevices = useCallback(async () => {
-    if (!api?.communityListDeployDevices || !loggedIn) {
+    if (!active || !api?.communityListDeployDevices || (!loggedIn && isCommunityAuthSkippedForSession())) {
       setDevices([]);
       setDevicesError(null);
       setSupabaseConfigured(false);
@@ -87,19 +92,27 @@ export function DeployPanel({
       const res = await api.communityListDeployDevices();
       if (!res.ok) {
         setDevices([]);
-        setDevicesError(res.message);
-        if (res.code === "session_expired") {
+        if (res.authRequired || res.code === "session_expired") {
           await onCommunitySessionChange();
+          if (!isCommunityAuthSkippedForSession()) {
+            onAuthRequired();
+          }
+          setDevicesError(null);
+          setSupabaseConfigured(false);
+          return;
         }
+        setDevicesError(res.message);
         return;
       }
       setDevices(res.devices);
       setSupabaseConfigured(res.supabaseConfigured);
+      const currentSelectedDeviceKey = selectedDeviceKeyRef.current;
       if (
-        selectedDeviceKey &&
-        selectedDeviceKey !== MANUAL_DEVICE_VALUE &&
-        !res.devices.some((d) => d.deviceId === selectedDeviceKey)
+        currentSelectedDeviceKey &&
+        currentSelectedDeviceKey !== MANUAL_DEVICE_VALUE &&
+        !res.devices.some((d) => d.deviceId === currentSelectedDeviceKey)
       ) {
+        selectedDeviceKeyRef.current = "";
         setSelectedDeviceKey("");
         setHost("");
       }
@@ -109,11 +122,15 @@ export function DeployPanel({
     } finally {
       setDevicesLoading(false);
     }
-  }, [api, loggedIn, onCommunitySessionChange, selectedDeviceKey]);
+  }, [active, api, loggedIn, onAuthRequired, onCommunitySessionChange]);
 
   useEffect(() => {
     void loadDevices();
   }, [loadDevices, communitySessionVersion]);
+
+  useEffect(() => {
+    selectedDeviceKeyRef.current = selectedDeviceKey;
+  }, [selectedDeviceKey]);
 
   useEffect(() => {
     if (!api?.onDeployLog) {
@@ -143,6 +160,7 @@ export function DeployPanel({
   }, [manualIpMode, selectedDevice]);
 
   function handleDeviceSelectChange(value: string) {
+    selectedDeviceKeyRef.current = value;
     setSelectedDeviceKey(value);
     setLastError(null);
     setLocalNetworkRetryPrompt(false);
@@ -155,21 +173,6 @@ export function DeployPanel({
       setHost(device.ipAddress.trim());
     } else {
       setHost("");
-    }
-  }
-
-  async function handleSignOut() {
-    if (!api?.communityLogout) {
-      return;
-    }
-    setSigningOut(true);
-    try {
-      await api.communityLogout();
-      setSelectedDeviceKey("");
-      setDevices([]);
-      await onCommunitySessionChange();
-    } finally {
-      setSigningOut(false);
     }
   }
 
@@ -335,25 +338,6 @@ export function DeployPanel({
       ) : null}
 
       {loggedIn ? (
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-edge bg-[var(--color-surface-elevated)] px-3 py-2 text-[13px]">
-          <span className="text-[var(--color-text-subtle)]">
-            Signed in as{" "}
-            <span className="font-medium text-[var(--color-text-primary)]">
-              {communitySession.account || "—"}
-            </span>
-          </span>
-          <button
-            type="button"
-            className={toolbarBtn}
-            disabled={signingOut || busyAction !== null || connected}
-            onClick={() => void handleSignOut()}
-          >
-            {signingOut ? "Signing out…" : "Sign out"}
-          </button>
-        </div>
-      ) : null}
-
-      {loggedIn ? (
         <label className="flex shrink-0 flex-col gap-1.5 text-[13px]">
           <span className="text-[var(--color-text-subtle)]">Bound device</span>
           <select
@@ -491,4 +475,4 @@ export function DeployPanel({
       </div>
     </div>
   );
-}
+});

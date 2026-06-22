@@ -33,6 +33,16 @@ import {
   type CommunityLoginResponse,
   type CommunityLogoutResponse,
   type CommunityListDeployDevicesResponse,
+  type CommunityListMyGamesResponse,
+  type CommunityGetPublishOptionsResponse,
+  type CommunityCreateAppRequest,
+  type CommunityCreateAppResponse,
+  type CommunityUploadNativeImageRequest,
+  type CommunityUploadNativeImageResponse,
+  type CommunitySubmitAppVersionRequest,
+  type CommunitySubmitAppVersionResponse,
+  type CommunityWithdrawAppVersionRequest,
+  type CommunityWithdrawAppVersionResponse,
   type WindowChromeInsets,
   type ShellUiTheme,
   type AgentSessionWorkspaceSummary
@@ -61,7 +71,9 @@ const api = {
   saveTempWorkspace: () =>
     ipcRenderer.invoke(IPCChannels.saveTempWorkspace) as Promise<SaveTempWorkspaceResponse>,
   pickWorkspace: (request?: PickWorkspaceRequest) =>
-    ipcRenderer.invoke(IPCChannels.pickWorkspace, request) as Promise<PickWorkspaceResponse>,
+    (request === undefined
+      ? ipcRenderer.invoke(IPCChannels.pickWorkspace)
+      : ipcRenderer.invoke(IPCChannels.pickWorkspace, request)) as Promise<PickWorkspaceResponse>,
   intakeSubmitQuestionAnswer: (body: IntakeSubmitQuestionAnswerRequest) =>
     ipcRenderer.invoke(IPCChannels.intakeSubmitQuestionAnswer, body) as Promise<IntakeSubmitQuestionAnswerResponse>,
   sendPrompt: (request: PromptRequest) =>
@@ -152,9 +164,13 @@ const api = {
   deployDisconnect: () =>
     ipcRenderer.invoke(IPCChannels.deployDisconnect) as Promise<DeployActionResponse>,
   deployRun: (request?: DeployLaunchRequest) =>
-    ipcRenderer.invoke(IPCChannels.deployRun, request) as Promise<DeployActionResponse>,
+    (request === undefined
+      ? ipcRenderer.invoke(IPCChannels.deployRun)
+      : ipcRenderer.invoke(IPCChannels.deployRun, request)) as Promise<DeployActionResponse>,
   deployReload: (request?: DeployLaunchRequest) =>
-    ipcRenderer.invoke(IPCChannels.deployReload, request) as Promise<DeployActionResponse>,
+    (request === undefined
+      ? ipcRenderer.invoke(IPCChannels.deployReload)
+      : ipcRenderer.invoke(IPCChannels.deployReload, request)) as Promise<DeployActionResponse>,
   deployStop: () => ipcRenderer.invoke(IPCChannels.deployStop) as Promise<DeployActionResponse>,
   deployOpenLocalNetworkSettings: () =>
     ipcRenderer.invoke(IPCChannels.deployOpenLocalNetworkSettings) as Promise<DeployActionResponse>,
@@ -171,6 +187,18 @@ const api = {
     ipcRenderer.invoke(IPCChannels.communityLogout) as Promise<CommunityLogoutResponse>,
   communityListDeployDevices: () =>
     ipcRenderer.invoke(IPCChannels.communityListDeployDevices) as Promise<CommunityListDeployDevicesResponse>,
+  communityListMyGames: () =>
+    ipcRenderer.invoke(IPCChannels.communityListMyGames) as Promise<CommunityListMyGamesResponse>,
+  communityGetPublishOptions: () =>
+    ipcRenderer.invoke(IPCChannels.communityGetPublishOptions) as Promise<CommunityGetPublishOptionsResponse>,
+  communityCreateApp: (request: CommunityCreateAppRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityCreateApp, request) as Promise<CommunityCreateAppResponse>,
+  communityUploadNativeImage: (request: CommunityUploadNativeImageRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityUploadNativeImage, request) as Promise<CommunityUploadNativeImageResponse>,
+  communitySubmitAppVersion: (request: CommunitySubmitAppVersionRequest) =>
+    ipcRenderer.invoke(IPCChannels.communitySubmitAppVersion, request) as Promise<CommunitySubmitAppVersionResponse>,
+  communityWithdrawAppVersion: (request: CommunityWithdrawAppVersionRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityWithdrawAppVersion, request) as Promise<CommunityWithdrawAppVersionResponse>,
   assets: {
     getManifest: (workspacePath: string) =>
       ipcRenderer.invoke(IPCChannels.assetsGetManifest, workspacePath) as Promise<ManifestSnapshot>,

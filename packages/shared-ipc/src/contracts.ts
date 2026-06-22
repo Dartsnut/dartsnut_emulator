@@ -51,6 +51,7 @@ export const IPCChannels = {
   communityLogin: "community:login",
   communityLogout: "community:logout",
   communityListDeployDevices: "community:list-deploy-devices",
+  communityListMyGames: "community:list-my-games",
   /**
    * Main → renderer: mirror main-process terminal lines into DevTools.
    * Payload must stay free of raw LLM request/response bodies (metadata and safe summaries only).
@@ -524,7 +525,21 @@ export type CommunityDeployDevice = {
 
 export type CommunityListDeployDevicesResponse =
   | { ok: true; devices: CommunityDeployDevice[]; supabaseConfigured: boolean }
-  | { ok: false; code: string; message: string };
+  | { ok: false; code: string; message: string; authRequired?: boolean };
+
+export type CommunityGameSummary = {
+  id: number | string;
+  gameId: string;
+  gameName: string;
+  mainCover: string;
+  description: string;
+  status: string;
+  createdAt: string | null;
+};
+
+export type CommunityListMyGamesResponse =
+  | { ok: true; games: CommunityGameSummary[]; total: number }
+  | { ok: false; code: string; message: string; authRequired?: boolean };
 
 export function validateDeployWorkspaceConf(raw: unknown): DeployEligibility {
   if (!raw || typeof raw !== "object") {

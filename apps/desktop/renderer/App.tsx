@@ -21,9 +21,14 @@ import { AskQuestionCard } from "./AskQuestionCard";
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { cn } from "./cn";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
-import { DeployAuthGate, isDeployAuthSkippedForSession } from "./DeployAuthGate";
+import {
+  DeployAuthGate,
+  isCommunityAuthSkippedForSession,
+  setCommunityAuthSkippedForSession
+} from "./DeployAuthGate";
 import { DeployPanel } from "./DeployPanel";
 import { EmulatorPanel } from "./EmulatorPanel";
+import { MyGamesPanel } from "./MyGamesPanel";
 import {
   agentEventTimelineRole,
   formatAgentEventForTimeline,
@@ -45,7 +50,9 @@ function projectTypeChipLabel(pt: ProjectType): string {
   return pt === "game" ? "Game" : "Widget";
 }
 
-type RightPaneTab = "emulator" | "assets" | "deploy";
+type RightPaneTab = "emulator" | "assets";
+type DeployPaneTab = "deploy" | "games";
+type CommunityAuthIntent = "deploy-devices" | "my-games";
 
 type AppScreen = "main" | "settings";
 
@@ -275,6 +282,7 @@ export function App() {
   const [assetManifest, setAssetManifest] = useState<AssetManifest | null>(null);
   const [pendingChangeSlotIds, setPendingChangeSlotIds] = useState<string[]>([]);
   const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>("emulator");
+  const [deployPaneTab, setDeployPaneTab] = useState<DeployPaneTab>("deploy");
   const [deployEligibility, setDeployEligibility] = useState<DeployEligibility>({
     ok: false,
     reason: "no_workspace"
@@ -289,6 +297,8 @@ export function App() {
     googleClientId: ""
   });
   const [deployAuthGateOpen, setDeployAuthGateOpen] = useState(false);
+  const [communityAuthIntent, setCommunityAuthIntent] = useState<CommunityAuthIntent>("deploy-devices");
+  const [communityAuthSkippedVersion, setCommunityAuthSkippedVersion] = useState(0);
   const [communitySessionVersion, setCommunitySessionVersion] = useState(0);
 
   const api = window.dartsnutApi;
@@ -316,9 +326,9 @@ export function App() {
     }
   }, [communitySession.loggedIn]);
 
-  const openDeployTab = useCallback(() => {
-    setRightPaneTab("deploy");
-    if (!communitySession.loggedIn && !isDeployAuthSkippedForSession()) {
+  const requestCommunityAuth = useCallback((intent: CommunityAuthIntent) => {
+    setCommunityAuthIntent(intent);
+    if (!communitySession.loggedIn && !isCommunityAuthSkippedForSession()) {
       setDeployAuthGateOpen(true);
     }
   }, [communitySession.loggedIn]);
@@ -806,16 +816,21 @@ export function App() {
 
   const deployEligible = deployEligibility.ok;
   const deployPanelShowsWidgetParams = deployEligible && deployEligibility.projectType === "widget";
+  const communityAuthSkipped = communityAuthSkippedVersion >= 0 && isCommunityAuthSkippedForSession();
+  const gamesTabDisabled = !communitySession.loggedIn && communityAuthSkipped;
 
   // Reset to Emulator tab when the active tab is no longer available.
   useEffect(() => {
     if (!assetManifest && rightPaneTab === "assets") {
       setRightPaneTab("emulator");
     }
-    if (!deployEligible && rightPaneTab === "deploy") {
-      setRightPaneTab("emulator");
-    }
   }, [assetManifest, deployEligible, rightPaneTab]);
+
+  useEffect(() => {
+    if (!deployEligible || (gamesTabDisabled && deployPaneTab === "games")) {
+      setDeployPaneTab("deploy");
+    }
+  }, [deployEligible, deployPaneTab, gamesTabDisabled]);
 
   useEffect(() => {
     const ws = bootstrap?.workspaceRoot;
@@ -1137,7 +1152,10 @@ export function App() {
     <main
       className={cn(
         "app-shell grid h-full w-full items-stretch overflow-visible pt-0",
-        "grid-cols-[minmax(620px,760px)_1fr] grid-rows-[auto_minmax(0,1fr)]",
+        deployEligible
+          ? "grid-cols-[minmax(520px,700px)_minmax(420px,1fr)_minmax(360px,420px)]"
+          : "grid-cols-[minmax(620px,760px)_1fr]",
+        "grid-rows-[auto_minmax(0,1fr)]",
         "pr-[var(--window-control-inset-right)] pb-[var(--window-control-inset-bottom)] pl-[var(--window-control-inset-left)]",
         "max-[1100px]:grid-cols-1 max-[1100px]:grid-rows-[auto_minmax(0,1fr)]"
       )}
@@ -1295,7 +1313,10 @@ export function App() {
       </header>
       {screen === "main" && showRuntimeSetup ? (
         <section
-          className="runtime-config-main col-start-1 col-end-3 row-start-2 min-h-0 h-full overflow-auto bg-[var(--gradient-rail)] max-[1100px]:col-end-2"
+          className={cn(
+            "runtime-config-main col-start-1 row-start-2 min-h-0 h-full overflow-auto bg-[var(--gradient-rail)] max-[1100px]:col-end-2",
+            deployEligible ? "col-end-4" : "col-end-3"
+          )}
           aria-live="polite"
         >
           <div className="runtime-config-main__inner">
@@ -1684,7 +1705,7 @@ export function App() {
           showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
         )}
       >
-        {assetManifest || deployEligible ? (
+        {assetManifest ? (
             <div className="flex gap-0.5 border-b border-edge px-3 pb-0 pt-2" role="tablist" aria-label="Right pane view">
               <button
                 type="button"
@@ -1695,17 +1716,6 @@ export function App() {
               >
                 Emulator
               </button>
-              {deployEligible ? (
-                <button
-                  type="button"
-                  className={cn("ui-tab", rightPaneTab === "deploy" && "ui-tab--active")}
-                  role="tab"
-                  aria-selected={rightPaneTab === "deploy"}
-                  onClick={() => openDeployTab()}
-                >
-                  Deploy
-                </button>
-              ) : null}
               {assetManifest ? (
                 <button
                   type="button"
@@ -1731,7 +1741,7 @@ export function App() {
             <div
               className={cn(
                 "flex min-h-0 flex-1 flex-col",
-                (Boolean(assetManifest) || deployEligible) && rightPaneTab !== "emulator" && "hidden"
+                Boolean(assetManifest) && rightPaneTab !== "emulator" && "hidden"
               )}
             >
               <EmulatorPanel
@@ -1741,22 +1751,6 @@ export function App() {
                 setWidgetParamsError={setWidgetParamsError}
               />
             </div>
-          {deployEligible ? (
-              <div
-                className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "deploy" && "hidden")}
-              >
-                <DeployPanel
-                  showWidgetParams={deployPanelShowsWidgetParams}
-                  widgetParamsText={widgetParamsText}
-                  setWidgetParamsText={setWidgetParamsText}
-                  widgetParamsError={widgetParamsError}
-                  setWidgetParamsError={setWidgetParamsError}
-                  communitySession={communitySession}
-                  communitySessionVersion={communitySessionVersion}
-                  onCommunitySessionChange={refreshCommunitySession}
-                />
-              </div>
-            ) : null}
           {assetManifest && bootstrap?.workspaceRoot ? (
               <div className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "assets" && "hidden")}>
                 <AssetManagerPanel
@@ -1771,14 +1765,88 @@ export function App() {
             ) : null}
         </div>
       </aside>
+      {deployEligible ? (
+        <aside
+          className={cn(
+            "right-pane col-start-3 row-start-2 flex min-h-0 h-full min-w-[360px] flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+            showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
+          )}
+        >
+          <div className="flex gap-0.5 border-b border-edge px-3 pb-0 pt-2" role="tablist" aria-label="Deploy view">
+            <button
+              type="button"
+              className={cn("ui-tab", deployPaneTab === "deploy" && "ui-tab--active")}
+              role="tab"
+              aria-selected={deployPaneTab === "deploy"}
+              onClick={() => setDeployPaneTab("deploy")}
+            >
+              Deploy
+            </button>
+            <button
+              type="button"
+              className={cn("ui-tab", deployPaneTab === "games" && "ui-tab--active")}
+              role="tab"
+              aria-selected={deployPaneTab === "games"}
+              aria-disabled={gamesTabDisabled}
+              disabled={gamesTabDisabled}
+              onClick={() => {
+                if (!gamesTabDisabled) {
+                  setCommunityAuthIntent("my-games");
+                  setDeployPaneTab("games");
+                }
+              }}
+            >
+              My Games
+            </button>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "deploy" && "hidden")}>
+              <DeployPanel
+                active={deployPaneTab === "deploy"}
+                showWidgetParams={deployPanelShowsWidgetParams}
+                widgetParamsText={widgetParamsText}
+                setWidgetParamsText={setWidgetParamsText}
+                widgetParamsError={widgetParamsError}
+                setWidgetParamsError={setWidgetParamsError}
+                communitySession={communitySession}
+                communitySessionVersion={communitySessionVersion + communityAuthSkippedVersion}
+                onCommunitySessionChange={refreshCommunitySession}
+                onAuthRequired={() => requestCommunityAuth("deploy-devices")}
+              />
+            </div>
+            <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "games" && "hidden")}>
+              <MyGamesPanel
+                active={deployPaneTab === "games"}
+                communitySession={communitySession}
+                communitySessionVersion={communitySessionVersion + communityAuthSkippedVersion}
+                onCommunitySessionChange={refreshCommunitySession}
+                onAuthRequired={() => requestCommunityAuth("my-games")}
+              />
+            </div>
+          </div>
+        </aside>
+      ) : null}
       <DeployAuthGate
         open={deployAuthGateOpen}
         googleClientId={communitySession.googleClientId}
-        onSkip={() => setDeployAuthGateOpen(false)}
+        title={communityAuthIntent === "my-games" ? "Sign in to view games" : "Sign in to pick a device"}
+        description={
+          communityAuthIntent === "my-games"
+            ? "Log in with your Dartsnut account to list games submitted by this account."
+            : "Log in with your Dartsnut account to select a bound machine and use its IP automatically. You can continue without signing in and enter an IP manually."
+        }
+        onSkip={() => {
+          setCommunityAuthSkippedForSession();
+          setCommunityAuthSkippedVersion((v) => v + 1);
+          setDeployAuthGateOpen(false);
+          if (communityAuthIntent === "my-games") {
+            setDeployPaneTab("deploy");
+          }
+        }}
         onSuccess={async (account) => {
           setDeployAuthGateOpen(false);
           await refreshCommunitySession();
-          devLog.log("[deploy] Signed in as", account);
+          devLog.log("[community] Signed in as", account);
         }}
       />
     </main>

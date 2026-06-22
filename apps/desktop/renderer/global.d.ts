@@ -31,6 +31,7 @@ import type {
   CommunityLoginResponse,
   CommunityLogoutResponse,
   CommunityListDeployDevicesResponse,
+  CommunityListMyGamesResponse,
   WindowChromeInsets,
   type ShellUiTheme,
   type MainProcessConsoleMirrorPayload
@@ -92,6 +93,7 @@ declare global {
       communityLogin: (request: CommunityLoginRequest) => Promise<CommunityLoginResponse>;
       communityLogout: () => Promise<CommunityLogoutResponse>;
       communityListDeployDevices: () => Promise<CommunityListDeployDevicesResponse>;
+      communityListMyGames: () => Promise<CommunityListMyGamesResponse>;
       assets: {
         getManifest: (workspacePath: string) => Promise<ManifestSnapshot>;
         onManifest: (listener: (snapshot: ManifestSnapshot) => void) => () => void;

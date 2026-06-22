@@ -4,6 +4,7 @@ import type {
   CommunitySessionInfo,
   DeployConnectResponse
 } from "@dartsnut/shared-ipc";
+import { isCommunityAuthSkippedForSession } from "./DeployAuthGate";
 import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
@@ -11,6 +12,7 @@ const toolbarBtn = "ui-toolbar-btn";
 const MANUAL_DEVICE_VALUE = "__manual__";
 
 export type DeployPanelProps = {
+  active: boolean;
   showWidgetParams: boolean;
   widgetParamsText: string;
   setWidgetParamsText: Dispatch<SetStateAction<string>>;
@@ -19,6 +21,7 @@ export type DeployPanelProps = {
   communitySession: CommunitySessionInfo;
   communitySessionVersion: number;
   onCommunitySessionChange: () => Promise<void>;
+  onAuthRequired: () => void;
 };
 
 function formatDeviceOptionLabel(device: CommunityDeployDevice): string {
@@ -35,6 +38,7 @@ function formatDeviceOptionLabel(device: CommunityDeployDevice): string {
 }
 
 export function DeployPanel({
+  active,
   showWidgetParams,
   widgetParamsText,
   setWidgetParamsText,
@@ -42,7 +46,8 @@ export function DeployPanel({
   setWidgetParamsError,
   communitySession,
   communitySessionVersion,
-  onCommunitySessionChange
+  onCommunitySessionChange,
+  onAuthRequired
 }: DeployPanelProps) {
   const api = window.dartsnutApi;
   const [host, setHost] = useState("");
@@ -75,7 +80,7 @@ export function DeployPanel({
     busyAction !== null || connected || (Boolean(selectedDevice?.ipAddress) && !manualIpMode);
 
   const loadDevices = useCallback(async () => {
-    if (!api?.communityListDeployDevices || !loggedIn) {
+    if (!active || !api?.communityListDeployDevices || (!loggedIn && isCommunityAuthSkippedForSession())) {
       setDevices([]);
       setDevicesError(null);
       setSupabaseConfigured(false);
@@ -87,10 +92,16 @@ export function DeployPanel({
       const res = await api.communityListDeployDevices();
       if (!res.ok) {
         setDevices([]);
-        setDevicesError(res.message);
-        if (res.code === "session_expired") {
+        if (res.authRequired || res.code === "session_expired") {
           await onCommunitySessionChange();
+          if (!isCommunityAuthSkippedForSession()) {
+            onAuthRequired();
+          }
+          setDevicesError(null);
+          setSupabaseConfigured(false);
+          return;
         }
+        setDevicesError(res.message);
         return;
       }
       setDevices(res.devices);
@@ -109,7 +120,7 @@ export function DeployPanel({
     } finally {
       setDevicesLoading(false);
     }
-  }, [api, loggedIn, onCommunitySessionChange, selectedDeviceKey]);
+  }, [active, api, loggedIn, onAuthRequired, onCommunitySessionChange, selectedDeviceKey]);
 
   useEffect(() => {
     void loadDevices();

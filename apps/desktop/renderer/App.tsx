@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   type AgentEvent,
   type AssetManifest,
@@ -96,6 +96,82 @@ function isSettingsShortcut(event: KeyboardEvent): boolean {
 function isComposerSendShortcut(event: { key: string; metaKey: boolean; ctrlKey: boolean }): boolean {
   return event.key === "Enter" && hasPrimaryShortcutModifier(event);
 }
+
+type TimelineEntryViewProps = {
+  entry: TimelineEntry;
+  onToggleReasoning: (entryId: string) => void;
+};
+
+const TimelineEntryView = memo(function TimelineEntryView({
+  entry,
+  onToggleReasoning
+}: TimelineEntryViewProps) {
+  return (
+    <div
+      className={cn(
+        "entry",
+        entry.role,
+        entry.id.startsWith("greeting") && entry.role === "agent" && "greeting-entry"
+      )}
+    >
+      {entry.role === "agent" && entry.id.startsWith("greeting") ? (
+        <div className="greeting-card" role="status">
+          <p className="greeting-card__eyebrow">Neon Pit · ready</p>
+          <p className="greeting-card__title">Dartsnut Agent</p>
+          <p className="greeting-card__body">{entry.text}</p>
+        </div>
+      ) : entry.role === "user" ? (
+        <div className="entry-text">{entry.text}</div>
+      ) : entry.role === "agent" ? (
+        <AgentMarkdownBody source={entry.text} className="entry-text" />
+      ) : entry.reasoningMode === "delta" ? (
+        <div className="entry-text entry-text--subtle">
+          <AgentMarkdownBody source={entry.text} className="entry-text entry-text--subtle" />
+        </div>
+      ) : entry.reasoningMode === "summary" || entry.reasoningMode === "expanded" ? (
+        <div className="entry-reasoning-wrap">
+          <button
+            type="button"
+            className="entry-reasoning-summary entry-text--subtle"
+            onClick={() => onToggleReasoning(entry.id)}
+          >
+            {entry.text}
+          </button>
+          {entry.reasoningMode === "expanded" ? (
+            <div className="entry-text entry-text--subtle">
+              <AgentMarkdownBody
+                source={entry.reasoningFullText ?? ""}
+                className="entry-text entry-text--subtle"
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : entry.role === "status" && entry.toolStatusMeta ? (
+        <div className="entry-status-detail">
+          <span className="entry-status-detail__text">{entry.text}</span>
+          {entry.toolStatusMeta.filePath ? (
+            <span className="entry-status-detail__path">{entry.toolStatusMeta.filePath}</span>
+          ) : null}
+          {typeof entry.toolStatusMeta.added === "number" ||
+          typeof entry.toolStatusMeta.deleted === "number" ? (
+            <span className="entry-status-detail__diff" aria-label="Line changes">
+              <span className="entry-status-detail__add">
+                +{entry.toolStatusMeta.added ?? 0}
+              </span>
+              <span className="entry-status-detail__del">
+                -{entry.toolStatusMeta.deleted ?? 0}
+              </span>
+            </span>
+          ) : null}
+        </div>
+      ) : entry.role === "status" ? (
+        <div className="entry-text">{entry.text}</div>
+      ) : (
+        <pre className="entry-json">{entry.text}</pre>
+      )}
+    </div>
+  );
+});
 
 function maskApiKey(value: string): string {
   if (!value) {
@@ -309,8 +385,18 @@ export function App() {
     }
     try {
       const session = await api.communityGetSession();
-      setCommunitySession(session);
-      setCommunitySessionVersion((v) => v + 1);
+      setCommunitySession((prev) => {
+        const changed =
+          prev.loggedIn !== session.loggedIn ||
+          prev.account !== session.account ||
+          prev.hasSupabase !== session.hasSupabase ||
+          prev.googleClientId !== session.googleClientId;
+        if (changed) {
+          setCommunitySessionVersion((v) => v + 1);
+          return session;
+        }
+        return prev;
+      });
     } catch {
       // keep previous session snapshot
     }
@@ -332,6 +418,27 @@ export function App() {
       setDeployAuthGateOpen(true);
     }
   }, [communitySession.loggedIn]);
+
+  const requestDeployCommunityAuth = useCallback(() => {
+    requestCommunityAuth("deploy-devices");
+  }, [requestCommunityAuth]);
+
+  const requestMyGamesCommunityAuth = useCallback(() => {
+    requestCommunityAuth("my-games");
+  }, [requestCommunityAuth]);
+
+  const toggleReasoningEntry = useCallback((entryId: string) => {
+    setEntries((prev) =>
+      prev.map((candidate) =>
+        candidate.id === entryId
+          ? {
+            ...candidate,
+            reasoningMode: candidate.reasoningMode === "expanded" ? "summary" : "expanded"
+          }
+          : candidate
+      )
+    );
+  }, []);
 
   useLayoutEffect(() => {
     applyTheme(theme);
@@ -1371,81 +1478,11 @@ export function App() {
           >
             <div className="timeline-inner">
             {entries.map((entry) => (
-              <div
+              <TimelineEntryView
                 key={entry.id}
-                className={cn(
-                  "entry",
-                  entry.role,
-                  entry.id.startsWith("greeting") && entry.role === "agent" && "greeting-entry"
-                )}
-              >
-                {entry.role === "agent" && entry.id.startsWith("greeting") ? (
-                  <div className="greeting-card" role="status">
-                    <p className="greeting-card__eyebrow">Neon Pit · ready</p>
-                    <p className="greeting-card__title">Dartsnut Agent</p>
-                    <p className="greeting-card__body">{entry.text}</p>
-                  </div>
-                ) : entry.role === "user" ? (
-                  <div className="entry-text">{entry.text}</div>
-                ) : entry.role === "agent" ? (
-                  <AgentMarkdownBody source={entry.text} className="entry-text" />
-                ) : entry.reasoningMode === "delta" ? (
-                  <div className="entry-text entry-text--subtle">
-                    <AgentMarkdownBody source={entry.text} className="entry-text entry-text--subtle" />
-                  </div>
-                ) : entry.reasoningMode === "summary" || entry.reasoningMode === "expanded" ? (
-                  <div className="entry-reasoning-wrap">
-                  <button
-                    type="button"
-                    className="entry-reasoning-summary entry-text--subtle"
-                    onClick={() =>
-                      setEntries((prev) =>
-                        prev.map((candidate) =>
-                          candidate.id === entry.id
-                            ? {
-                              ...candidate,
-                              reasoningMode: candidate.reasoningMode === "expanded" ? "summary" : "expanded"
-                            }
-                            : candidate
-                        )
-                      )
-                    }
-                  >
-                    {entry.text}
-                  </button>
-                  {entry.reasoningMode === "expanded" ? (
-                    <div className="entry-text entry-text--subtle">
-                      <AgentMarkdownBody
-                        source={entry.reasoningFullText ?? ""}
-                        className="entry-text entry-text--subtle"
-                      />
-                    </div>
-                  ) : null}
-                  </div>
-                ) : entry.role === "status" && entry.toolStatusMeta ? (
-                  <div className="entry-status-detail">
-                    <span className="entry-status-detail__text">{entry.text}</span>
-                    {entry.toolStatusMeta.filePath ? (
-                      <span className="entry-status-detail__path">{entry.toolStatusMeta.filePath}</span>
-                    ) : null}
-                    {typeof entry.toolStatusMeta.added === "number" ||
-                    typeof entry.toolStatusMeta.deleted === "number" ? (
-                      <span className="entry-status-detail__diff" aria-label="Line changes">
-                        <span className="entry-status-detail__add">
-                          +{entry.toolStatusMeta.added ?? 0}
-                        </span>
-                        <span className="entry-status-detail__del">
-                          -{entry.toolStatusMeta.deleted ?? 0}
-                        </span>
-                      </span>
-                    ) : null}
-                  </div>
-                ) : entry.role === "status" ? (
-                  <div className="entry-text">{entry.text}</div>
-                ) : (
-                  <pre className="entry-json">{entry.text}</pre>
-                )}
-              </div>
+                entry={entry}
+                onToggleReasoning={toggleReasoningEntry}
+              />
             ))}
             </div>
           </section>
@@ -1811,7 +1848,7 @@ export function App() {
                 communitySession={communitySession}
                 communitySessionVersion={communitySessionVersion + communityAuthSkippedVersion}
                 onCommunitySessionChange={refreshCommunitySession}
-                onAuthRequired={() => requestCommunityAuth("deploy-devices")}
+                onAuthRequired={requestDeployCommunityAuth}
               />
             </div>
             <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "games" && "hidden")}>
@@ -1820,7 +1857,7 @@ export function App() {
                 communitySession={communitySession}
                 communitySessionVersion={communitySessionVersion + communityAuthSkippedVersion}
                 onCommunitySessionChange={refreshCommunitySession}
-                onAuthRequired={() => requestCommunityAuth("my-games")}
+                onAuthRequired={requestMyGamesCommunityAuth}
               />
             </div>
           </div>

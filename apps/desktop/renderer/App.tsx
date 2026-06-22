@@ -268,10 +268,7 @@ function CommunityAuthStatus({ communitySession, onAuthRequired, onSignOut }: Co
       <div className="relative" ref={menuRef}>
         <button
           type="button"
-          className={cn(
-            chromeIconBtnClass,
-            "w-auto gap-1.5 px-2 text-xs font-medium"
-          )}
+          className="inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1.5 rounded border border-transparent bg-transparent px-2.5 py-0 text-xs font-medium text-[var(--color-app-btn-text)] transition-colors hover:bg-[var(--color-app-btn-bg-hover)] hover:text-[var(--color-app-btn-text-hover)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
           onClick={() => setMenuOpen(!menuOpen)}
           aria-label="Account menu"
           title={communitySession.account || "Signed in"}
@@ -290,12 +287,12 @@ function CommunityAuthStatus({ communitySession, onAuthRequired, onSignOut }: Co
         </button>
         {menuOpen ? (
           <div
-            className="absolute right-0 top-full z-50 mt-1 min-w-[160px] rounded-lg border border-edge bg-[var(--color-surface-elevated)] py-1 shadow-lg"
+            className="absolute right-0 top-full z-50 mt-1 min-w-[120px] rounded-md border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] py-1 shadow-sm"
             role="menu"
           >
             <button
               type="button"
-              className="w-full px-3 py-2 text-left text-xs text-[var(--color-text-primary)] hover:bg-[var(--color-surface)] disabled:opacity-50"
+              className="w-full border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() => void handleSignOut()}
               disabled={signingOut}
               role="menuitem"

@@ -412,31 +412,22 @@ export const MyGamesPanel = memo(function MyGamesPanel({
             Submit the active game or widget workspace for community review.
           </p>
         </div>
-        <button
-          type="button"
-          className="ui-toolbar-btn"
-          disabled={loading || submitting}
-          onClick={() => void loadPublishOptions()}
-        >
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
-      </div>
-
-      {communitySession.loggedIn ? (
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-edge bg-[var(--color-surface-elevated)] px-3 py-2 text-[13px]">
-          <span className="text-[var(--color-text-subtle)]">
-            Signed in as{" "}
-            <span className="font-medium text-[var(--color-text-primary)]">
-              {communitySession.account || "-"}
-            </span>
-          </span>
+        <div className="flex shrink-0 items-center gap-2">
           {projectType ? (
-            <span className="rounded-md border border-edge bg-[var(--color-surface)] px-2 py-0.5 text-[11px] uppercase tracking-wide text-[var(--color-text-subtle)]">
+            <span className="rounded-md border border-edge bg-[var(--color-surface-elevated)] px-2 py-1 text-[11px] uppercase tracking-wide text-[var(--color-text-subtle)]">
               {projectType}
             </span>
           ) : null}
+          <button
+            type="button"
+            className="ui-toolbar-btn"
+            disabled={loading || submitting}
+            onClick={() => void loadPublishOptions()}
+          >
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
         </div>
-      ) : null}
+      </div>
 
       {error ? (
         <p className="shrink-0 rounded-lg border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-[13px] text-[var(--color-error-text)]">

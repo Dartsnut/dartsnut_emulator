@@ -66,7 +66,6 @@ export const DeployPanel = memo(function DeployPanel({
   const [supabaseConfigured, setSupabaseConfigured] = useState(false);
   const [selectedDeviceKey, setSelectedDeviceKey] = useState("");
   const selectedDeviceKeyRef = useRef("");
-  const [signingOut, setSigningOut] = useState(false);
 
   const bridgeReady = Boolean(api?.sendEmulatorCommand);
   const loggedIn = communitySession.loggedIn;
@@ -174,22 +173,6 @@ export const DeployPanel = memo(function DeployPanel({
       setHost(device.ipAddress.trim());
     } else {
       setHost("");
-    }
-  }
-
-  async function handleSignOut() {
-    if (!api?.communityLogout) {
-      return;
-    }
-    setSigningOut(true);
-    try {
-      await api.communityLogout();
-      selectedDeviceKeyRef.current = "";
-      setSelectedDeviceKey("");
-      setDevices([]);
-      await onCommunitySessionChange();
-    } finally {
-      setSigningOut(false);
     }
   }
 
@@ -351,25 +334,6 @@ export const DeployPanel = memo(function DeployPanel({
           {settingsOpenError ? (
             <span className="text-xs text-[var(--color-error-text)]">{settingsOpenError}</span>
           ) : null}
-        </div>
-      ) : null}
-
-      {loggedIn ? (
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-edge bg-[var(--color-surface-elevated)] px-3 py-2 text-[13px]">
-          <span className="text-[var(--color-text-subtle)]">
-            Signed in as{" "}
-            <span className="font-medium text-[var(--color-text-primary)]">
-              {communitySession.account || "—"}
-            </span>
-          </span>
-          <button
-            type="button"
-            className={toolbarBtn}
-            disabled={signingOut || busyAction !== null || connected}
-            onClick={() => void handleSignOut()}
-          >
-            {signingOut ? "Signing out…" : "Sign out"}
-          </button>
         </div>
       ) : null}
 

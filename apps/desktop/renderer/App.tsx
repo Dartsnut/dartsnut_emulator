@@ -230,6 +230,106 @@ function AgentMarkdownBody({ source, className }: { source: string; className?: 
   );
 }
 
+type CommunityAuthStatusProps = {
+  communitySession: CommunitySessionInfo;
+  onAuthRequired: () => void;
+  onSignOut: () => Promise<void>;
+};
+
+function CommunityAuthStatus({ communitySession, onAuthRequired, onSignOut }: CommunityAuthStatusProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    if (menuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [menuOpen]);
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    try {
+      await onSignOut();
+      setMenuOpen(false);
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
+  if (communitySession.loggedIn) {
+    return (
+      <div className="relative" ref={menuRef}>
+        <button
+          type="button"
+          className={cn(
+            chromeIconBtnClass,
+            "gap-1.5 px-2 text-xs font-medium"
+          )}
+          onClick={() => setMenuOpen(!menuOpen)}
+          aria-label="Account menu"
+          title={communitySession.account || "Signed in"}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden className="shrink-0">
+            <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
+            <path
+              d="M6 21c0-3.3 2.7-6 6-6s6 2.7 6 6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+          <span className="whitespace-nowrap">{communitySession.account || "Signed in"}</span>
+        </button>
+        {menuOpen ? (
+          <div
+            className="absolute right-0 top-full z-50 mt-1 min-w-[160px] rounded-lg border border-edge bg-[var(--color-surface-elevated)] py-1 shadow-lg"
+            role="menu"
+          >
+            <button
+              type="button"
+              className="w-full px-3 py-2 text-left text-xs text-[var(--color-text-primary)] hover:bg-[var(--color-surface)] disabled:opacity-50"
+              onClick={() => void handleSignOut()}
+              disabled={signingOut}
+              role="menuitem"
+            >
+              {signingOut ? "Signing out..." : "Sign out"}
+            </button>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={chromeIconBtnClass}
+      onClick={onAuthRequired}
+      aria-label="Sign in"
+      title="Sign in"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+        <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
+        <path
+          d="M6 21c0-3.3 2.7-6 6-6s6 2.7 6 6"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
 function extractPartialStringField(argumentsJson: string, fieldName: string): string | null {
   const key = `"${fieldName}"`;
   const keyAt = argumentsJson.indexOf(key);
@@ -1375,7 +1475,22 @@ export function App() {
               className="min-h-0 min-w-6 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
               aria-hidden
             />
-            <div className="inline-flex shrink-0 items-center gap-2">
+            <div className="inline-flex shrink-0 items-center justify-end gap-3">
+              <CommunityAuthStatus
+                communitySession={communitySession}
+                onAuthRequired={() => requestCommunityAuth("deploy-devices")}
+                onSignOut={async () => {
+                  if (!api?.communityLogout) {
+                    return;
+                  }
+                  try {
+                    await api.communityLogout();
+                    await refreshCommunitySession();
+                  } catch {
+                    // ignore
+                  }
+                }}
+              />
               <ThemeSwitcherIcon id="main-theme-icon" value={theme} onChange={handleThemeChange} />
             </div>
           </>

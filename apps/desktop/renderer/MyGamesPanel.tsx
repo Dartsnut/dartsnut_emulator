@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CommunityGameCategoryOption,
   CommunityGameControlOption,
@@ -108,7 +108,7 @@ function shortFileName(name: string): string {
   return `${name.slice(0, 10)}...${name.slice(-9)}`;
 }
 
-export function MyGamesPanel({
+export const MyGamesPanel = memo(function MyGamesPanel({
   active,
   communitySession,
   communitySessionVersion,
@@ -689,4 +689,4 @@ export function MyGamesPanel({
       </div>
     </section>
   );
-}
+});

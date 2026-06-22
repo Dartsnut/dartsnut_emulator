@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type {
   CommunityDeployDevice,
   CommunitySessionInfo,
@@ -37,7 +37,7 @@ function formatDeviceOptionLabel(device: CommunityDeployDevice): string {
   return parts.join(" · ");
 }
 
-export function DeployPanel({
+export const DeployPanel = memo(function DeployPanel({
   active,
   showWidgetParams,
   widgetParamsText,
@@ -65,6 +65,7 @@ export function DeployPanel({
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [supabaseConfigured, setSupabaseConfigured] = useState(false);
   const [selectedDeviceKey, setSelectedDeviceKey] = useState("");
+  const selectedDeviceKeyRef = useRef("");
   const [signingOut, setSigningOut] = useState(false);
 
   const bridgeReady = Boolean(api?.sendEmulatorCommand);
@@ -106,11 +107,13 @@ export function DeployPanel({
       }
       setDevices(res.devices);
       setSupabaseConfigured(res.supabaseConfigured);
+      const currentSelectedDeviceKey = selectedDeviceKeyRef.current;
       if (
-        selectedDeviceKey &&
-        selectedDeviceKey !== MANUAL_DEVICE_VALUE &&
-        !res.devices.some((d) => d.deviceId === selectedDeviceKey)
+        currentSelectedDeviceKey &&
+        currentSelectedDeviceKey !== MANUAL_DEVICE_VALUE &&
+        !res.devices.some((d) => d.deviceId === currentSelectedDeviceKey)
       ) {
+        selectedDeviceKeyRef.current = "";
         setSelectedDeviceKey("");
         setHost("");
       }
@@ -120,11 +123,15 @@ export function DeployPanel({
     } finally {
       setDevicesLoading(false);
     }
-  }, [active, api, loggedIn, onAuthRequired, onCommunitySessionChange, selectedDeviceKey]);
+  }, [active, api, loggedIn, onAuthRequired, onCommunitySessionChange]);
 
   useEffect(() => {
     void loadDevices();
   }, [loadDevices, communitySessionVersion]);
+
+  useEffect(() => {
+    selectedDeviceKeyRef.current = selectedDeviceKey;
+  }, [selectedDeviceKey]);
 
   useEffect(() => {
     if (!api?.onDeployLog) {
@@ -154,6 +161,7 @@ export function DeployPanel({
   }, [manualIpMode, selectedDevice]);
 
   function handleDeviceSelectChange(value: string) {
+    selectedDeviceKeyRef.current = value;
     setSelectedDeviceKey(value);
     setLastError(null);
     setLocalNetworkRetryPrompt(false);
@@ -176,6 +184,7 @@ export function DeployPanel({
     setSigningOut(true);
     try {
       await api.communityLogout();
+      selectedDeviceKeyRef.current = "";
       setSelectedDeviceKey("");
       setDevices([]);
       await onCommunitySessionChange();
@@ -502,4 +511,4 @@ export function DeployPanel({
       </div>
     </div>
   );
-}
+});

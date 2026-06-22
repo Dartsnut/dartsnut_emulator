@@ -52,6 +52,10 @@ export const IPCChannels = {
   communityLogout: "community:logout",
   communityListDeployDevices: "community:list-deploy-devices",
   communityListMyGames: "community:list-my-games",
+  communityGetGamePublishOptions: "community:get-game-publish-options",
+  communityCreateGame: "community:create-game",
+  communitySubmitGameVersion: "community:submit-game-version",
+  communityUploadNativeImage: "community:upload-native-image",
   /**
    * Main → renderer: mirror main-process terminal lines into DevTools.
    * Payload must stay free of raw LLM request/response bodies (metadata and safe summaries only).
@@ -539,6 +543,74 @@ export type CommunityGameSummary = {
 
 export type CommunityListMyGamesResponse =
   | { ok: true; games: CommunityGameSummary[]; total: number }
+  | { ok: false; code: string; message: string; authRequired?: boolean };
+
+export type CommunityGameCategoryOption = {
+  id: number | string;
+  name: string;
+};
+
+export type CommunityGameControlOption = {
+  value: string;
+  label: string;
+};
+
+export type CommunityGameWorkspaceDefaults = {
+  eligible: boolean;
+  appId: string;
+  projectType: ProjectType | null;
+  gameName: string;
+  version: string;
+  description: string;
+};
+
+export type CommunityGetGamePublishOptionsResponse =
+  | {
+      ok: true;
+      categories: CommunityGameCategoryOption[];
+      controls: CommunityGameControlOption[];
+      workspace: CommunityGameWorkspaceDefaults;
+    }
+  | { ok: false; code: string; message: string; authRequired?: boolean };
+
+export type CommunityCreateGameRequest = {
+  mainCover: string;
+  gameName: string;
+  gameId: string;
+  gameCateId: number | string;
+  minPersonal?: number | null;
+  maxPersonal?: number | null;
+  control: string[];
+};
+
+export type CommunityCreateGameResponse =
+  | { ok: true; game: CommunityGameSummary }
+  | { ok: false; code: string; message: string; authRequired?: boolean };
+
+export type CommunityUploadNativeImageRequest = {
+  filePath: string;
+};
+
+export type CommunityUploadNativeImageResponse =
+  | { ok: true; url: string }
+  | { ok: false; code: string; message: string; authRequired?: boolean };
+
+export type CommunitySubmitGameVersionRequest = {
+  gameSystemId: number | string;
+  version: string;
+  description: string;
+  fields?: string;
+  preview: string[];
+};
+
+export type CommunitySubmitGameVersionResponse =
+  | {
+      ok: true;
+      versionId: number | string | null;
+      status: string;
+      gameDownloadUrl: string;
+      gameDownloadMd5: string;
+    }
   | { ok: false; code: string; message: string; authRequired?: boolean };
 
 export function validateDeployWorkspaceConf(raw: unknown): DeployEligibility {

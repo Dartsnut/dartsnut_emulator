@@ -55,6 +55,14 @@ import {
   type CommunityLogoutResponse,
   type CommunityListDeployDevicesResponse,
   type CommunityListMyGamesResponse,
+  type CommunityGetGamePublishOptionsResponse,
+  type CommunityCreateGameRequest,
+  type CommunityCreateGameResponse,
+  type CommunityUploadNativeImageRequest,
+  type CommunityUploadNativeImageResponse,
+  type CommunitySubmitGameVersionRequest,
+  type CommunitySubmitGameVersionResponse,
+  type CommunityGameWorkspaceDefaults,
   type AgentSessionWorkspaceSummary,
   resolveSessionUserLocale,
   type UserLocale,
@@ -267,6 +275,97 @@ function readDeployEligibilityFromWorkspace(): DeployEligibility {
   } catch {
     return { ok: false, reason: "invalid_conf" };
   }
+}
+
+function readCommunityWorkspaceDefaults(): CommunityGameWorkspaceDefaults {
+  const elig = readDeployEligibilityFromWorkspace();
+  const fallback = {
+    eligible: false,
+    appId: "",
+    projectType: null,
+    gameName: "",
+    version: "",
+    description: ""
+  };
+  if (!workspaceRoot || !elig.ok) {
+    return fallback;
+  }
+  const confPath = path.join(workspaceRoot, "conf.json");
+  try {
+    const conf = JSON.parse(fs.readFileSync(confPath, "utf-8")) as Record<string, unknown>;
+    return {
+      eligible: elig.projectType === "game",
+      appId: elig.appId,
+      projectType: elig.projectType,
+      gameName: String(conf.name || elig.appId).trim(),
+      version: String(conf.version || "1.0.0").trim(),
+      description: String(conf.description || "").trim()
+    };
+  } catch {
+    return { ...fallback, appId: elig.appId, projectType: elig.projectType };
+  }
+}
+
+function createPublishTarball(workspacePath: string, appId: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const outFile = path.join(os.tmpdir(), `dartsnut-publish-${appId}-${Date.now()}.tar.gz`);
+    const env = { ...process.env, COPYFILE_DISABLE: "1" };
+    const child = spawn(
+      "tar",
+      [
+        "-c",
+        "--format",
+        "ustar",
+        "-z",
+        "-f",
+        outFile,
+        "-C",
+        workspacePath,
+        "--exclude=.git",
+        "--exclude=node_modules",
+        "--exclude=.DS_Store",
+        "--exclude=.dartsnut",
+        "."
+      ],
+      { stdio: "ignore", env }
+    );
+    child.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") {
+        reject(new Error("Could not run `tar` on PATH to package the game workspace."));
+        return;
+      }
+      reject(err);
+    });
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve(outFile);
+      } else {
+        reject(new Error(`tar exited with code ${code}`));
+      }
+    });
+  });
+}
+
+function fileBlobFromPath(filePath: string, mimeType = "application/octet-stream"): Blob {
+  return new Blob([fs.readFileSync(filePath)], { type: mimeType });
+}
+
+function authRequiredResponse(code: string, message: string): { ok: false; code: string; message: string; authRequired?: boolean } {
+  return { ok: false, code, message, authRequired: code === "session_expired" };
+}
+
+function clearAuthIfExpired(code: string): void {
+  if (code === "session_expired") {
+    clearCommunityAuth(getCommunityUserDataPath());
+  }
+}
+
+function hasResolvableCommunityGameSystemId(id: number | string): boolean {
+  if (typeof id === "number") {
+    return Number.isFinite(id) && id > 0;
+  }
+  const parsed = Number(String(id).trim());
+  return Number.isFinite(parsed) && parsed > 0;
 }
 
 const EMULATOR_LOG_RING_MAX = 200;
@@ -2287,6 +2386,162 @@ ipcMain.handle(
       };
     }
     return { ok: true, games: result.games, total: result.total };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communityGetGamePublishOptions,
+  async (): Promise<CommunityGetGamePublishOptionsResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const client = getCommunityClient();
+    const [categories, controls] = await Promise.all([
+      client.listGameCategories(auth.token),
+      client.listGameControls(auth.token)
+    ]);
+    if (!categories.ok) {
+      clearAuthIfExpired(categories.code);
+      return authRequiredResponse(categories.code, categories.message);
+    }
+    if (!controls.ok) {
+      clearAuthIfExpired(controls.code);
+      return authRequiredResponse(controls.code, controls.message);
+    }
+    return {
+      ok: true,
+      categories: categories.categories,
+      controls: controls.controls,
+      workspace: readCommunityWorkspaceDefaults()
+    };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communityUploadNativeImage,
+  async (_event, request: CommunityUploadNativeImageRequest): Promise<CommunityUploadNativeImageResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const filePath = String(request?.filePath || "").trim();
+    if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      return { ok: false, code: "api_error", message: "Image file does not exist." };
+    }
+    const result = await getCommunityClient().uploadNativeImage(
+      auth.token,
+      fileBlobFromPath(filePath, "application/octet-stream"),
+      path.basename(filePath)
+    );
+    if (!result.ok) {
+      clearAuthIfExpired(result.code);
+      return authRequiredResponse(result.code, result.message);
+    }
+    return { ok: true, url: result.url };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communityCreateGame,
+  async (_event, request: CommunityCreateGameRequest): Promise<CommunityCreateGameResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const gameId = String(request?.gameId || "").trim();
+    const existing = await getCommunityClient().listMyGames(auth.token);
+    if (!existing.ok) {
+      clearAuthIfExpired(existing.code);
+      return authRequiredResponse(existing.code, existing.message);
+    }
+    const found = existing.games.find((game) => game.gameId === gameId);
+    if (found) {
+      if (!hasResolvableCommunityGameSystemId(found.id)) {
+        return { ok: false, code: "api_error", message: "Could not resolve backend game id for this app." };
+      }
+      return { ok: true, game: found };
+    }
+    const result = await getCommunityClient().createGame(auth.token, request);
+    if (!result.ok) {
+      clearAuthIfExpired(result.code);
+      return authRequiredResponse(result.code, result.message);
+    }
+    const refreshed = await getCommunityClient().listMyGames(auth.token);
+    if (refreshed.ok) {
+      const created = refreshed.games.find((game) => game.gameId === gameId);
+      if (created) {
+        if (!hasResolvableCommunityGameSystemId(created.id)) {
+          return { ok: false, code: "api_error", message: "Could not resolve backend game id after creating app." };
+        }
+        return { ok: true, game: created };
+      }
+    }
+    if (!hasResolvableCommunityGameSystemId(result.game.id)) {
+      return { ok: false, code: "api_error", message: "Game app was created, but the backend id was not returned." };
+    }
+    return { ok: true, game: result.game };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communitySubmitGameVersion,
+  async (_event, request: CommunitySubmitGameVersionRequest): Promise<CommunitySubmitGameVersionResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const elig = readDeployEligibilityFromWorkspace();
+    if (!workspaceRoot || !elig.ok || elig.projectType !== "game") {
+      return { ok: false, code: "api_error", message: "Select a valid game workspace before submitting." };
+    }
+    if (!hasResolvableCommunityGameSystemId(request.gameSystemId)) {
+      return { ok: false, code: "api_error", message: "Could not resolve backend game id for version submission." };
+    }
+    const preview = Array.isArray(request?.preview) ? request.preview.map((url) => String(url).trim()).filter(Boolean) : [];
+    if (!preview.length) {
+      return { ok: false, code: "api_error", message: "Upload at least one preview image before submitting." };
+    }
+    let tarballPath: string | null = null;
+    try {
+      tarballPath = await createPublishTarball(workspaceRoot, elig.appId);
+      const packageUpload = await getCommunityClient().uploadGameZip(
+        auth.token,
+        fileBlobFromPath(tarballPath, "application/gzip"),
+        `${elig.appId}.tar.gz`
+      );
+      if (!packageUpload.ok) {
+        clearAuthIfExpired(packageUpload.code);
+        return authRequiredResponse(packageUpload.code, packageUpload.message);
+      }
+      const submit = await getCommunityClient().submitGameVersion(auth.token, {
+        gameSystemId: request.gameSystemId,
+        version: String(request.version || "").trim(),
+        description: String(request.description || "").trim(),
+        fields: String(request.fields || "").trim(),
+        preview,
+        gameDownloadUrl: packageUpload.upload.url,
+        gameDownloadMd5: packageUpload.upload.md5
+      });
+      if (!submit.ok) {
+        clearAuthIfExpired(submit.code);
+        return authRequiredResponse(submit.code, submit.message);
+      }
+      return {
+        ok: true,
+        versionId: submit.result.versionId,
+        status: submit.result.status,
+        gameDownloadUrl: packageUpload.upload.url,
+        gameDownloadMd5: packageUpload.upload.md5
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, code: "network_error", message };
+    } finally {
+      if (tarballPath) {
+        fs.unlink(tarballPath, () => {});
+      }
+    }
   }
 );
 

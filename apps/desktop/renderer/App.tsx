@@ -270,7 +270,7 @@ function CommunityAuthStatus({ communitySession, onAuthRequired, onSignOut }: Co
           type="button"
           className={cn(
             chromeIconBtnClass,
-            "gap-1.5 px-2 text-xs font-medium"
+            "w-auto gap-1.5 px-2 text-xs font-medium"
           )}
           onClick={() => setMenuOpen(!menuOpen)}
           aria-label="Account menu"
@@ -1379,7 +1379,7 @@ export function App() {
       >
         {screen === "main" ? (
           <>
-            <div className="flex min-w-0 shrink-0 items-center gap-1.5">
+            <div className="flex min-w-0 shrink items-center gap-1.5">
               <h1
                 className="m-0 min-w-0 p-0 font-[family-name:var(--font-display)] text-[13px] font-semibold leading-snug tracking-tight text-fg-strong"
                 title={
@@ -1472,10 +1472,10 @@ export function App() {
               </button>
             </div>
             <div
-              className="min-h-0 min-w-6 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
+              className="min-h-0 min-w-0 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
               aria-hidden
             />
-            <div className="inline-flex shrink-0 items-center justify-end gap-3">
+            <div className="inline-flex shrink-0 items-center justify-end gap-3 overflow-visible">
               <CommunityAuthStatus
                 communitySession={communitySession}
                 onAuthRequired={() => requestCommunityAuth("deploy-devices")}

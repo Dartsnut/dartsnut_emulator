@@ -1833,7 +1833,7 @@ export function App() {
                 }
               }}
             >
-              My Games
+              Community
             </button>
           </div>
           <div className="flex min-h-0 flex-1 flex-col">
@@ -1866,10 +1866,10 @@ export function App() {
       <DeployAuthGate
         open={deployAuthGateOpen}
         googleClientId={communitySession.googleClientId}
-        title={communityAuthIntent === "my-games" ? "Sign in to view games" : "Sign in to pick a device"}
+        title={communityAuthIntent === "my-games" ? "Sign in to publish apps" : "Sign in to pick a device"}
         description={
           communityAuthIntent === "my-games"
-            ? "Log in with your Dartsnut account to list games submitted by this account."
+            ? "Log in with your Dartsnut account to publish games and widgets."
             : "Log in with your Dartsnut account to select a bound machine and use its IP automatically. You can continue without signing in and enter an IP manually."
         }
         onSkip={() => {

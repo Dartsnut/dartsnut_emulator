@@ -3,6 +3,7 @@ const test = require("node:test");
 
 const {
   buildInFilter,
+  CommunityClient,
   filterAllowedDeviceIds,
   isApiSuccess,
   isSessionExpiredCode,
@@ -11,6 +12,7 @@ const {
   normalizeBoundDevices,
   normalizeCommunityGameCategories,
   normalizeCommunityGameControls,
+  normalizeCommunityVersions,
   pickUploadMd5,
   pickUploadUrl,
   readCommunityConfig
@@ -75,11 +77,82 @@ test("normalizeCommunityGameControls maps control options", () => {
   ]);
 });
 
+test("normalizeCommunityVersions maps game and widget version rows", () => {
+  assert.deepEqual(
+    normalizeCommunityVersions([
+      { id: 9, game_system_id: 2, version: "1.2.3", status: 1, description: "review", created_at: "2026-01-02" },
+      { id: "", version: "" }
+    ], "game"),
+    [
+      {
+        id: 9,
+        appSystemId: 2,
+        projectType: "game",
+        version: "1.2.3",
+        description: "review",
+        status: "1",
+        createdAt: "2026-01-02"
+      }
+    ]
+  );
+  assert.equal(
+    normalizeCommunityVersions([{ id: "w1", widget_system_id: "7", version: "2.0.0" }], "widget")[0]?.appSystemId,
+    "7"
+  );
+});
+
 test("upload result helpers accept community response aliases", () => {
   assert.equal(pickUploadUrl({ url: "https://cdn.example/game.tar.gz" }), "https://cdn.example/game.tar.gz");
   assert.equal(pickUploadUrl({ game_download_url: "https://cdn.example/game.tar.gz" }), "https://cdn.example/game.tar.gz");
+  assert.equal(pickUploadUrl({ widget_download_url: "https://cdn.example/widget.tar.gz" }), "https://cdn.example/widget.tar.gz");
   assert.equal(pickUploadMd5({ md5: "abc" }), "abc");
   assert.equal(pickUploadMd5({ game_download_md5: "def" }), "def");
+  assert.equal(pickUploadMd5({ widget_download_md5: "ghi" }), "ghi");
+});
+
+test("withdrawAppVersion falls back across review withdrawal routes", async () => {
+  const calls = [];
+  const client = new CommunityClient(
+    {
+      baseApi: "https://api.example.com",
+      supabaseUrl: "",
+      supabaseAnonKey: "",
+      supabaseDeviceTable: "remote_devices",
+      googleClientId: "",
+      hasSupabase: false
+    },
+    async (url, init) => {
+      calls.push({ url, init });
+      if (String(url).endsWith("/community/game-version/withdraw")) {
+        return {
+          status: 404,
+          json: async () => ({ code: 404, msg: "missing" })
+        };
+      }
+      return {
+        status: 200,
+        json: async () => ({ code: 1001, data: { status: 0 } })
+      };
+    }
+  );
+
+  const result = await client.withdrawAppVersion("token-1", {
+    projectType: "game",
+    versionId: 9,
+    appSystemId: 2
+  });
+
+  assert.deepEqual(result, { ok: true, status: "0" });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]?.url, "https://api.example.com/community/game-version/withdraw");
+  assert.equal(calls[1]?.url, "https://api.example.com/community/game-version/cancel-review");
+  assert.deepEqual(JSON.parse(calls[1]?.init.body), {
+    id: 9,
+    version_id: 9,
+    game_system_id: 2,
+    submit_mode: "draft",
+    status: 0
+  });
 });
 
 test("mergeDeployDevices pulls ip and ssid from state", () => {

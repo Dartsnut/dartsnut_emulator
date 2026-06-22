@@ -49,24 +49,63 @@ export type CommunityGameRow = {
   createdAt: string | null;
 };
 
-export type CommunityGameCategoryRow = {
+export type CommunityAppRow = {
+  id: number | string;
+  appId: string;
+  appName: string;
+  projectType: "game" | "widget";
+  mainCover: string;
+  description: string;
+  status: string;
+  createdAt: string | null;
+};
+
+export type CommunityCategoryRow = {
   id: number | string;
   name: string;
 };
 
-export type CommunityGameControlRow = {
+export type CommunityControlRow = {
   value: string;
   label: string;
 };
 
-export type CommunityCreateGameInput = {
+export type CommunitySizeRow = {
+  value: string;
+  label: string;
+};
+
+export type CommunityVersionRow = {
+  id: number | string;
+  appSystemId: number | string;
+  projectType: "game" | "widget";
+  version: string;
+  description: string;
+  status: string;
+  createdAt: string | null;
+};
+
+export type CommunityCreateAppInput = {
+  projectType: "game" | "widget";
   mainCover: string;
-  gameName: string;
-  gameId: string;
-  gameCateId: number | string;
+  appName: string;
+  appId: string;
+  categoryId: number | string;
   minPersonal?: number | null;
   maxPersonal?: number | null;
   control: string[];
+  widgetSize?: string;
+};
+
+export type CommunitySubmitAppVersionInput = {
+  projectType: "game" | "widget";
+  appSystemId: number | string;
+  version: string;
+  downloadUrl: string;
+  downloadMd5: string;
+  description: string;
+  fields?: string;
+  preview: string[];
 };
 
 export type CommunitySubmitGameVersionInput = {
@@ -79,12 +118,18 @@ export type CommunitySubmitGameVersionInput = {
   preview: string[];
 };
 
-export type CommunityGameVersionSubmitResult = {
+export type CommunityVersionSubmitResult = {
   versionId: number | string | null;
   status: string;
 };
 
-export type CommunityUploadGameZipResult = {
+export type CommunityWithdrawAppVersionInput = {
+  projectType: "game" | "widget";
+  versionId: number | string;
+  appSystemId: number | string;
+};
+
+export type CommunityUploadZipResult = {
   url: string;
   md5: string;
 };
@@ -223,12 +268,41 @@ export function normalizeCommunityGames(list: unknown[]): CommunityGameRow[] {
     .filter((row): row is CommunityGameRow => row !== null);
 }
 
-export function normalizeCommunityGameCategories(list: unknown[]): CommunityGameCategoryRow[] {
+export function normalizeCommunityApps(list: unknown[], projectType: "game" | "widget"): CommunityAppRow[] {
   return list
     .map((row) => {
       const r = row as Record<string, unknown>;
-      const id = r.id ?? r.game_cate_id ?? "";
-      const name = String(r.game_cate_name || r.name || r.label || "").trim();
+      const systemKey = projectType === "game" ? "game_system_id" : "widget_system_id";
+      const idKey = projectType === "game" ? "game_id" : "widget_id";
+      const nameKey = projectType === "game" ? "game_name" : "widget_name";
+      const id = r.id ?? r[systemKey] ?? r[idKey] ?? "";
+      const appId = String(r[idKey] || r.appId || "").trim();
+      const appName = String(r[nameKey] || r.appName || "").trim();
+      if (!id && !appId && !appName) {
+        return null;
+      }
+      return {
+        id: typeof id === "number" ? id : String(id).trim(),
+        appId,
+        appName,
+        projectType,
+        mainCover: String(r.main_cover || r.mainCover || "").trim(),
+        description: String(r.description || r.desc || "").trim(),
+        status: String(r.status || "").trim(),
+        createdAt: r.created_at != null ? String(r.created_at) : r.createdAt != null ? String(r.createdAt) : null
+      };
+    })
+    .filter((row): row is CommunityAppRow => row !== null);
+}
+
+export function normalizeCommunityCategories(list: unknown[], projectType: "game" | "widget"): CommunityCategoryRow[] {
+  return list
+    .map((row) => {
+      const r = row as Record<string, unknown>;
+      const id = r.id ?? (projectType === "game" ? r.game_cate_id : r.widget_cate_id) ?? "";
+      const name = String(
+        (projectType === "game" ? r.game_cate_name : r.widget_cate_name) || r.name || r.label || ""
+      ).trim();
       if (!id || !name) {
         return null;
       }
@@ -237,10 +311,10 @@ export function normalizeCommunityGameCategories(list: unknown[]): CommunityGame
         name
       };
     })
-    .filter((row): row is CommunityGameCategoryRow => row !== null);
+    .filter((row): row is CommunityCategoryRow => row !== null);
 }
 
-export function normalizeCommunityGameControls(list: unknown[]): CommunityGameControlRow[] {
+export function normalizeCommunityControls(list: unknown[]): CommunityControlRow[] {
   return list
     .map((row) => {
       const r = row as Record<string, unknown>;
@@ -251,17 +325,73 @@ export function normalizeCommunityGameControls(list: unknown[]): CommunityGameCo
       }
       return { value, label: label || value };
     })
-    .filter((row): row is CommunityGameControlRow => row !== null);
+    .filter((row): row is CommunityControlRow => row !== null);
+}
+
+export function normalizeCommunitySizes(list: unknown[]): CommunitySizeRow[] {
+  return list
+    .map((row) => {
+      const r = row as Record<string, unknown>;
+      const value = String(r.value || r.id || r.key || "").trim();
+      const label = String(r.label || r.name || value).trim();
+      if (!value) {
+        return null;
+      }
+      return { value, label: label || value };
+    })
+    .filter((row): row is CommunitySizeRow => row !== null);
+}
+
+export function normalizeCommunityVersions(list: unknown[], projectType: "game" | "widget"): CommunityVersionRow[] {
+  return list
+    .map((row) => {
+      const r = row as Record<string, unknown>;
+      const systemKey = projectType === "game" ? "game_system_id" : "widget_system_id";
+      const id = r.id ?? r.version_id ?? "";
+      const appSystemId = r[systemKey] ?? r.appSystemId ?? "";
+      const version = String(r.version || "").trim();
+      if (!id && !version) {
+        return null;
+      }
+      return {
+        id: typeof id === "number" ? id : String(id).trim(),
+        appSystemId: typeof appSystemId === "number" ? appSystemId : String(appSystemId).trim(),
+        projectType,
+        version,
+        description: String(r.description || r.desc || "").trim(),
+        status: String(r.status ?? "").trim(),
+        createdAt: r.created_at != null ? String(r.created_at) : r.createdAt != null ? String(r.createdAt) : null
+      };
+    })
+    .filter((row): row is CommunityVersionRow => row !== null);
+}
+
+export const normalizeCommunityGameCategories = (list: unknown[]): CommunityCategoryRow[] =>
+  normalizeCommunityCategories(list, "game");
+
+export const normalizeCommunityGameControls = normalizeCommunityControls;
+
+export function toCommunityAppRow(game: CommunityGameRow): CommunityAppRow {
+  return {
+    id: game.id,
+    appId: game.gameId,
+    appName: game.gameName,
+    projectType: "game",
+    mainCover: game.mainCover,
+    description: game.description,
+    status: game.status,
+    createdAt: game.createdAt
+  };
 }
 
 export function pickUploadUrl(data: unknown): string {
   const d = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
-  return String(d.url || d.path || d.file_url || d.fileUrl || d.game_download_url || "").trim();
+  return String(d.url || d.path || d.file_url || d.fileUrl || d.game_download_url || d.widget_download_url || "").trim();
 }
 
 export function pickUploadMd5(data: unknown): string {
   const d = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
-  return String(d.md5 || d.file_md5 || d.fileMd5 || d.game_download_md5 || "").trim();
+  return String(d.md5 || d.file_md5 || d.fileMd5 || d.game_download_md5 || d.widget_download_md5 || "").trim();
 }
 
 type FetchLike = typeof fetch;
@@ -530,10 +660,56 @@ export class CommunityClient {
     }
   }
 
+  async listMyWidgets(
+    token: string
+  ): Promise<
+    | { ok: true; widgets: CommunityAppRow[]; total: number }
+    | { ok: false; code: CommunityAuthErrorCode; message: string }
+  > {
+    if (!this.config.baseApi) {
+      return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
+    }
+    if (!token.trim()) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    try {
+      const res = await this.fetchImpl(`${this.config.baseApi}/community/widget/my-list`, {
+        method: "GET",
+        headers: { token: token.trim(), Accept: "application/json" }
+      });
+      const raw = await res.json().catch(() => null);
+      const parsed = normalizeApiJson(raw) || {};
+      const code = Number(parsed.code);
+      if (res.status === 403) {
+        return {
+          ok: false,
+          code: "session_expired",
+          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+        };
+      }
+      if (!isApiSuccess(code)) {
+        return {
+          ok: false,
+          code: mapApiErrorCode(code),
+          message: String(parsed.desc || parsed.msg || "Failed to load widgets.")
+        };
+      }
+      const data = parsed.data as Record<string, unknown> | null | undefined;
+      const list = Array.isArray(data?.list) ? data.list : Array.isArray(parsed.data) ? parsed.data : [];
+      const widgets = normalizeCommunityApps(list, "widget");
+      const totalRaw = data?.total;
+      const total = typeof totalRaw === "number" ? totalRaw : widgets.length;
+      return { ok: true, widgets, total };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, code: "network_error", message };
+    }
+  }
+
   async listGameCategories(
     token: string
   ): Promise<
-    | { ok: true; categories: CommunityGameCategoryRow[] }
+    | { ok: true; categories: CommunityCategoryRow[] }
     | { ok: false; code: CommunityAuthErrorCode; message: string }
   > {
     if (!this.config.baseApi) {
@@ -563,7 +739,47 @@ export class CommunityClient {
       }
       const data = parsed.data as Record<string, unknown> | null | undefined;
       const list = Array.isArray(data?.list) ? data.list : Array.isArray(parsed.data) ? parsed.data : [];
-      return { ok: true, categories: normalizeCommunityGameCategories(list) };
+      return { ok: true, categories: normalizeCommunityCategories(list, "game") };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, code: "network_error", message };
+    }
+  }
+
+  async listWidgetCategories(
+    token: string
+  ): Promise<
+    | { ok: true; categories: CommunityCategoryRow[] }
+    | { ok: false; code: CommunityAuthErrorCode; message: string }
+  > {
+    if (!this.config.baseApi) {
+      return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
+    }
+    try {
+      const res = await this.fetchImpl(`${this.config.baseApi}/community/widget-cate/list`, {
+        method: "GET",
+        headers: token.trim() ? { token: token.trim(), Accept: "application/json" } : { Accept: "application/json" }
+      });
+      const raw = await res.json().catch(() => null);
+      const parsed = normalizeApiJson(raw) || {};
+      const code = Number(parsed.code);
+      if (res.status === 403) {
+        return {
+          ok: false,
+          code: "session_expired",
+          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+        };
+      }
+      if (!isApiSuccess(code)) {
+        return {
+          ok: false,
+          code: mapApiErrorCode(code),
+          message: String(parsed.desc || parsed.msg || "Failed to load widget categories.")
+        };
+      }
+      const data = parsed.data as Record<string, unknown> | null | undefined;
+      const list = Array.isArray(data?.list) ? data.list : Array.isArray(parsed.data) ? parsed.data : [];
+      return { ok: true, categories: normalizeCommunityCategories(list, "widget") };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, code: "network_error", message };
@@ -573,7 +789,7 @@ export class CommunityClient {
   async listGameControls(
     token: string
   ): Promise<
-    | { ok: true; controls: CommunityGameControlRow[] }
+    | { ok: true; controls: CommunityControlRow[] }
     | { ok: false; code: CommunityAuthErrorCode; message: string }
   > {
     if (!this.config.baseApi) {
@@ -604,39 +820,26 @@ export class CommunityClient {
       const data = parsed.data as Record<string, unknown> | null | undefined;
       const game = data?.GAME && typeof data.GAME === "object" ? (data.GAME as Record<string, unknown>) : {};
       const list = Array.isArray(game.CONTROL_OPTIONS) ? game.CONTROL_OPTIONS : [];
-      return { ok: true, controls: normalizeCommunityGameControls(list) };
+      return { ok: true, controls: normalizeCommunityControls(list) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, code: "network_error", message };
     }
   }
 
-  async createGame(
-    token: string,
-    input: CommunityCreateGameInput
+  async listWidgetStatusOptions(
+    token: string
   ): Promise<
-    | { ok: true; game: CommunityGameRow }
+    | { ok: true; controls: CommunityControlRow[]; sizes: CommunitySizeRow[] }
     | { ok: false; code: CommunityAuthErrorCode; message: string }
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
     }
-    if (!token.trim()) {
-      return { ok: false, code: "session_expired", message: "Please sign in first." };
-    }
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/game/add`, {
-        method: "POST",
-        headers: { token: token.trim(), "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          main_cover: input.mainCover,
-          game_name: input.gameName,
-          game_cate_id: Number(input.gameCateId),
-          game_id: input.gameId,
-          min_personal: input.minPersonal || undefined,
-          max_personal: input.maxPersonal || undefined,
-          control: input.control
-        })
+      const res = await this.fetchImpl(`${this.config.baseApi}/community/status/info`, {
+        method: "GET",
+        headers: token.trim() ? { token: token.trim(), Accept: "application/json" } : { Accept: "application/json" }
       });
       const raw = await res.json().catch(() => null);
       const parsed = normalizeApiJson(raw) || {};
@@ -652,24 +855,186 @@ export class CommunityClient {
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || "Failed to create game app.")
+          message: String(parsed.desc || parsed.msg || "Failed to load widget status options.")
+        };
+      }
+      const data = parsed.data as Record<string, unknown> | null | undefined;
+      const widget = data?.WIDGET && typeof data.WIDGET === "object" ? (data.WIDGET as Record<string, unknown>) : {};
+      const controls = Array.isArray(widget.CONTROL_OPTIONS) ? widget.CONTROL_OPTIONS : [];
+      const sizes = Array.isArray(widget.WIDGET_SIZE_OPTIONS) ? widget.WIDGET_SIZE_OPTIONS : [];
+      return { ok: true, controls: normalizeCommunityControls(controls), sizes: normalizeCommunitySizes(sizes) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, code: "network_error", message };
+    }
+  }
+
+  async listAppVersions(
+    token: string,
+    projectType: "game" | "widget",
+    appSystemId: number | string
+  ): Promise<
+    | { ok: true; versions: CommunityVersionRow[]; total: number }
+    | { ok: false; code: CommunityAuthErrorCode; message: string }
+  > {
+    if (!this.config.baseApi) {
+      return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
+    }
+    if (!token.trim()) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    const isWidget = projectType === "widget";
+    const qs = new URLSearchParams({
+      [isWidget ? "widget_system_id" : "game_system_id"]: String(appSystemId)
+    });
+    try {
+      const res = await this.fetchImpl(`${this.config.baseApi}/community/${isWidget ? "widget" : "game"}-version/list?${qs.toString()}`, {
+        method: "GET",
+        headers: { token: token.trim(), Accept: "application/json" }
+      });
+      const raw = await res.json().catch(() => null);
+      const parsed = normalizeApiJson(raw) || {};
+      const code = Number(parsed.code);
+      if (res.status === 403) {
+        return {
+          ok: false,
+          code: "session_expired",
+          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+        };
+      }
+      if (!isApiSuccess(code)) {
+        return {
+          ok: false,
+          code: mapApiErrorCode(code),
+          message: String(parsed.desc || parsed.msg || `Failed to load ${projectType} versions.`)
+        };
+      }
+      const data = parsed.data as Record<string, unknown> | null | undefined;
+      const list = Array.isArray(data?.list) ? data.list : Array.isArray(parsed.data) ? parsed.data : [];
+      const versions = normalizeCommunityVersions(list, projectType);
+      const totalRaw = data?.total;
+      const total = typeof totalRaw === "number" ? totalRaw : versions.length;
+      return { ok: true, versions, total };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, code: "network_error", message };
+    }
+  }
+
+  async createApp(
+    token: string,
+    input: CommunityCreateAppInput
+  ): Promise<
+    | { ok: true; app: CommunityAppRow }
+    | { ok: false; code: CommunityAuthErrorCode; message: string }
+  > {
+    if (!this.config.baseApi) {
+      return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
+    }
+    if (!token.trim()) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    try {
+      const isWidget = input.projectType === "widget";
+      const res = await this.fetchImpl(`${this.config.baseApi}/community/${isWidget ? "widget" : "game"}/add`, {
+        method: "POST",
+        headers: { token: token.trim(), "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(
+          isWidget
+            ? {
+                main_cover: input.mainCover,
+                widget_name: input.appName,
+                widget_cate_id: Number(input.categoryId),
+                widget_id: input.appId,
+                control: input.control,
+                widget_size: input.widgetSize || ""
+              }
+            : {
+                main_cover: input.mainCover,
+                game_name: input.appName,
+                game_cate_id: Number(input.categoryId),
+                game_id: input.appId,
+                min_personal: input.minPersonal || undefined,
+                max_personal: input.maxPersonal || undefined,
+                control: input.control
+              }
+        )
+      });
+      const raw = await res.json().catch(() => null);
+      const parsed = normalizeApiJson(raw) || {};
+      const code = Number(parsed.code);
+      if (res.status === 403) {
+        return {
+          ok: false,
+          code: "session_expired",
+          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+        };
+      }
+      if (!isApiSuccess(code)) {
+        return {
+          ok: false,
+          code: mapApiErrorCode(code),
+          message: String(parsed.desc || parsed.msg || `Failed to create ${input.projectType} app.`)
         };
       }
       const data = parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : {};
-      const game = normalizeCommunityGames([data.game || data.info || data]).at(0) || {
-        id: data.id != null ? (typeof data.id === "number" ? data.id : String(data.id).trim()) : input.gameId,
-        gameId: input.gameId,
-        gameName: input.gameName,
+      const app = normalizeCommunityApps([data[isWidget ? "widget" : "game"] || data.info || data], input.projectType).at(0) || {
+        id: data.id != null ? (typeof data.id === "number" ? data.id : String(data.id).trim()) : input.appId,
+        appId: input.appId,
+        appName: input.appName,
+        projectType: input.projectType,
         mainCover: input.mainCover,
         description: "",
         status: "",
         createdAt: null
       };
-      return { ok: true, game };
+      return { ok: true, app };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, code: "network_error", message };
     }
+  }
+
+  async createGame(
+    token: string,
+    input: {
+      mainCover: string;
+      gameName: string;
+      gameId: string;
+      gameCateId: number | string;
+      minPersonal?: number | null;
+      maxPersonal?: number | null;
+      control: string[];
+    }
+  ): Promise<
+    | { ok: true; game: CommunityGameRow }
+    | { ok: false; code: CommunityAuthErrorCode; message: string }
+  > {
+    const result = await this.createApp(token, {
+      projectType: "game",
+      mainCover: input.mainCover,
+      appName: input.gameName,
+      appId: input.gameId,
+      categoryId: input.gameCateId,
+      minPersonal: input.minPersonal,
+      maxPersonal: input.maxPersonal,
+      control: input.control
+    });
+    if (!result.ok) {
+      return result;
+    }
+    return {
+      ok: true,
+      game: {
+        id: result.app.id,
+        gameId: result.app.appId,
+        gameName: result.app.appName,
+        mainCover: result.app.mainCover,
+        description: result.app.description,
+        status: result.app.status,
+        createdAt: result.app.createdAt
+      }
+    };
   }
 
   async uploadNativeImage(
@@ -688,10 +1053,29 @@ export class CommunityClient {
     file: Blob,
     filename: string
   ): Promise<
-    | { ok: true; upload: CommunityUploadGameZipResult }
+    | { ok: true; upload: CommunityUploadZipResult }
     | { ok: false; code: CommunityAuthErrorCode; message: string }
   > {
     const result = await this.uploadFileForUrl(token, "/community/upload/upload-game-zip", file, filename, "package");
+    if (!result.ok) {
+      return result;
+    }
+    const md5 = pickUploadMd5(result.data);
+    if (!md5) {
+      return { ok: false, code: "api_error", message: "Upload response did not include an MD5." };
+    }
+    return { ok: true, upload: { url: result.url, md5 } };
+  }
+
+  async uploadWidgetZip(
+    token: string,
+    file: Blob,
+    filename: string
+  ): Promise<
+    | { ok: true; upload: CommunityUploadZipResult }
+    | { ok: false; code: CommunityAuthErrorCode; message: string }
+  > {
+    const result = await this.uploadFileForUrl(token, "/community/upload/upload-widget-zip", file, filename, "package");
     if (!result.ok) {
       return result;
     }
@@ -754,11 +1138,11 @@ export class CommunityClient {
     }
   }
 
-  async submitGameVersion(
+  async submitAppVersion(
     token: string,
-    input: CommunitySubmitGameVersionInput
+    input: CommunitySubmitAppVersionInput
   ): Promise<
-    | { ok: true; result: CommunityGameVersionSubmitResult }
+    | { ok: true; result: CommunityVersionSubmitResult }
     | { ok: false; code: CommunityAuthErrorCode; message: string }
   > {
     if (!this.config.baseApi) {
@@ -768,19 +1152,33 @@ export class CommunityClient {
       return { ok: false, code: "session_expired", message: "Please sign in first." };
     }
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/game-version/add`, {
+      const isWidget = input.projectType === "widget";
+      const res = await this.fetchImpl(`${this.config.baseApi}/community/${isWidget ? "widget" : "game"}-version/add`, {
         method: "POST",
         headers: { token: token.trim(), "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          game_system_id: Number(input.gameSystemId),
-          version: input.version,
-          game_download_url: input.gameDownloadUrl,
-          game_download_md5: input.gameDownloadMd5,
-          description: input.description,
-          fields: input.fields || "",
-          preview: input.preview,
-          submit_mode: "review"
-        })
+        body: JSON.stringify(
+          isWidget
+            ? {
+                widget_system_id: Number(input.appSystemId),
+                version: input.version,
+                widget_download_url: input.downloadUrl,
+                widget_download_md5: input.downloadMd5,
+                description: input.description,
+                fields: input.fields || "",
+                preview: input.preview,
+                submit_mode: "review"
+              }
+            : {
+                game_system_id: Number(input.appSystemId),
+                version: input.version,
+                game_download_url: input.downloadUrl,
+                game_download_md5: input.downloadMd5,
+                description: input.description,
+                fields: input.fields || "",
+                preview: input.preview,
+                submit_mode: "review"
+              }
+        )
       });
       const raw = await res.json().catch(() => null);
       const parsed = normalizeApiJson(raw) || {};
@@ -820,6 +1218,91 @@ export class CommunityClient {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, code: "network_error", message };
     }
+  }
+
+  async withdrawAppVersion(
+    token: string,
+    input: CommunityWithdrawAppVersionInput
+  ): Promise<
+    | { ok: true; status: string }
+    | { ok: false; code: CommunityAuthErrorCode; message: string }
+  > {
+    if (!this.config.baseApi) {
+      return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
+    }
+    if (!token.trim()) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    const isWidget = input.projectType === "widget";
+    const appSystemKey = isWidget ? "widget_system_id" : "game_system_id";
+    const versionId = typeof input.versionId === "number" ? input.versionId : String(input.versionId).trim();
+    const appSystemId =
+      typeof input.appSystemId === "number" ? input.appSystemId : String(input.appSystemId).trim();
+    const payload = {
+      id: versionId,
+      version_id: versionId,
+      [appSystemKey]: appSystemId,
+      submit_mode: "draft",
+      status: 0
+    };
+    const endpoints = [
+      `/community/${isWidget ? "widget" : "game"}-version/withdraw`,
+      `/community/${isWidget ? "widget" : "game"}-version/cancel-review`,
+      `/community/${isWidget ? "widget" : "game"}-version/cancel`,
+      `/community/${isWidget ? "widget" : "game"}-version/update`
+    ];
+    let lastMessage = `Failed to pull ${input.projectType} version out of review.`;
+    let lastCode: CommunityAuthErrorCode = "api_error";
+    for (const endpoint of endpoints) {
+      try {
+        const res = await this.fetchImpl(`${this.config.baseApi}${endpoint}`, {
+          method: "POST",
+          headers: { token: token.trim(), "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const raw = await res.json().catch(() => null);
+        const parsed = normalizeApiJson(raw) || {};
+        const code = Number(parsed.code);
+        const message = String(parsed.desc || parsed.msg || lastMessage);
+        if (res.status === 403) {
+          return { ok: false, code: "session_expired", message: message || "Please sign in again." };
+        }
+        if (res.status === 404 || code === 404) {
+          lastMessage = message;
+          continue;
+        }
+        if (!isApiSuccess(code)) {
+          lastCode = mapApiErrorCode(code);
+          lastMessage = message;
+          continue;
+        }
+        const data = parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : {};
+        return { ok: true, status: String(data.status ?? "0") };
+      } catch (error) {
+        lastCode = "network_error";
+        lastMessage = error instanceof Error ? error.message : String(error);
+      }
+    }
+    return { ok: false, code: lastCode, message: lastMessage };
+  }
+
+  async submitGameVersion(
+    token: string,
+    input: CommunitySubmitGameVersionInput
+  ): Promise<
+    | { ok: true; result: CommunityVersionSubmitResult }
+    | { ok: false; code: CommunityAuthErrorCode; message: string }
+  > {
+    return this.submitAppVersion(token, {
+      projectType: "game",
+      appSystemId: input.gameSystemId,
+      version: input.version,
+      downloadUrl: input.gameDownloadUrl,
+      downloadMd5: input.gameDownloadMd5,
+      description: input.description,
+      fields: input.fields,
+      preview: input.preview
+    });
   }
 }
 

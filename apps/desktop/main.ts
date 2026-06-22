@@ -54,6 +54,7 @@ import {
   type CommunityLoginResponse,
   type CommunityLogoutResponse,
   type CommunityListDeployDevicesResponse,
+  type CommunityListMyGamesResponse,
   type AgentSessionWorkspaceSummary,
   resolveSessionUserLocale,
   type UserLocale,
@@ -2244,20 +2245,48 @@ ipcMain.handle(
   async (): Promise<CommunityListDeployDevicesResponse> => {
     const auth = readCommunityAuth(getCommunityUserDataPath());
     if (!auth?.token) {
-      return { ok: false, code: "session_expired", message: "Please sign in first." };
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
     }
     const result = await getCommunityClient().listDeployDevices(auth.token);
     if (!result.ok) {
       if (result.code === "session_expired") {
         clearCommunityAuth(getCommunityUserDataPath());
       }
-      return { ok: false, code: result.code, message: result.message };
+      return {
+        ok: false,
+        code: result.code,
+        message: result.message,
+        authRequired: result.code === "session_expired"
+      };
     }
     return {
       ok: true,
       devices: result.devices,
       supabaseConfigured: result.supabaseConfigured
     };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communityListMyGames,
+  async (): Promise<CommunityListMyGamesResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const result = await getCommunityClient().listMyGames(auth.token);
+    if (!result.ok) {
+      if (result.code === "session_expired") {
+        clearCommunityAuth(getCommunityUserDataPath());
+      }
+      return {
+        ok: false,
+        code: result.code,
+        message: result.message,
+        authRequired: result.code === "session_expired"
+      };
+    }
+    return { ok: true, games: result.games, total: result.total };
   }
 );
 

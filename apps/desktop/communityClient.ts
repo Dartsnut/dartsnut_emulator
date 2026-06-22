@@ -39,6 +39,16 @@ export type DeployDeviceRow = {
   updatedAt: string | null;
 };
 
+export type CommunityGameRow = {
+  id: number | string;
+  gameId: string;
+  gameName: string;
+  mainCover: string;
+  description: string;
+  status: string;
+  createdAt: string | null;
+};
+
 export type ApiEnvelope = {
   code?: number;
   desc?: string;
@@ -148,6 +158,29 @@ export function filterAllowedDeviceIds(
   }
   const set = new Set(allowed);
   return requested.map((id) => String(id).trim()).filter((id) => id && set.has(id));
+}
+
+export function normalizeCommunityGames(list: unknown[]): CommunityGameRow[] {
+  return list
+    .map((row) => {
+      const r = row as Record<string, unknown>;
+      const id = r.id ?? r.game_system_id ?? r.gameSystemId ?? r.game_id ?? "";
+      const gameId = String(r.game_id || r.gameId || "").trim();
+      const gameName = String(r.game_name || r.gameName || "").trim();
+      if (!id && !gameId && !gameName) {
+        return null;
+      }
+      return {
+        id: typeof id === "number" ? id : String(id).trim(),
+        gameId,
+        gameName,
+        mainCover: String(r.main_cover || r.mainCover || "").trim(),
+        description: String(r.description || r.desc || "").trim(),
+        status: String(r.status || "").trim(),
+        createdAt: r.created_at != null ? String(r.created_at) : r.createdAt != null ? String(r.createdAt) : null
+      };
+    })
+    .filter((row): row is CommunityGameRow => row !== null);
 }
 
 type FetchLike = typeof fetch;
@@ -261,6 +294,13 @@ export class CommunityClient {
       const raw = await res.json().catch(() => null);
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
+      if (res.status === 403) {
+        return {
+          ok: false,
+          code: "session_expired",
+          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+        };
+      }
       if (!isApiSuccess(code)) {
         return {
           ok: false,
@@ -361,6 +401,52 @@ export class CommunityClient {
       devices: mergeDeployDevices(filteredBindings, stateResult.states),
       supabaseConfigured: stateResult.supabaseConfigured
     };
+  }
+
+  async listMyGames(
+    token: string
+  ): Promise<
+    | { ok: true; games: CommunityGameRow[]; total: number }
+    | { ok: false; code: CommunityAuthErrorCode; message: string }
+  > {
+    if (!this.config.baseApi) {
+      return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
+    }
+    if (!token.trim()) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    try {
+      const res = await this.fetchImpl(`${this.config.baseApi}/community/game/my-list`, {
+        method: "GET",
+        headers: { token: token.trim(), Accept: "application/json" }
+      });
+      const raw = await res.json().catch(() => null);
+      const parsed = normalizeApiJson(raw) || {};
+      const code = Number(parsed.code);
+      if (res.status === 403) {
+        return {
+          ok: false,
+          code: "session_expired",
+          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+        };
+      }
+      if (!isApiSuccess(code)) {
+        return {
+          ok: false,
+          code: mapApiErrorCode(code),
+          message: String(parsed.desc || parsed.msg || "Failed to load games.")
+        };
+      }
+      const data = parsed.data as Record<string, unknown> | null | undefined;
+      const list = Array.isArray(data?.list) ? data.list : Array.isArray(parsed.data) ? parsed.data : [];
+      const totalRaw = data?.total;
+      const games = normalizeCommunityGames(list);
+      const total = typeof totalRaw === "number" ? totalRaw : games.length;
+      return { ok: true, games, total };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, code: "network_error", message };
+    }
   }
 }
 

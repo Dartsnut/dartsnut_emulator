@@ -8,9 +8,7 @@ const envPath = path.join(repoRoot, ".env");
 const outputPath = path.join(repoRoot, "apps", "desktop", "packagedEnv.generated.ts");
 
 const allowList = [
-  "XIAOMI_BASE_URL",
-  "XIAOMI_API_KEY",
-  "XIAOMI_MODEL",
+  "DARTSNUT_MODEL_DECRYPTION_KEY",
   "DARTSNUT_BASE_API",
   "DARTSNUT_SUPABASE_URL",
   "DARTSNUT_SUPABASE_ANON_KEY",

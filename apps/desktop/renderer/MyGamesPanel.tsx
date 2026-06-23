@@ -10,6 +10,12 @@ import type {
   ProjectType
 } from "@dartsnut/shared-ipc";
 import { isCommunityAuthSkippedForSession } from "./DeployAuthGate";
+import {
+  CommunityErrorSnackbar,
+  isCommunityAuthFailure,
+  shouldShowCommunityErrorSnackbar,
+  type CommunityApiFailure
+} from "./CommunityErrorSnackbar";
 import { cn } from "./cn";
 
 export type MyGamesPanelProps = {
@@ -39,6 +45,11 @@ type PublishForm = {
   version: string;
   description: string;
   fields: string;
+};
+
+type ApiErrorSnackbarState = {
+  message: string;
+  detail?: string;
 };
 
 const emptyWorkspace: CommunityWorkspaceDefaults = {
@@ -72,10 +83,6 @@ function defaultForm(workspace: CommunityWorkspaceDefaults = emptyWorkspace): Pu
     description: workspace.description || "",
     fields: ""
   };
-}
-
-function isMissingAuth(res: { ok: boolean; authRequired?: boolean; code?: string }): boolean {
-  return !res.ok && (res.authRequired || res.code === "session_expired");
 }
 
 function versionStatusLabel(status: string): string {
@@ -146,6 +153,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
   const [submitStage, setSubmitStage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [apiErrorSnackbar, setApiErrorSnackbar] = useState<ApiErrorSnackbarState | null>(null);
 
   const projectType = workspace.projectType;
   const isWidget = projectType === "widget";
@@ -180,6 +188,20 @@ export const MyGamesPanel = memo(function MyGamesPanel({
     }
   }, [onAuthRequired, onCommunitySessionChange]);
 
+  const surfaceApiFailure = useCallback(
+    async (res: CommunityApiFailure, message?: string) => {
+      if (isCommunityAuthFailure(res)) {
+        await applyAuthFailure();
+        return;
+      }
+      if (shouldShowCommunityErrorSnackbar(res)) {
+        const detail = res.serverMessage?.trim();
+        setApiErrorSnackbar(message ? { message, detail } : { message: detail });
+      }
+    },
+    [applyAuthFailure]
+  );
+
   const loadPublishOptions = useCallback(async () => {
     if (!active || !api?.communityGetPublishOptions || (!communitySession.loggedIn && isCommunityAuthSkippedForSession())) {
       setApps([]);
@@ -196,12 +218,12 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       if (!res.ok) {
         setApps([]);
         setCurrentVersions([]);
-        if (isMissingAuth(res)) {
-          await applyAuthFailure();
+        if (isCommunityAuthFailure(res)) {
+          await surfaceApiFailure(res);
           setError(null);
           return;
         }
-        setError(res.message);
+        await surfaceApiFailure(res);
         return;
       }
       setApps([...res.games, ...res.widgets]);
@@ -236,11 +258,11 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       });
     } catch (e) {
       setApps([]);
-      setError(e instanceof Error ? e.message : String(e));
+      setApiErrorSnackbar({ message: e instanceof Error ? e.message : String(e) });
     } finally {
       setLoading(false);
     }
-  }, [active, api, applyAuthFailure, communitySession.loggedIn]);
+  }, [active, api, communitySession.loggedIn, surfaceApiFailure]);
 
   useEffect(() => {
     void loadPublishOptions();
@@ -259,12 +281,10 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       return { ...pending, uploading: false, error: "Could not resolve file path." };
     }
     const res = await api.communityUploadNativeImage({ filePath });
-    if (!res.ok) {
-      if (isMissingAuth(res)) {
-        await applyAuthFailure();
+      if (!res.ok) {
+        await surfaceApiFailure(res, "Failed to upload image.");
+        return { ...pending, uploading: false, error: res.message };
       }
-      return { ...pending, uploading: false, error: res.message };
-    }
     return { ...pending, url: res.url, uploading: false };
   }
 
@@ -337,10 +357,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
         widgetSize: isWidget ? form.widgetSize : undefined
       });
       if (!create.ok) {
-        if (isMissingAuth(create)) {
-          await applyAuthFailure();
-        }
-        setError(create.message);
+        await surfaceApiFailure(create, `Failed to create ${projectLabel(projectType).toLowerCase()} app.`);
         return;
       }
       setSubmitStage("Packaging workspace and submitting version...");
@@ -353,10 +370,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
         preview: previews.map((preview) => preview.url).filter(Boolean)
       });
       if (!submit.ok) {
-        if (isMissingAuth(submit)) {
-          await applyAuthFailure();
-        }
-        setError(submit.message);
+        await surfaceApiFailure(submit, `Failed to submit ${projectLabel(projectType).toLowerCase()} version for review.`);
         return;
       }
       setNotice(`${projectLabel(projectType)} version ${form.version.trim()} submitted for review.`);
@@ -387,10 +401,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
         appSystemId: activeApp.id
       });
       if (!res.ok) {
-        if (isMissingAuth(res)) {
-          await applyAuthFailure();
-        }
-        setError(res.message);
+        await surfaceApiFailure(res, `Failed to pull ${appLabel.toLowerCase()} version out of review.`);
         return;
       }
       setNotice(`${appLabel} version ${version.version || versionId} pulled out of review.`);
@@ -803,6 +814,11 @@ export const MyGamesPanel = memo(function MyGamesPanel({
           ) : null}
         </div>
       </div>
+      <CommunityErrorSnackbar
+        message={apiErrorSnackbar?.message ?? null}
+        detail={apiErrorSnackbar?.detail}
+        onDismiss={() => setApiErrorSnackbar(null)}
+      />
     </section>
   );
 });

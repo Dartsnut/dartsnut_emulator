@@ -509,11 +509,14 @@ export type CommunitySessionInfo = {
   account: string | null;
   hasSupabase: boolean;
   googleClientId: string;
+  googleDesktopClientId: string;
+  googleSignInAvailable: boolean;
 };
 
 export type CommunityLoginRequest =
   | { method: "password"; account: string; password: string }
-  | { method: "google"; idToken: string };
+  | { method: "google"; idToken: string }
+  | { method: "googleOAuth" };
 
 export type CommunityLoginResponse =
   | { ok: true; account: string }

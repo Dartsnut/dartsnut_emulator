@@ -78,7 +78,6 @@ import {
 import {
   loadProviderConfig,
   validateProviderConfig,
-  readDartsnutLlmDefaultsFromEnv,
   configureAgentsSdk,
   buildAgentModelConfig,
   SessionEngine,
@@ -101,6 +100,11 @@ import {
 } from "@dartsnut/agent-runtime";
 import { formatAgentEventForConsole } from "./agentEventConsole";
 import { PACKAGED_ENV } from "./packagedEnv.generated";
+import {
+  ensureRuntimeDartsnutLlmConfig,
+  primeRuntimeDartsnutLlmConfig,
+  readCachedRuntimeDartsnutLlmConfig
+} from "./dartsnutLlmConfig";
 import {
   EMULATOR_IPC_CHANNELS,
   type EmulatorCommand,
@@ -170,6 +174,14 @@ if (app.isPackaged) {
 } else if (fs.existsSync(repoEnvPath)) {
   dotenv.config({ path: repoEnvPath });
 }
+void primeRuntimeDartsnutLlmConfig()
+  .catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    devLog.warn(`[provider] Dartsnut LLM config load failed: ${message}`);
+  })
+  .finally(() => {
+    emitBootstrapStateToRenderer();
+  });
 let pythonExec: string | null = null;
 let pythonRuntimeStatus: string | null = null;
 let pythonRuntimeProgress: PythonRuntimeProgress = {
@@ -586,7 +598,7 @@ function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): P
   const legacyUserDefine = normalizeUserDefineSettings(input?.userDefine);
   const customSource = input?.custom ?? input?.userDefine;
   let custom = normalizeUserDefineSettings(customSource);
-  const builtin = normalizeUserDefineSettings(readDartsnutLlmDefaultsFromEnv());
+  const builtin = normalizeUserDefineSettings(readCachedRuntimeDartsnutLlmConfig());
   if (custom.apiKey && sameProviderSettings(custom, builtin)) {
     custom = normalizeUserDefineSettings();
   }
@@ -646,12 +658,19 @@ function readProviderSettings(): ProviderSettings {
   }
 }
 
-function validateProviderSettingsInput(input: SaveProviderSettingsRequest): { ok: true } | { ok: false; error: string } {
+async function validateProviderSettingsInput(input: SaveProviderSettingsRequest): Promise<{ ok: true } | { ok: false; error: string }> {
   const normalized = normalizeProviderSettings(input);
-  const ud =
-    normalized.activeProvider === "dartsnut-llm"
-      ? readDartsnutLlmDefaultsFromEnv()
-      : normalized.custom;
+  let ud: UserDefineProviderSettings;
+  if (normalized.activeProvider === "dartsnut-llm") {
+    try {
+      ud = await ensureRuntimeDartsnutLlmConfig();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: `Dartsnut LLM configuration could not be loaded. ${message}` };
+    }
+  } else {
+    ud = normalized.custom;
+  }
   if (!ud.apiKey) {
     return { ok: false, error: "API key is required." };
   }
@@ -668,8 +687,8 @@ function validateProviderSettingsInput(input: SaveProviderSettingsRequest): { ok
   return { ok: true };
 }
 
-function writeProviderSettings(input: SaveProviderSettingsRequest): ProviderSettings {
-  const validation = validateProviderSettingsInput(input);
+async function writeProviderSettings(input: SaveProviderSettingsRequest): Promise<ProviderSettings> {
+  const validation = await validateProviderSettingsInput(input);
   if (!validation.ok) {
     throw new Error(validation.error);
   }
@@ -678,8 +697,31 @@ function writeProviderSettings(input: SaveProviderSettingsRequest): ProviderSett
   return normalized;
 }
 
-function buildAgentModelConfigFromProviderSettings(providerSettings: ProviderSettings) {
-  const config = loadProviderConfig({ providerSettings });
+async function resolveProviderConfigForDesktop(providerSettings: ProviderSettings) {
+  if (providerSettings.activeProvider === "dartsnut-llm") {
+    try {
+      return await ensureRuntimeDartsnutLlmConfig();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Dartsnut LLM configuration could not be loaded. ${message}`);
+    }
+  }
+  return loadProviderConfig({ providerSettings });
+}
+
+function resolveCachedProviderConfigForDesktop(providerSettings: ProviderSettings) {
+  if (providerSettings.activeProvider === "dartsnut-llm") {
+    const config = readCachedRuntimeDartsnutLlmConfig();
+    if (!config) {
+      return null;
+    }
+    return config;
+  }
+  return loadProviderConfig({ providerSettings });
+}
+
+async function buildAgentModelConfigFromProviderSettings(providerSettings: ProviderSettings) {
+  const config = await resolveProviderConfigForDesktop(providerSettings);
   return buildAgentModelConfig({
     model: config.model,
     baseUrl: config.baseUrl,
@@ -687,8 +729,8 @@ function buildAgentModelConfigFromProviderSettings(providerSettings: ProviderSet
   });
 }
 
-function reconfigureAgentsSdkFromProviderSettings(providerSettings: ProviderSettings): void {
-  configureAgentsSdk(buildAgentModelConfigFromProviderSettings(providerSettings), { force: true });
+async function reconfigureAgentsSdkFromProviderSettings(providerSettings: ProviderSettings): Promise<void> {
+  configureAgentsSdk(await buildAgentModelConfigFromProviderSettings(providerSettings), { force: true });
 }
 
 function readProofState() {
@@ -1065,7 +1107,10 @@ async function maybeRecoverTrackedTempWorkspaceAtLaunch(): Promise<void> {
 
 function providerStatus(): BootstrapState["providerStatus"] {
   const stored = readProviderSettings();
-  const config = loadProviderConfig({ providerSettings: stored });
+  const config = resolveCachedProviderConfigForDesktop(stored);
+  if (!config) {
+    return "missing_config";
+  }
   const validation = validateProviderConfig(config);
   return validation.ok ? "ready" : "missing_config";
 }
@@ -1874,7 +1919,7 @@ function resolvePreferredUserLocaleForSession(
   return resolveSessionUserLocale(persisted, latestUserText);
 }
 
-function buildSession(
+async function buildSession(
   templateMode: PromptRequest["templateMode"] | undefined,
   extras?: {
     workspacePath?: string;
@@ -1894,13 +1939,13 @@ function buildSession(
     widgetSize?: WidgetSize;
     assetApplierMode?: boolean;
   }
-): AgentSessionRuntime {
+): Promise<AgentSessionRuntime> {
   const workspacePath = extras?.workspacePath ?? workspaceRoot;
   if (!workspacePath) {
     throw new Error("Workspace is not selected.");
   }
   const providerSettings = readProviderSettings();
-  const config = loadProviderConfig({ providerSettings });
+  const config = await resolveProviderConfigForDesktop(providerSettings);
   const validation = validateProviderConfig(config);
   if (!validation.ok) {
     throw new Error(validation.error);
@@ -2823,9 +2868,9 @@ ipcMain.handle(IPCChannels.deployStop, async (): Promise<DeployActionResponse> =
 ipcMain.handle(IPCChannels.getProviderSettings, () => readProviderSettings());
 ipcMain.handle(IPCChannels.getPythonRuntimeStatus, () => pythonRuntimeStatus);
 ipcMain.handle(IPCChannels.getPythonRuntimeProgress, () => pythonRuntimeProgress);
-ipcMain.handle(IPCChannels.saveProviderSettings, (_event: unknown, request: SaveProviderSettingsRequest) => {
-  const saved = writeProviderSettings(request);
-  reconfigureAgentsSdkFromProviderSettings(saved);
+ipcMain.handle(IPCChannels.saveProviderSettings, async (_event: unknown, request: SaveProviderSettingsRequest) => {
+  const saved = await writeProviderSettings(request);
+  await reconfigureAgentsSdkFromProviderSettings(saved);
   emitBootstrapStateToRenderer();
   return saved;
 });
@@ -3034,7 +3079,7 @@ ipcMain.handle(
       return { ok: false, reason: "missing_conf", message };
     }
     try {
-      const session = buildSession("asset-applier", {
+      const session = await buildSession("asset-applier", {
         workspacePath: targetWorkspace,
         assetApplierMode: true
       });
@@ -3122,7 +3167,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
           ? "game"
           : undefined);
     const routedWidgetSize = req.widgetSize ?? hintedRouting?.widgetSize;
-    const session = buildSession(req.templateMode, {
+    const session = await buildSession(req.templateMode, {
       completionTools: AGENT_TOOL_SCHEMAS,
       hostIntakeToolHandler: sharedIntakeHandler,
       hostAskQuestionHandler: (args) => askQuestionHostExecute(args, hostState),

@@ -20,6 +20,8 @@ test("generate_packaged_env emits decryption key but not legacy Xiaomi credentia
       path.join(tempRoot, ".env"),
       [
         "DARTSNUT_MODEL_DECRYPTION_KEY=decrypt-secret",
+        "DARTSNUT_GOOGLE_DESKTOP_CLIENT_ID=desktop-client",
+        "DARTSNUT_GOOGLE_DESKTOP_CLIENT_SECRET=desktop-secret",
         "XIAOMI_BASE_URL=https://legacy.example.com",
         "XIAOMI_API_KEY=legacy-key",
         "XIAOMI_MODEL=legacy-model"
@@ -34,6 +36,8 @@ test("generate_packaged_env emits decryption key but not legacy Xiaomi credentia
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const generated = fs.readFileSync(path.join(tempRoot, "apps", "desktop", "packagedEnv.generated.ts"), "utf8");
     assert.match(generated, /DARTSNUT_MODEL_DECRYPTION_KEY/);
+    assert.match(generated, /DARTSNUT_GOOGLE_DESKTOP_CLIENT_ID/);
+    assert.match(generated, /DARTSNUT_GOOGLE_DESKTOP_CLIENT_SECRET/);
     assert.doesNotMatch(generated, /XIAOMI_BASE_URL|XIAOMI_API_KEY|XIAOMI_MODEL/);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });

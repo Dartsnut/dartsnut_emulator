@@ -5,11 +5,21 @@ import type {
   DeployConnectResponse
 } from "@dartsnut/shared-ipc";
 import { isCommunityAuthSkippedForSession } from "./DeployAuthGate";
+import {
+  CommunityErrorSnackbar,
+  isCommunityAuthFailure,
+  shouldShowCommunityErrorSnackbar
+} from "./CommunityErrorSnackbar";
 import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
 const toolbarBtn = "ui-toolbar-btn";
 const MANUAL_DEVICE_VALUE = "__manual__";
+
+type ApiErrorSnackbarState = {
+  message: string;
+  detail?: string;
+};
 
 export type DeployPanelProps = {
   active: boolean;
@@ -63,6 +73,7 @@ export const DeployPanel = memo(function DeployPanel({
   const [devices, setDevices] = useState<CommunityDeployDevice[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [devicesError, setDevicesError] = useState<string | null>(null);
+  const [apiErrorSnackbar, setApiErrorSnackbar] = useState<ApiErrorSnackbarState | null>(null);
   const [supabaseConfigured, setSupabaseConfigured] = useState(false);
   const [selectedDeviceKey, setSelectedDeviceKey] = useState("");
   const selectedDeviceKeyRef = useRef("");
@@ -92,7 +103,7 @@ export const DeployPanel = memo(function DeployPanel({
       const res = await api.communityListDeployDevices();
       if (!res.ok) {
         setDevices([]);
-        if (res.authRequired || res.code === "session_expired") {
+        if (isCommunityAuthFailure(res)) {
           await onCommunitySessionChange();
           if (!isCommunityAuthSkippedForSession()) {
             onAuthRequired();
@@ -101,7 +112,12 @@ export const DeployPanel = memo(function DeployPanel({
           setSupabaseConfigured(false);
           return;
         }
-        setDevicesError(res.message);
+        if (shouldShowCommunityErrorSnackbar(res)) {
+          setApiErrorSnackbar({
+            message: "Failed to load bound devices.",
+            detail: res.serverMessage?.trim()
+          });
+        }
         return;
       }
       setDevices(res.devices);
@@ -118,7 +134,7 @@ export const DeployPanel = memo(function DeployPanel({
       }
     } catch (e) {
       setDevices([]);
-      setDevicesError(e instanceof Error ? e.message : String(e));
+      setApiErrorSnackbar({ message: e instanceof Error ? e.message : String(e) });
     } finally {
       setDevicesLoading(false);
     }
@@ -473,6 +489,11 @@ export const DeployPanel = memo(function DeployPanel({
           {logLines.join("\n")}
         </pre>
       </div>
+      <CommunityErrorSnackbar
+        message={apiErrorSnackbar?.message ?? null}
+        detail={apiErrorSnackbar?.detail}
+        onDismiss={() => setApiErrorSnackbar(null)}
+      />
     </div>
   );
 });

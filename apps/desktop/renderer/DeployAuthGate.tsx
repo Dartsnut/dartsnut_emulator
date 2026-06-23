@@ -23,31 +23,9 @@ export function setDeployAuthSkippedForSession(): void {
 
 export const setCommunityAuthSkippedForSession = setDeployAuthSkippedForSession;
 
-type GoogleCredentialResponse = {
-  credential?: string;
-};
-
-type GoogleIdApi = {
-  accounts: {
-    id: {
-      initialize: (config: {
-        client_id: string;
-        callback: (response: GoogleCredentialResponse) => void;
-      }) => void;
-      prompt: (momentListener?: (notification: { isNotDisplayed: () => boolean }) => void) => void;
-    };
-  };
-};
-
-declare global {
-  interface Window {
-    google?: GoogleIdApi;
-  }
-}
-
 export type DeployAuthGateProps = {
   open: boolean;
-  googleClientId: string;
+  googleSignInAvailable: boolean;
   title?: string;
   description?: string;
   onSkip: () => void;
@@ -56,32 +34,9 @@ export type DeployAuthGateProps = {
 
 const toolbarBtn = "ui-toolbar-btn";
 
-function loadGoogleScript(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (window.google?.accounts?.id) {
-      resolve();
-      return;
-    }
-    const existing = document.querySelector('script[data-dartsnut-gsi="1"]');
-    if (existing) {
-      existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener("error", () => reject(new Error("Load Google script failed")), { once: true });
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    script.dataset.dartsnutGsi = "1";
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Load Google script failed"));
-    document.head.appendChild(script);
-  });
-}
-
 export function DeployAuthGate({
   open,
-  googleClientId,
+  googleSignInAvailable,
   title = "Sign in to Dartsnut",
   description = "Log in with your Dartsnut account to use community features. You can continue without signing in and enter an IP manually.",
   onSkip,
@@ -129,55 +84,25 @@ export function DeployAuthGate({
     if (!api?.communityLogin) {
       return;
     }
-    const clientId = googleClientId.trim();
-    if (!clientId) {
-      setHint("Google sign-in is not configured (set DARTSNUT_GOOGLE_CLIENT_ID in .env).");
+    if (!googleSignInAvailable) {
+      setHint("Google sign-in is not configured (set DARTSNUT_GOOGLE_DESKTOP_CLIENT_ID in .env).");
       return;
     }
     setHint(null);
     setBusy("google");
     try {
-      await loadGoogleScript();
-      await new Promise<void>((resolve) => {
-        let settled = false;
-        const finish = () => {
-          if (!settled) {
-            settled = true;
-            resolve();
-          }
-        };
-        window.google!.accounts.id.initialize({
-          client_id: clientId,
-          callback: async (response) => {
-            const idToken = String(response?.credential || "").trim();
-            if (!idToken) {
-              setHint("Google sign-in did not return a credential.");
-              finish();
-              return;
-            }
-            try {
-              const res = await api.communityLogin({ method: "google", idToken });
-              if (!res.ok) {
-                setHint(res.message);
-              } else {
-                onSuccess(res.account);
-              }
-            } catch (e) {
-              setHint(e instanceof Error ? e.message : String(e));
-            } finally {
-              setBusy(null);
-              finish();
-            }
-          }
-        });
-        window.google!.accounts.id.prompt(() => finish());
-        window.setTimeout(finish, 12_000);
-      });
+      const res = await api.communityLogin({ method: "googleOAuth" });
+      if (!res.ok) {
+        setHint(res.message);
+        return;
+      }
+      onSuccess(res.account);
     } catch (e) {
       setHint(e instanceof Error ? e.message : String(e));
+    } finally {
       setBusy(null);
     }
-  }, [api, googleClientId, onSuccess]);
+  }, [api, googleSignInAvailable, onSuccess]);
 
   const handleSkip = useCallback(() => {
     setDeployAuthSkippedForSession();
@@ -255,10 +180,10 @@ export function DeployAuthGate({
         <button
           type="button"
           className={cn(toolbarBtn, "w-full justify-center")}
-          disabled={busy !== null || !googleClientId.trim()}
+          disabled={busy !== null || !googleSignInAvailable}
           onClick={() => void handleGoogleLogin()}
         >
-          {busy === "google" ? "Opening Google…" : "Continue with Google"}
+          {busy === "google" ? "Opening browser…" : "Continue with Google"}
         </button>
 
         <button type="button" className={cn(toolbarBtn, "w-full justify-center")} disabled={busy !== null} onClick={handleSkip}>

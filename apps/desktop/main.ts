@@ -118,6 +118,7 @@ import { AssetManager } from "./assetManager";
 import { DeployMachineSession } from "./deployMachine";
 import { createCommunityClient, type CommunityClient } from "./communityClient";
 import { clearCommunityAuth, readCommunityAuth, writeCommunityAuth } from "./communityAuth";
+import { signInWithGoogleOAuth } from "./googleOAuth";
 import {
   DEFAULT_WINDOW_HEIGHT,
   DEFAULT_WINDOW_WIDTH,
@@ -2323,7 +2324,9 @@ ipcMain.handle(IPCChannels.communityGetSession, (): CommunitySessionInfo => {
     loggedIn: Boolean(auth?.token),
     account: auth?.account ?? null,
     hasSupabase: config.hasSupabase,
-    googleClientId: config.googleClientId
+    googleClientId: config.googleClientId,
+    googleDesktopClientId: config.googleDesktopClientId,
+    googleSignInAvailable: Boolean(config.googleDesktopClientId)
   };
 });
 
@@ -2338,6 +2341,23 @@ ipcMain.handle(
         return { ok: false, code: "invalid_credentials", message: "Please enter account and password." };
       }
       const result = await client.loginWithPassword(account, password);
+      if (!result.ok) {
+        return { ok: false, code: result.code, message: result.message };
+      }
+      writeCommunityAuth(getCommunityUserDataPath(), { token: result.token, account: result.account });
+      return { ok: true, account: result.account };
+    }
+    if (request.method === "googleOAuth") {
+      const config = client.getConfig();
+      const oauthResult = await signInWithGoogleOAuth({
+        clientId: config.googleDesktopClientId,
+        clientSecret: config.googleDesktopClientSecret,
+        openExternal: (url) => shell.openExternal(url)
+      });
+      if (!oauthResult.ok) {
+        return { ok: false, code: oauthResult.code, message: oauthResult.message };
+      }
+      const result = await client.loginWithGoogleIdToken(oauthResult.idToken);
       if (!result.ok) {
         return { ok: false, code: result.code, message: result.message };
       }

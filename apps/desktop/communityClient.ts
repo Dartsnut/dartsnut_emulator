@@ -14,6 +14,8 @@ export type CommunityConfig = {
   supabaseAnonKey: string;
   supabaseDeviceTable: string;
   googleClientId: string;
+  googleDesktopClientId: string;
+  googleDesktopClientSecret: string;
   hasSupabase: boolean;
 };
 
@@ -156,12 +158,16 @@ export function readCommunityConfig(env: NodeJS.ProcessEnv = process.env): Commu
     String(env.DARTSNUT_SUPABASE_DEVICE_TABLE || DEFAULT_SUPABASE_DEVICE_TABLE).trim() ||
     DEFAULT_SUPABASE_DEVICE_TABLE;
   const googleClientId = String(env.DARTSNUT_GOOGLE_CLIENT_ID || "").trim();
+  const googleDesktopClientId = String(env.DARTSNUT_GOOGLE_DESKTOP_CLIENT_ID || "").trim();
+  const googleDesktopClientSecret = String(env.DARTSNUT_GOOGLE_DESKTOP_CLIENT_SECRET || "").trim();
   return {
     baseApi,
     supabaseUrl,
     supabaseAnonKey,
     supabaseDeviceTable,
     googleClientId,
+    googleDesktopClientId,
+    googleDesktopClientSecret,
     hasSupabase: Boolean(supabaseUrl && supabaseAnonKey)
   };
 }

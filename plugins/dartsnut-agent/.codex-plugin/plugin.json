@@ -1,0 +1,34 @@
+{
+  "name": "dartsnut-agent",
+  "version": "0.1.0",
+  "description": "Dartsnut agent skills and firmware bridge for building games and widgets.",
+  "author": {
+    "name": "Dartsnut"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dartsnut",
+    "skills",
+    "firmware",
+    "mcp",
+    "widgets",
+    "games"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Dartsnut Agent",
+    "shortDescription": "Skills and firmware tools for Dartsnut machines.",
+    "longDescription": "Build, modify, and verify Dartsnut games and widgets with packaged domain skills and a local firmware MCP bridge.",
+    "developerName": "Dartsnut",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Build a Dartsnut game.",
+      "Create a Dartsnut widget.",
+      "Review my Dartsnut project."
+    ],
+    "brandColor": "#00A88F"
+  }
+}

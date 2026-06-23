@@ -1,0 +1,7 @@
+{
+  "name": "dartsnut-agent",
+  "description": "Dartsnut agent skills and firmware bridge for building games and widgets.",
+  "author": {
+    "name": "Dartsnut"
+  }
+}

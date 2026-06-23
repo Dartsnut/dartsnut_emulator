@@ -1,0 +1,52 @@
+---
+name: conf-contract
+description: Root conf.json schema, defaults, size rules, preview handling, and reload requirements for Dartsnut projects.
+license: MIT
+---
+
+# conf.json contract (games and widgets)
+
+Load this **before** `write_file` on root **`conf.json`**. Use recorded intake metadata (`read_workspace_conf` / host context) for `type`, `size`, and widget display size when available.
+
+## Required top-level keys
+
+`id`, `type`, `name`, `author`, `version`, `description`, `size`, `fields`
+
+- **`preview`:** include for new projects as **`[""]`** unless the user omits it explicitly.
+- **`type`:** `"game"` or `"widget"` per intake metadata when present.
+- **`size`:** two-element integer array **`[width, height]`** — never a string like `"128x160"`.
+- **`fields`:** JSON array; use **`[]`** when no custom fields.
+
+## Defaults when missing from user text
+
+| Key | Default |
+|-----|---------|
+| `id` | kebab-case slug from project name |
+| `author` | `"Dartsnut Team"` or `"Unknown"` |
+| `version` | `"0.1.0"` or `"1.0.0"` (pick one scheme per project) |
+| `description` | one-sentence summary of what it does |
+
+## Size
+
+- **Games:** default **`[128, 160]`** unless context overrides.
+- **Widgets:** **`size` must match** the recorded widget display size when intake provided one.
+
+## Example (adjust all values)
+
+```json
+{
+  "id": "<slug>",
+  "type": "game",
+  "name": "<Title>",
+  "author": "Dartsnut Team",
+  "version": "0.1.0",
+  "description": "<one sentence>",
+  "size": [128, 160],
+  "fields": [],
+  "preview": [""]
+}
+```
+
+For widgets, set `"type": "widget"` and `size` from intake metadata (e.g. `[128, 128]`).
+
+After creating or materially changing **`conf.json`**, call **`reload_emulator`** then **`get_emulator_logs`** so the preview sees the new config and Python started cleanly.

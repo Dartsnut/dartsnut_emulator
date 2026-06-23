@@ -41,6 +41,7 @@ import {
   type CommunityUploadNativeImageResponse,
   type CommunitySubmitAppVersionRequest,
   type CommunitySubmitAppVersionResponse,
+  type CommunitySubmitProgress,
   type CommunityWithdrawAppVersionRequest,
   type CommunityWithdrawAppVersionResponse,
   type WindowChromeInsets,
@@ -197,6 +198,11 @@ const api = {
     ipcRenderer.invoke(IPCChannels.communityUploadNativeImage, request) as Promise<CommunityUploadNativeImageResponse>,
   communitySubmitAppVersion: (request: CommunitySubmitAppVersionRequest) =>
     ipcRenderer.invoke(IPCChannels.communitySubmitAppVersion, request) as Promise<CommunitySubmitAppVersionResponse>,
+  onCommunitySubmitProgress: (listener: (progress: CommunitySubmitProgress) => void) => {
+    const handler = (_: unknown, progress: CommunitySubmitProgress) => listener(progress);
+    ipcRenderer.on(IPCChannels.communitySubmitProgress, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.communitySubmitProgress, handler);
+  },
   communityWithdrawAppVersion: (request: CommunityWithdrawAppVersionRequest) =>
     ipcRenderer.invoke(IPCChannels.communityWithdrawAppVersion, request) as Promise<CommunityWithdrawAppVersionResponse>,
   assets: {

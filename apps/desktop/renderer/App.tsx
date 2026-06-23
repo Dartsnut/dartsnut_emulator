@@ -15,7 +15,8 @@ import {
   type SaveTempWorkspaceResponse,
   type MainProcessConsoleMirrorPayload,
   type WidgetSize,
-  type CommunitySessionInfo
+  type CommunitySessionInfo,
+  type CommunitySubmitProgress
 } from "@dartsnut/shared-ipc";
 import { AskQuestionCard } from "./AskQuestionCard";
 import { AssetManagerPanel } from "./AssetManagerPanel";
@@ -55,6 +56,11 @@ type DeployPaneTab = "deploy" | "games";
 type CommunityAuthIntent = "deploy-devices" | "my-games";
 
 type AppScreen = "main" | "settings";
+type SubmissionLockState = {
+  active: boolean;
+  stage: CommunitySubmitProgress["stage"] | "idle";
+  message: string;
+};
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
 /** Keep in sync with composer textarea `max-h-[200px]` */
@@ -95,6 +101,37 @@ function isSettingsShortcut(event: KeyboardEvent): boolean {
 
 function isComposerSendShortcut(event: { key: string; metaKey: boolean; ctrlKey: boolean }): boolean {
   return event.key === "Enter" && hasPrimaryShortcutModifier(event);
+}
+
+function CommunitySubmitOverlay({ lock }: { lock: SubmissionLockState }) {
+  if (!lock.active) {
+    return null;
+  }
+  return (
+    <div
+      className="community-submit-overlay"
+      role="status"
+      aria-live="polite"
+      aria-label="Community submission in progress"
+    >
+      <div className="community-submit-overlay__panel">
+        <div className="community-submit-overlay__glyph" aria-hidden>
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="community-submit-overlay__copy">
+          <p className="community-submit-overlay__eyebrow">Community review</p>
+          <h2 className="community-submit-overlay__title">Submitting to Community</h2>
+          <p className="community-submit-overlay__message">{lock.message}</p>
+          <div className="community-submit-overlay__rail" aria-hidden>
+            <span />
+          </div>
+          <p className="community-submit-overlay__note">Keep Dartsnut Agent open until this finishes.</p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 type TimelineEntryViewProps = {
@@ -473,8 +510,25 @@ export function App() {
   const [communityAuthIntent, setCommunityAuthIntent] = useState<CommunityAuthIntent>("deploy-devices");
   const [communityAuthSkippedVersion, setCommunityAuthSkippedVersion] = useState(0);
   const [communitySessionVersion, setCommunitySessionVersion] = useState(0);
+  const [submissionLock, setSubmissionLock] = useState<SubmissionLockState>({
+    active: false,
+    stage: "idle",
+    message: "Preparing submission..."
+  });
 
   const api = window.dartsnutApi;
+
+  const handleCommunitySubmitProgress = useCallback((progress: CommunitySubmitProgress | null) => {
+    if (!progress) {
+      setSubmissionLock((current) => ({ ...current, active: false, stage: "idle" }));
+      return;
+    }
+    setSubmissionLock({
+      active: true,
+      stage: progress.stage,
+      message: progress.message
+    });
+  }, []);
 
   const refreshCommunitySession = useCallback(async () => {
     if (!api?.communityGetSession) {
@@ -948,6 +1002,18 @@ export function App() {
         devLog.info("[python-runtime-progress]", progress);
       }
     });
+    const unsubscribeCommunitySubmitProgress =
+      api.onCommunitySubmitProgress?.((progress) => {
+        setSubmissionLock((current) =>
+          current.active
+            ? {
+                active: true,
+                stage: progress.stage,
+                message: progress.message
+              }
+            : current
+        );
+      }) ?? (() => {});
     const unsubscribeMainConsoleMirror = isDevLoggingEnabled()
       ? api.onMainProcessConsoleMirror((payload) => {
           printMainProcessMirrorToDevtools(payload);
@@ -958,6 +1024,7 @@ export function App() {
       unsubscribeBootstrap();
       unsubscribePythonRuntime();
       unsubscribePythonRuntimeProgress();
+      unsubscribeCommunitySubmitProgress();
       unsubscribeMainConsoleMirror();
     };
   }, [api]);
@@ -1363,6 +1430,7 @@ export function App() {
         "pr-[var(--window-control-inset-right)] pb-[var(--window-control-inset-bottom)] pl-[var(--window-control-inset-left)]",
         "max-[1100px]:grid-cols-1 max-[1100px]:grid-rows-[auto_minmax(0,1fr)]"
       )}
+      aria-busy={submissionLock.active}
     >
       <header
         className="app-header col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),40px)] items-center gap-2 border-b border-edge bg-[var(--gradient-app-bar)] shadow-[var(--shadow-app-bar-divider)] [app-region:no-drag] [-webkit-app-region:no-drag]"
@@ -1970,6 +2038,7 @@ export function App() {
                 communitySessionVersion={communitySessionVersion + communityAuthSkippedVersion}
                 onCommunitySessionChange={refreshCommunitySession}
                 onAuthRequired={requestMyGamesCommunityAuth}
+                onSubmitProgress={handleCommunitySubmitProgress}
               />
             </div>
           </div>
@@ -1998,6 +2067,7 @@ export function App() {
           devLog.log("[community] Signed in as", account);
         }}
       />
+      <CommunitySubmitOverlay lock={submissionLock} />
     </main>
   );
 }

@@ -63,6 +63,8 @@ import {
   type CommunityUploadNativeImageResponse,
   type CommunitySubmitAppVersionRequest,
   type CommunitySubmitAppVersionResponse,
+  type CommunitySubmitProgress,
+  type CommunitySubmitProgressStage,
   type CommunityWithdrawAppVersionRequest,
   type CommunityWithdrawAppVersionResponse,
   type CommunityAppSummary,
@@ -231,6 +233,11 @@ function startDeployConfWatcher(workspacePath: string): void {
 
 function emitDeployLog(line: string): void {
   sendToRenderer(IPCChannels.deployLog, line);
+}
+
+function emitCommunitySubmitProgress(stage: CommunitySubmitProgressStage, message: string): void {
+  const progress: CommunitySubmitProgress = { stage, message };
+  sendToRenderer(IPCChannels.communitySubmitProgress, progress);
 }
 
 function getDeployMachineSession(): DeployMachineSession {
@@ -2569,8 +2576,10 @@ ipcMain.handle(
     }
     let tarballPath: string | null = null;
     try {
+      emitCommunitySubmitProgress("packaging", "Packaging workspace and running tar...");
       tarballPath = await createPublishTarball(workspaceRoot, elig.appId);
       const client = getCommunityClient();
+      emitCommunitySubmitProgress("uploading", "Uploading packaged workspace...");
       const packageUpload =
         projectType === "widget"
           ? await client.uploadWidgetZip(auth.token, fileBlobFromPath(tarballPath, "application/gzip"), `${elig.appId}.tar.gz`)
@@ -2579,6 +2588,7 @@ ipcMain.handle(
         clearAuthIfExpired(packageUpload.code);
         return authRequiredResponse(packageUpload.code, packageUpload.message, packageUpload.serverMessage);
       }
+      emitCommunitySubmitProgress("submitting", "Submitting version for community review...");
       const submit = await client.submitAppVersion(auth.token, {
         projectType,
         appSystemId: request.appSystemId,
@@ -2605,6 +2615,7 @@ ipcMain.handle(
       return { ok: false, code: "network_error", message };
     } finally {
       if (tarballPath) {
+        emitCommunitySubmitProgress("cleaning", "Cleaning up temporary package...");
         fs.unlink(tarballPath, () => {});
       }
     }

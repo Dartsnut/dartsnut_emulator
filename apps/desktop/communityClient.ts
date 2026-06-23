@@ -141,6 +141,13 @@ export type ApiEnvelope = {
   data?: unknown;
 };
 
+export type CommunityApiError = {
+  ok: false;
+  code: CommunityAuthErrorCode;
+  message: string;
+  serverMessage?: string;
+};
+
 export function readCommunityConfig(env: NodeJS.ProcessEnv = process.env): CommunityConfig {
   const baseApi = String(env.DARTSNUT_BASE_API || DEFAULT_BASE_API).trim().replace(/\/$/, "");
   const supabaseUrl = String(env.DARTSNUT_SUPABASE_URL || DEFAULT_SUPABASE_URL).trim().replace(/\/$/, "");
@@ -186,6 +193,11 @@ export function mapApiErrorCode(code: number): CommunityAuthErrorCode {
     return "session_expired";
   }
   return "api_error";
+}
+
+export function apiServerMessage(parsed: ApiEnvelope): string | undefined {
+  const value = parsed.desc || parsed.msg;
+  return value ? String(value) : undefined;
 }
 
 export function buildInFilter(deviceIds: string[]): string {
@@ -411,7 +423,7 @@ export class CommunityClient {
     password: string
   ): Promise<
     | { ok: true; token: string; account: string }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -426,10 +438,12 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || "Login failed.")
+          message: serverMessage || "Login failed.",
+          serverMessage
         };
       }
       const data = parsed.data as Record<string, unknown> | null | undefined;
@@ -450,7 +464,7 @@ export class CommunityClient {
     idToken: string
   ): Promise<
     | { ok: true; token: string; account: string }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -465,10 +479,12 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || "Google login failed.")
+          message: serverMessage || "Google login failed.",
+          serverMessage
         };
       }
       const data = parsed.data as Record<string, unknown> | null | undefined;
@@ -489,7 +505,7 @@ export class CommunityClient {
     token: string
   ): Promise<
     | { ok: true; devices: BoundDeviceRow[] }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -506,17 +522,21 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (res.status === 403) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: "session_expired",
-          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+          message: serverMessage || "Please sign in again.",
+          serverMessage
         };
       }
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || "Failed to load devices.")
+          message: serverMessage || "Failed to load devices.",
+          serverMessage
         };
       }
       const list = Array.isArray(parsed.data) ? parsed.data : [];
@@ -587,7 +607,7 @@ export class CommunityClient {
     requestedDeviceIds?: string[] | null
   ): Promise<
     | { ok: true; devices: DeployDeviceRow[]; supabaseConfigured: boolean }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     const bound = await this.listBoundDevices(token);
     if (!bound.ok) {
@@ -618,7 +638,7 @@ export class CommunityClient {
     token: string
   ): Promise<
     | { ok: true; games: CommunityGameRow[]; total: number }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -635,17 +655,21 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (res.status === 403) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: "session_expired",
-          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+          message: serverMessage || "Please sign in again.",
+          serverMessage
         };
       }
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || "Failed to load games.")
+          message: serverMessage || "Failed to load games.",
+          serverMessage
         };
       }
       const data = parsed.data as Record<string, unknown> | null | undefined;
@@ -664,7 +688,7 @@ export class CommunityClient {
     token: string
   ): Promise<
     | { ok: true; widgets: CommunityAppRow[]; total: number }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -681,17 +705,21 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (res.status === 403) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: "session_expired",
-          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+          message: serverMessage || "Please sign in again.",
+          serverMessage
         };
       }
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || "Failed to load widgets.")
+          message: serverMessage || "Failed to load widgets.",
+          serverMessage
         };
       }
       const data = parsed.data as Record<string, unknown> | null | undefined;
@@ -710,7 +738,7 @@ export class CommunityClient {
     token: string
   ): Promise<
     | { ok: true; categories: CommunityCategoryRow[] }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -724,17 +752,21 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (res.status === 403) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: "session_expired",
-          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+          message: serverMessage || "Please sign in again.",
+          serverMessage
         };
       }
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || "Failed to load game categories.")
+          message: serverMessage || "Failed to load game categories.",
+          serverMessage
         };
       }
       const data = parsed.data as Record<string, unknown> | null | undefined;
@@ -750,7 +782,7 @@ export class CommunityClient {
     token: string
   ): Promise<
     | { ok: true; categories: CommunityCategoryRow[] }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -764,17 +796,21 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (res.status === 403) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: "session_expired",
-          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+          message: serverMessage || "Please sign in again.",
+          serverMessage
         };
       }
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || "Failed to load widget categories.")
+          message: serverMessage || "Failed to load widget categories.",
+          serverMessage
         };
       }
       const data = parsed.data as Record<string, unknown> | null | undefined;
@@ -790,7 +826,7 @@ export class CommunityClient {
     token: string
   ): Promise<
     | { ok: true; controls: CommunityControlRow[] }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -804,17 +840,21 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (res.status === 403) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: "session_expired",
-          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+          message: serverMessage || "Please sign in again.",
+          serverMessage
         };
       }
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || "Failed to load game controls.")
+          message: serverMessage || "Failed to load game controls.",
+          serverMessage
         };
       }
       const data = parsed.data as Record<string, unknown> | null | undefined;
@@ -831,7 +871,7 @@ export class CommunityClient {
     token: string
   ): Promise<
     | { ok: true; controls: CommunityControlRow[]; sizes: CommunitySizeRow[] }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -845,17 +885,21 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (res.status === 403) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: "session_expired",
-          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+          message: serverMessage || "Please sign in again.",
+          serverMessage
         };
       }
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || "Failed to load widget status options.")
+          message: serverMessage || "Failed to load widget status options.",
+          serverMessage
         };
       }
       const data = parsed.data as Record<string, unknown> | null | undefined;
@@ -875,7 +919,7 @@ export class CommunityClient {
     appSystemId: number | string
   ): Promise<
     | { ok: true; versions: CommunityVersionRow[]; total: number }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -896,17 +940,21 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (res.status === 403) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: "session_expired",
-          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+          message: serverMessage || "Please sign in again.",
+          serverMessage
         };
       }
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || `Failed to load ${projectType} versions.`)
+          message: serverMessage || `Failed to load ${projectType} versions.`,
+          serverMessage
         };
       }
       const data = parsed.data as Record<string, unknown> | null | undefined;
@@ -926,7 +974,7 @@ export class CommunityClient {
     input: CommunityCreateAppInput
   ): Promise<
     | { ok: true; app: CommunityAppRow }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -964,17 +1012,21 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (res.status === 403) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: "session_expired",
-          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+          message: serverMessage || "Please sign in again.",
+          serverMessage
         };
       }
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || `Failed to create ${input.projectType} app.`)
+          message: serverMessage || `Failed to create ${input.projectType} app.`,
+          serverMessage
         };
       }
       const data = parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : {};
@@ -1008,7 +1060,7 @@ export class CommunityClient {
     }
   ): Promise<
     | { ok: true; game: CommunityGameRow }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     const result = await this.createApp(token, {
       projectType: "game",
@@ -1043,7 +1095,7 @@ export class CommunityClient {
     filename: string
   ): Promise<
     | { ok: true; url: string }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     return this.uploadFileForUrl(token, "/community/upload/upload-native-image", file, filename, "image");
   }
@@ -1054,7 +1106,7 @@ export class CommunityClient {
     filename: string
   ): Promise<
     | { ok: true; upload: CommunityUploadZipResult }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     const result = await this.uploadFileForUrl(token, "/community/upload/upload-game-zip", file, filename, "package");
     if (!result.ok) {
@@ -1073,7 +1125,7 @@ export class CommunityClient {
     filename: string
   ): Promise<
     | { ok: true; upload: CommunityUploadZipResult }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     const result = await this.uploadFileForUrl(token, "/community/upload/upload-widget-zip", file, filename, "package");
     if (!result.ok) {
@@ -1094,7 +1146,7 @@ export class CommunityClient {
     label: string
   ): Promise<
     | { ok: true; url: string; data: unknown }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -1114,17 +1166,21 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (res.status === 403) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: "session_expired",
-          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+          message: serverMessage || "Please sign in again.",
+          serverMessage
         };
       }
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || `Failed to upload ${label}.`)
+          message: serverMessage || `Failed to upload ${label}.`,
+          serverMessage
         };
       }
       const url = pickUploadUrl(parsed.data);
@@ -1143,7 +1199,7 @@ export class CommunityClient {
     input: CommunitySubmitAppVersionInput
   ): Promise<
     | { ok: true; result: CommunityVersionSubmitResult }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -1184,17 +1240,21 @@ export class CommunityClient {
       const parsed = normalizeApiJson(raw) || {};
       const code = Number(parsed.code);
       if (res.status === 403) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: "session_expired",
-          message: String(parsed.desc || parsed.msg || "Please sign in again.")
+          message: serverMessage || "Please sign in again.",
+          serverMessage
         };
       }
       if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
         return {
           ok: false,
           code: mapApiErrorCode(code),
-          message: String(parsed.desc || parsed.msg || "Failed to submit version for review.")
+          message: serverMessage || "Failed to submit version for review.",
+          serverMessage
         };
       }
       const data = parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : {};
@@ -1225,7 +1285,7 @@ export class CommunityClient {
     input: CommunityWithdrawAppVersionInput
   ): Promise<
     | { ok: true; status: string }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     if (!this.config.baseApi) {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
@@ -1252,6 +1312,7 @@ export class CommunityClient {
       `/community/${isWidget ? "widget" : "game"}-version/update`
     ];
     let lastMessage = `Failed to pull ${input.projectType} version out of review.`;
+    let lastServerMessage: string | undefined;
     let lastCode: CommunityAuthErrorCode = "api_error";
     for (const endpoint of endpoints) {
       try {
@@ -1263,17 +1324,25 @@ export class CommunityClient {
         const raw = await res.json().catch(() => null);
         const parsed = normalizeApiJson(raw) || {};
         const code = Number(parsed.code);
-        const message = String(parsed.desc || parsed.msg || lastMessage);
+        const serverMessage = apiServerMessage(parsed);
+        const message = serverMessage || lastMessage;
         if (res.status === 403) {
-          return { ok: false, code: "session_expired", message: message || "Please sign in again." };
+          return {
+            ok: false,
+            code: "session_expired",
+            message: message || "Please sign in again.",
+            serverMessage
+          };
         }
         if (res.status === 404 || code === 404) {
           lastMessage = message;
+          lastServerMessage = serverMessage;
           continue;
         }
         if (!isApiSuccess(code)) {
           lastCode = mapApiErrorCode(code);
           lastMessage = message;
+          lastServerMessage = serverMessage;
           continue;
         }
         const data = parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : {};
@@ -1281,9 +1350,10 @@ export class CommunityClient {
       } catch (error) {
         lastCode = "network_error";
         lastMessage = error instanceof Error ? error.message : String(error);
+        lastServerMessage = undefined;
       }
     }
-    return { ok: false, code: lastCode, message: lastMessage };
+    return { ok: false, code: lastCode, message: lastMessage, serverMessage: lastServerMessage };
   }
 
   async submitGameVersion(
@@ -1291,7 +1361,7 @@ export class CommunityClient {
     input: CommunitySubmitGameVersionInput
   ): Promise<
     | { ok: true; result: CommunityVersionSubmitResult }
-    | { ok: false; code: CommunityAuthErrorCode; message: string }
+    | CommunityApiError
   > {
     return this.submitAppVersion(token, {
       projectType: "game",

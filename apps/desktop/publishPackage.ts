@@ -50,8 +50,21 @@ export function isPublishAllowedFile(relativePath: string): boolean {
   return PUBLISH_ALLOWED_EXTENSIONS.has(path.extname(baseName));
 }
 
-export function stagePublishWorkspace(workspacePath: string): { stagePath: string; fileCount: number } {
+function assertPublishRootFolderName(folderName: string): void {
+  if (!/^[a-zA-Z0-9_-]+$/.test(folderName)) {
+    throw new Error("Publish package folder name must only contain letters, numbers, underscores, and hyphens.");
+  }
+}
+
+export function stagePublishWorkspace(
+  workspacePath: string,
+  rootFolderName?: string
+): { stagePath: string; fileCount: number } {
+  if (rootFolderName !== undefined) {
+    assertPublishRootFolderName(rootFolderName);
+  }
   const stagePath = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-publish-stage-"));
+  const stageRootPath = rootFolderName ? path.join(stagePath, rootFolderName) : stagePath;
   let fileCount = 0;
   const walk = (absoluteDir: string) => {
     const entries = fs.readdirSync(absoluteDir, { withFileTypes: true });
@@ -74,7 +87,7 @@ export function stagePublishWorkspace(workspacePath: string): { stagePath: strin
       if (!isPublishAllowedFile(relativePath)) {
         continue;
       }
-      const absoluteDest = path.join(stagePath, relativePath);
+      const absoluteDest = path.join(stageRootPath, relativePath);
       fs.mkdirSync(path.dirname(absoluteDest), { recursive: true });
       fs.copyFileSync(absoluteSource, absoluteDest);
       fileCount += 1;
@@ -89,7 +102,7 @@ export function createPublishTarball(workspacePath: string, appId: string): Prom
     let stagePath: string;
     let fileCount: number;
     try {
-      const stage = stagePublishWorkspace(workspacePath);
+      const stage = stagePublishWorkspace(workspacePath, appId);
       stagePath = stage.stagePath;
       fileCount = stage.fileCount;
       if (fileCount === 0) {
@@ -114,7 +127,7 @@ export function createPublishTarball(workspacePath: string, appId: string): Prom
         outFile,
         "-C",
         stagePath,
-        "."
+        appId
       ],
       { stdio: "ignore", env }
     );

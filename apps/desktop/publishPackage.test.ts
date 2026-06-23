@@ -1,10 +1,11 @@
 const assert = require("node:assert/strict");
+const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { isPublishAllowedFile, stagePublishWorkspace } = require("./publishPackage.ts");
+const { createPublishTarball, isPublishAllowedFile, stagePublishWorkspace } = require("./publishPackage.ts");
 
 function listRelativeFiles(root) {
   const out = [];
@@ -64,6 +65,38 @@ test("stagePublishWorkspace skips venvs and agent session files", () => {
     if (stagePath) {
       fs.rmSync(stagePath, { recursive: true, force: true });
     }
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("createPublishTarball puts filtered files under a single app id folder", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-publish-test-"));
+  const extractPath = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-publish-extract-"));
+  let tarballPath = null;
+  try {
+    fs.writeFileSync(path.join(workspace, "conf.json"), JSON.stringify({ id: "abc_def", type: "game" }));
+    fs.writeFileSync(path.join(workspace, "main.py"), "print('ok')\n");
+    fs.mkdirSync(path.join(workspace, "assets"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "assets", "hero.png"), "png");
+    fs.writeFileSync(path.join(workspace, "README.md"), "ignored");
+
+    tarballPath = await createPublishTarball(workspace, "abc_def");
+    const extract = childProcess.spawnSync("tar", ["-xzf", tarballPath, "-C", extractPath], {
+      encoding: "utf-8"
+    });
+
+    assert.equal(extract.status, 0, extract.stderr);
+    assert.deepEqual(fs.readdirSync(extractPath).sort(), ["abc_def"]);
+    assert.deepEqual(listRelativeFiles(path.join(extractPath, "abc_def")), [
+      "assets/hero.png",
+      "conf.json",
+      "main.py"
+    ]);
+  } finally {
+    if (tarballPath) {
+      fs.rmSync(tarballPath, { force: true });
+    }
+    fs.rmSync(extractPath, { recursive: true, force: true });
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });

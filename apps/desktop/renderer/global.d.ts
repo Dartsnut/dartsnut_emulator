@@ -39,6 +39,7 @@ import type {
   CommunityUploadNativeImageResponse,
   CommunitySubmitAppVersionRequest,
   CommunitySubmitAppVersionResponse,
+  CommunitySubmitProgress,
   CommunityWithdrawAppVersionRequest,
   CommunityWithdrawAppVersionResponse,
   WindowChromeInsets,
@@ -111,6 +112,7 @@ declare global {
       communitySubmitAppVersion: (
         request: CommunitySubmitAppVersionRequest
       ) => Promise<CommunitySubmitAppVersionResponse>;
+      onCommunitySubmitProgress: (listener: (progress: CommunitySubmitProgress) => void) => () => void;
       communityWithdrawAppVersion: (
         request: CommunityWithdrawAppVersionRequest
       ) => Promise<CommunityWithdrawAppVersionResponse>;

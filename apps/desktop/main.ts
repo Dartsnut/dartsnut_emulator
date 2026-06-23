@@ -63,6 +63,8 @@ import {
   type CommunityUploadNativeImageResponse,
   type CommunitySubmitAppVersionRequest,
   type CommunitySubmitAppVersionResponse,
+  type CommunitySubmitProgress,
+  type CommunitySubmitProgressStage,
   type CommunityWithdrawAppVersionRequest,
   type CommunityWithdrawAppVersionResponse,
   type CommunityAppSummary,
@@ -245,6 +247,11 @@ function emitDeployLog(line: string): void {
   sendToRenderer(IPCChannels.deployLog, line);
 }
 
+function emitCommunitySubmitProgress(stage: CommunitySubmitProgressStage, message: string): void {
+  const progress: CommunitySubmitProgress = { stage, message };
+  sendToRenderer(IPCChannels.communitySubmitProgress, progress);
+}
+
 function getDeployMachineSession(): DeployMachineSession {
   if (!deployMachineSession) {
     deployMachineSession = new DeployMachineSession(emitDeployLog);
@@ -329,8 +336,12 @@ function fileBlobFromPath(filePath: string, mimeType = "application/octet-stream
   return new Blob([fs.readFileSync(filePath)], { type: mimeType });
 }
 
-function authRequiredResponse(code: string, message: string): { ok: false; code: string; message: string; authRequired?: boolean } {
-  return { ok: false, code, message, authRequired: code === "session_expired" };
+function authRequiredResponse(
+  code: string,
+  message: string,
+  serverMessage?: string
+): { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean } {
+  return { ok: false, code, message, serverMessage, authRequired: code === "session_expired" };
 }
 
 function clearAuthIfExpired(code: string): void {
@@ -2419,27 +2430,27 @@ ipcMain.handle(
     ]);
     if (!games.ok) {
       clearAuthIfExpired(games.code);
-      return authRequiredResponse(games.code, games.message);
+      return authRequiredResponse(games.code, games.message, games.serverMessage);
     }
     if (!widgets.ok) {
       clearAuthIfExpired(widgets.code);
-      return authRequiredResponse(widgets.code, widgets.message);
+      return authRequiredResponse(widgets.code, widgets.message, widgets.serverMessage);
     }
     if (!gameCategories.ok) {
       clearAuthIfExpired(gameCategories.code);
-      return authRequiredResponse(gameCategories.code, gameCategories.message);
+      return authRequiredResponse(gameCategories.code, gameCategories.message, gameCategories.serverMessage);
     }
     if (!widgetCategories.ok) {
       clearAuthIfExpired(widgetCategories.code);
-      return authRequiredResponse(widgetCategories.code, widgetCategories.message);
+      return authRequiredResponse(widgetCategories.code, widgetCategories.message, widgetCategories.serverMessage);
     }
     if (!gameControls.ok) {
       clearAuthIfExpired(gameControls.code);
-      return authRequiredResponse(gameControls.code, gameControls.message);
+      return authRequiredResponse(gameControls.code, gameControls.message, gameControls.serverMessage);
     }
     if (!widgetStatus.ok) {
       clearAuthIfExpired(widgetStatus.code);
-      return authRequiredResponse(widgetStatus.code, widgetStatus.message);
+      return authRequiredResponse(widgetStatus.code, widgetStatus.message, widgetStatus.serverMessage);
     }
     const workspace = readCommunityWorkspaceDefaults();
     const normalizedGames: CommunityAppSummary[] = games.games.map((game) => ({
@@ -2462,7 +2473,7 @@ ipcMain.handle(
       const versions = await client.listAppVersions(auth.token, currentApp.projectType, currentApp.id);
       if (!versions.ok) {
         clearAuthIfExpired(versions.code);
-        return authRequiredResponse(versions.code, versions.message);
+        return authRequiredResponse(versions.code, versions.message, versions.serverMessage);
       }
       currentVersions = versions.versions;
     }
@@ -2499,7 +2510,7 @@ ipcMain.handle(
     );
     if (!result.ok) {
       clearAuthIfExpired(result.code);
-      return authRequiredResponse(result.code, result.message);
+      return authRequiredResponse(result.code, result.message, result.serverMessage);
     }
     return { ok: true, url: result.url };
   }
@@ -2520,14 +2531,14 @@ ipcMain.handle(
       const existing = await client.listMyWidgets(auth.token);
       if (!existing.ok) {
         clearAuthIfExpired(existing.code);
-        return authRequiredResponse(existing.code, existing.message);
+        return authRequiredResponse(existing.code, existing.message, existing.serverMessage);
       }
       existingApps = existing.widgets;
     } else {
       const existing = await client.listMyGames(auth.token);
       if (!existing.ok) {
         clearAuthIfExpired(existing.code);
-        return authRequiredResponse(existing.code, existing.message);
+        return authRequiredResponse(existing.code, existing.message, existing.serverMessage);
       }
       existingApps = existing.games.map((game) => ({
           id: game.id,
@@ -2550,7 +2561,7 @@ ipcMain.handle(
     const result = await client.createApp(auth.token, request);
     if (!result.ok) {
       clearAuthIfExpired(result.code);
-      return authRequiredResponse(result.code, result.message);
+      return authRequiredResponse(result.code, result.message, result.serverMessage);
     }
     let refreshedApps: CommunityAppSummary[] | null = null;
     if (projectType === "widget") {
@@ -2610,16 +2621,19 @@ ipcMain.handle(
     }
     let tarballPath: string | null = null;
     try {
+      emitCommunitySubmitProgress("packaging", "Packaging workspace and running tar...");
       tarballPath = await createPublishTarball(workspaceRoot, elig.appId);
       const client = getCommunityClient();
+      emitCommunitySubmitProgress("uploading", "Uploading packaged workspace...");
       const packageUpload =
         projectType === "widget"
           ? await client.uploadWidgetZip(auth.token, fileBlobFromPath(tarballPath, "application/gzip"), `${elig.appId}.tar.gz`)
           : await client.uploadGameZip(auth.token, fileBlobFromPath(tarballPath, "application/gzip"), `${elig.appId}.tar.gz`);
       if (!packageUpload.ok) {
         clearAuthIfExpired(packageUpload.code);
-        return authRequiredResponse(packageUpload.code, packageUpload.message);
+        return authRequiredResponse(packageUpload.code, packageUpload.message, packageUpload.serverMessage);
       }
+      emitCommunitySubmitProgress("submitting", "Submitting version for community review...");
       const submit = await client.submitAppVersion(auth.token, {
         projectType,
         appSystemId: request.appSystemId,
@@ -2632,7 +2646,7 @@ ipcMain.handle(
       });
       if (!submit.ok) {
         clearAuthIfExpired(submit.code);
-        return authRequiredResponse(submit.code, submit.message);
+        return authRequiredResponse(submit.code, submit.message, submit.serverMessage);
       }
       return {
         ok: true,
@@ -2646,6 +2660,7 @@ ipcMain.handle(
       return { ok: false, code: "network_error", message };
     } finally {
       if (tarballPath) {
+        emitCommunitySubmitProgress("cleaning", "Cleaning up temporary package...");
         fs.unlink(tarballPath, () => {});
       }
     }
@@ -2675,7 +2690,7 @@ ipcMain.handle(
     });
     if (!result.ok) {
       clearAuthIfExpired(result.code);
-      return authRequiredResponse(result.code, result.message);
+      return authRequiredResponse(result.code, result.message, result.serverMessage);
     }
     return { ok: true, status: result.status };
   }

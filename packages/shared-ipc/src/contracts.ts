@@ -55,6 +55,8 @@ export const IPCChannels = {
   communityGetPublishOptions: "community:get-publish-options",
   communityCreateApp: "community:create-app",
   communitySubmitAppVersion: "community:submit-app-version",
+  /** Main → renderer: current package/upload/review stage for the blocking submission overlay. */
+  communitySubmitProgress: "community:submit-progress",
   communityWithdrawAppVersion: "community:withdraw-app-version",
   communityUploadNativeImage: "community:upload-native-image",
   /**
@@ -530,7 +532,7 @@ export type CommunityDeployDevice = {
 
 export type CommunityListDeployDevicesResponse =
   | { ok: true; devices: CommunityDeployDevice[]; supabaseConfigured: boolean }
-  | { ok: false; code: string; message: string; authRequired?: boolean };
+  | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
 export type CommunityGameSummary = {
   id: number | string;
@@ -544,7 +546,7 @@ export type CommunityGameSummary = {
 
 export type CommunityListMyGamesResponse =
   | { ok: true; games: CommunityGameSummary[]; total: number }
-  | { ok: false; code: string; message: string; authRequired?: boolean };
+  | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
 export type CommunityAppSummary = {
   id: number | string;
@@ -605,7 +607,7 @@ export type CommunityGetPublishOptionsResponse =
       currentVersions: CommunityVersionSummary[];
       workspace: CommunityWorkspaceDefaults;
     }
-  | { ok: false; code: string; message: string; authRequired?: boolean };
+  | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
 export type CommunityCreateAppRequest = {
   projectType: ProjectType;
@@ -621,7 +623,7 @@ export type CommunityCreateAppRequest = {
 
 export type CommunityCreateAppResponse =
   | { ok: true; app: CommunityAppSummary }
-  | { ok: false; code: string; message: string; authRequired?: boolean };
+  | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
 export type CommunityUploadNativeImageRequest = {
   filePath: string;
@@ -629,7 +631,7 @@ export type CommunityUploadNativeImageRequest = {
 
 export type CommunityUploadNativeImageResponse =
   | { ok: true; url: string }
-  | { ok: false; code: string; message: string; authRequired?: boolean };
+  | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
 export type CommunitySubmitAppVersionRequest = {
   projectType: ProjectType;
@@ -640,6 +642,18 @@ export type CommunitySubmitAppVersionRequest = {
   preview: string[];
 };
 
+export type CommunitySubmitProgressStage =
+  | "creating"
+  | "packaging"
+  | "uploading"
+  | "submitting"
+  | "cleaning";
+
+export type CommunitySubmitProgress = {
+  stage: CommunitySubmitProgressStage;
+  message: string;
+};
+
 export type CommunitySubmitAppVersionResponse =
   | {
       ok: true;
@@ -648,7 +662,7 @@ export type CommunitySubmitAppVersionResponse =
       downloadUrl: string;
       downloadMd5: string;
     }
-  | { ok: false; code: string; message: string; authRequired?: boolean };
+  | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
 export type CommunityWithdrawAppVersionRequest = {
   projectType: ProjectType;
@@ -658,7 +672,7 @@ export type CommunityWithdrawAppVersionRequest = {
 
 export type CommunityWithdrawAppVersionResponse =
   | { ok: true; status: string }
-  | { ok: false; code: string; message: string; authRequired?: boolean };
+  | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
 export function validateDeployWorkspaceConf(raw: unknown): DeployEligibility {
   if (!raw || typeof raw !== "object") {

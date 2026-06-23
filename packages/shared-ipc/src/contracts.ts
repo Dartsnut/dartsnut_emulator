@@ -55,6 +55,8 @@ export const IPCChannels = {
   communityGetPublishOptions: "community:get-publish-options",
   communityCreateApp: "community:create-app",
   communitySubmitAppVersion: "community:submit-app-version",
+  /** Main → renderer: current package/upload/review stage for the blocking submission overlay. */
+  communitySubmitProgress: "community:submit-progress",
   communityWithdrawAppVersion: "community:withdraw-app-version",
   communityUploadNativeImage: "community:upload-native-image",
   /**
@@ -638,6 +640,18 @@ export type CommunitySubmitAppVersionRequest = {
   description: string;
   fields?: string;
   preview: string[];
+};
+
+export type CommunitySubmitProgressStage =
+  | "creating"
+  | "packaging"
+  | "uploading"
+  | "submitting"
+  | "cleaning";
+
+export type CommunitySubmitProgress = {
+  stage: CommunitySubmitProgressStage;
+  message: string;
 };
 
 export type CommunitySubmitAppVersionResponse =

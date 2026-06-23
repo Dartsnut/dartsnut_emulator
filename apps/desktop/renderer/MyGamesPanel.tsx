@@ -5,6 +5,7 @@ import type {
   CommunityControlOption,
   CommunitySessionInfo,
   CommunitySizeOption,
+  CommunitySubmitProgress,
   CommunityVersionSummary,
   CommunityWorkspaceDefaults,
   ProjectType
@@ -24,6 +25,7 @@ export type MyGamesPanelProps = {
   communitySessionVersion: number;
   onCommunitySessionChange: () => Promise<void>;
   onAuthRequired: () => void;
+  onSubmitProgress: (progress: CommunitySubmitProgress | null) => void;
 };
 
 type UploadTile = {
@@ -131,7 +133,8 @@ export const MyGamesPanel = memo(function MyGamesPanel({
   communitySession,
   communitySessionVersion,
   onCommunitySessionChange,
-  onAuthRequired
+  onAuthRequired,
+  onSubmitProgress
 }: MyGamesPanelProps) {
   const api = window.dartsnutApi;
   const iconInputRef = useRef<HTMLInputElement | null>(null);
@@ -343,8 +346,15 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       return;
     }
     setSubmitting(true);
+    const setSubmitProgress = (progress: CommunitySubmitProgress) => {
+      setSubmitStage(progress.message);
+      onSubmitProgress(progress);
+    };
     try {
-      setSubmitStage(activeApp ? "Using existing app record..." : "Creating app record...");
+      setSubmitProgress({
+        stage: "creating",
+        message: activeApp ? "Using existing app record..." : "Creating app record..."
+      });
       const create = await api.communityCreateApp({
         projectType,
         mainCover: icon.url,
@@ -360,7 +370,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
         await surfaceApiFailure(create, `Failed to create ${projectLabel(projectType).toLowerCase()} app.`);
         return;
       }
-      setSubmitStage("Packaging workspace and submitting version...");
+      setSubmitProgress({ stage: "packaging", message: "Preparing workspace package..." });
       const submit = await api.communitySubmitAppVersion({
         projectType,
         appSystemId: create.app.id,
@@ -377,6 +387,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       await loadPublishOptions();
     } finally {
       setSubmitStage(null);
+      onSubmitProgress(null);
       setSubmitting(false);
     }
   }

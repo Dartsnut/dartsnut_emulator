@@ -1087,6 +1087,11 @@ export function App() {
 
   const deployEligible = deployEligibility.ok;
   const deployPanelShowsWidgetParams = deployEligible && deployEligibility.projectType === "widget";
+  const communityWorkspaceRefreshKey = [
+    bootstrap?.workspaceRoot ?? "",
+    deployEligibility.ok ? deployEligibility.appId : "",
+    deployEligibility.ok ? deployEligibility.projectType : deployEligibility.reason
+  ].join("|");
   const communityAuthSkipped = communityAuthSkippedVersion >= 0 && isCommunityAuthSkippedForSession();
   const gamesTabDisabled = !communitySession.loggedIn && communityAuthSkipped;
 
@@ -2036,6 +2041,7 @@ export function App() {
                 active={deployPaneTab === "games"}
                 communitySession={communitySession}
                 communitySessionVersion={communitySessionVersion + communityAuthSkippedVersion}
+                communityWorkspaceRefreshKey={communityWorkspaceRefreshKey}
                 onCommunitySessionChange={refreshCommunitySession}
                 onAuthRequired={requestMyGamesCommunityAuth}
                 onSubmitProgress={handleCommunitySubmitProgress}

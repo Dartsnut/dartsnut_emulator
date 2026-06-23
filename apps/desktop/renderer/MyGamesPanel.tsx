@@ -23,6 +23,7 @@ export type MyGamesPanelProps = {
   active: boolean;
   communitySession: CommunitySessionInfo;
   communitySessionVersion: number;
+  communityWorkspaceRefreshKey: string;
   onCommunitySessionChange: () => Promise<void>;
   onAuthRequired: () => void;
   onSubmitProgress: (progress: CommunitySubmitProgress | null) => void;
@@ -132,6 +133,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
   active,
   communitySession,
   communitySessionVersion,
+  communityWorkspaceRefreshKey,
   onCommunitySessionChange,
   onAuthRequired,
   onSubmitProgress
@@ -157,6 +159,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [apiErrorSnackbar, setApiErrorSnackbar] = useState<ApiErrorSnackbarState | null>(null);
+  const lastWorkspaceRefreshKeyRef = useRef(communityWorkspaceRefreshKey);
 
   const projectType = workspace.projectType;
   const isWidget = projectType === "widget";
@@ -268,8 +271,21 @@ export const MyGamesPanel = memo(function MyGamesPanel({
   }, [active, api, communitySession.loggedIn, surfaceApiFailure]);
 
   useEffect(() => {
+    if (lastWorkspaceRefreshKeyRef.current === communityWorkspaceRefreshKey) {
+      return;
+    }
+    lastWorkspaceRefreshKeyRef.current = communityWorkspaceRefreshKey;
+    setIcon(null);
+    setPreviews([]);
+    setError(null);
+    setNotice(null);
+    setApiErrorSnackbar(null);
+    setSubmitStage(null);
+  }, [communityWorkspaceRefreshKey]);
+
+  useEffect(() => {
     void loadPublishOptions();
-  }, [loadPublishOptions, communitySessionVersion]);
+  }, [loadPublishOptions, communitySessionVersion, communityWorkspaceRefreshKey]);
 
   async function uploadImageFile(file: File): Promise<UploadTile> {
     const filePath = api.assets.getPathForFile(file);

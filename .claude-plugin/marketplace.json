@@ -1,0 +1,13 @@
+{
+  "name": "dartsnut",
+  "owner": {
+    "name": "Dartsnut"
+  },
+  "plugins": [
+    {
+      "name": "dartsnut-agent",
+      "source": "./plugins/dartsnut-agent",
+      "description": "Dartsnut agent skills and firmware bridge."
+    }
+  ]
+}

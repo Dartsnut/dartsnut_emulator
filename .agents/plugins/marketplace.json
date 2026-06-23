@@ -1,0 +1,20 @@
+{
+  "name": "dartsnut",
+  "interface": {
+    "displayName": "Dartsnut"
+  },
+  "plugins": [
+    {
+      "name": "dartsnut-agent",
+      "source": {
+        "source": "local",
+        "path": "./plugins/dartsnut-agent"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

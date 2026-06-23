@@ -17,6 +17,7 @@
     "pythonRuntime.ts",
     "assetManager.ts",
     "communityClient.ts",
+    "googleOAuth.ts",
     "communityAuth.ts"
   ]
 }

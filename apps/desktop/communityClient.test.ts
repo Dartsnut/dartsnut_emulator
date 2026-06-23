@@ -119,6 +119,8 @@ test("withdrawAppVersion falls back across review withdrawal routes", async () =
       supabaseAnonKey: "",
       supabaseDeviceTable: "remote_devices",
       googleClientId: "",
+      googleDesktopClientId: "",
+      googleDesktopClientSecret: "",
       hasSupabase: false
     },
     async (url, init) => {
@@ -180,4 +182,17 @@ test("readCommunityConfig applies defaults and hasSupabase flag", () => {
   assert.equal(cfg.baseApi, "https://api.example.com");
   assert.equal(cfg.hasSupabase, true);
   assert.equal(cfg.supabaseDeviceTable, "remote_devices");
+  assert.equal(cfg.googleDesktopClientId, "");
+  assert.equal(cfg.googleDesktopClientSecret, "");
+});
+
+test("readCommunityConfig reads desktop Google OAuth client id", () => {
+  const cfg = readCommunityConfig({
+    DARTSNUT_GOOGLE_CLIENT_ID: "web-client",
+    DARTSNUT_GOOGLE_DESKTOP_CLIENT_ID: "desktop-client",
+    DARTSNUT_GOOGLE_DESKTOP_CLIENT_SECRET: "desktop-secret"
+  });
+  assert.equal(cfg.googleClientId, "web-client");
+  assert.equal(cfg.googleDesktopClientId, "desktop-client");
+  assert.equal(cfg.googleDesktopClientSecret, "desktop-secret");
 });

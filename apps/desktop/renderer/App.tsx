@@ -504,7 +504,9 @@ export function App() {
     loggedIn: false,
     account: null,
     hasSupabase: false,
-    googleClientId: ""
+    googleClientId: "",
+    googleDesktopClientId: "",
+    googleSignInAvailable: false
   });
   const [deployAuthGateOpen, setDeployAuthGateOpen] = useState(false);
   const [communityAuthIntent, setCommunityAuthIntent] = useState<CommunityAuthIntent>("deploy-devices");
@@ -541,7 +543,9 @@ export function App() {
           prev.loggedIn !== session.loggedIn ||
           prev.account !== session.account ||
           prev.hasSupabase !== session.hasSupabase ||
-          prev.googleClientId !== session.googleClientId;
+          prev.googleClientId !== session.googleClientId ||
+          prev.googleDesktopClientId !== session.googleDesktopClientId ||
+          prev.googleSignInAvailable !== session.googleSignInAvailable;
         if (changed) {
           setCommunitySessionVersion((v) => v + 1);
           return session;
@@ -2052,7 +2056,7 @@ export function App() {
       ) : null}
       <DeployAuthGate
         open={deployAuthGateOpen}
-        googleClientId={communitySession.googleClientId}
+        googleSignInAvailable={communitySession.googleSignInAvailable}
         title={communityAuthIntent === "my-games" ? "Sign in to publish apps" : "Sign in to pick a device"}
         description={
           communityAuthIntent === "my-games"

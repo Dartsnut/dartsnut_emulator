@@ -1,13 +1,8 @@
 {
   "mcpServers": {
     "dartsnut-firmware": {
-      "command": "node",
-      "args": [
-        "./mcp/dartsnut-firmware-bridge.js"
-      ],
-      "env": {
-        "DARTSNUT_MACHINE_URL": "${DARTSNUT_MACHINE_URL}"
-      }
+      "type": "http",
+      "url": "${DARTSNUT_MACHINE_URL:-http://127.0.0.1:9252}/mcp"
     }
   }
 }

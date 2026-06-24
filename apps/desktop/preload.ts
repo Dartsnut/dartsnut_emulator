@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   IPCChannels,
   type AgentEvent,
+  type AppUpdateInstallResponse,
+  type AppUpdateStatus,
   type MainProcessConsoleMirrorPayload,
   type ApplyAssetsRequest,
   type ApplyAssetsResponse,
@@ -68,6 +70,10 @@ const api = {
     >,
   getWindowChromeInsets: () =>
     ipcRenderer.invoke(IPCChannels.windowChromeInsets) as Promise<WindowChromeInsets>,
+  getAppUpdateStatus: () =>
+    ipcRenderer.invoke(IPCChannels.appUpdateStatus) as Promise<AppUpdateStatus>,
+  installAppUpdateNow: () =>
+    ipcRenderer.invoke(IPCChannels.appUpdateInstallNow) as Promise<AppUpdateInstallResponse>,
   setShellUiTheme: (theme: ShellUiTheme) =>
     ipcRenderer.invoke(IPCChannels.shellUiTheme, theme) as Promise<void>,
   startNewProject: () => ipcRenderer.invoke(IPCChannels.startNewProject) as Promise<BootstrapState>,
@@ -106,6 +112,11 @@ const api = {
     const handler = (_: unknown, insets: WindowChromeInsets) => listener(insets);
     ipcRenderer.on(IPCChannels.windowChromeInsetsChanged, handler);
     return () => ipcRenderer.removeListener(IPCChannels.windowChromeInsetsChanged, handler);
+  },
+  onAppUpdateStatus: (listener: (status: AppUpdateStatus) => void) => {
+    const handler = (_: unknown, status: AppUpdateStatus) => listener(status);
+    ipcRenderer.on(IPCChannels.appUpdateStatusChanged, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.appUpdateStatusChanged, handler);
   },
   onSessionReset: (listener: () => void) => {
     const handler = () => listener();

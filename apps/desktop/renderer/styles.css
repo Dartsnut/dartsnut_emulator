@@ -210,6 +210,242 @@ body {
   color: color-mix(in srgb, var(--color-text-subtle) 82%, transparent);
 }
 
+.app-update-pill {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--color-neon-mint) 34%, var(--color-panel-border));
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface-elevated) 86%, transparent), color-mix(in srgb, var(--color-surface) 92%, transparent));
+  padding: 0 9px;
+  color: var(--color-text-primary);
+  font-size: 11px;
+  line-height: 1;
+  box-shadow: 0 0 18px color-mix(in srgb, var(--color-neon-mint-dim) 42%, transparent);
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.app-update-pill__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-neon-mint);
+  box-shadow: 0 0 12px var(--color-neon-mint-dim);
+  animation: app-update-dot 1.2s ease-in-out infinite;
+}
+
+.app-update-pill__text {
+  font-family: var(--font-mono);
+  color: var(--color-neon-mint);
+  text-transform: uppercase;
+}
+
+.app-update-pill__percent {
+  color: var(--color-text-subtle);
+}
+
+.app-update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2350;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    linear-gradient(135deg, rgba(7, 6, 8, 0.8), rgba(16, 19, 22, 0.68)),
+    color-mix(in srgb, var(--color-bg-page) 70%, transparent);
+  backdrop-filter: blur(9px) saturate(1.08);
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.app-update-overlay::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  opacity: 0.16;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 13px, rgba(255, 255, 255, 0.08) 13px 14px),
+    linear-gradient(135deg, transparent 0 46%, var(--color-neon-coral-dim) 46% 47%, transparent 47%);
+}
+
+.app-update-panel {
+  position: relative;
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 18px;
+  width: min(500px, 100%);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-neon-coral) 36%, var(--color-panel-border));
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface-elevated) 94%, transparent), var(--color-surface)),
+    var(--color-surface-elevated);
+  box-shadow:
+    0 28px 90px rgba(0, 0, 0, 0.46),
+    0 0 34px color-mix(in srgb, var(--color-neon-coral-dim) 55%, transparent);
+  padding: 20px;
+}
+
+.app-update-panel__ticker {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 84px;
+  height: 84px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-neon-mint) 38%, var(--color-panel-border));
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--color-surface) 90%, transparent), var(--color-surface-elevated));
+}
+
+.app-update-panel__ticker::before {
+  content: "";
+  width: 44px;
+  height: 44px;
+  border-radius: 9px;
+  border: 2px solid var(--color-neon-mint);
+  box-shadow:
+    inset 0 0 18px color-mix(in srgb, var(--color-neon-mint-dim) 70%, transparent),
+    0 0 18px color-mix(in srgb, var(--color-neon-mint-dim) 70%, transparent);
+  transform: rotate(45deg);
+}
+
+.app-update-panel__ticker span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--color-neon-coral);
+  box-shadow: 0 0 14px var(--color-neon-coral-dim);
+  animation: app-update-scan 1.35s ease-in-out infinite;
+}
+
+.app-update-panel__ticker span:nth-child(1) {
+  margin-left: -26px;
+}
+
+.app-update-panel__ticker span:nth-child(2) {
+  margin-left: -4px;
+  background: var(--color-neon-mint);
+  box-shadow: 0 0 14px var(--color-neon-mint-dim);
+  animation-delay: 0.16s;
+}
+
+.app-update-panel__ticker span:nth-child(3) {
+  margin-left: 18px;
+  animation-delay: 0.32s;
+}
+
+.app-update-panel__copy {
+  min-width: 0;
+}
+
+.app-update-panel__eyebrow {
+  margin: 0 0 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neon-mint);
+  text-transform: uppercase;
+}
+
+.app-update-panel__title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.15;
+  color: var(--color-text-primary);
+}
+
+.app-update-panel__version {
+  margin: 8px 0 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-neon-coral);
+}
+
+.app-update-panel__message {
+  margin: 10px 0 0;
+  color: var(--color-text-subtle);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.app-update-panel__error {
+  margin: 10px 0 0;
+  color: var(--color-error-text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.app-update-panel__actions {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-start;
+}
+
+.app-update-panel__primary,
+.app-update-panel__secondary {
+  min-height: 32px;
+  white-space: nowrap;
+}
+
+.app-update-panel__secondary {
+  margin: 0;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--color-text-primary) 18%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-surface-elevated) 70%, transparent);
+  padding: 0 13px;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+
+.app-update-panel__secondary:hover {
+  border-color: color-mix(in srgb, var(--color-neon-mint) 42%, transparent);
+  background: color-mix(in srgb, var(--color-neon-mint-dim) 26%, var(--color-surface-elevated));
+}
+
+.app-update-panel__secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@keyframes app-update-dot {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes app-update-scan {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(9px) scale(0.78);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateY(-18px) scale(1);
+  }
+}
+
 @keyframes community-submit-spin {
   to {
     transform: rotate(360deg);
@@ -242,7 +478,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .community-submit-overlay__glyph::before,
   .community-submit-overlay__glyph span,
-  .community-submit-overlay__rail span {
+  .community-submit-overlay__rail span,
+  .app-update-pill__dot,
+  .app-update-panel__ticker span {
     animation-duration: 2.6s;
   }
 }

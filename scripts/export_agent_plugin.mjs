@@ -117,7 +117,7 @@ function buildCodexManifest() {
         "Build, modify, and verify Dartsnut games and widgets with packaged domain skills and a local firmware MCP bridge.",
       developerName: "Dartsnut",
       category: "Developer Tools",
-      capabilities: ["Write"],
+      capabilities: ["Write", "MCP"],
       defaultPrompt: [
         "Build a Dartsnut game.",
         "Create a Dartsnut widget.",
@@ -127,10 +127,7 @@ function buildCodexManifest() {
     }
   };
 
-  if (process.env.DARTSNUT_EXPORT_FIRMWARE_MCP === "1") {
-    manifest.mcpServers = "./.mcp.json";
-    manifest.interface.capabilities = ["Write", "MCP"];
-  }
+  manifest.mcpServers = "./.mcp.json";
 
   return manifest;
 }
@@ -150,7 +147,7 @@ function buildMcpConfig() {
     mcpServers: {
       "dartsnut-firmware": {
         type: "http",
-        url: "${DARTSNUT_MACHINE_URL:-http://127.0.0.1:9252}/mcp"
+        url: "${DARTSNUT_MACHINE_URL}/mcp"
       }
     }
   };
@@ -211,28 +208,19 @@ pnpm run export:agent-plugin
 - Codex manifest: \`.codex-plugin/plugin.json\`
 - Claude manifest: \`.claude-plugin/plugin.json\`
 - Skills: \`skills/<skill-id>/SKILL.md\`
-- Firmware MCP bridge stub: \`mcp/dartsnut-firmware-bridge.js\`
+- Firmware MCP server config: \`.mcp.json\`
 
-## Firmware MCP bridge
+## Firmware MCP server
 
-The repository includes an MCP config template for a local server named \`dartsnut-firmware\`, but
-the plugin manifest does not enable it by default until the bridge is implemented. To export a
-manifest that declares the MCP server, run:
+The plugin includes an MCP server named \`dartsnut-firmware\`. Before starting
+the agent, set \`DARTSNUT_MACHINE_URL\` to the base URL of the Dartsnut machine
+you want to control. Use the Dartsnut machine IP address:
 
 \`\`\`bash
-DARTSNUT_EXPORT_FIRMWARE_MCP=1 pnpm run export:agent-plugin
+export DARTSNUT_MACHINE_URL=http://192.168.1.42:9252
 \`\`\`
 
-The bridge entrypoint is \`mcp/dartsnut-firmware-bridge.js\` and reads
-\`DARTSNUT_MACHINE_URL\` when the firmware bridge is implemented.
-`;
-}
-
-function buildMcpBridge() {
-  return `#!/usr/bin/env node
-console.error("dartsnut-firmware MCP bridge is not implemented yet.");
-console.error("Set DARTSNUT_MACHINE_URL when the firmware MCP bridge is added.");
-process.exit(1);
+The MCP endpoint is resolved as \`\${DARTSNUT_MACHINE_URL}/mcp\`.
 `;
 }
 
@@ -258,7 +246,6 @@ function generateInto(rootDir, codexMarketplaceFile, claudeMarketplaceFile) {
   writeJson(path.join(rootDir, ".claude-plugin", "plugin.json"), buildClaudeManifest());
   writeJson(path.join(rootDir, ".mcp.json"), buildMcpConfig());
   writeText(path.join(rootDir, "README.md"), buildReadme());
-  writeText(path.join(rootDir, "mcp", "dartsnut-firmware-bridge.js"), buildMcpBridge());
 
   writeJson(codexMarketplaceFile, buildCodexMarketplace());
   writeJson(claudeMarketplaceFile, buildClaudeMarketplace());

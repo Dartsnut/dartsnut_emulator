@@ -2,7 +2,7 @@
   "mcpServers": {
     "dartsnut-firmware": {
       "type": "http",
-      "url": "${DARTSNUT_MACHINE_URL:-http://127.0.0.1:9252}/mcp"
+      "url": "${DARTSNUT_MACHINE_URL}/mcp"
     }
   }
 }

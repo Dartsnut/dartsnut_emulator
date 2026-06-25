@@ -14,6 +14,8 @@ import {
   type PickWorkspaceResponse,
   type IntakeSubmitQuestionAnswerRequest,
   type IntakeSubmitQuestionAnswerResponse,
+  type MachineMcpSubmitQuestionAnswerRequest,
+  type MachineMcpSubmitQuestionAnswerResponse,
   type PromptRequest,
   type ProviderSettings,
   type PythonRuntimeProgress,
@@ -77,6 +79,8 @@ const api = {
       : ipcRenderer.invoke(IPCChannels.pickWorkspace, request)) as Promise<PickWorkspaceResponse>,
   intakeSubmitQuestionAnswer: (body: IntakeSubmitQuestionAnswerRequest) =>
     ipcRenderer.invoke(IPCChannels.intakeSubmitQuestionAnswer, body) as Promise<IntakeSubmitQuestionAnswerResponse>,
+  machineMcpSubmitQuestionAnswer: (body: MachineMcpSubmitQuestionAnswerRequest) =>
+    ipcRenderer.invoke(IPCChannels.machineMcpSubmitQuestionAnswer, body) as Promise<MachineMcpSubmitQuestionAnswerResponse>,
   sendPrompt: (request: PromptRequest) =>
     ipcRenderer.invoke(IPCChannels.sendPrompt, request) as Promise<SendPromptResponse>,
   cancelAgent: () => ipcRenderer.invoke(IPCChannels.cancelAgent) as Promise<{ ok: boolean }>,

@@ -31,6 +31,7 @@ const MAIN_LOOP_INSTRUCTIONS = [
   "3. **Load skills just-in-time.** Call **`get_dartsnut_skill`** for the step you are about to do (e.g. `conf-contract` before `conf.json`, `pydartsnut-core` + the widget/game loop skill before `main.py`). Decide which to load from **meaning** in English / Simplified Chinese / Traditional Chinese, not exact keywords.",
   "4. **Make the change.** Prefer **`replace_in_file`** for existing files (make `find` unique, or use `replace_all`); use **`write_file`** for new files. Workspace-scoped paths only.",
   "5. **Verify.** After writing/editing Python, run **`check_python`** for a fast syntax check, then **`reload_emulator`** and **`get_emulator_logs`**. Stop as soon as logs show no Traceback/SyntaxError/ModuleNotFoundError **and** the request is met.",
+  "6. **Machine MCP only when needed.** If the user asks for real-machine/firmware interaction, call **`dartsnut_machine_mcp`** with `connect`; the host will ask the user for a machine/IP. Then call `list_tools` and use `call_tool` only with discovered tool names.",
   "",
   "**Edit discipline (load `karpathy-guidelines` for detail):** touch only what the request requires; no speculative refactors or drive-by cleanup; match existing style. For a focused fix, change the smallest set of lines, verify, and stop — do not keep editing once logs are clean.",
   "",

@@ -44,11 +44,11 @@ assert(codexManifest.version === "0.1.0", "Codex manifest version must be 0.1.0"
 assert(codexManifest.skills === "./skills/", "Codex manifest must point at ./skills/");
 assert(codexManifest.interface?.displayName === "Dartsnut Agent", "Codex display name is missing");
 
-if (process.env.DARTSNUT_EXPORT_FIRMWARE_MCP === "1") {
-  assert(codexManifest.mcpServers === "./.mcp.json", "Codex manifest must opt into .mcp.json when MCP export is enabled");
-} else {
-  assert(!("mcpServers" in codexManifest), "Codex manifest must not enable firmware MCP by default");
-}
+assert(codexManifest.mcpServers === "./.mcp.json", "Codex manifest must opt into .mcp.json");
+assert(
+  codexManifest.interface?.capabilities?.includes("MCP"),
+  "Codex manifest capabilities must include MCP"
+);
 
 const claudeManifest = readJson("plugins/dartsnut-agent/.claude-plugin/plugin.json");
 assert(claudeManifest.name === "dartsnut-agent", "Claude manifest name must be dartsnut-agent");
@@ -61,7 +61,6 @@ const claudeMarketplace = readJson(".claude-plugin/marketplace.json");
 assert(claudeMarketplace.plugins?.[0]?.source === "./plugins/dartsnut-agent", "Claude marketplace path is wrong");
 
 assertFile("plugins/dartsnut-agent/.mcp.json");
-assertFile("plugins/dartsnut-agent/mcp/dartsnut-firmware-bridge.js");
 
 for (const skillId of exportedSkills) {
   assertFile(`packages/agent-runtime/skills/${skillId}.md`);

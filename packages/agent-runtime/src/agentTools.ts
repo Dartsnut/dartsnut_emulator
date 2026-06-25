@@ -406,6 +406,13 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     return options.hostCheckPythonHandler({ paths });
   });
 
+  const machineMcp = defineJsonSchemaTool("dartsnut_machine_mcp", async (args) => {
+    if (!options.hostMachineMcpHandler) {
+      return JSON.stringify({ ok: false, error: "Machine MCP handler unavailable." });
+    }
+    return options.hostMachineMcpHandler(args);
+  });
+
   const registry: Record<string, Tool> = {
     list_files: listFiles,
     read_file: readFile,
@@ -419,7 +426,8 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     dartsnut_ask_question: askQuestion,
     reload_emulator: reloadEmulator,
     get_emulator_logs: getEmulatorLogs,
-    check_python: checkPython
+    check_python: checkPython,
+    dartsnut_machine_mcp: machineMcp
   };
 
   const requested = new Set(

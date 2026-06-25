@@ -34,6 +34,7 @@ export type HostAskQuestionHandler = (args: Record<string, unknown>) => Promise<
 export type HostReloadEmulatorHandler = () => Promise<string>;
 export type HostGetEmulatorLogsHandler = (args: { max_lines?: number }) => Promise<string>;
 export type HostCheckPythonHandler = (args: { paths?: string[] }) => Promise<string>;
+export type HostMachineMcpHandler = (args: Record<string, unknown>) => Promise<string>;
 
 export interface AgentSkillLibrary {
   skillsDir: string;
@@ -54,6 +55,7 @@ export interface SessionEngineOptions {
   hostReloadEmulatorHandler?: HostReloadEmulatorHandler;
   hostGetEmulatorLogsHandler?: HostGetEmulatorLogsHandler;
   hostCheckPythonHandler?: HostCheckPythonHandler;
+  hostMachineMcpHandler?: HostMachineMcpHandler;
   skipInitialWorkspaceResolve?: boolean;
   sessionPersistence?: AgentSessionPersistence;
   sessionTemplateMode?: string | null;
@@ -158,7 +160,8 @@ export class SessionEngine {
         : undefined,
       hostReloadEmulatorHandler: this.options.hostReloadEmulatorHandler,
       hostGetEmulatorLogsHandler: this.options.hostGetEmulatorLogsHandler,
-      hostCheckPythonHandler: this.options.hostCheckPythonHandler
+      hostCheckPythonHandler: this.options.hostCheckPythonHandler,
+      hostMachineMcpHandler: this.options.hostMachineMcpHandler
     };
   }
 

@@ -50,6 +50,9 @@ import {
   type MainProcessConsoleMirrorPayload,
   type IntakeSubmitQuestionAnswerRequest,
   type IntakeSubmitQuestionAnswerResponse,
+  type MachineMcpQuestionMachine,
+  type MachineMcpSubmitQuestionAnswerRequest,
+  type MachineMcpSubmitQuestionAnswerResponse,
   type CommunitySessionInfo,
   type CommunityLoginRequest,
   type CommunityLoginResponse,
@@ -1192,6 +1195,30 @@ interface IntakeChipQuestionPending {
 
 let intakeChipQuestionPending: IntakeChipQuestionPending | null = null;
 
+interface MachineMcpQuestionPending {
+  resolve: (answer: { host: string; deviceId?: string } | null) => void;
+  machines: MachineMcpQuestionMachine[];
+}
+
+let machineMcpQuestionPending: MachineMcpQuestionPending | null = null;
+
+type MachineMcpToolInfo = {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+};
+
+type MachineMcpSession = {
+  url: string;
+  host: string;
+  deviceId?: string;
+  protocolVersion: string;
+  tools: MachineMcpToolInfo[];
+};
+
+let machineMcpSession: MachineMcpSession | null = null;
+let machineMcpRequestId = 1;
+
 function cancelAllIntakeUserInputPending(): void {
   if (intakeChipQuestionPending) {
     const { resolve, kind } = intakeChipQuestionPending;
@@ -1210,6 +1237,12 @@ function cancelAllIntakeUserInputPending(): void {
         message: "Choice was interrupted."
       })
     );
+  }
+  if (machineMcpQuestionPending) {
+    const { resolve } = machineMcpQuestionPending;
+    machineMcpQuestionPending = null;
+    agentEventEmitter?.({ type: "machine_mcp_prompt", at: Date.now(), visible: false });
+    resolve(null);
   }
 }
 
@@ -1326,6 +1359,194 @@ async function askQuestionHostExecute(
     });
   }
   return JSON.stringify({ ok: false, error: `Unknown question_id: ${questionId}` });
+}
+
+function normalizeMachineHost(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || /[/?#\s]/.test(trimmed)) {
+    return null;
+  }
+  const withoutProtocol = trimmed.replace(/^https?:\/\//i, "");
+  const host = withoutProtocol.replace(/\/+$/, "");
+  if (!host || /[/?#\s]/.test(host)) {
+    return null;
+  }
+  return host;
+}
+
+function machineMcpUrlForHost(host: string): string {
+  const hasPort = /:\d+$/.test(host);
+  return `http://${hasPort ? host : `${host}:9252`}/mcp`;
+}
+
+async function fetchMachineMcpQuestionMachines(): Promise<MachineMcpQuestionMachine[]> {
+  const auth = readCommunityAuth(getCommunityUserDataPath());
+  if (!auth?.token) {
+    return [];
+  }
+  const result = await getCommunityClient().listDeployDevices(auth.token);
+  if (!result.ok) {
+    if (result.code === "session_expired") {
+      clearCommunityAuth(getCommunityUserDataPath());
+    }
+    return [];
+  }
+  return result.devices
+    .filter((device) => normalizeMachineHost(device.ipAddress) !== null)
+    .map((device) => ({
+      deviceId: device.deviceId,
+      name: device.name,
+      model: device.model,
+      ipAddress: device.ipAddress,
+      ssid: device.ssid,
+      updatedAt: device.updatedAt
+    }));
+}
+
+async function askMachineForMcp(): Promise<{ host: string; deviceId?: string } | null> {
+  if (machineMcpQuestionPending) {
+    return null;
+  }
+  const machines = await fetchMachineMcpQuestionMachines();
+  agentEventEmitter?.({
+    type: "machine_mcp_prompt",
+    at: Date.now(),
+    visible: true,
+    machines,
+    manualOnly: machines.length === 0
+  });
+  return await new Promise((resolve) => {
+    machineMcpQuestionPending = { resolve, machines };
+  });
+}
+
+async function machineMcpJsonRpc(url: string, method: string, params?: unknown): Promise<unknown> {
+  const id = machineMcpRequestId++;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream"
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      method,
+      ...(params === undefined ? {} : { params })
+    })
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`MCP HTTP ${res.status}: ${text.slice(0, 500)}`);
+  }
+  const data = JSON.parse(text) as { result?: unknown; error?: { message?: string; code?: number } };
+  if (data.error) {
+    throw new Error(data.error.message || `MCP JSON-RPC error ${data.error.code ?? ""}`.trim());
+  }
+  return data.result;
+}
+
+function normalizeMachineMcpTools(result: unknown): MachineMcpToolInfo[] {
+  const rawTools =
+    result && typeof result === "object" && Array.isArray((result as { tools?: unknown }).tools)
+      ? (result as { tools: unknown[] }).tools
+      : [];
+  return rawTools
+    .map((toolInfo) => {
+      if (!toolInfo || typeof toolInfo !== "object") {
+        return null;
+      }
+      const record = toolInfo as Record<string, unknown>;
+      const name = typeof record.name === "string" ? record.name.trim() : "";
+      if (!name) {
+        return null;
+      }
+      return {
+        name,
+        ...(typeof record.description === "string" ? { description: record.description } : {}),
+        ...(record.inputSchema !== undefined ? { inputSchema: record.inputSchema } : {})
+      };
+    })
+    .filter((toolInfo): toolInfo is MachineMcpToolInfo => toolInfo !== null);
+}
+
+async function connectMachineMcp(force = false): Promise<MachineMcpSession> {
+  if (machineMcpSession && !force) {
+    return machineMcpSession;
+  }
+  const selected = await askMachineForMcp();
+  if (!selected) {
+    throw new Error("Machine selection was cancelled.");
+  }
+  const url = machineMcpUrlForHost(selected.host);
+  const initialized = await machineMcpJsonRpc(url, "initialize", {
+    protocolVersion: "2024-11-05",
+    capabilities: {},
+    clientInfo: { name: "dartsnut-agent-desktop", version: app.getVersion() }
+  });
+  const protocolVersion =
+    initialized && typeof initialized === "object" && typeof (initialized as { protocolVersion?: unknown }).protocolVersion === "string"
+      ? (initialized as { protocolVersion: string }).protocolVersion
+      : "2024-11-05";
+  const tools = normalizeMachineMcpTools(await machineMcpJsonRpc(url, "tools/list"));
+  machineMcpSession = {
+    url,
+    host: selected.host,
+    ...(selected.deviceId ? { deviceId: selected.deviceId } : {}),
+    protocolVersion,
+    tools
+  };
+  return machineMcpSession;
+}
+
+async function executeMachineMcpForAgent(args: Record<string, unknown>): Promise<string> {
+  const action = typeof args.action === "string" ? args.action : "";
+  try {
+    if (action === "connect") {
+      const session = await connectMachineMcp(args.force === true);
+      return JSON.stringify({
+        ok: true,
+        connected: true,
+        url: session.url,
+        host: session.host,
+        deviceId: session.deviceId,
+        tools: session.tools
+      });
+    }
+    if (action === "list_tools") {
+      const session = await connectMachineMcp(false);
+      session.tools = normalizeMachineMcpTools(await machineMcpJsonRpc(session.url, "tools/list"));
+      return JSON.stringify({ ok: true, tools: session.tools });
+    }
+    if (action === "call_tool") {
+      const session = await connectMachineMcp(false);
+      const toolName = typeof args.tool_name === "string" ? args.tool_name.trim() : "";
+      if (!toolName) {
+        return JSON.stringify({ ok: false, error: "tool_name is required for call_tool." });
+      }
+      if (!session.tools.some((toolInfo) => toolInfo.name === toolName)) {
+        return JSON.stringify({ ok: false, error: `Unknown MCP tool: ${toolName}. Call list_tools first.` });
+      }
+      const result = await machineMcpJsonRpc(session.url, "tools/call", {
+        name: toolName,
+        arguments:
+          args.arguments && typeof args.arguments === "object" && !Array.isArray(args.arguments)
+            ? args.arguments
+            : {}
+      });
+      return JSON.stringify({ ok: true, result });
+    }
+    if (action === "disconnect") {
+      machineMcpSession = null;
+      return JSON.stringify({ ok: true, connected: false });
+    }
+    return JSON.stringify({ ok: false, error: "action must be connect, list_tools, call_tool, or disconnect." });
+  } catch (error) {
+    return JSON.stringify({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
 
 function buildAssetApplierPrompt(request: PromptRequest): string {
@@ -1990,6 +2211,7 @@ async function buildSession(
     hostReloadEmulatorHandler: () => executeHostReloadEmulatorForAgent(),
     hostGetEmulatorLogsHandler: (args) => Promise.resolve(executeHostGetEmulatorLogsForAgent(args)),
     hostCheckPythonHandler: (args) => Promise.resolve(executeHostCheckPythonForAgent(args)),
+    hostMachineMcpHandler: (args) => executeMachineMcpForAgent(args),
     skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve,
     sessionPersistence: extras?.sessionPersistence,
     initialConversation: extras?.initialConversation,
@@ -3032,6 +3254,42 @@ ipcMain.handle(
           next: "Call **read_workspace_conf** — returns `conf.json` status for the active workspace."
         })
       );
+      return { ok: true };
+    }
+    return { ok: false, reason: "invalid_value" };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.machineMcpSubmitQuestionAnswer,
+  async (_event: unknown, body: MachineMcpSubmitQuestionAnswerRequest): Promise<MachineMcpSubmitQuestionAnswerResponse> => {
+    if (!machineMcpQuestionPending) {
+      return { ok: false, reason: "no_pending" };
+    }
+    if (body.kind === "machine") {
+      const host = normalizeMachineHost(body.ipAddress);
+      if (!host) {
+        return { ok: false, reason: "invalid_value" };
+      }
+      const pending = machineMcpQuestionPending;
+      const known = pending.machines.find((machine) => machine.deviceId === body.deviceId && machine.ipAddress === body.ipAddress);
+      if (!known) {
+        return { ok: false, reason: "invalid_value" };
+      }
+      machineMcpQuestionPending = null;
+      agentEventEmitter?.({ type: "machine_mcp_prompt", at: Date.now(), visible: false });
+      pending.resolve({ host, deviceId: body.deviceId });
+      return { ok: true };
+    }
+    if (body.kind === "manual_ip") {
+      const host = normalizeMachineHost(body.value);
+      if (!host) {
+        return { ok: false, reason: "invalid_value" };
+      }
+      const pending = machineMcpQuestionPending;
+      machineMcpQuestionPending = null;
+      agentEventEmitter?.({ type: "machine_mcp_prompt", at: Date.now(), visible: false });
+      pending.resolve({ host });
       return { ok: true };
     }
     return { ok: false, reason: "invalid_value" };

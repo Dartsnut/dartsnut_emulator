@@ -11,6 +11,8 @@ import type {
   PickWorkspaceResponse,
   IntakeSubmitQuestionAnswerRequest,
   IntakeSubmitQuestionAnswerResponse,
+  MachineMcpSubmitQuestionAnswerRequest,
+  MachineMcpSubmitQuestionAnswerResponse,
   PromptRequest,
   ProviderSettings,
   PythonRuntimeProgress,
@@ -69,6 +71,9 @@ declare global {
       intakeSubmitQuestionAnswer: (
         body: IntakeSubmitQuestionAnswerRequest
       ) => Promise<IntakeSubmitQuestionAnswerResponse>;
+      machineMcpSubmitQuestionAnswer: (
+        body: MachineMcpSubmitQuestionAnswerRequest
+      ) => Promise<MachineMcpSubmitQuestionAnswerResponse>;
       sendPrompt: (request: PromptRequest) => Promise<SendPromptResponse>;
       cancelAgent: () => Promise<{ ok: boolean }>;
       getProviderSettings: () => Promise<ProviderSettings>;

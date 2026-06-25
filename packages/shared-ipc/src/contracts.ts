@@ -7,6 +7,8 @@ export const IPCChannels = {
   pickWorkspace: "agent:pick-workspace",
   /** Completes a blocking `dartsnut_ask_question` call for project type or widget size (chip row). */
   intakeSubmitQuestionAnswer: "agent:intake-submit-question-answer",
+  /** Completes a blocking machine selection/input question for MCP connection. */
+  machineMcpSubmitQuestionAnswer: "agent:machine-mcp-submit-question-answer",
   startNewProject: "agent:start-new-project",
   /** Copy/move the tracked temp workspace to a user-chosen folder and clear temp tracking. */
   saveTempWorkspace: "agent:save-temp-workspace",
@@ -218,6 +220,23 @@ export type IntakeSubmitQuestionAnswerResponse =
   | { ok: true }
   | { ok: false; reason: "no_pending" | "kind_mismatch" | "invalid_value" };
 
+export type MachineMcpQuestionMachine = {
+  deviceId: string;
+  name: string;
+  model: string;
+  ipAddress: string;
+  ssid: string;
+  updatedAt: string | null;
+};
+
+export type MachineMcpSubmitQuestionAnswerRequest =
+  | { kind: "machine"; deviceId: string; ipAddress: string }
+  | { kind: "manual_ip"; value: string };
+
+export type MachineMcpSubmitQuestionAnswerResponse =
+  | { ok: true }
+  | { ok: false; reason: "no_pending" | "invalid_value" };
+
 const TRANSCRIPT_USER_REQUEST_SECTION = "\n\nUser request:\n";
 
 /** Prefix line inside the post-intake creator user prompt (see `buildPostIntakeCreatorUserPrompt`). */
@@ -375,6 +394,14 @@ export type AgentEvent =
     /** When true, the renderer shows the Game / Widget chip row (`options`) after the model calls `dartsnut_ask_question` with `question_id` `project_type`. When false, hide it. */
     visible: boolean;
     options?: ProjectType[];
+  }
+  | {
+    type: "machine_mcp_prompt";
+    at: number;
+    /** When true, renderer asks the user which machine/IP to use for MCP. */
+    visible: boolean;
+    machines?: MachineMcpQuestionMachine[];
+    manualOnly?: boolean;
   };
 
 export type AssetKind = "static" | "gif" | "spritesheet";

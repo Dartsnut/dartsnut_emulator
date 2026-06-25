@@ -29,7 +29,8 @@ describe("buildAgentTools profiles", () => {
       "get_emulator_logs",
       "check_python",
       "dartsnut_project_intake",
-      "dartsnut_ask_question"
+      "dartsnut_ask_question",
+      "dartsnut_machine_mcp"
     ]) {
       expect(names).toContain(expected);
     }
@@ -45,5 +46,6 @@ describe("buildAgentTools profiles", () => {
     expect(names).not.toContain("copy_asset_file");
     expect(names).not.toContain("dartsnut_project_intake");
     expect(names).not.toContain("dartsnut_ask_question");
+    expect(names).not.toContain("dartsnut_machine_mcp");
   });
 });

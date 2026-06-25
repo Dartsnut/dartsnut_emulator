@@ -13,17 +13,16 @@ pnpm run export:agent-plugin
 - Codex manifest: `.codex-plugin/plugin.json`
 - Claude manifest: `.claude-plugin/plugin.json`
 - Skills: `skills/<skill-id>/SKILL.md`
-- Firmware MCP bridge stub: `mcp/dartsnut-firmware-bridge.js`
+- Firmware MCP server config: `.mcp.json`
 
-## Firmware MCP bridge
+## Firmware MCP server
 
-The repository includes an MCP config template for a local server named `dartsnut-firmware`, but
-the plugin manifest does not enable it by default until the bridge is implemented. To export a
-manifest that declares the MCP server, run:
+The plugin includes an MCP server named `dartsnut-firmware`. Before starting
+the agent, set `DARTSNUT_MACHINE_URL` to the base URL of the Dartsnut machine
+you want to control. Use the Dartsnut machine IP address:
 
 ```bash
-DARTSNUT_EXPORT_FIRMWARE_MCP=1 pnpm run export:agent-plugin
+export DARTSNUT_MACHINE_URL=http://192.168.1.42:9252
 ```
 
-The bridge entrypoint is `mcp/dartsnut-firmware-bridge.js` and reads
-`DARTSNUT_MACHINE_URL` when the firmware bridge is implemented.
+The MCP endpoint is resolved as `${DARTSNUT_MACHINE_URL}/mcp`.

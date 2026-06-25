@@ -22,7 +22,8 @@
     "developerName": "Dartsnut",
     "category": "Developer Tools",
     "capabilities": [
-      "Write"
+      "Write",
+      "MCP"
     ],
     "defaultPrompt": [
       "Build a Dartsnut game.",
@@ -30,5 +31,6 @@
       "Review my Dartsnut project."
     ],
     "brandColor": "#00A88F"
-  }
+  },
+  "mcpServers": "./.mcp.json"
 }

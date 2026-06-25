@@ -99,6 +99,40 @@ const DARTSNUT_PROJECT_INTAKE_TOOL: ChatCompletionTool = {
   }
 };
 
+const DARTSNUT_MACHINE_MCP_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "dartsnut_machine_mcp",
+    description: [
+      "Host-executed bridge to a real Dartsnut machine MCP service. Use only when the task requires interacting with physical hardware, firmware state, or live machine capabilities.",
+      "Call `connect` first; the desktop host will ask the user to select a logged-in machine or enter an IP address, then connect to `http://<host>:9252/mcp`.",
+      "After connecting, call `list_tools` to discover what this machine supports. Use `call_tool` only with a discovered tool name and JSON arguments.",
+      "Do not assume firmware tool names before discovery."
+    ].join(" "),
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["connect", "list_tools", "call_tool", "disconnect"],
+          description: "MCP operation to perform."
+        },
+        tool_name: {
+          type: "string",
+          description: "Required when action is `call_tool`; must be a name returned by `list_tools`."
+        },
+        arguments: {
+          type: "object",
+          description: "JSON arguments forwarded to the discovered MCP tool when action is `call_tool`."
+        }
+      },
+      required: ["action"],
+      additionalProperties: false
+    },
+    strict: false
+  }
+};
+
 /** File + asset tools only (no host intake). */
 export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
   {
@@ -367,7 +401,8 @@ export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
   GET_EMULATOR_LOGS_TOOL,
   CHECK_PYTHON_TOOL,
   DARTSNUT_ASK_QUESTION_TOOL,
-  DARTSNUT_PROJECT_INTAKE_TOOL
+  DARTSNUT_PROJECT_INTAKE_TOOL,
+  DARTSNUT_MACHINE_MCP_TOOL
 ];
 
 export type AgentToolSchemaDefinition = {

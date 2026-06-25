@@ -10,7 +10,14 @@ export type AskQuestionCardProps = {
   questionNumber?: number;
   questionTotal?: number;
   question: string;
-  options: AskQuestionOption[];
+  options?: AskQuestionOption[];
+  input?: {
+    value: string;
+    placeholder: string;
+    error?: string | null;
+    onChange: (value: string) => void;
+    validate?: (value: string) => boolean;
+  };
   onSubmit: (value: string) => void;
 };
 
@@ -46,10 +53,14 @@ export function AskQuestionCard({
   questionNumber = 1,
   questionTotal = 1,
   question,
-  options,
+  options = [],
+  input,
   onSubmit,
 }: AskQuestionCardProps) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const inputValue = input?.value ?? "";
+  const inputValid = input ? (input.validate ? input.validate(inputValue) : inputValue.trim().length > 0) : false;
+  const canContinue = input ? inputValid : selectedIndex !== null;
 
   useEffect(() => {
     setSelectedIndex(null);
@@ -59,6 +70,10 @@ export function AskQuestionCard({
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) {
+        if (event.key === "Enter" && input && inputValid) {
+          event.preventDefault();
+          onSubmit(inputValue.trim());
+        }
         return;
       }
       if (event.key === "Enter" && selectedIndex !== null) {
@@ -87,7 +102,7 @@ export function AskQuestionCard({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onSubmit, options, selectedIndex]);
+  }, [input, inputValid, inputValue, onSubmit, options, selectedIndex]);
 
   return (
     <div
@@ -119,37 +134,56 @@ export function AskQuestionCard({
         <p className="ui-ask-question__prompt">
           {questionNumber}. {question}
         </p>
-        <ul className="ui-ask-question__options" role="listbox" aria-label="Answer choices">
-          {options.map((option, index) => {
-            const letter = OPTION_LETTERS[index] ?? String(index + 1);
-            const selected = selectedIndex === index;
-            return (
-              <li key={option.value} role="presentation">
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  className={cn("ui-ask-question__option", selected && "ui-ask-question__option--selected")}
-                  onClick={() => setSelectedIndex(index)}
-                  onDoubleClick={() => onSubmit(option.value)}
-                >
-                  <span className="ui-ask-question__option-badge" aria-hidden>
-                    {letter}
-                  </span>
-                  <span className="ui-ask-question__option-label">{option.label}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        {input ? (
+          <div className="ui-ask-question__input-wrap">
+            <input
+              className={cn("ui-ask-question__input", input.error && "ui-ask-question__input--invalid")}
+              value={input.value}
+              placeholder={input.placeholder}
+              onChange={(event) => input.onChange(event.target.value)}
+              aria-invalid={Boolean(input.error)}
+              autoFocus
+            />
+            {input.error ? <p className="ui-ask-question__input-error">{input.error}</p> : null}
+          </div>
+        ) : (
+          <ul className="ui-ask-question__options" role="listbox" aria-label="Answer choices">
+            {options.map((option, index) => {
+              const letter = OPTION_LETTERS[index] ?? String(index + 1);
+              const selected = selectedIndex === index;
+              return (
+                <li key={option.value} role="presentation">
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    className={cn("ui-ask-question__option", selected && "ui-ask-question__option--selected")}
+                    onClick={() => setSelectedIndex(index)}
+                    onDoubleClick={() => onSubmit(option.value)}
+                  >
+                    <span className="ui-ask-question__option-badge" aria-hidden>
+                      {letter}
+                    </span>
+                    <span className="ui-ask-question__option-label">{option.label}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
 
       <footer className="ui-ask-question__footer">
         <button
           type="button"
           className="ui-ask-question__continue"
-          disabled={selectedIndex === null}
+          disabled={!canContinue}
           onClick={() => {
+            if (input) {
+              if (!inputValid) return;
+              onSubmit(inputValue.trim());
+              return;
+            }
             if (selectedIndex === null) return;
             const option = options[selectedIndex];
             if (option) {

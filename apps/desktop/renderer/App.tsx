@@ -14,6 +14,7 @@ import {
   type SendPromptResponse,
   type SaveTempWorkspaceResponse,
   type MainProcessConsoleMirrorPayload,
+  type MachineMcpQuestionMachine,
   type WidgetSize,
   type CommunitySessionInfo,
   type CommunitySubmitProgress
@@ -49,6 +50,17 @@ const AgentMarkdownRenderer = lazy(() => import("./AgentMarkdownRenderer"));
 
 function projectTypeChipLabel(pt: ProjectType): string {
   return pt === "game" ? "Game" : "Widget";
+}
+
+function isValidMachineHost(value: string): boolean {
+  const trimmed = value.trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  return Boolean(trimmed) && !/[/?#\s]/.test(trimmed);
+}
+
+function machineOptionLabel(machine: MachineMcpQuestionMachine): string {
+  const name = machine.name || machine.deviceId;
+  const details = [machine.ipAddress, machine.ssid].filter(Boolean).join(" · ");
+  return details ? `${name}  ${details}` : name;
 }
 
 type RightPaneTab = "emulator" | "assets";
@@ -470,6 +482,13 @@ export function App() {
     visible: boolean;
     sizes: WidgetSize[];
   }>({ visible: false, sizes: [] });
+  const [machineMcpPicker, setMachineMcpPicker] = useState<{
+    visible: boolean;
+    machines: MachineMcpQuestionMachine[];
+    manualOnly: boolean;
+  }>({ visible: false, machines: [], manualOnly: true });
+  const [machineMcpManualIp, setMachineMcpManualIp] = useState("");
+  const [machineMcpInputError, setMachineMcpInputError] = useState<string | null>(null);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
@@ -809,6 +828,9 @@ export function App() {
         return;
       }
       if (event.type === "intake_project_type_prompt") {
+        if (event.visible) {
+          setMachineMcpPicker({ visible: false, machines: [], manualOnly: true });
+        }
         setProjectTypePicker({
           visible: event.visible,
           types:
@@ -821,6 +843,9 @@ export function App() {
         return;
       }
       if (event.type === "intake_widget_size_prompt") {
+        if (event.visible) {
+          setMachineMcpPicker({ visible: false, machines: [], manualOnly: true });
+        }
         setWidgetSizePicker({
           visible: event.visible,
           sizes:
@@ -829,6 +854,20 @@ export function App() {
               : event.visible
                 ? [...WIDGET_DISPLAY_SIZES]
                 : []
+        });
+        return;
+      }
+      if (event.type === "machine_mcp_prompt") {
+        if (event.visible) {
+          setProjectTypePicker({ visible: false, types: [] });
+          setWidgetSizePicker({ visible: false, sizes: [] });
+          setMachineMcpManualIp("");
+          setMachineMcpInputError(null);
+        }
+        setMachineMcpPicker({
+          visible: event.visible,
+          machines: event.visible && event.machines ? event.machines : [],
+          manualOnly: event.visible ? event.manualOnly === true || !event.machines?.length : true
         });
         return;
       }
@@ -1390,6 +1429,39 @@ export function App() {
     }
   }
 
+  async function handleMachineMcpChoice(value: string) {
+    if (!api) {
+      return;
+    }
+    const machine = machineMcpPicker.machines.find((entry) => entry.deviceId === value);
+    if (!machine) {
+      postStatus("That machine is no longer available.");
+      return;
+    }
+    const res = await api.machineMcpSubmitQuestionAnswer({
+      kind: "machine",
+      deviceId: machine.deviceId,
+      ipAddress: machine.ipAddress
+    });
+    if (!res.ok) {
+      postStatus("The machine selection could not be used. Enter the IP manually.");
+    }
+  }
+
+  async function handleMachineMcpManualIp(value: string) {
+    if (!api) {
+      return;
+    }
+    if (!isValidMachineHost(value)) {
+      setMachineMcpInputError("Enter an IP or host, without path/query text.");
+      return;
+    }
+    const res = await api.machineMcpSubmitQuestionAnswer({ kind: "manual_ip", value });
+    if (!res.ok) {
+      setMachineMcpInputError("That address could not be used.");
+    }
+  }
+
   async function handleSend() {
     if (!prompt.trim() || chatDisabled) {
       return;
@@ -1719,6 +1791,41 @@ export function App() {
                 label: sz,
               }))}
               onSubmit={(value) => void handleWidgetSizeChip(value as WidgetSize)}
+            />
+          ) : machineMcpPicker.visible ? (
+            <AskQuestionCard
+              question={
+                machineMcpPicker.manualOnly
+                  ? "Enter the machine IP for MCP."
+                  : "Which machine should the agent use for MCP?"
+              }
+              options={
+                machineMcpPicker.manualOnly
+                  ? undefined
+                  : machineMcpPicker.machines.map((machine) => ({
+                    value: machine.deviceId,
+                    label: machineOptionLabel(machine),
+                  }))
+              }
+              input={
+                machineMcpPicker.manualOnly
+                  ? {
+                    value: machineMcpManualIp,
+                    placeholder: "192.168.1.42",
+                    error: machineMcpInputError,
+                    onChange: (value) => {
+                      setMachineMcpManualIp(value);
+                      setMachineMcpInputError(null);
+                    },
+                    validate: isValidMachineHost,
+                  }
+                  : undefined
+              }
+              onSubmit={(value) =>
+                machineMcpPicker.manualOnly
+                  ? void handleMachineMcpManualIp(value)
+                  : void handleMachineMcpChoice(value)
+              }
             />
           ) : null}
 

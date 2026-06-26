@@ -10,6 +10,7 @@ import { SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
 import { buildAgentModelConfig } from "../src/agentProviderConfig";
 import { resetAgentsBootstrapForTests } from "../src/agentsBootstrap";
+import { AgentSessionPersistence } from "../src/agentSessionPersistence";
 import type { StreamedRunResult } from "@openai/agents";
 
 function createMockStream(params: {
@@ -193,6 +194,70 @@ describe("SessionEngine (@openai/agents)", () => {
     const result = await engine.runPrompt("align the time label", () => {});
     expect(result).toContain("Aligned labels");
     expect(runCalls).toBe(1);
+  });
+
+  it("persists and emits token usage after a run", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-usage-"));
+    const persistence = new AgentSessionPersistence(workspace);
+    persistence.writeTokenUsageAtomic({ inputTokens: 10, outputTokens: 4, totalTokens: 14 });
+    const runFn: typeof import("@openai/agents").run = async () =>
+      createMockStream({
+        finalOutput: "Done.",
+        events: [
+          chatChunk({
+            choices: [{ index: 0, delta: { content: "Done." } }],
+            usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 }
+          }),
+          chatChunk({
+            choices: [],
+            usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 }
+          })
+        ]
+      });
+
+    const engine = new SessionEngine({
+      runFn,
+      agentModelConfig: buildAgentModelConfig({
+        model: "gpt-4.1-mini",
+        apiKey: "test-key"
+      }),
+      workspacePolicy: new WorkspacePolicy(workspace),
+      skillPrompt: "system skill prompt",
+      sessionPersistence: persistence
+    });
+    const events: AgentEvent[] = [];
+
+    await engine.runPrompt("count usage", (event) => events.push(event));
+
+    const usageEvents = events.filter((event) => event.type === "token_usage");
+    expect(persistence.readTokenUsage()).toEqual({
+      inputTokens: 17,
+      outputTokens: 8,
+      totalTokens: 25,
+      lastRun: { inputTokens: 7, outputTokens: 4, totalTokens: 11 }
+    });
+    expect(usageEvents).toHaveLength(2);
+    expect(usageEvents[0]).toMatchObject({
+      type: "token_usage",
+      runUsage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
+      sessionUsage: {
+        inputTokens: 15,
+        outputTokens: 7,
+        totalTokens: 22,
+        lastRun: { inputTokens: 5, outputTokens: 3, totalTokens: 8 }
+      }
+    });
+    expect(usageEvents[1]).toMatchObject({
+      type: "token_usage",
+      runUsage: { inputTokens: 7, outputTokens: 4, totalTokens: 11 },
+      sessionUsage: {
+        inputTokens: 17,
+        outputTokens: 8,
+        totalTokens: 25,
+        lastRun: { inputTokens: 7, outputTokens: 4, totalTokens: 11 }
+      }
+    });
   });
 
   it("throws stop message when aborted", async () => {

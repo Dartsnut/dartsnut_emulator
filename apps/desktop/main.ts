@@ -2496,7 +2496,8 @@ ipcMain.handle(IPCChannels.getWorkspaceSessionSummary, (): AgentSessionWorkspace
       sessionId: null,
       updatedAt: null,
       templateMode: null,
-      transcriptTail: []
+      transcriptTail: [],
+      tokenUsage: null
     };
   }
   const persistence = new AgentSessionPersistence(ws);
@@ -2506,7 +2507,8 @@ ipcMain.handle(IPCChannels.getWorkspaceSessionSummary, (): AgentSessionWorkspace
     sessionId: manifest?.sessionId ?? null,
     updatedAt: manifest?.updatedAt ?? null,
     templateMode: manifest?.templateMode ?? null,
-    transcriptTail: persistence.readTranscriptTail(200)
+    transcriptTail: persistence.readTranscriptTail(200),
+    tokenUsage: persistence.readTokenUsage()
   };
 });
 

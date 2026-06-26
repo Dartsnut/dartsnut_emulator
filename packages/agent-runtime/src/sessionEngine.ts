@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { run, type StreamedRunResult } from "@openai/agents";
 import {
   type AgentEvent,
+  type AgentTokenUsage,
   type UserLocale
 } from "@dartsnut/shared-ipc";
 import type { ChatMessage } from "./providerClient";
@@ -28,6 +29,7 @@ import type { IntakeToolState } from "./creationIntakeHost";
 import { DartsnutAgentsSession } from "./dartsnutAgentsSession";
 import { mapAgentsStreamToAgentEvents } from "./agentsEventBridge";
 import { fixReasoningContentEcho } from "./reasoningContentFilter";
+import { addRunTokenUsage } from "./tokenUsage";
 
 export type HostIntakeToolHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostAskQuestionHandler = (args: Record<string, unknown>) => Promise<string>;
@@ -189,6 +191,21 @@ export class SessionEngine {
     }
   }
 
+  private emitTokenUsage(
+    baseUsage: ReturnType<AgentSessionPersistence["readTokenUsage"]>,
+    runUsage: AgentTokenUsage,
+    onEvent: (event: AgentEvent) => void
+  ): void {
+    const sessionUsage = addRunTokenUsage(baseUsage, runUsage);
+    this.options.sessionPersistence?.writeTokenUsageAtomic(sessionUsage);
+    onEvent({
+      type: "token_usage",
+      at: Date.now(),
+      runUsage,
+      sessionUsage
+    });
+  }
+
   async runPrompt(
     prompt: string,
     onEvent: (event: AgentEvent) => void,
@@ -248,12 +265,14 @@ export class SessionEngine {
         callModelInputFilter: fixReasoningContentEcho
       })) as StreamedRunResult<DartsnutRunContext, any>;
 
+      const tokenUsageBase = this.options.sessionPersistence?.readTokenUsage() ?? null;
       const bridgeResult = await mapAgentsStreamToAgentEvents(stream, onEvent, {
         readWorkspaceFileIfExists: (rel) => this.readWorkspaceFileIfExists(rel),
         persistTranscript: (kind, text) => this.persistTranscript(kind, text),
         onActiveAgentChange: (name) => {
           runContext.activeAgentName = name;
-        }
+        },
+        onTokenUsage: (runUsage) => this.emitTokenUsage(tokenUsageBase, runUsage, onEvent)
       });
 
       const final = (bridgeResult.finalText || "Dartsnut Agent run complete.").trim();

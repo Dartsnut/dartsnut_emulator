@@ -175,6 +175,16 @@ export interface SendPromptResponse {
 
 export type AgentSessionTranscriptLineKind = "user" | "assistant" | "tool_status" | "thinking";
 
+export interface AgentTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface AgentSessionTokenUsage extends AgentTokenUsage {
+  lastRun?: AgentTokenUsage;
+}
+
 /** Workspace `transcript.jsonl` row shape (renderer preview). */
 export interface AgentSessionTranscriptLine {
   kind: AgentSessionTranscriptLineKind;
@@ -190,6 +200,7 @@ export interface AgentSessionWorkspaceSummary {
   updatedAt: string | null;
   templateMode: string | null;
   transcriptTail: AgentSessionTranscriptLine[];
+  tokenUsage?: AgentSessionTokenUsage | null;
 }
 
 export type ProjectType = "game" | "widget";
@@ -379,6 +390,12 @@ export type AgentEvent =
     type: "final";
     content: string;
     at: number;
+  }
+  | {
+    type: "token_usage";
+    at: number;
+    runUsage: AgentTokenUsage;
+    sessionUsage: AgentSessionTokenUsage;
   }
   | {
     type: "intake_widget_size_prompt";

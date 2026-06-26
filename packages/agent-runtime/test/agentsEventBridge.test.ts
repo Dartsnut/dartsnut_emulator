@@ -202,4 +202,50 @@ describe("agentsEventBridge", () => {
     expect(events.some((e) => e.type === "status" && e.message.includes("WidgetCreator"))).toBe(true);
     expect(activeAgents).toContain("WidgetCreator");
   });
+
+  it("aggregates token usage from raw model stream events", async () => {
+    const events: AgentEvent[] = [];
+    const usageUpdates: Array<{ runUsage: { inputTokens: number; outputTokens: number; totalTokens: number } }> = [];
+    const stream = createMockStream(
+      [
+        {
+          type: "raw_model_stream_event",
+          source: "openai-chat-completions",
+          data: {
+            type: "model",
+            event: {
+              choices: [{ index: 0, delta: { content: "Hello" } }],
+              usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 }
+            } as ChatCompletionChunk,
+            providerData: { rawModelEventSource: "openai-chat-completions" }
+          }
+        } as RunStreamEvent,
+        {
+          type: "raw_model_stream_event",
+          source: "openai-chat-completions",
+          data: {
+            type: "model",
+            event: {
+              choices: [],
+              usage: { input_tokens: 3, output_tokens: 4, total_tokens: 7 }
+            } as ChatCompletionChunk,
+            providerData: { rawModelEventSource: "openai-chat-completions" }
+          }
+        } as RunStreamEvent
+      ],
+      "Hello"
+    );
+
+    const result = await mapAgentsStreamToAgentEvents(stream, (event) => events.push(event), {
+      onTokenUsage: (runUsage) => {
+        usageUpdates.push({ runUsage });
+      }
+    });
+
+    expect(result.tokenUsage).toEqual({ inputTokens: 8, outputTokens: 6, totalTokens: 14 });
+    expect(usageUpdates).toEqual([
+      { runUsage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } },
+      { runUsage: { inputTokens: 8, outputTokens: 6, totalTokens: 14 } }
+    ]);
+  });
 });

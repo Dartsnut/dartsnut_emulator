@@ -1968,6 +1968,16 @@ export function App() {
                   <option value="custom">Custom</option>
                 </select>
               </label>
+              {providerSettings.activeProvider === "dartsnut-llm" ? (
+                <div className="rounded-[var(--radius-md)] border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
+                  <p className="m-0 font-medium">This service is free for a limited time only.</p>
+                  <p className="m-0 mt-1 text-fg-muted">
+                    Please use Dartsnut LLM only for creating and updating Dartsnut games,
+                    widgets, and related project assets. Avoid sending unrelated, sensitive,
+                    or personal content.
+                  </p>
+                </div>
+              ) : null}
               {providerSettings.activeProvider === "custom" ? (
                 <>
                   <label className="flex flex-col gap-1.5">

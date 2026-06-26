@@ -6,6 +6,7 @@ import { DartsnutAgentsSession } from "../src/dartsnutAgentsSession";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
 import { chatMessagesToAgentInputItems, agentInputItemsToChatMessages } from "../src/conversationProtocol";
 import type { ChatMessage } from "../src/providerClient";
+import { resolveSessionUserLocale } from "@dartsnut/shared-ipc";
 
 describe("DartsnutAgentsSession", () => {
   it("round-trips conversation through AgentInputItem protocol", async () => {
@@ -51,5 +52,26 @@ describe("DartsnutAgentsSession", () => {
         (typeof item.content === "string" ? item.content === "next turn" : false)
     );
     expect(hasNextTurn).toBe(true);
+  });
+
+  it("persists resolved locale so short follow-ups can reuse it", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-session-locale-"));
+    const persistence = new AgentSessionPersistence(workspace);
+    const firstLocale = resolveSessionUserLocale(null, "我想要一个时钟小组件");
+    const session = new DartsnutAgentsSession({
+      sessionId: "sess-locale",
+      sessionPersistence: persistence,
+      preferredUserLocale: firstLocale
+    });
+
+    await session.addItems(chatMessagesToAgentInputItems([{ role: "user", content: "我想要一个时钟小组件" }]));
+    await persistence.flushWrites();
+
+    expect(persistence.readManifest()?.preferredUserLocale).toBe("zh-Hans");
+    const followUpLocale = resolveSessionUserLocale(
+      persistence.readManifest()?.preferredUserLocale ?? null,
+      "ok"
+    );
+    expect(followUpLocale).toBe("zh-Hans");
   });
 });

@@ -34,7 +34,9 @@ import { MyGamesPanel } from "./MyGamesPanel";
 import {
   agentEventTimelineRole,
   formatAgentEventForTimeline,
+  mergeTimelineSkillStatusEntry,
   parseToolStatusMessage,
+  shouldHideTimelineStatus,
   transcriptLineToTimelineEntry,
   type TimelineEntry
 } from "./rawTimeline";
@@ -641,6 +643,36 @@ export function App() {
     return `${meta.toolName}\0${meta.filePath ?? ""}`;
   }
 
+  function mergeSkillStatusIntoTimeline(entry: TimelineEntry): void {
+    const seq = eventSeqRef.current;
+    eventSeqRef.current += 1;
+    setEntries((prev) => {
+      const priorIdx = prev.findIndex(
+        (candidate) =>
+          candidate.role === "status" &&
+          candidate.toolStatusMeta?.toolName === "get_dartsnut_skill"
+      );
+      if (priorIdx >= 0) {
+        return prev.map((candidate, idx) =>
+          idx === priorIdx ? mergeTimelineSkillStatusEntry(candidate, entry) : candidate
+        );
+      }
+      const id = `evt-${seq}-${Date.now()}`;
+      return [
+        ...prev,
+        mergeTimelineSkillStatusEntry(
+          {
+            id,
+            role: "status",
+            text: "Loaded Dartsnut skills.",
+            toolStatusMeta: { toolName: "get_dartsnut_skill", phase: "result" }
+          },
+          { ...entry, id }
+        )
+      ];
+    });
+  }
+
   function appendRawAgentEvent(event: AgentEvent): void {
     clearActiveCoalescedStreamEntries();
     const seq = eventSeqRef.current;
@@ -958,6 +990,21 @@ export function App() {
         eventSeqRef.current += 1;
         const parsed = parseToolStatusMessage(event.message);
         const meta = parsed.meta;
+        if (shouldHideTimelineStatus({ text: parsed.text, toolStatusMeta: meta })) {
+          return;
+        }
+        if (meta?.toolName === "get_dartsnut_skill" && meta.phase === "call") {
+          return;
+        }
+        if (meta?.toolName === "get_dartsnut_skill" && meta.phase === "result") {
+          mergeSkillStatusIntoTimeline({
+            id: `evt-${seq}-${event.at}`,
+            role: "status",
+            text: parsed.text,
+            toolStatusMeta: meta
+          });
+          return;
+        }
         const key = meta ? toolStatusKey(meta) : null;
         if (meta?.phase === "result" && key) {
           const priorId = activeToolStatusEntryByKeyRef.current.get(key);
@@ -1177,6 +1224,29 @@ export function App() {
       const toolCallEntryIndexByKey = new Map<string, number>();
       const deduped: TimelineEntry[] = [];
       for (const entry of hydrated) {
+        if (entry.role === "status" && entry.toolStatusMeta?.toolName === "get_dartsnut_skill") {
+          const priorIdx = deduped.findIndex(
+            (candidate) =>
+              candidate.role === "status" &&
+              candidate.toolStatusMeta?.toolName === "get_dartsnut_skill"
+          );
+          if (priorIdx >= 0) {
+            deduped[priorIdx] = mergeTimelineSkillStatusEntry(deduped[priorIdx], entry);
+            continue;
+          }
+          deduped.push(
+            mergeTimelineSkillStatusEntry(
+              {
+                id: entry.id,
+                role: "status",
+                text: "Loaded Dartsnut skills.",
+                toolStatusMeta: { toolName: "get_dartsnut_skill", phase: "result" }
+              },
+              entry
+            )
+          );
+          continue;
+        }
         if (entry.role === "status" && entry.toolStatusMeta) {
           const key = toolStatusKey(entry.toolStatusMeta);
           if (entry.toolStatusMeta.phase === "result" && key) {

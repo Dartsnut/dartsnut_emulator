@@ -60,4 +60,22 @@ describe("buildDartsnutAgent", () => {
     expect(toolNames).not.toContain("dartsnut_project_intake");
     expect(toolNames).not.toContain("copy_asset_file");
   });
+
+  it("includes selected session locale and behavior-invariance policy in instructions", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const ctx = makeContext(workspace, { preferredUserLocale: "zh-Hant" });
+    const agent = buildDartsnutAgent({
+      model: "gpt-4.1-mini",
+      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
+      contextSnapshot: ctx,
+      preferredUserLocale: "zh-Hant",
+      getRunContext: () => ctx
+    });
+    expect(agent.instructions).toContain("Session locale: zh-Hant");
+    expect(agent.instructions).toContain("output-only");
+    expect(agent.instructions).toContain("must not change behavior");
+    expect(agent.instructions).toContain("routing");
+    expect(agent.instructions).toContain("tool choice");
+    expect(agent.instructions).toContain("intake");
+  });
 });

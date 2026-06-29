@@ -11,6 +11,7 @@ export type ToolStatusMeta = {
   filePath?: string;
   added?: number;
   deleted?: number;
+  skillId?: string;
 };
 
 export type ToolStatusContext = {
@@ -19,6 +20,7 @@ export type ToolStatusContext = {
   source?: string;
   added?: number;
   deleted?: number;
+  skillId?: string;
 };
 
 export function toRelPath(input: unknown): string | undefined {
@@ -64,9 +66,10 @@ export function buildToolStatusMessage(
         phase,
         filePath,
         added: context?.added,
-        deleted: context?.deleted
+        deleted: context?.deleted,
+        skillId: context?.skillId
       }
-      : { callId: context?.callId, toolName: name, phase };
+      : { callId: context?.callId, toolName: name, phase, skillId: context?.skillId };
 
   switch (name) {
     case "list_files":
@@ -138,7 +141,9 @@ export function emitToolStatusEvent(
     at: Date.now(),
     message: transportMessage
   });
-  persist?.("tool_status", transportMessage);
+  if (name !== "get_dartsnut_skill" || phase === "result") {
+    persist?.("tool_status", transportMessage);
+  }
 }
 
 export function safeParseObject(input: unknown): Record<string, unknown> {

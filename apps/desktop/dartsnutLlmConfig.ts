@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeProviderBaseUrl, type ProviderConfig } from "@dartsnut/agent-runtime";
+import { withDartsnutSourceHeader } from "./dartsnutSourceHeader";
 
 export const DARTSNUT_MODEL_CONFIG_URL = "https://api.dartsnut.com/mobile/system/model";
 export const DARTSNUT_MODEL_DECRYPTION_KEY_ENV = "DARTSNUT_MODEL_DECRYPTION_KEY";
@@ -144,13 +145,13 @@ export function parseDartsnutModelConfig(decryptedJson: string): ProviderConfig 
 export async function fetchDartsnutLlmConfig(options: RuntimeDartsnutLlmConfigOptions = {}): Promise<ProviderConfig> {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
-  const response = await fetchImpl(DARTSNUT_MODEL_CONFIG_URL, {
+  const response = await fetchImpl(DARTSNUT_MODEL_CONFIG_URL, withDartsnutSourceHeader(DARTSNUT_MODEL_CONFIG_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
     body: "{}"
-  });
+  }));
   if (!response.ok) {
     throw new Error(`Dartsnut LLM model request failed with HTTP ${response.status}.`);
   }

@@ -3,6 +3,7 @@ import {
   type AgentEvent,
   type AgentSessionTokenUsage,
   type AgentTokenUsage,
+  type AppUpdateStatus,
   type AssetManifest,
   type BootstrapState,
   type DeployEligibility,
@@ -76,6 +77,11 @@ type SubmissionLockState = {
   active: boolean;
   stage: CommunitySubmitProgress["stage"] | "idle";
   message: string;
+};
+type UpdatePromptState = AppUpdateStatus & {
+  dismissedVersion: string | null;
+  installing: boolean;
+  error: string | null;
 };
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
@@ -162,6 +168,72 @@ function formatTokenCount(value: number): string {
 
 function formatTokenUsageTitle(usage: AgentTokenUsage): string {
   return `Input ${usage.inputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · Total ${usage.totalTokens.toLocaleString()}`;
+}
+
+function UpdateDownloadPill({ status }: { status: AppUpdateStatus | null }) {
+  if (!status || status.kind !== "downloading") {
+    return null;
+  }
+  const percent = Math.round(status.percent ?? 0);
+  return (
+    <div className="app-update-pill" role="status" aria-label="App update downloading">
+      <span className="app-update-pill__dot" aria-hidden />
+      <span className="app-update-pill__text">Updating</span>
+      <span className="app-update-pill__percent tabular-nums">{percent}%</span>
+    </div>
+  );
+}
+
+type UpdateReadyOverlayProps = {
+  status: AppUpdateStatus | null;
+  installing: boolean;
+  error: string | null;
+  onInstallNow: () => void;
+  onLater: () => void;
+};
+
+function UpdateReadyOverlay({ status, installing, error, onInstallNow, onLater }: UpdateReadyOverlayProps) {
+  if (!status || status.kind !== "ready") {
+    return null;
+  }
+  return (
+    <div className="app-update-overlay" role="dialog" aria-modal="true" aria-labelledby="app-update-title">
+      <div className="app-update-panel">
+        <div className="app-update-panel__ticker" aria-hidden>
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="app-update-panel__copy">
+          <p className="app-update-panel__eyebrow">Desktop update</p>
+          <h2 id="app-update-title" className="app-update-panel__title">Update ready</h2>
+          <p className="app-update-panel__version">
+            Dartsnut Agent {status.currentVersion}
+            {status.availableVersion ? ` -> ${status.availableVersion}` : ""}
+          </p>
+          <p className="app-update-panel__message">
+            The new version has finished downloading. Install it now to relaunch, or keep working and update the next time you open Dartsnut Agent.
+          </p>
+          {error ? (
+            <p className="app-update-panel__error" role="alert">{error}</p>
+          ) : null}
+        </div>
+        <div className="app-update-panel__actions">
+          <button
+            type="button"
+            className="ui-btn-primary app-update-panel__primary"
+            disabled={installing}
+            onClick={onInstallNow}
+          >
+            {installing ? "Preparing..." : "Update now"}
+          </button>
+          <button type="button" className="app-update-panel__secondary" disabled={installing} onClick={onLater}>
+            Next launch
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 type TimelineEntryViewProps = {
@@ -555,6 +627,7 @@ export function App() {
     stage: "idle",
     message: "Preparing submission..."
   });
+  const [appUpdate, setAppUpdate] = useState<UpdatePromptState | null>(null);
 
   const api = window.dartsnutApi;
 
@@ -568,6 +641,45 @@ export function App() {
       stage: progress.stage,
       message: progress.message
     });
+  }, []);
+
+  const handleInstallAppUpdateNow = useCallback(() => {
+    if (!api?.installAppUpdateNow) {
+      return;
+    }
+    setAppUpdate((current) => current ? { ...current, installing: true, error: null } : current);
+    void api.installAppUpdateNow().then((result) => {
+      if (!result.ok) {
+        setAppUpdate((current) =>
+          current
+            ? {
+                ...current,
+                installing: false,
+                error:
+                  result.reason === "cancelled"
+                    ? null
+                    : "The downloaded update is no longer ready. It will be checked again on next launch."
+              }
+            : current
+        );
+      }
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Could not start the update.";
+      setAppUpdate((current) => current ? { ...current, installing: false, error: message } : current);
+    });
+  }, [api]);
+
+  const handleUpdateNextLaunch = useCallback(() => {
+    setAppUpdate((current) =>
+      current
+        ? {
+            ...current,
+            dismissedVersion: current.availableVersion,
+            installing: false,
+            error: null
+          }
+        : current
+    );
   }, []);
 
   const refreshCommunitySession = useCallback(async () => {
@@ -872,6 +984,17 @@ export function App() {
     api.getPythonRuntimeProgress().then(setPythonRuntimeProgress).catch(() => {
       setPythonRuntimeProgress({ running: false, stage: null, percent: 0, message: null });
     });
+    api.getAppUpdateStatus?.().then((status) => {
+      setAppUpdate((current) => ({
+        ...status,
+        dismissedVersion:
+          current?.dismissedVersion === status.availableVersion ? current.dismissedVersion : null,
+        installing: false,
+        error: null
+      }));
+    }).catch(() => {
+      // Update checks are best effort.
+    });
     const unsubscribe = api.onAgentEvent((event) => {
       if (discardAgentEventsRef.current) {
         return;
@@ -1125,6 +1248,16 @@ export function App() {
             : current
         );
       }) ?? (() => {});
+    const unsubscribeAppUpdateStatus =
+      api.onAppUpdateStatus?.((status) => {
+        setAppUpdate((current) => ({
+          ...status,
+          dismissedVersion:
+            current?.dismissedVersion === status.availableVersion ? current.dismissedVersion : null,
+          installing: false,
+          error: null
+        }));
+      }) ?? (() => {});
     const unsubscribeMainConsoleMirror = isDevLoggingEnabled()
       ? api.onMainProcessConsoleMirror((payload) => {
           printMainProcessMirrorToDevtools(payload);
@@ -1136,6 +1269,7 @@ export function App() {
       unsubscribePythonRuntime();
       unsubscribePythonRuntimeProgress();
       unsubscribeCommunitySubmitProgress();
+      unsubscribeAppUpdateStatus();
       unsubscribeMainConsoleMirror();
     };
   }, [api]);
@@ -1205,6 +1339,10 @@ export function App() {
   ].join("|");
   const communityAuthSkipped = communityAuthSkippedVersion >= 0 && isCommunityAuthSkippedForSession();
   const gamesTabDisabled = !communitySession.loggedIn && communityAuthSkipped;
+  const visibleAppUpdate =
+    appUpdate?.kind === "ready" && appUpdate.dismissedVersion !== appUpdate.availableVersion
+      ? appUpdate
+      : null;
 
   // Reset to Emulator tab when the active tab is no longer available.
   useEffect(() => {
@@ -1715,6 +1853,7 @@ export function App() {
               aria-hidden
             />
             <div className="inline-flex shrink-0 items-center justify-end gap-3 overflow-visible">
+              <UpdateDownloadPill status={appUpdate} />
               <CommunityAuthStatus
                 communitySession={communitySession}
                 onAuthRequired={() => requestCommunityAuth("deploy-devices")}
@@ -2301,6 +2440,13 @@ export function App() {
           await refreshCommunitySession();
           devLog.log("[community] Signed in as", account);
         }}
+      />
+      <UpdateReadyOverlay
+        status={visibleAppUpdate}
+        installing={appUpdate?.installing ?? false}
+        error={appUpdate?.error ?? null}
+        onInstallNow={handleInstallAppUpdateNow}
+        onLater={handleUpdateNextLaunch}
       />
       <CommunitySubmitOverlay lock={submissionLock} />
     </main>

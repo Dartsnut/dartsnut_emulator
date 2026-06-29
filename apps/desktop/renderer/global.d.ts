@@ -1,6 +1,8 @@
 import type {
   AgentEvent,
   AgentSessionWorkspaceSummary,
+  AppUpdateInstallResponse,
+  AppUpdateStatus,
   ApplyAssetsRequest,
   ApplyAssetsResponse,
   BindSlotRequest,
@@ -64,6 +66,8 @@ declare global {
         { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" }
       >;
       getWindowChromeInsets: () => Promise<WindowChromeInsets>;
+      getAppUpdateStatus: () => Promise<AppUpdateStatus>;
+      installAppUpdateNow: () => Promise<AppUpdateInstallResponse>;
       setShellUiTheme: (theme: ShellUiTheme) => Promise<void>;
       startNewProject: () => Promise<BootstrapState>;
       saveTempWorkspace: () => Promise<SaveTempWorkspaceResponse>;
@@ -83,6 +87,7 @@ declare global {
       onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
       onMainProcessConsoleMirror: (listener: (payload: MainProcessConsoleMirrorPayload) => void) => () => void;
       onWindowChromeInsets: (listener: (insets: WindowChromeInsets) => void) => () => void;
+      onAppUpdateStatus: (listener: (status: AppUpdateStatus) => void) => () => void;
       onSessionReset: (listener: () => void) => () => void;
       onBootstrapStateChanged: (listener: (state: BootstrapState) => void) => () => void;
       onPythonRuntimeStatus: (listener: (status: string | null) => void) => () => void;

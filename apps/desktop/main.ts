@@ -18,6 +18,8 @@ import {
   type BindSlotRequest,
   type BindSlotResponse,
   type BootstrapState,
+  type AppUpdateStatus,
+  type AppUpdateInstallResponse,
   type SaveTempWorkspaceResponse,
   isTemporaryWorkspaceForBootstrap,
   normalizeFsPathComparable,
@@ -135,6 +137,12 @@ import {
   shouldAllocateTempWorkspaceAfterDiscard,
   type TempWorkspaceGuardReason
 } from "./quitFlow";
+import {
+  getAppUpdateStatus,
+  installDownloadedAppUpdate,
+  isDownloadedAppUpdateReady,
+  startAppUpdateCheck
+} from "./appUpdater";
 
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
@@ -2352,6 +2360,7 @@ async function createWindow() {
 app.whenReady().then(async () => {
   try {
     await createWindow();
+    startAppUpdateCheck(sendToRenderer);
     setPythonRuntimeProgress({
       running: true,
       stage: "check",
@@ -2484,6 +2493,20 @@ ipcMain.handle(IPCChannels.shellUiTheme, (_event: unknown, theme: unknown): void
   if (theme === "light" || theme === "dark") {
     applyShellUiTheme(theme);
   }
+});
+
+ipcMain.handle(IPCChannels.appUpdateStatus, (): AppUpdateStatus => getAppUpdateStatus());
+ipcMain.handle(IPCChannels.appUpdateInstallNow, async (): Promise<AppUpdateInstallResponse> => {
+  if (!isDownloadedAppUpdateReady()) {
+    return { ok: false, reason: "not_ready" };
+  }
+  const proceed = await ensureTemporaryWorkspaceResolvedForGuard("quit");
+  if (!proceed) {
+    return { ok: false, reason: "cancelled" };
+  }
+  allowWindowCloseWithoutTempPrompt = true;
+  installDownloadedAppUpdate();
+  return { ok: true };
 });
 
 ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());

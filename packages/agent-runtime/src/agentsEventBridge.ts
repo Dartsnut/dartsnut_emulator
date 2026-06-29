@@ -176,7 +176,8 @@ function toolContextFromArgs(
     const args = safeParseObject(JSON.parse(argsJson));
     const pathArg = toRelPath(args.path);
     const sourceArg = toRelPath(args.source);
-    context = { callId, path: pathArg, source: sourceArg };
+    const skillIdArg = toRelPath(args.skill_id);
+    context = { callId, path: pathArg, source: sourceArg, skillId: skillIdArg };
     if (toolName === "write_file") {
       const nextContent = typeof args.content === "string" ? args.content : "";
       const previousContent = pathArg ? hooks.readWorkspaceFileIfExists?.(pathArg) : undefined;

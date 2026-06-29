@@ -14,6 +14,8 @@ export interface TimelineEntry {
     filePath?: string;
     added?: number;
     deleted?: number;
+    skillId?: string;
+    skillIds?: string[];
   };
 }
 
@@ -36,6 +38,7 @@ export function parseToolStatusMessage(input: string): {
     filePath?: string;
     added?: number;
     deleted?: number;
+    skillId?: string;
   };
 } {
   const marker = input.indexOf(TOOL_STATUS_META_PREFIX);
@@ -55,6 +58,7 @@ export function parseToolStatusMessage(input: string): {
       filePath?: unknown;
       added?: unknown;
       deleted?: unknown;
+      skillId?: unknown;
     };
     const callId = typeof parsed.callId === "string" ? parsed.callId : undefined;
     const toolName = typeof parsed.toolName === "string" ? parsed.toolName : undefined;
@@ -62,6 +66,7 @@ export function parseToolStatusMessage(input: string): {
     const filePath = typeof parsed.filePath === "string" ? parsed.filePath : undefined;
     const added = typeof parsed.added === "number" ? parsed.added : undefined;
     const deleted = typeof parsed.deleted === "number" ? parsed.deleted : undefined;
+    const skillId = typeof parsed.skillId === "string" ? parsed.skillId : undefined;
     return {
       text: visible,
       meta:
@@ -69,13 +74,63 @@ export function parseToolStatusMessage(input: string): {
         phase !== undefined ||
         filePath !== undefined ||
         added !== undefined ||
-        deleted !== undefined
-          ? { callId, toolName, phase, filePath, added, deleted }
+        deleted !== undefined ||
+        skillId !== undefined
+          ? { callId, toolName, phase, filePath, added, deleted, skillId }
           : undefined
     };
   } catch {
     return { text: visible };
   }
+}
+
+export function shouldHideTimelineStatus(input: {
+  text: string;
+  toolStatusMeta?: {
+    toolName?: string;
+  };
+}): boolean {
+  const text = input.text.trim();
+  return text === "Dartsnut Agent run started." || /^Agent:\s+\S/.test(text);
+}
+
+function timelineSkillIds(entry: TimelineEntry): string[] {
+  const meta = entry.toolStatusMeta;
+  if (!meta || meta.toolName !== "get_dartsnut_skill") {
+    return [];
+  }
+  const ids = new Set<string>();
+  if (Array.isArray(meta.skillIds)) {
+    for (const id of meta.skillIds) {
+      if (id.trim()) {
+        ids.add(id.trim());
+      }
+    }
+  }
+  if (typeof meta.skillId === "string" && meta.skillId.trim()) {
+    ids.add(meta.skillId.trim());
+  }
+  return [...ids];
+}
+
+export function mergeTimelineSkillStatusEntry(
+  existing: TimelineEntry,
+  next: TimelineEntry
+): TimelineEntry {
+  const skillIds = [...new Set([...timelineSkillIds(existing), ...timelineSkillIds(next)])];
+  if (skillIds.length === 0) {
+    return { ...existing, text: "Loaded Dartsnut skills." };
+  }
+  return {
+    ...existing,
+    text: `Loaded skills: ${skillIds.join(", ")}`,
+    toolStatusMeta: {
+      ...existing.toolStatusMeta,
+      toolName: "get_dartsnut_skill",
+      phase: "result",
+      skillIds
+    }
+  };
 }
 
 export function agentEventTimelineRole(event: AgentEvent): "status" | "error" {
@@ -123,6 +178,9 @@ export function transcriptLineToTimelineEntry(
       return null;
     }
     const parsed = parseToolStatusMessage(body);
+    if (shouldHideTimelineStatus({ text: parsed.text, toolStatusMeta: parsed.meta })) {
+      return null;
+    }
     return {
       id,
       role: "status",

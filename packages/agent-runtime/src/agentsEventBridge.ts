@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@dartsnut/shared-ipc";
+import type { AgentEvent, AgentTokenUsage } from "@dartsnut/shared-ipc";
 import type { StreamedRunResult } from "@openai/agents";
 import {
   isOpenAIChatCompletionsRawModelStreamEvent,
@@ -15,11 +15,13 @@ import {
   toRelPath,
   type ToolStatusContext
 } from "./toolStatusHelpers";
+import { addTokenUsage, normalizeTokenUsage } from "./tokenUsage";
 
 export type AgentsStreamBridgeHooks = {
   readWorkspaceFileIfExists?: (relPath: string) => string | undefined;
   persistTranscript?: (kind: "user" | "assistant" | "tool_status" | "thinking", text: string) => void;
   onActiveAgentChange?: (agentName: string) => void;
+  onTokenUsage?: (runUsage: AgentTokenUsage) => void;
 };
 
 export type AgentsStreamBridgeResult = {
@@ -31,6 +33,7 @@ export type AgentsStreamBridgeResult = {
   toolNames: string[];
   filesWrittenThisTurn: number;
   toolCallCount: number;
+  tokenUsage?: AgentTokenUsage;
 };
 
 type StreamingToolCallAccumulator = {
@@ -120,9 +123,16 @@ function handleChatCompletionsChunk(
     stepText: string;
     toolCallAccumulators: Map<number, StreamingToolCallAccumulator>;
     streamedFileToolCallIds: Set<string>;
+    tokenUsage: AgentTokenUsage | null;
+    onTokenUsage?: (runUsage: AgentTokenUsage) => void;
   },
   emit: (event: AgentEvent) => void
 ): void {
+  const chunkUsage = normalizeTokenUsage((chunk as { usage?: unknown }).usage);
+  if (chunkUsage) {
+    state.tokenUsage = state.tokenUsage ? addTokenUsage(state.tokenUsage, chunkUsage) : chunkUsage;
+    state.onTokenUsage?.(state.tokenUsage);
+  }
   const delta = chunk.choices?.[0]?.delta;
   if (!delta) {
     return;
@@ -194,7 +204,9 @@ export async function mapAgentsStreamToAgentEvents(
     stepReasoning: "",
     stepText: "",
     toolCallAccumulators: new Map<number, StreamingToolCallAccumulator>(),
-    streamedFileToolCallIds: new Set<string>()
+    streamedFileToolCallIds: new Set<string>(),
+    tokenUsage: null as AgentTokenUsage | null,
+    onTokenUsage: hooks.onTokenUsage
   };
   const toolNames: string[] = [];
   let filesWrittenThisTurn = 0;
@@ -293,6 +305,7 @@ export async function mapAgentsStreamToAgentEvents(
     stepReasoning: state.stepReasoning,
     toolNames,
     filesWrittenThisTurn,
-    toolCallCount
+    toolCallCount,
+    ...(state.tokenUsage ? { tokenUsage: state.tokenUsage } : {})
   };
 }

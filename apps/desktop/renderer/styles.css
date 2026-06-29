@@ -1410,6 +1410,33 @@ kbd,
   justify-content: flex-end;
 }
 
+.token-usage-chip {
+  display: inline-flex;
+  min-height: 24px;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--color-neon-mint) 26%, var(--color-composer-pill-border));
+  background: color-mix(in srgb, var(--color-composer-pill-bg) 86%, transparent);
+  padding: 3px 9px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--color-text-subtle);
+  box-shadow: var(--shadow-sm);
+}
+
+.token-usage-chip__label {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+}
+
+.token-usage-chip__value {
+  color: var(--color-neon-mint);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
 .ui-btn-primary {
   cursor: pointer;
   border: 0;

@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import type { AgentSessionTokenUsage } from "@dartsnut/shared-ipc";
 import type { ChatMessage } from "./providerClient";
+import { normalizeTokenUsage } from "./tokenUsage";
 
 export const AGENT_SESSION_SCHEMA_VERSION = 1;
 
@@ -34,6 +36,11 @@ export type TranscriptRecord = {
 export type ConversationFileV1 = {
   schemaVersion: number;
   messages: ChatMessage[];
+};
+
+export type TokenUsageFileV1 = {
+  schemaVersion: number;
+  usage: AgentSessionTokenUsage;
 };
 
 export function isAgentSessionPersistenceDisabledByEnv(): boolean {
@@ -196,6 +203,39 @@ export class AgentSessionPersistence {
     });
   }
 
+  readTokenUsage(): AgentSessionTokenUsage | null {
+    const target = path.join(this.dir, "usage.json");
+    if (!fs.existsSync(target)) {
+      return null;
+    }
+    try {
+      const data = JSON.parse(fs.readFileSync(target, "utf-8")) as TokenUsageFileV1;
+      if (!data || data.schemaVersion !== AGENT_SESSION_SCHEMA_VERSION) {
+        return null;
+      }
+      const usage = normalizeTokenUsage(data.usage);
+      if (!usage) {
+        return null;
+      }
+      const lastRun = normalizeTokenUsage(data.usage.lastRun);
+      return {
+        ...usage,
+        ...(lastRun ? { lastRun } : {})
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  writeTokenUsageAtomic(usage: AgentSessionTokenUsage): void {
+    this.ensureDir();
+    const target = path.join(this.dir, "usage.json");
+    const tmp = path.join(this.dir, `.usage.${process.pid}.${Date.now()}.tmp`);
+    const payload: TokenUsageFileV1 = { schemaVersion: AGENT_SESSION_SCHEMA_VERSION, usage };
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
+    fs.renameSync(tmp, target);
+  }
+
   /**
    * Move active session files into `archives/<iso-ish-label>/` and leave the session dir ready for a new session.
    */
@@ -203,7 +243,7 @@ export class AgentSessionPersistence {
     if (!fs.existsSync(this.dir)) {
       return;
     }
-    const files = ["manifest.json", "transcript.jsonl", "transactions.jsonl", "conversation.json"];
+    const files = ["manifest.json", "transcript.jsonl", "transactions.jsonl", "conversation.json", "usage.json"];
     const existing = files.filter((f) => fs.existsSync(path.join(this.dir, f)));
     if (existing.length === 0) {
       return;

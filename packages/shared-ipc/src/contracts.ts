@@ -38,6 +38,12 @@ export const IPCChannels = {
   windowChromeInsetsChanged: "shell:window-chrome-insets-changed",
   /** Renderer → main: align native title bar / system chrome with in-app light or dark theme. */
   shellUiTheme: "shell:ui-theme",
+  /** Main → renderer: desktop app update lifecycle changed. */
+  appUpdateStatusChanged: "app:update-status-changed",
+  /** Renderer invokes for current desktop app update lifecycle state. */
+  appUpdateStatus: "app:update-status",
+  /** Renderer → main: install an already-downloaded desktop app update and relaunch. */
+  appUpdateInstallNow: "app:update-install-now",
   deployGetEligibility: "deploy:get-eligibility",
   /** Main → renderer: workspace `conf.json` created/changed; payload is {@link DeployEligibility}. */
   deployEligibilityChanged: "deploy:eligibility-changed",
@@ -90,6 +96,26 @@ export interface WindowChromeInsets {
 
 /** Matches renderer `ThemeId`; used to style Windows `titleBarOverlay` and `nativeTheme`. */
 export type ShellUiTheme = "dark" | "light";
+
+export type AppUpdateStatusKind =
+  | "idle"
+  | "checking"
+  | "downloading"
+  | "ready"
+  | "not_available"
+  | "error";
+
+export interface AppUpdateStatus {
+  kind: AppUpdateStatusKind;
+  currentVersion: string;
+  availableVersion: string | null;
+  percent: number | null;
+  message: string | null;
+}
+
+export type AppUpdateInstallResponse =
+  | { ok: true }
+  | { ok: false; reason: "not_ready" | "cancelled" };
 
 export type ProviderStatus = "ready" | "missing_config" | "invalid";
 

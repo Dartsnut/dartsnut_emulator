@@ -110,6 +110,49 @@ test("upload result helpers accept community response aliases", () => {
   assert.equal(pickUploadMd5({ widget_download_md5: "ghi" }), "ghi");
 });
 
+test("CommunityClient adds source header to Dartsnut API requests", async () => {
+  const calls = [];
+  const client = new CommunityClient(
+    readCommunityConfig({}),
+    async (url, init) => {
+      calls.push({ url, init });
+      return {
+        status: 200,
+        json: async () => ({ code: 1001, data: { list: [] } })
+      };
+    }
+  );
+
+  const result = await client.listMyGames("token-1");
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://api.dartsnut.com/community/game/my-list");
+  assert.equal(calls[0].init.headers.source, "agent");
+});
+
+test("CommunityClient adds source header to Dartsnut Supabase requests", async () => {
+  const calls = [];
+  const client = new CommunityClient(
+    readCommunityConfig({ DARTSNUT_SUPABASE_ANON_KEY: "anon-key" }),
+    async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => []
+      };
+    }
+  );
+
+  const result = await client.fetchSupabaseStates(["device-1"]);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /^https:\/\/base\.dartsnut\.com\/rest\/v1\/remote_devices\?/);
+  assert.equal(calls[0].init.headers.source, "agent");
+});
+
 test("withdrawAppVersion falls back across review withdrawal routes", async () => {
   const calls = [];
   const client = new CommunityClient(

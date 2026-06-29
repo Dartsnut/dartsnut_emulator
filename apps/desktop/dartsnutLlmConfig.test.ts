@@ -139,6 +139,7 @@ test("fetchDartsnutLlmConfig posts to model endpoint and decrypts data", async (
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, DARTSNUT_MODEL_CONFIG_URL);
   assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.headers.source, "agent");
   assert.equal(calls[0].init.body, "{}");
 });
 

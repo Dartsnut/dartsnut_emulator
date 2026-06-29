@@ -107,6 +107,24 @@ describe("AgentSessionPersistence", () => {
     expect(tail).toEqual([{ kind: "user", at: 1, text: "hello" }]);
   });
 
+  it("writes and reads token usage atomically", () => {
+    const root = path.join(mkTmp(), "ws");
+    fs.mkdirSync(root, { recursive: true });
+    const p = new AgentSessionPersistence(root);
+    p.writeTokenUsageAtomic({
+      inputTokens: 11,
+      outputTokens: 5,
+      totalTokens: 16,
+      lastRun: { inputTokens: 3, outputTokens: 2, totalTokens: 5 }
+    });
+    expect(p.readTokenUsage()).toEqual({
+      inputTokens: 11,
+      outputTokens: 5,
+      totalTokens: 16,
+      lastRun: { inputTokens: 3, outputTokens: 2, totalTokens: 5 }
+    });
+  });
+
   it("archiveOrResetSession moves files into archives", () => {
     const root = path.join(mkTmp(), "ws");
     fs.mkdirSync(root, { recursive: true });
@@ -118,11 +136,13 @@ describe("AgentSessionPersistence", () => {
       createdAt: "2020-01-01T00:00:00.000Z",
       updatedAt: "2020-01-01T00:00:00.000Z"
     });
+    p.writeTokenUsageAtomic({ inputTokens: 1, outputTokens: 2, totalTokens: 3 });
     p.archiveOrResetSession("test-archive");
     expect(p.readManifest()).toBeNull();
     const archives = fs.readdirSync(path.join(resolveAgentSessionDir(root), "archives"));
     expect(archives.length).toBe(1);
     const archivedDir = path.join(resolveAgentSessionDir(root), "archives", archives[0]!);
     expect(fs.existsSync(path.join(archivedDir, "manifest.json"))).toBe(true);
+    expect(fs.existsSync(path.join(archivedDir, "usage.json"))).toBe(true);
   });
 });

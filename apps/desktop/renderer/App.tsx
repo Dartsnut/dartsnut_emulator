@@ -1,6 +1,8 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   type AgentEvent,
+  type AgentSessionTokenUsage,
+  type AgentTokenUsage,
   type AssetManifest,
   type BootstrapState,
   type DeployEligibility,
@@ -144,6 +146,20 @@ function CommunitySubmitOverlay({ lock }: { lock: SubmissionLockState }) {
       </div>
     </div>
   );
+}
+
+function formatTokenCount(value: number): string {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+  }
+  return value.toLocaleString();
+}
+
+function formatTokenUsageTitle(usage: AgentTokenUsage): string {
+  return `Input ${usage.inputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · Total ${usage.totalTokens.toLocaleString()}`;
 }
 
 type TimelineEntryViewProps = {
@@ -472,6 +488,7 @@ export function App() {
   >(null);
   const [sessionWidgetSize, setSessionWidgetSize] = useState<WidgetSize | null>(null);
   const [sessionProjectType, setSessionProjectType] = useState<ProjectType | null>(null);
+  const [tokenUsage, setTokenUsage] = useState<AgentSessionTokenUsage | null>(null);
   /** Shown until intake records project type (`intake_project_type_prompt` from host). */
   const [projectTypePicker, setProjectTypePicker] = useState<{
     visible: boolean;
@@ -871,6 +888,10 @@ export function App() {
         });
         return;
       }
+      if (event.type === "token_usage") {
+        setTokenUsage(event.sessionUsage);
+        return;
+      }
       if (event.type === "reasoning_stream") {
         appendOrPatchReasoningStream(event);
         return;
@@ -1167,6 +1188,7 @@ export function App() {
         return;
       }
       lastAgentSessionHydrateKeyRef.current = ws;
+      setTokenUsage(summary.tokenUsage ?? null);
       if (!summary.hasPersistedSession || summary.transcriptTail.length === 0) {
         setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT }]);
         return;
@@ -1236,6 +1258,7 @@ export function App() {
     setSessionTemplateMode(null);
     setSessionWidgetSize(null);
     setSessionProjectType(null);
+    setTokenUsage(null);
     setWidgetSizePicker({ visible: false, sizes: [] });
     setProjectTypePicker({ visible: false, types: [] });
     setPrompt("");
@@ -1773,6 +1796,21 @@ export function App() {
 
           <div className="chat-rail-overlay chat-rail-overlay--bottom pointer-events-none absolute inset-x-0 bottom-0 z-10">
             <div className="chat-rail-chrome pointer-events-auto">
+          {tokenUsage ? (
+            <div className="flex justify-end">
+              <div
+                className="token-usage-chip"
+                role="status"
+                aria-label={formatTokenUsageTitle(tokenUsage)}
+                title={formatTokenUsageTitle(tokenUsage)}
+              >
+                <span className="token-usage-chip__label">Tokens</span>
+                <span className="token-usage-chip__value">
+                  {formatTokenCount(tokenUsage.totalTokens)}
+                </span>
+              </div>
+            </div>
+          ) : null}
           {/* Blocking `dartsnut_ask_question` UI — shown while the host waits for an answer. */}
           {projectTypePicker.visible && projectTypePicker.types.length > 0 ? (
             <AskQuestionCard

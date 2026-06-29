@@ -2,6 +2,8 @@
  * Dartsnut community API + Supabase device state (mirrors dartsnut-community-pc server routes).
  */
 
+import { withDartsnutSourceHeader } from "./dartsnutSourceHeader";
+
 export const DEFAULT_BASE_API = "https://api.dartsnut.com";
 export const DEFAULT_SUPABASE_URL = "https://base.dartsnut.com";
 export const DEFAULT_SUPABASE_DEVICE_TABLE = "remote_devices";
@@ -424,6 +426,10 @@ export class CommunityClient {
     return this.config;
   }
 
+  private fetchWithDartsnutHeaders(input: RequestInfo | URL, init?: RequestInit): ReturnType<FetchLike> {
+    return this.fetchImpl(input, withDartsnutSourceHeader(input, init));
+  }
+
   async loginWithPassword(
     account: string,
     password: string
@@ -435,7 +441,7 @@ export class CommunityClient {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
     }
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/member/login-in`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/member/login-in`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ account: account.trim(), password })
@@ -476,7 +482,7 @@ export class CommunityClient {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
     }
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/google/login`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/google/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ idToken: idToken.trim() })
@@ -520,7 +526,7 @@ export class CommunityClient {
       return { ok: false, code: "session_expired", message: "Please sign in first." };
     }
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/mobile/device-map/devices`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/mobile/device-map/devices`, {
         method: "GET",
         headers: { token: token.trim(), Accept: "application/json" }
       });
@@ -576,7 +582,7 @@ export class CommunityClient {
     });
     try {
       const url = `${this.config.supabaseUrl}/rest/v1/${encodeURIComponent(this.config.supabaseDeviceTable)}?${qs.toString()}`;
-      const res = await this.fetchImpl(url, {
+      const res = await this.fetchWithDartsnutHeaders(url, {
         method: "GET",
         headers: {
           apikey: this.config.supabaseAnonKey,
@@ -653,7 +659,7 @@ export class CommunityClient {
       return { ok: false, code: "session_expired", message: "Please sign in first." };
     }
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/game/my-list`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/game/my-list`, {
         method: "GET",
         headers: { token: token.trim(), Accept: "application/json" }
       });
@@ -703,7 +709,7 @@ export class CommunityClient {
       return { ok: false, code: "session_expired", message: "Please sign in first." };
     }
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/widget/my-list`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/widget/my-list`, {
         method: "GET",
         headers: { token: token.trim(), Accept: "application/json" }
       });
@@ -750,7 +756,7 @@ export class CommunityClient {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
     }
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/game-cate/list`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/game-cate/list`, {
         method: "GET",
         headers: token.trim() ? { token: token.trim(), Accept: "application/json" } : { Accept: "application/json" }
       });
@@ -794,7 +800,7 @@ export class CommunityClient {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
     }
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/widget-cate/list`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/widget-cate/list`, {
         method: "GET",
         headers: token.trim() ? { token: token.trim(), Accept: "application/json" } : { Accept: "application/json" }
       });
@@ -838,7 +844,7 @@ export class CommunityClient {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
     }
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/status/info`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/status/info`, {
         method: "GET",
         headers: token.trim() ? { token: token.trim(), Accept: "application/json" } : { Accept: "application/json" }
       });
@@ -883,7 +889,7 @@ export class CommunityClient {
       return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
     }
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/status/info`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/status/info`, {
         method: "GET",
         headers: token.trim() ? { token: token.trim(), Accept: "application/json" } : { Accept: "application/json" }
       });
@@ -938,7 +944,7 @@ export class CommunityClient {
       [isWidget ? "widget_system_id" : "game_system_id"]: String(appSystemId)
     });
     try {
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/${isWidget ? "widget" : "game"}-version/list?${qs.toString()}`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/${isWidget ? "widget" : "game"}-version/list?${qs.toString()}`, {
         method: "GET",
         headers: { token: token.trim(), Accept: "application/json" }
       });
@@ -990,7 +996,7 @@ export class CommunityClient {
     }
     try {
       const isWidget = input.projectType === "widget";
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/${isWidget ? "widget" : "game"}/add`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/${isWidget ? "widget" : "game"}/add`, {
         method: "POST",
         headers: { token: token.trim(), "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify(
@@ -1163,7 +1169,7 @@ export class CommunityClient {
     try {
       const formData = new FormData();
       formData.append("file", file, filename);
-      const res = await this.fetchImpl(`${this.config.baseApi}${endpoint}`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}${endpoint}`, {
         method: "POST",
         headers: { token: token.trim(), Accept: "application/json" },
         body: formData
@@ -1215,7 +1221,7 @@ export class CommunityClient {
     }
     try {
       const isWidget = input.projectType === "widget";
-      const res = await this.fetchImpl(`${this.config.baseApi}/community/${isWidget ? "widget" : "game"}-version/add`, {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/${isWidget ? "widget" : "game"}-version/add`, {
         method: "POST",
         headers: { token: token.trim(), "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify(
@@ -1322,7 +1328,7 @@ export class CommunityClient {
     let lastCode: CommunityAuthErrorCode = "api_error";
     for (const endpoint of endpoints) {
       try {
-        const res = await this.fetchImpl(`${this.config.baseApi}${endpoint}`, {
+        const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}${endpoint}`, {
           method: "POST",
           headers: { token: token.trim(), "Content-Type": "application/json", Accept: "application/json" },
           body: JSON.stringify(payload)

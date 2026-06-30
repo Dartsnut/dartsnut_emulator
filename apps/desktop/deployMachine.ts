@@ -5,8 +5,11 @@ import { spawn } from "node:child_process";
 import type { ProjectType } from "@dartsnut/shared-ipc";
 import { Client, type Channel, type SFTPWrapper } from "ssh2";
 import {
+  buildDebugLaunchScript,
   buildDebugLaunchInner,
   buildEnsureAppVenvScript,
+  buildKillAppMainPyProcessesScript,
+  buildKillDebugPythonScript,
   buildSyncWorkspaceScript,
   remoteAppPythonBin,
   remoteLegacyPythonBin,
@@ -20,6 +23,8 @@ const REMOTE_LOG = "/tmp/dartsnut_deploy.log";
 const REMOTE_PID = "/tmp/dartsnut_dbg.pid";
 /** Widget-only: runner script materialized via heredoc (avoids `sudo bash -c "$(…)"` quote bugs). */
 const REMOTE_WIDGET_RUNNER = "/tmp/dartsnut_deploy_inner.sh";
+/** Launch wrapper materialized via heredoc so pid/log handling is not hidden inside nested shell quotes. */
+const REMOTE_LAUNCH_WRAPPER = "/tmp/dartsnut_deploy_launch.sh";
 
 /** Same tree as `services/dartsnut_python.service` on `dartsnut_rpi` (WorkingDirectory + ExecStart paths). */
 const REMOTE_DARTSNUT_ROOT = "/home/rpi/dartsnut_rpi";
@@ -380,13 +385,10 @@ export class DeployMachineSession {
     if (!this.client) {
       throw new Error("Not connected.");
     }
-    const script = [
-      "set -eo pipefail",
-      "PASS=" + JSON.stringify(SSH_PASSWORD),
-      // procps `pkill -f` uses regex; `[^/]+` matches a single apps/<id>/ segment.
-      'echo "$PASS" | sudo -S pkill -f \'dartsnut_rpi/apps/[^/]+/main\\.py\' 2>/dev/null || true',
-      `rm -f ${REMOTE_PID}`,
-    ].join("\n");
+    const script = buildKillAppMainPyProcessesScript({
+      password: SSH_PASSWORD,
+      pidPath: REMOTE_PID,
+    });
     const { stderr, code } = await execBashScriptStdin(this.client, script);
     if (code !== 0) {
       throw new Error(stderr.trim() || `kill apps/*/main.py failed (exit ${code})`);
@@ -394,10 +396,39 @@ export class DeployMachineSession {
     this.emitLog("[deploy] Cleared processes matching apps/*/main.py");
   }
 
+  async killAppMainPyProcessesForApp(appId: string): Promise<void> {
+    if (!this.client) {
+      throw new Error("Not connected.");
+    }
+    const script = buildKillAppMainPyProcessesScript({
+      appId,
+      password: SSH_PASSWORD,
+      pidPath: REMOTE_PID,
+    });
+    const { stderr, code } = await execBashScriptStdin(this.client, script);
+    if (code !== 0) {
+      throw new Error(stderr.trim() || `kill apps/${appId}/main.py failed (exit ${code})`);
+    }
+    this.emitLog(`[deploy] Cleared processes matching apps/${appId}/main.py`);
+  }
+
   async killDebugPython(): Promise<void> {
-    await this.execRemoteShell(
-      `bash -lc 'if [ -f ${REMOTE_PID} ]; then echo ${SSH_PASSWORD} | sudo -S kill "$(cat ${REMOTE_PID})" 2>/dev/null || true; rm -f ${REMOTE_PID}; fi'`,
-    );
+    if (!this.client) {
+      throw new Error("Not connected.");
+    }
+    const script = buildKillDebugPythonScript({
+      password: SSH_PASSWORD,
+      pidPath: REMOTE_PID,
+    });
+    const { stderr, code } = await execBashScriptStdin(this.client, script);
+    if (code !== 0) {
+      throw new Error(stderr.trim() || `kill debug Python failed (exit ${code})`);
+    }
+  }
+
+  async stopDebugApp(appId: string): Promise<void> {
+    await this.killDebugPython();
+    await this.killAppMainPyProcessesForApp(appId);
   }
 
   async startDebugPython(
@@ -424,21 +455,11 @@ export class DeployMachineSession {
       ? remoteAppPythonBin(REMOTE_DARTSNUT_ROOT, appId)
       : remoteLegacyPythonBin(REMOTE_DARTSNUT_ROOT);
     const mainScript = this.remoteUsesUv ? "main.py" : appMainPy;
-    const passAssign = "PASS=" + JSON.stringify(SSH_PASSWORD);
-    const scriptHead = [
-      "set -eo pipefail",
-      "LOG=" + REMOTE_LOG,
-      "PIDFILE=" + REMOTE_PID,
-      passAssign,
-      'echo "$PASS" | sudo -S truncate -s 0 "$LOG" 2>/dev/null || true',
-      'echo "$PASS" | sudo -S chmod 666 "$LOG" 2>/dev/null || true',
-      'printf "%s\\n" "[deploy] spawning python $(date -Is)" >> "$LOG"',
-    ];
-    let script: string;
+    let eofMarker = `DARTSNUT_DEPLOY_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+    let paramsB64: string | undefined;
     if (launch.projectType === "widget") {
       const paramsJson = JSON.stringify(launch.widgetParams ?? {});
-      const paramsB64 = Buffer.from(paramsJson, "utf8").toString("base64");
-      let eofMarker = `DARTSNUT_DEPLOY_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+      paramsB64 = Buffer.from(paramsJson, "utf8").toString("base64");
       const innerBody = buildDebugLaunchInner({
         appDir,
         pythonBin,
@@ -449,28 +470,20 @@ export class DeployMachineSession {
       while (innerBody.includes(eofMarker)) {
         eofMarker = `DARTSNUT_DEPLOY_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
       }
-      script = [
-        ...scriptHead,
-        `echo "$PASS" | sudo -S tee ${JSON.stringify(REMOTE_WIDGET_RUNNER)} > /dev/null <<'${eofMarker}'`,
-        innerBody,
-        eofMarker,
-        `echo "$PASS" | sudo -S chmod 755 ${JSON.stringify(REMOTE_WIDGET_RUNNER)} 2>/dev/null || true`,
-        `echo "$PASS" | sudo -S bash ${JSON.stringify(REMOTE_WIDGET_RUNNER)} >> "$LOG" 2>&1 &`,
-        'echo $! > "$PIDFILE"',
-      ].join("\n");
-    } else {
-      const innerCmd = buildDebugLaunchInner({
-        appDir,
-        pythonBin,
-        mainScript,
-        projectType: "game",
-      });
-      script = [
-        ...scriptHead,
-        'echo "$PASS" | sudo -S bash -c ' + JSON.stringify(innerCmd) + ' >> "$LOG" 2>&1 &',
-        'echo $! > "$PIDFILE"',
-      ].join("\n");
     }
+    const script = buildDebugLaunchScript({
+      appDir,
+      pythonBin,
+      mainScript,
+      projectType: launch.projectType,
+      paramsB64,
+      logPath: REMOTE_LOG,
+      pidPath: REMOTE_PID,
+      password: SSH_PASSWORD,
+      widgetRunnerPath: REMOTE_WIDGET_RUNNER,
+      launchWrapperPath: REMOTE_LAUNCH_WRAPPER,
+      eofMarker,
+    });
     const { stderr, code } = await execBashScriptStdin(this.client, script);
     if (code !== 0) {
       throw new Error(stderr.trim() || `failed to start debug python (exit ${code})`);

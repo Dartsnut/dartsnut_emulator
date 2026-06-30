@@ -3,6 +3,8 @@ type FrameJob = {
   height: number;
   rgbBase64: string;
   timestampMs: number;
+  generation: number;
+  sequence: number;
 };
 
 type FrameResult = {
@@ -10,9 +12,11 @@ type FrameResult = {
   width: number;
   height: number;
   timestampMs: number;
+  generation: number;
+  sequence: number;
 };
 
-type WorkerNack = { kind: "workerNack" };
+type WorkerNack = { kind: "workerNack"; generation: number; sequence: number };
 
 type WorkerScope = {
   onmessage: ((event: MessageEvent<FrameJob>) => void) | null;
@@ -31,18 +35,18 @@ function decodeBase64ToBytes(base64: string): Uint8Array {
 }
 
 workerScope.onmessage = async (event: MessageEvent<FrameJob>) => {
-  const { width, height, rgbBase64, timestampMs } = event.data;
+  const { width, height, rgbBase64, timestampMs, generation, sequence } = event.data;
   const expectedRgb = width * height * 3;
   try {
     let rgb: Uint8Array;
     try {
       rgb = decodeBase64ToBytes(rgbBase64);
     } catch {
-      workerScope.postMessage({ kind: "workerNack" } satisfies WorkerNack);
+      workerScope.postMessage({ kind: "workerNack", generation, sequence } satisfies WorkerNack);
       return;
     }
     if (rgb.length !== expectedRgb) {
-      workerScope.postMessage({ kind: "workerNack" } satisfies WorkerNack);
+      workerScope.postMessage({ kind: "workerNack", generation, sequence } satisfies WorkerNack);
       return;
     }
     const rgba = new Uint8ClampedArray(width * height * 4);
@@ -54,9 +58,9 @@ workerScope.onmessage = async (event: MessageEvent<FrameJob>) => {
     }
     const imageData = new ImageData(rgba, width, height);
     const bitmap = await createImageBitmap(imageData);
-    const result: FrameResult = { bitmap, width, height, timestampMs };
+    const result: FrameResult = { bitmap, width, height, timestampMs, generation, sequence };
     workerScope.postMessage(result, [bitmap]);
   } catch {
-    workerScope.postMessage({ kind: "workerNack" } satisfies WorkerNack);
+    workerScope.postMessage({ kind: "workerNack", generation, sequence } satisfies WorkerNack);
   }
 };

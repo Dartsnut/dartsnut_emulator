@@ -18,6 +18,17 @@ ROOT = Path(__file__).resolve().parent
 CORE_PATH = ROOT / "core.py"
 
 
+class FakeSharedMemory:
+    def __init__(self, size: int):
+        self.buf = bytearray(size)
+
+    def close(self):
+        pass
+
+    def unlink(self):
+        pass
+
+
 def _load_core_module():
     spec = importlib.util.spec_from_file_location("emulator_core", CORE_PATH)
     if spec is None or spec.loader is None:
@@ -68,6 +79,36 @@ class LifecycleLoggingTests(unittest.TestCase):
             self.assertTrue(any("reload_widget requested" in text for text in texts), texts)
             self.assertTrue(any("launch command" in text for text in texts), texts)
             self.assertTrue(any("spawn broken" in text for text in texts), texts)
+
+    def test_reload_widget_invalidates_stale_shared_memory_frame_before_launch(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            _write_widget_conf(workspace, "demo")
+            (workspace / "demo" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+            core.shm_pdi = FakeSharedMemory(128 * 160 * 3 + 1)
+
+            core.apply_command({"type": "set_path", "path": "demo"})
+            stale_frame = bytes([99, 88, 77] * (128 * 160))
+            core.shm_pdi.buf[1 : 1 + len(stale_frame)] = stale_frame
+            core.shm_pdi.buf[0] = 0
+            core._last_frame_bytes = stale_frame
+            core._last_frame_w = 128
+            core._last_frame_h = 160
+
+            with (
+                mock.patch.object(module.time, "sleep", lambda _: None),
+                mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=True),
+                mock.patch.object(module.subprocess, "Popen", side_effect=OSError("spawn broken")),
+            ):
+                core.apply_command({"type": "reload_widget"})
+
+            self.assertEqual(core.shm_pdi.buf[0], 1)
+            self.assertIsNone(core._last_frame_bytes)
+            self.assertIsNone(core.read_latest_frame())
 
 
 class WidgetLaunchCommandTests(unittest.TestCase):

@@ -223,6 +223,13 @@ class EmulatorCore:
                 self.shm_pdo.buf[base : base + 2] = int(x).to_bytes(2, "little")
                 self.shm_pdo.buf[base + 2 : base + 4] = int(y).to_bytes(2, "little")
 
+    def _invalidate_framebuffer(self) -> None:
+        self._last_frame_bytes = None
+        self._last_frame_w = 128
+        self._last_frame_h = 160
+        if self.shm_pdi is not None:
+            self.shm_pdi.buf[0] = 1
+
     def snapshot(self) -> dict[str, Any]:
         if self.widget_process is not None and self.widget_process.poll() is not None:
             self._stop_widget_log_readers(join_timeout=5.0)
@@ -255,6 +262,7 @@ class EmulatorCore:
 
     def stop_widget_process(self) -> None:
         if self.widget_process is None:
+            self._invalidate_framebuffer()
             return
         if self.widget_process.poll() is None:
             self._queue_bridge_log("Stopping running widget process.")
@@ -275,6 +283,7 @@ class EmulatorCore:
         self.widget_process = None
         self.state.running = False
         self.state.status = "Widget stopped"
+        self._invalidate_framebuffer()
 
     def _ensure_workspace_venv(self, launch_cwd: str) -> bool:
         uv_bin = os.environ.get("DARTSNUT_UV_BIN", "").strip()

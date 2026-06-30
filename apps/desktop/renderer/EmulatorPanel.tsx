@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState, type Dispatch, type MouseEvent, type SetStateAction } from "react";
 import {
-  isVenvPrepStatus,
+  createHiddenVenvPrepDisplay,
+  nextVenvPrepDisplay,
+  nextFrameRenderGeneration,
+  shouldRenderFrameGeneration,
+  VENV_PREP_STATUS_HOLD_MS,
+  VENV_PREP_STATUS_PREFIX,
   type EmulatorFrame,
   type EmulatorLogEntry,
   type EmulatorStateSnapshot,
-  venvPrepStatusMessage,
+  type VenvPrepDisplay,
 } from "@dartsnut/emulator-protocol";
 import { cn } from "./cn";
 import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
@@ -12,6 +17,15 @@ import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
 type DartCoord = { x: number; y: number } | null;
 type UiEmulatorLogEntry = EmulatorLogEntry & { id: string };
+type PendingFrameJob = EmulatorFrame & { generation: number };
+type WorkerFrameResult = {
+  bitmap?: ImageBitmap;
+  width?: number;
+  height?: number;
+  generation?: number;
+  sequence?: number;
+  kind?: string;
+};
 
 const defaultState: EmulatorStateSnapshot = {
   widgetPath: null,
@@ -77,12 +91,16 @@ export function EmulatorPanel({
   const [emulatorLogs, setEmulatorLogs] = useState<UiEmulatorLogEntry[]>([]);
   const [captureToast, setCaptureToast] = useState<string | null>(null);
   const [captureFolder, setCaptureFolder] = useState<string | null>(null);
+  const [venvPrepDisplay, setVenvPrepDisplay] = useState<VenvPrepDisplay>(() => createHiddenVenvPrepDisplay());
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const zoomCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const logsBodyRef = useRef<HTMLDivElement | null>(null);
   const frameWorkerRef = useRef<Worker | null>(null);
   const workerBusyRef = useRef(false);
-  const pendingFrameRef = useRef<EmulatorFrame | null>(null);
+  const pendingFrameRef = useRef<PendingFrameJob | null>(null);
+  const frameRenderGenerationRef = useRef(0);
+  const nextWorkerSequenceRef = useRef(0);
+  const activeWorkerSequenceRef = useRef<number | null>(null);
   const latestFrameMetaRef = useRef<{ width: number; height: number } | null>(null);
   const gridOverlayCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const captureTimesRef = useRef<number[]>([]);
@@ -93,6 +111,9 @@ export function EmulatorPanel({
   const lastRightClickMsRef = useRef<number>(0);
   const zoomOpenRef = useRef(false);
   const captureToastTimerRef = useRef<number | null>(null);
+  const venvPrepDisplayRef = useRef<VenvPrepDisplay>(createHiddenVenvPrepDisplay());
+  const venvPrepHideTimerRef = useRef<number | null>(null);
+  const stateRef = useRef<EmulatorStateSnapshot>(defaultState);
   const normalizedWidgetType = state.widgetType?.toLowerCase() ?? null;
   const hasResolvedWorkspaceType = Boolean(state.widgetPath && normalizedWidgetType);
   const showParamsPanel = hasResolvedWorkspaceType && normalizedWidgetType === "widget";
@@ -100,8 +121,8 @@ export function EmulatorPanel({
   const projectKindLabel =
     normalizedWidgetType === "widget" ? "Widget" : normalizedWidgetType === "game" ? "Game" : "Unknown";
   const stoppedWithError = isEmulatorStoppedWithError(state);
-  const venvPreparing = isVenvPrepStatus(state.status);
-  const venvPrepMessage = venvPrepStatusMessage(state.status);
+  const venvPreparing = venvPrepDisplay.visible;
+  const venvPrepMessage = venvPrepDisplay.message;
 
   useEffect(() => {
     zoomOpenRef.current = zoomOpen;
@@ -119,6 +140,9 @@ export function EmulatorPanel({
     return () => {
       if (captureToastTimerRef.current !== null) {
         window.clearTimeout(captureToastTimerRef.current);
+      }
+      if (venvPrepHideTimerRef.current !== null) {
+        window.clearTimeout(venvPrepHideTimerRef.current);
       }
     };
   }, []);
@@ -174,6 +198,8 @@ export function EmulatorPanel({
   /** Clear last frame and pending work so the preview does not show a stale capture after stop. */
   function wipePreviewCanvas() {
     const meta = latestFrameMetaRef.current;
+    frameRenderGenerationRef.current = nextFrameRenderGeneration(frameRenderGenerationRef.current);
+    activeWorkerSequenceRef.current = null;
     pendingFrameRef.current = null;
     latestFrameMetaRef.current = null;
     workerBusyRef.current = false;
@@ -268,21 +294,44 @@ export function EmulatorPanel({
     }
   }
 
+  function postFrameJob(job: PendingFrameJob) {
+    const worker = frameWorkerRef.current;
+    if (!worker) return;
+    const sequence = nextWorkerSequenceRef.current + 1;
+    nextWorkerSequenceRef.current = sequence;
+    activeWorkerSequenceRef.current = sequence;
+    workerBusyRef.current = true;
+    worker.postMessage({ ...job, sequence });
+  }
+
+  function postPendingFrameJob() {
+    const pending = pendingFrameRef.current;
+    if (!pending || !frameWorkerRef.current) return;
+    pendingFrameRef.current = null;
+    postFrameJob(pending);
+  }
+
   useEffect(() => {
     frameWorkerRef.current = new Worker(new URL("./frameWorker.ts", import.meta.url), { type: "module" });
     frameWorkerRef.current.onmessage = (event: MessageEvent) => {
-      const data = event.data as { kind?: string; bitmap?: ImageBitmap; width?: number; height?: number };
-      if (data && typeof data === "object" && data.kind === "workerNack") {
-        workerBusyRef.current = false;
-        const pending = pendingFrameRef.current;
-        if (pending && frameWorkerRef.current) {
-          pendingFrameRef.current = null;
-          workerBusyRef.current = true;
-          frameWorkerRef.current.postMessage(pending);
-        }
+      const data = event.data as WorkerFrameResult;
+      if (typeof data.sequence !== "number" || data.sequence !== activeWorkerSequenceRef.current) {
+        data.bitmap?.close();
         return;
       }
-      const payload = data as { bitmap: ImageBitmap; width: number; height: number };
+      activeWorkerSequenceRef.current = null;
+      if (data && typeof data === "object" && data.kind === "workerNack") {
+        workerBusyRef.current = false;
+        postPendingFrameJob();
+        return;
+      }
+      const payload = data as Required<Pick<WorkerFrameResult, "bitmap" | "width" | "height" | "generation">>;
+      if (!shouldRenderFrameGeneration(payload.generation, frameRenderGenerationRef.current)) {
+        payload.bitmap.close();
+        workerBusyRef.current = false;
+        postPendingFrameJob();
+        return;
+      }
       latestFrameMetaRef.current = { width: payload.width, height: payload.height };
       drawFrameToCanvas(canvasRef.current, payload.bitmap, { width: payload.width, height: payload.height }, 1);
       if (zoomOpenRef.current) {
@@ -298,12 +347,7 @@ export function EmulatorPanel({
       renderTimesRef.current.push(now);
       updateNormalizedFps(now);
       workerBusyRef.current = false;
-      const pending = pendingFrameRef.current;
-      if (pending && frameWorkerRef.current) {
-        pendingFrameRef.current = null;
-        workerBusyRef.current = true;
-        frameWorkerRef.current.postMessage(pending);
-      }
+      postPendingFrameJob();
     };
 
     void (async () => {
@@ -326,7 +370,25 @@ export function EmulatorPanel({
     })();
 
     const stopState = window.dartsnutApi.onEmulatorState((nextState) => {
+      stateRef.current = nextState;
       setState(nextState);
+      const nowMs = Date.now();
+      const nextPrepDisplay = nextVenvPrepDisplay(venvPrepDisplayRef.current, nextState.status, nowMs);
+      venvPrepDisplayRef.current = nextPrepDisplay;
+      setVenvPrepDisplay(nextPrepDisplay);
+      if (venvPrepHideTimerRef.current !== null) {
+        window.clearTimeout(venvPrepHideTimerRef.current);
+        venvPrepHideTimerRef.current = null;
+      }
+      if (nextPrepDisplay.visible && !nextState.status.startsWith(VENV_PREP_STATUS_PREFIX)) {
+        const hideDelayMs = Math.max(0, (nextPrepDisplay.observedAtMs ?? nowMs) + VENV_PREP_STATUS_HOLD_MS - nowMs);
+        venvPrepHideTimerRef.current = window.setTimeout(() => {
+          const hidden = createHiddenVenvPrepDisplay();
+          venvPrepDisplayRef.current = hidden;
+          setVenvPrepDisplay(hidden);
+          venvPrepHideTimerRef.current = null;
+        }, hideDelayMs);
+      }
       if (!nextState.running && nextState.widgetPath == null) {
         wipePreviewCanvas();
       }
@@ -345,16 +407,22 @@ export function EmulatorPanel({
     });
 
     const stopFrame = window.dartsnutApi.onEmulatorFrame((frame: EmulatorFrame) => {
+      if (stateRef.current.widgetPath == null) {
+        return;
+      }
       const now = performance.now();
       captureTimesRef.current.push(now);
       updateNormalizedFps(now);
       if (!frameWorkerRef.current) return;
+      const job: PendingFrameJob = {
+        ...frame,
+        generation: frameRenderGenerationRef.current,
+      };
       if (workerBusyRef.current) {
-        pendingFrameRef.current = frame;
+        pendingFrameRef.current = job;
         return;
       }
-      workerBusyRef.current = true;
-      frameWorkerRef.current.postMessage(frame);
+      postFrameJob(job);
     });
 
     const stopLog = window.dartsnutApi.onEmulatorLog((entry: EmulatorLogEntry) => {

@@ -114,10 +114,14 @@ import {
 } from "./dartsnutLlmConfig";
 import {
   EMULATOR_IPC_CHANNELS,
+  beginEmulatorSwitch,
+  handleEmulatorSwitchFrame,
+  handleEmulatorSwitchState,
   type EmulatorCommand,
   type EmulatorFrame,
   type EmulatorLogEntry,
   type EmulatorStateSnapshot,
+  type EmulatorSwitchGate,
 } from "@dartsnut/emulator-protocol";
 import { AssetManager } from "./assetManager";
 import { DeployMachineSession } from "./deployMachine";
@@ -476,6 +480,7 @@ async function executeHostReloadEmulatorForAgent(): Promise<string> {
   const reload: EmulatorCommand = { type: "reload_widget" };
   bridgeProcess.stdin.write(`${JSON.stringify({ command: setPath })}\n`);
   clearEmulatorLogsForReload();
+  beginPendingEmulatorSwitch(selectedPath);
   bridgeProcess.stdin.write(`${JSON.stringify({ command: reload })}\n`);
   lastWidgetDir = selectedPath;
   writeEmulatorState();
@@ -541,6 +546,8 @@ const emulatorState: EmulatorStateSnapshot = {
   status: "Idle",
   lastCapturePath: null,
 };
+let emulatorSwitchGate: EmulatorSwitchGate | null = null;
+let pendingEmulatorPathForReload: string | null = null;
 
 const proofStatePath = () => path.join(app.getPath("userData"), "first-run-proof.json");
 const tempWorkspaceRecordPath = () => path.join(app.getPath("userData"), "temp-workspace.json");
@@ -1343,6 +1350,7 @@ function applyWorkspaceRoot(selectedPath: string): void {
       `${JSON.stringify({ command: { type: "set_path", path: selectedPath } satisfies EmulatorCommand })}\n`,
     );
     clearEmulatorLogsForReload();
+    beginPendingEmulatorSwitch(selectedPath);
     bridgeProcess.stdin.write(
       `${JSON.stringify({ command: { type: "reload_widget" } satisfies EmulatorCommand })}\n`,
     );
@@ -1971,6 +1979,8 @@ function sendBridgeCommandSafe(command: EmulatorCommand): void {
 
 /** Mirror Python `stop_widget` idle snapshot if stdout lags. */
 function applyIdleEmulatorMainState(): void {
+  emulatorSwitchGate = null;
+  pendingEmulatorPathForReload = null;
   emulatorState.widgetPath = null;
   emulatorState.widgetId = null;
   emulatorState.widgetType = null;
@@ -2012,8 +2022,37 @@ function emitEmulatorState() {
   sendToRenderer(EMULATOR_IPC_CHANNELS.emulatorState, emulatorState);
 }
 
+function applyEmulatorStateSnapshot(nextState: EmulatorStateSnapshot): void {
+  emulatorState.widgetPath = nextState.widgetPath;
+  emulatorState.widgetId = nextState.widgetId;
+  emulatorState.widgetType = nextState.widgetType;
+  emulatorState.running = nextState.running;
+  emulatorState.fps = nextState.fps;
+  emulatorState.status = nextState.status;
+  emulatorState.lastError = nextState.lastError;
+  emulatorState.lastCapturePath = nextState.lastCapturePath;
+}
+
+function beginPendingEmulatorSwitch(targetWidgetPath: string): void {
+  if (!targetWidgetPath) {
+    return;
+  }
+  const pending = beginEmulatorSwitch(targetWidgetPath, emulatorState);
+  emulatorSwitchGate = pending.gate;
+  applyEmulatorStateSnapshot(pending.stateForRenderer);
+  emitEmulatorState();
+}
+
 function emitEmulatorFrame(frame: EmulatorFrame) {
-  sendToRenderer(EMULATOR_IPC_CHANNELS.emulatorFrame, frame);
+  const gated = handleEmulatorSwitchFrame(emulatorSwitchGate, frame);
+  emulatorSwitchGate = gated.gate;
+  if (gated.state) {
+    applyEmulatorStateSnapshot(gated.state);
+    emitEmulatorState();
+  }
+  if (gated.frame) {
+    sendToRenderer(EMULATOR_IPC_CHANNELS.emulatorFrame, gated.frame);
+  }
 }
 
 function emitEmulatorLog(entry: EmulatorLogEntry) {
@@ -2123,27 +2162,34 @@ function spawnBridgeAfterStop() {
           continue;
         }
         const payload = event.payload as Partial<EmulatorStateSnapshot>;
-        if (typeof payload.status === "string") {
-          emulatorState.status = payload.status;
-        }
-        if (typeof payload.running === "boolean") {
-          emulatorState.running = payload.running;
-        }
-        if (typeof payload.widgetPath !== "undefined") {
-          emulatorState.widgetPath = payload.widgetPath ?? null;
-        }
-        if (typeof payload.widgetId !== "undefined") {
-          emulatorState.widgetId = payload.widgetId ?? null;
-        }
-        if (typeof payload.widgetType !== "undefined") {
-          emulatorState.widgetType = payload.widgetType ?? null;
-        }
-        if (typeof payload.lastError === "string") {
-          emulatorState.lastError = payload.lastError;
-        }
-        if (typeof payload.lastCapturePath !== "undefined") {
-          emulatorState.lastCapturePath = payload.lastCapturePath ?? null;
-        }
+        const incomingState: EmulatorStateSnapshot = {
+          widgetPath:
+            typeof payload.widgetPath !== "undefined"
+              ? payload.widgetPath ?? null
+              : emulatorState.widgetPath,
+          widgetId:
+            typeof payload.widgetId !== "undefined"
+              ? payload.widgetId ?? null
+              : emulatorState.widgetId,
+          widgetType:
+            typeof payload.widgetType !== "undefined"
+              ? payload.widgetType ?? null
+              : emulatorState.widgetType,
+          running: typeof payload.running === "boolean" ? payload.running : emulatorState.running,
+          fps: typeof payload.fps === "number" ? payload.fps : emulatorState.fps,
+          status: typeof payload.status === "string" ? payload.status : emulatorState.status,
+          lastError:
+            typeof payload.lastError !== "undefined"
+              ? payload.lastError
+              : emulatorState.lastError,
+          lastCapturePath:
+            typeof payload.lastCapturePath !== "undefined"
+              ? payload.lastCapturePath ?? null
+              : emulatorState.lastCapturePath,
+        };
+        const gated = handleEmulatorSwitchState(emulatorSwitchGate, incomingState, emulatorState);
+        emulatorSwitchGate = gated.gate;
+        applyEmulatorStateSnapshot(gated.state);
         emitEmulatorState();
       } catch {
         emulatorState.status = jsonLine.trim();
@@ -2154,6 +2200,8 @@ function spawnBridgeAfterStop() {
 
   bridgeProcess.stderr?.on("data", (chunk) => {
     const text = chunk.toString();
+    emulatorSwitchGate = null;
+    pendingEmulatorPathForReload = null;
     emulatorState.status = "Bridge error";
     emulatorState.lastError = text;
     emitEmulatorState();
@@ -2167,6 +2215,8 @@ function spawnBridgeAfterStop() {
   bridgeProcess.on("close", () => {
     bridgeProcess = null;
     bridgeRuntimeKey = null;
+    emulatorSwitchGate = null;
+    pendingEmulatorPathForReload = null;
     emulatorState.running = false;
     emulatorState.status = "Bridge stopped";
     emitEmulatorState();
@@ -3646,9 +3696,14 @@ ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorCommand, async (_event, command: Em
       commandToSend = { type: "set_path", path: selectedPath };
       lastWidgetDir = selectedPath;
       writeEmulatorState();
+      if (emulatorState.widgetPath !== selectedPath) {
+        pendingEmulatorPathForReload = selectedPath;
+      }
     }
     if (commandToSend.type === "reload_widget") {
       clearEmulatorLogsForReload();
+      beginPendingEmulatorSwitch(pendingEmulatorPathForReload ?? emulatorState.widgetPath ?? lastWidgetDir ?? "");
+      pendingEmulatorPathForReload = null;
     }
     bridgeProcess.stdin.write(`${JSON.stringify({ command: commandToSend })}\n`);
   } else {

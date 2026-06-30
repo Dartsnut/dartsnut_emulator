@@ -134,6 +134,7 @@ import {
 } from "./windowState";
 import {
   decideBeforeQuitBridgeAction,
+  decideBeforeQuitDeployAction,
   shouldAllocateTempWorkspaceAfterDiscard,
   type TempWorkspaceGuardReason
 } from "./quitFlow";
@@ -161,6 +162,10 @@ let bridgeRuntimeKey: string | null = null;
 /** True after graceful bridge teardown so quit does not orphan pygame/SDL audio. */
 let emulatorBridgeTeardownDone = false;
 let emulatorBridgeTeardownInFlight: Promise<void> | null = null;
+/** True after quit-time remote deploy cleanup has restored the connected machine. */
+let deployMachineRestoreDone = false;
+let deployMachineRestoreInFlight: Promise<void> | null = null;
+let quitCleanupRequitScheduled = false;
 
 // Ensure consistent app name for getPath('userData') in both dev and packaged modes
 if (!app.isPackaged) {
@@ -294,6 +299,41 @@ async function disconnectDeployMachine(): Promise<void> {
   if (deployMachineSession) {
     await deployMachineSession.disconnect().catch(() => { });
     deployMachineSession = null;
+  }
+}
+
+async function restoreDeployMachineForQuit(): Promise<void> {
+  const session = deployMachineSession;
+  if (!session || !session.connected) {
+    deployMachineRestoreDone = true;
+    await disconnectDeployMachine();
+    return;
+  }
+  try {
+    emitDeployLog("[deploy] Quit — restore machine, stop debug apps, restart dartsnut_python.service…");
+    session.stopLogTail();
+    const elig = readDeployEligibilityFromWorkspace();
+    if (elig.ok) {
+      await session.stopDebugApp(elig.appId).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        emitDeployLog(`[deploy] Quit current app cleanup failed: ${message}`);
+      });
+      await session.removeRemoteAppFolder(elig.appId).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        emitDeployLog(`[deploy] Quit app folder cleanup failed: ${message}`);
+      });
+    }
+    await session.killAppMainPyProcesses().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      emitDeployLog(`[deploy] Quit broad process cleanup failed: ${message}`);
+    });
+    await session.restartSystemdService().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      emitDeployLog(`[deploy] Quit service restart failed: ${message}`);
+    });
+  } finally {
+    await disconnectDeployMachine();
+    deployMachineRestoreDone = true;
   }
 }
 
@@ -2448,26 +2488,61 @@ app.on("before-quit", (event) => {
     hasBridgeProcess: !!bridgeProcess,
     teardownInFlight: !!emulatorBridgeTeardownInFlight
   });
-  devLog.info("[quit] before-quit → bridge action", { action });
-  if (action === "proceed") {
+  const deployAction = decideBeforeQuitDeployAction({
+    restoreDone: deployMachineRestoreDone,
+    connected: !!deployMachineSession?.connected,
+    restoreInFlight: !!deployMachineRestoreInFlight
+  });
+  devLog.info("[quit] before-quit → teardown actions", { bridge: action, deploy: deployAction });
+  if (action === "proceed" && deployAction === "proceed") {
     return;
   }
   if (action === "mark_teardown_done") {
     emulatorBridgeTeardownDone = true;
+  }
+  if (deployAction === "mark_restore_done") {
+    deployMachineRestoreDone = true;
+  }
+  if (
+    (action === "proceed" || action === "mark_teardown_done") &&
+    (deployAction === "proceed" || deployAction === "mark_restore_done")
+  ) {
     return;
   }
   event.preventDefault();
-  devLog.info("[quit] before-quit → prevented; starting bridge teardown");
-  if (action === "wait_for_inflight_teardown") {
+  devLog.info("[quit] before-quit → prevented; starting quit cleanup");
+  if (action === "start_teardown") {
+    emulatorBridgeTeardownInFlight = gracefulStopEmulatorBridge(3000, { permanent: true })
+      .catch(() => undefined);
+  }
+  if (deployAction === "start_restore") {
+    deployMachineRestoreInFlight = restoreDeployMachineForQuit()
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        devLog.warn("[quit] deploy restore failed", message);
+        emitDeployLog(`[deploy] Quit restore failed: ${message}`);
+      });
+  }
+  if (
+    (action === "wait_for_inflight_teardown" || action === "start_teardown") ||
+    (deployAction === "wait_for_inflight_restore" || deployAction === "start_restore")
+  ) {
+    if (!quitCleanupRequitScheduled) {
+      quitCleanupRequitScheduled = true;
+      Promise.all([
+        emulatorBridgeTeardownInFlight ?? Promise.resolve(),
+        deployMachineRestoreInFlight ?? Promise.resolve(),
+      ])
+        .finally(() => {
+          devLog.info("[quit] before-quit → cleanup complete, re-quitting", { t: Date.now() });
+          emulatorBridgeTeardownInFlight = null;
+          deployMachineRestoreInFlight = null;
+          quitCleanupRequitScheduled = false;
+          app.quit();
+        });
+    }
     return;
   }
-  emulatorBridgeTeardownInFlight = gracefulStopEmulatorBridge(3000, { permanent: true })
-    .catch(() => undefined)
-    .finally(() => {
-      devLog.info("[quit] before-quit → bridge teardown complete, re-quitting", { t: Date.now() });
-      emulatorBridgeTeardownInFlight = null;
-      app.quit();
-    });
 });
 
 app.on("will-quit", () => {
@@ -3077,7 +3152,7 @@ ipcMain.handle(
       emitDeployLog("[deploy] Run — sync, stop service, start debug Python…");
       await session.syncWorkspace(workspaceRoot, elig.appId);
       await session.stopSystemdService();
-      await session.killDebugPython();
+      await session.stopDebugApp(elig.appId);
       session.stopLogTail();
       await session.startDebugPython(elig.appId, { projectType: elig.projectType, widgetParams });
       session.startLogTail();
@@ -3097,6 +3172,9 @@ ipcMain.handle(
     if (!elig.ok) {
       return { ok: false, error: `Workspace not deployable (${elig.reason}).` };
     }
+    if (!workspaceRoot) {
+      return { ok: false, error: "No workspace open." };
+    }
     let widgetParams: Record<string, unknown> | undefined;
     if (elig.projectType === "widget") {
       try {
@@ -3111,8 +3189,10 @@ ipcMain.handle(
       if (!session.connected) {
         throw new Error("SSH not connected.");
       }
-      emitDeployLog("[deploy] Reload — restart debug Python…");
-      await session.killDebugPython();
+      emitDeployLog("[deploy] Reload — sync, restart debug Python…");
+      await session.syncWorkspace(workspaceRoot, elig.appId);
+      await session.stopSystemdService();
+      await session.stopDebugApp(elig.appId);
       session.stopLogTail();
       await session.startDebugPython(elig.appId, { projectType: elig.projectType, widgetParams });
       session.startLogTail();
@@ -3137,7 +3217,7 @@ ipcMain.handle(IPCChannels.deployStop, async (): Promise<DeployActionResponse> =
     }
     emitDeployLog("[deploy] Stop — remove app folder, restore dartsnut_python.service…");
     session.stopLogTail();
-    await session.killDebugPython();
+    await session.stopDebugApp(elig.appId);
     await session.removeRemoteAppFolder(elig.appId);
     await session.startSystemdService();
     return { ok: true };

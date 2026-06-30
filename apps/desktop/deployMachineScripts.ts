@@ -97,6 +97,148 @@ export function buildDebugLaunchInner({
   ].join(" && ");
 }
 
+export type BuildDebugLaunchScriptOptions = BuildDebugLaunchInnerOptions & {
+  logPath: string;
+  pidPath: string;
+  password: string;
+  widgetRunnerPath: string;
+  launchWrapperPath: string;
+  eofMarker: string;
+};
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function buildLaunchWrapper(command: string, logPath: string, pidPath: string): string {
+  return [
+    "#!/usr/bin/env bash",
+    `LOG=${shellSingleQuote(logPath)}`,
+    `PIDFILE=${shellSingleQuote(pidPath)}`,
+    "set -eo pipefail",
+    `setsid ${command} >> "$LOG" 2>&1 &`,
+    "child=$!",
+    'echo $! > "$PIDFILE"',
+    'printf "%s\\n" "[deploy] launched pid $child" >> "$LOG"',
+    'set +e',
+    'wait "$child"',
+    'code=$?',
+    'set -e',
+    'printf "%s\\n" "[deploy] python exited $code" >> "$LOG"',
+    'exit "$code"',
+  ].join("\n");
+}
+
+export function buildDebugLaunchScript({
+  appDir,
+  pythonBin,
+  mainScript,
+  projectType,
+  paramsB64,
+  logPath,
+  pidPath,
+  password,
+  widgetRunnerPath,
+  launchWrapperPath,
+  eofMarker,
+}: BuildDebugLaunchScriptOptions): string {
+  const scriptHead = [
+    "set -eo pipefail",
+    "LOG=" + logPath,
+    "PIDFILE=" + pidPath,
+    "PASS=" + JSON.stringify(password),
+    'echo "$PASS" | sudo -S truncate -s 0 "$LOG" 2>/dev/null || true',
+    'echo "$PASS" | sudo -S chmod 666 "$LOG" 2>/dev/null || true',
+    'printf "%s\\n" "[deploy] spawning python $(date -Is)" >> "$LOG"',
+  ];
+  const innerBody = buildDebugLaunchInner({
+    appDir,
+    pythonBin,
+    mainScript,
+    projectType,
+    paramsB64,
+  });
+  const launchWrapper = buildLaunchWrapper(
+    projectType === "widget"
+      ? `bash ${JSON.stringify(widgetRunnerPath)}`
+      : `bash -c ${JSON.stringify(innerBody)}`,
+    logPath,
+    pidPath,
+  );
+  const launchLines = [
+    `echo "$PASS" | sudo -S tee ${JSON.stringify(launchWrapperPath)} > /dev/null <<'${eofMarker}_LAUNCH'`,
+    launchWrapper,
+    `${eofMarker}_LAUNCH`,
+    `echo "$PASS" | sudo -S chmod 755 ${JSON.stringify(launchWrapperPath)} 2>/dev/null || true`,
+    `echo "$PASS" | nohup sudo -S bash ${JSON.stringify(launchWrapperPath)} > /dev/null 2>&1 < /dev/null &`,
+  ];
+  if (projectType === "widget") {
+    return [
+      ...scriptHead,
+      `echo "$PASS" | sudo -S tee ${JSON.stringify(widgetRunnerPath)} > /dev/null <<'${eofMarker}'`,
+      innerBody,
+      eofMarker,
+      `echo "$PASS" | sudo -S chmod 755 ${JSON.stringify(widgetRunnerPath)} 2>/dev/null || true`,
+      ...launchLines,
+    ].join("\n");
+  }
+  return [
+    ...scriptHead,
+    ...launchLines,
+  ].join("\n");
+}
+
+export type BuildKillDebugPythonScriptOptions = {
+  password: string;
+  pidPath: string;
+};
+
+export function buildKillDebugPythonScript({
+  password,
+  pidPath,
+}: BuildKillDebugPythonScriptOptions): string {
+  return [
+    "set -eo pipefail",
+    "PASS=" + JSON.stringify(password),
+    "PIDFILE=" + pidPath,
+    'if [ -f "$PIDFILE" ]; then',
+    '  pid="$(echo "$PASS" | sudo -S cat "$PIDFILE" 2>/dev/null || true)"',
+    '  if [ -n "$pid" ]; then',
+    '    echo "$PASS" | sudo -S kill -- -"$pid" 2>/dev/null || true',
+    '    echo "$PASS" | sudo -S kill "$pid" 2>/dev/null || true',
+    "  fi",
+    '  echo "$PASS" | sudo -S rm -f "$PIDFILE"',
+    "fi",
+  ].join("\n");
+}
+
+export type BuildKillAppMainPyProcessesScriptOptions = {
+  appId?: string;
+  password: string;
+  pidPath: string;
+};
+
+export function buildKillAppMainPyProcessesScript({
+  appId,
+  password,
+  pidPath,
+}: BuildKillAppMainPyProcessesScriptOptions): string {
+  const appPattern = appId == null
+    ? "[^/]+"
+    : appId.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+  return [
+    "set -eo pipefail",
+    "PASS=" + JSON.stringify(password),
+    "PIDFILE=" + pidPath,
+    `APP_RE=${JSON.stringify(appPattern)}`,
+    'legacy_pattern="dartsnut_rpi/apps/$APP_RE/main\\.py"',
+    'uv_pattern="dartsnut_rpi/apps/$APP_RE/\\.venv/bin/python.*(^|[ ])main\\.py"',
+    'echo "$PASS" | sudo -S pkill -f "$legacy_pattern" 2>/dev/null || true',
+    'echo "$PASS" | sudo -S pkill -f "$uv_pattern" 2>/dev/null || true',
+    'echo "$PASS" | sudo -S rm -f "$PIDFILE"',
+  ].join("\n");
+}
+
 export function remoteLegacyPythonBin(root: string): string {
   return `${root}/venv0/bin/python`;
 }

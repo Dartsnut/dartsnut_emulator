@@ -3,6 +3,7 @@ const test = require("node:test");
 
 const {
   decideBeforeQuitBridgeAction,
+  decideBeforeQuitDeployAction,
   shouldAllocateTempWorkspaceAfterDiscard
 } = require("./quitFlow.ts");
 
@@ -47,4 +48,40 @@ test("shouldAllocateTempWorkspaceAfterDiscard does not recreate on quit", () => 
   assert.equal(shouldAllocateTempWorkspaceAfterDiscard("new_project"), true);
   assert.equal(shouldAllocateTempWorkspaceAfterDiscard("open_workspace"), true);
   assert.equal(shouldAllocateTempWorkspaceAfterDiscard(undefined), true);
+});
+
+test("decideBeforeQuitDeployAction proceeds when restore already done", () => {
+  const action = decideBeforeQuitDeployAction({
+    restoreDone: true,
+    connected: true,
+    restoreInFlight: true
+  });
+  assert.equal(action, "proceed");
+});
+
+test("decideBeforeQuitDeployAction marks restore done without connected machine", () => {
+  const action = decideBeforeQuitDeployAction({
+    restoreDone: false,
+    connected: false,
+    restoreInFlight: false
+  });
+  assert.equal(action, "mark_restore_done");
+});
+
+test("decideBeforeQuitDeployAction waits when restore already in flight", () => {
+  const action = decideBeforeQuitDeployAction({
+    restoreDone: false,
+    connected: true,
+    restoreInFlight: true
+  });
+  assert.equal(action, "wait_for_inflight_restore");
+});
+
+test("decideBeforeQuitDeployAction starts restore when machine is connected", () => {
+  const action = decideBeforeQuitDeployAction({
+    restoreDone: false,
+    connected: true,
+    restoreInFlight: false
+  });
+  assert.equal(action, "start_restore");
 });

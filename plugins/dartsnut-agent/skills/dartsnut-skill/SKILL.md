@@ -12,6 +12,7 @@ This id is kept for **backward compatibility**. For new work, load granular skil
 
 | Skill id | When |
 |----------|------|
+| **`caveman`** | Always — terse response style, no filler, technical accuracy preserved |
 | **`pydartsnut-core`** | Before `main.py` — instance, loop, framebuffer, deps, Chat run steps |
 | **`pydartsnut-widget-loop`** | Widget `main.py` (Pillow, no pygame) |
 | **`pydartsnut-game-io`** | Game `main.py` with hits/buttons and pygame loop |
@@ -22,6 +23,7 @@ This id is kept for **backward compatibility**. For new work, load granular skil
 ## Also see
 
 - **`dartsnut-display-mapping`** — layout, framebuffer merge, fonts on canvas
+- **`dartsnut-smallform-design`** — subject-grounded tiny-screen visual design and verification
 - **`asset-pipeline`** — `dartsnut.assets.json`, `assets_loader.py`, placeholders
 
 **Asset-applier sessions:** load **`pydartsnut-core`** + **`asset-pipeline`** (apply mode rules in asset-pipeline).

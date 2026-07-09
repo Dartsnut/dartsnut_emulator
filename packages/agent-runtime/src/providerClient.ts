@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions/completions";
 import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
 import type { ProviderConfig } from "./providerConfig";
+import { mergeToolCallDeltas, type StreamingToolCallAccumulator } from "./toolCallDeltaMerge";
 
 /**
  * Mirrors the assistant `tool_calls` entry as it is sent back to the API in subsequent turns.
@@ -65,12 +66,6 @@ export interface CompletionOptions {
 
 export interface CompletionProvider {
   complete(messages: ChatMessage[], options?: CompletionOptions): Promise<CompletionResult>;
-}
-
-interface StreamingToolCallAccumulator {
-  id: string;
-  name: string;
-  argumentsJson: string;
 }
 
 interface OpenAIToolCallDelta {
@@ -241,7 +236,7 @@ export class ProviderClient implements CompletionProvider {
           }
         }
         if (Array.isArray(delta.tool_calls)) {
-          ProviderClient.mergeToolCallDeltas(toolCallAccumulators, delta.tool_calls as OpenAIToolCallDelta[]);
+          mergeToolCallDeltas(toolCallAccumulators, delta.tool_calls as OpenAIToolCallDelta[]);
           if (onToolCallProgress) {
             const orderedIndices = Array.from(toolCallAccumulators.keys()).sort((a, b) => a - b);
             const progressCalls: ParsedToolCall[] = orderedIndices
@@ -315,31 +310,4 @@ export class ProviderClient implements CompletionProvider {
     return parsed;
   }
 
-  private static mergeToolCallDeltas(
-    accumulators: Map<number, StreamingToolCallAccumulator>,
-    deltas: OpenAIToolCallDelta[]
-  ): void {
-    for (let i = 0; i < deltas.length; i += 1) {
-      const delta = deltas[i];
-      if (!delta) {
-        continue;
-      }
-      const index = typeof delta.index === "number" ? delta.index : i;
-      const existing =
-        accumulators.get(index) ?? { id: "", name: "", argumentsJson: "" };
-      if (typeof delta.id === "string" && delta.id.length > 0) {
-        existing.id = delta.id;
-      }
-      const fn = delta.function;
-      if (fn) {
-        if (typeof fn.name === "string" && fn.name.length > 0) {
-          existing.name = fn.name;
-        }
-        if (typeof fn.arguments === "string" && fn.arguments.length > 0) {
-          existing.argumentsJson += fn.arguments;
-        }
-      }
-      accumulators.set(index, existing);
-    }
-  }
 }

@@ -429,6 +429,135 @@ describe("ProviderClient wire format", () => {
     expect(result.toolCalls[0]?.argumentsJson).toBe('{"path":"a.txt","content":"hello"}');
   });
 
+  it("keeps unindexed streamed tool calls with different ids separate", async () => {
+    const encoder = new TextEncoder();
+    const sseLines = [
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_conf",
+                  function: { name: "write_file", arguments: '{"path":"conf.json","content":"{}"}' }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_main",
+                  function: { name: "write_file", arguments: '{"path":"main.py","content":"print(' }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_main",
+                  function: { arguments: '\\"ok\\")"}' }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ];
+    const sse =
+      sseLines.map((line) => `data: ${JSON.stringify(line)}\n\n`).join("") + "data: [DONE]\n\n";
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(sse));
+            controller.close();
+          }
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+    }) as unknown as typeof fetch;
+
+    const client = new ProviderClient({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "test-model",
+      fetchImpl
+    });
+    const onToolCallProgress = vi.fn();
+    const result = await client.complete([{ role: "user", content: "go" }], {
+      onChunk: vi.fn(),
+      onToolCallProgress
+    });
+
+    expect(result.toolCalls).toHaveLength(2);
+    expect(result.toolCalls[0]).toMatchObject({ id: "call_conf", argumentsJson: '{"path":"conf.json","content":"{}"}' });
+    expect(result.toolCalls[1]).toMatchObject({ id: "call_main", argumentsJson: '{"path":"main.py","content":"print(\\"ok\\")"}' });
+    const lastProgress = onToolCallProgress.mock.calls.at(-1)?.[0];
+    expect(lastProgress[1]).toMatchObject({ id: "call_main", argumentsJson: '{"path":"main.py","content":"print(\\"ok\\")"}' });
+  });
+
+  it("keeps unindexed streamed tool calls separate when ids are missing", async () => {
+    const encoder = new TextEncoder();
+    const sseLines = [
+      { choices: [{ index: 0, delta: { tool_calls: [{ function: { name: "get_dartsnut_skill", arguments: '{"skill_id":"caveman"}' } }] } }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ function: { name: "dartsnut_project_intake", arguments: '{"action":"set_project_type"}' } }] } }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ function: { name: "dartsnut_ask_question", arguments: '{"question_id":"widget_display_size"}' } }] } }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ function: { name: "glob_files", arguments: '{"pattern":"*","max_results":100}' } }] } }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ function: { name: "write_file", arguments: '{"content":"{}","path":"conf.json"}' } }] } }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ function: { name: "write_file", arguments: '{"content":"print(' } }] } }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ function: { arguments: '\\"ok\\")","path":"main.py"}' } }] } }] }
+    ];
+    const sse =
+      sseLines.map((line) => `data: ${JSON.stringify(line)}\n\n`).join("") + "data: [DONE]\n\n";
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(sse));
+            controller.close();
+          }
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+    }) as unknown as typeof fetch;
+
+    const client = new ProviderClient({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "test-model",
+      fetchImpl
+    });
+    const onToolCallProgress = vi.fn();
+    const result = await client.complete([{ role: "user", content: "go" }], {
+      onChunk: vi.fn(),
+      onToolCallProgress
+    });
+
+    const writeCalls = result.toolCalls.filter((call) => call.name === "write_file");
+    expect(writeCalls).toHaveLength(2);
+    expect(writeCalls[0].argumentsJson).toBe('{"content":"{}","path":"conf.json"}');
+    expect(writeCalls[1].argumentsJson).toBe('{"content":"print(\\"ok\\")","path":"main.py"}');
+    expect(writeCalls[1].argumentsJson.includes("conf.json")).toBe(false);
+    const lastProgress = onToolCallProgress.mock.calls.at(-1)?.[0];
+    const progressWriteCalls = lastProgress.filter((call: { name: string }) => call.name === "write_file");
+    expect(progressWriteCalls.at(-1)?.argumentsJson).toBe('{"content":"print(\\"ok\\")","path":"main.py"}');
+  });
+
   it("aborts an in-flight streaming completion when abortSignal fires", async () => {
     const abort = new AbortController();
     const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {

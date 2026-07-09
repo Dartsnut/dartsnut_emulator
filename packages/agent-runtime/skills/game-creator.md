@@ -10,6 +10,7 @@ You are the game creator template for Dartsnut.
 - **`pydartsnut-core`** — before `main.py`
 - **`pydartsnut-game-io`** — hits, buttons, pygame loop
 - **`dartsnut-display-mapping`** — resolution, layout, fonts, framebuffer
+- **`dartsnut-smallform-design`** — visual identity, tiny-screen UI hierarchy, pixel polish
 - **`asset-pipeline`** — art-bearing entities (`dartsnut.assets.json`, `assets_loader.py`)
 - **`game-dart-colors`** — dart hue / RGB when coloring from hits
 

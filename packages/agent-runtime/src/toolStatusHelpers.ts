@@ -113,6 +113,12 @@ export function buildToolStatusMessage(
       return { text: phase === "call" ? "Reloading emulator…" : "Reloaded emulator.", meta: baseMeta };
     case "get_emulator_logs":
       return { text: phase === "call" ? "Fetching emulator logs…" : "Fetched emulator logs.", meta: baseMeta };
+    case "observe_emulator":
+      return { text: phase === "call" ? "Observing display…" : "Observed display.", meta: baseMeta };
+    case "control_emulator_input":
+      return { text: phase === "call" ? "Controlling emulator input…" : "Controlled emulator input.", meta: baseMeta };
+    case "run_emulator_scenario":
+      return { text: phase === "call" ? "Running emulator scenario…" : "Ran emulator scenario.", meta: baseMeta };
     case "check_python":
       return { text: phase === "call" ? "Checking Python…" : "Checked Python.", meta: baseMeta };
     default:
@@ -153,6 +159,94 @@ export function safeParseObject(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
+type JsonObjectSlice = {
+  text: string;
+  end: number;
+};
+
+function collectCompleteJsonObjectSlices(input: string): JsonObjectSlice[] {
+  const slices: JsonObjectSlice[] = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (start < 0) {
+      if (ch === "{") {
+        start = i;
+        depth = 1;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (ch === "\\") {
+        escaping = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === "\"") {
+      inString = true;
+    } else if (ch === "{") {
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        slices.push({ text: input.slice(start, i + 1), end: i + 1 });
+        start = -1;
+      }
+    }
+  }
+
+  return slices;
+}
+
+function extractLastRegexPath(input: string): string | undefined {
+  const matches = Array.from(input.matchAll(/"path"\s*:\s*"((?:\\.|[^"\\])*)"?/g));
+  const match = matches.at(-1);
+  if (!match) {
+    return undefined;
+  }
+  try {
+    return toRelPath(JSON.parse(`"${match[1]}"`));
+  } catch {
+    return toRelPath(match[1]);
+  }
+}
+
+export function extractLatestArgumentsObject(
+  argumentsJson: string,
+  predicate: (args: Record<string, unknown>) => boolean = () => true
+): Record<string, unknown> | undefined {
+  if (!argumentsJson.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = safeParseObject(JSON.parse(argumentsJson));
+    return predicate(parsed) ? parsed : undefined;
+  } catch {
+    const slices = collectCompleteJsonObjectSlices(argumentsJson);
+    for (let i = slices.length - 1; i >= 0; i -= 1) {
+      try {
+        const parsed = safeParseObject(JSON.parse(slices[i].text));
+        if (predicate(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // Keep scanning older complete objects.
+      }
+    }
+    return undefined;
+  }
+}
+
 export function extractPathFromArgumentsJson(argumentsJson: string): string | undefined {
   if (!argumentsJson.trim()) {
     return undefined;
@@ -161,14 +255,30 @@ export function extractPathFromArgumentsJson(argumentsJson: string): string | un
     const parsed = safeParseObject(JSON.parse(argumentsJson));
     return toRelPath(parsed.path);
   } catch {
-    const match = argumentsJson.match(/"path"\s*:\s*"([^"]*)"?/);
-    if (!match) {
-      return undefined;
+    const slices = collectCompleteJsonObjectSlices(argumentsJson);
+    const lastCompleteEnd = slices.at(-1)?.end ?? 0;
+    const trailingPartial = argumentsJson.slice(lastCompleteEnd).trim();
+    if (trailingPartial.length > 0) {
+      const trailingPath = extractLastRegexPath(trailingPartial);
+      if (trailingPath) {
+        return trailingPath;
+      }
+      if (slices.length > 0) {
+        return undefined;
+      }
     }
-    try {
-      return toRelPath(JSON.parse(`"${match[1]}"`));
-    } catch {
-      return toRelPath(match[1]);
+
+    for (let i = slices.length - 1; i >= 0; i -= 1) {
+      try {
+        const parsed = safeParseObject(JSON.parse(slices[i].text));
+        const path = toRelPath(parsed.path);
+        if (path) {
+          return path;
+        }
+      } catch {
+        // Keep scanning; the regex fallback below can still handle partial JSON.
+      }
     }
+    return extractLastRegexPath(argumentsJson);
   }
 }

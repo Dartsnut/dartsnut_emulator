@@ -10,10 +10,12 @@ Integration with the **Dartsnut machine** via **`pydartsnut`** — not generic P
 
 In README or final replies:
 
-1. **reload_emulator** — restarts the embedded preview and re-reads `conf.json`.
-2. **get_emulator_logs** — read recent Python stdout/stderr from the bridge (use after reload to confirm no Traceback/SyntaxError).
-3. The emulator pane also has **Logs** for the user; agents should use **`get_emulator_logs`**, not assume they can see the UI.
-4. Do **not** tell users to `cd` and `python main.py` unless they asked for CLI-only steps.
+1. **reload_emulator** — restarts the embedded preview and re-reads `conf.json`. Use `params` when testing alternate widget/game launch params, and `clear_inputs` before repeatable verification.
+2. **observe_emulator** — read the current frame, display mapping, panel hashes, nonblack bounds, dominant colors, and optional PNG base64. When `include_png` is true, inspect `mainSurfacePngBase64` and `bottomSurfacePngBase64` (or matching `display.panels[].pngBase64`) to catch panel-specific rendering issues. Use this after reload and after input.
+3. **get_emulator_logs** — read recent Python stdout/stderr from the bridge (use after reload/observation to confirm no Traceback/SyntaxError).
+4. For games, use **control_emulator_input** or **run_emulator_scenario** to clear darts, throw/tap input, observe the state change, and then check logs.
+5. The emulator pane also has **Logs** for the user; agents should use the emulator tools, not assume they can see the UI.
+6. Do **not** tell users to `cd` and `python main.py` unless they asked for CLI-only steps.
 
 ## Dependencies (hardware boundary)
 

@@ -11,6 +11,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from io import BytesIO
 from multiprocessing import shared_memory
 from pathlib import Path
 from typing import Any
@@ -610,6 +611,36 @@ class EmulatorCore:
             )
             filepaths.append(self._write_capture_png(surface_img, suffix="surface", timestamp=timestamp))
         return filepaths
+
+    def _image_to_png_base64(self, img: Image.Image) -> str:
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    def capture_screenshot_payload(self, include_hardware: bool = True) -> dict[str, Any]:
+        if self._last_frame_bytes is None:
+            raise ValueError("No frame available yet for screenshot capture")
+        frame_w = int(self._last_frame_w)
+        frame_h = int(self._last_frame_h)
+        if frame_w <= 0 or frame_h <= 0:
+            raise ValueError("Invalid frame dimensions for screenshot capture")
+
+        frame_img = Image.frombytes("RGB", (frame_w, frame_h), self._last_frame_bytes)
+        payload: dict[str, Any] = {
+            "surface": {
+                "width": frame_w,
+                "height": frame_h,
+                "pngBase64": self._image_to_png_base64(frame_img),
+            }
+        }
+        if include_hardware:
+            canvas = self._build_capture_canvas(frame_img, frame_w, frame_h)
+            payload["hardware"] = {
+                "width": canvas.width,
+                "height": canvas.height,
+                "pngBase64": self._image_to_png_base64(canvas),
+            }
+        return payload
 
     def _build_capture_canvas(self, frame_img: Image.Image, frame_w: int, frame_h: int) -> Image.Image:
         base_w, base_h = 588, 800

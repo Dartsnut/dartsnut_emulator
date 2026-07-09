@@ -381,11 +381,19 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     return options.hostAskQuestionHandler(args);
   });
 
-  const reloadEmulator = defineJsonSchemaTool("reload_emulator", async () => {
+  const reloadEmulator = defineJsonSchemaTool("reload_emulator", async (args) => {
     if (!options.hostReloadEmulatorHandler) {
       return JSON.stringify({ ok: false, error: "reload_emulator handler unavailable." });
     }
-    return options.hostReloadEmulatorHandler();
+    const params = args.params && typeof args.params === "object" && !Array.isArray(args.params)
+      ? (args.params as Record<string, unknown>)
+      : undefined;
+    const clear_inputs = args.clear_inputs === true ? true : undefined;
+    const wait_for_frame_ms =
+      typeof args.wait_for_frame_ms === "number" && Number.isFinite(args.wait_for_frame_ms)
+        ? Math.max(0, Math.floor(args.wait_for_frame_ms))
+        : undefined;
+    return options.hostReloadEmulatorHandler({ params, clear_inputs, wait_for_frame_ms });
   });
 
   const getEmulatorLogs = defineJsonSchemaTool("get_emulator_logs", async (args) => {
@@ -413,6 +421,27 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     return options.hostMachineMcpHandler(args);
   });
 
+  const observeEmulator = defineJsonSchemaTool("observe_emulator", async (args) => {
+    if (!options.hostObserveEmulatorHandler) {
+      return JSON.stringify({ ok: false, error: "observe_emulator handler unavailable." });
+    }
+    return options.hostObserveEmulatorHandler(args);
+  });
+
+  const controlEmulatorInput = defineJsonSchemaTool("control_emulator_input", async (args) => {
+    if (!options.hostControlEmulatorInputHandler) {
+      return JSON.stringify({ ok: false, error: "control_emulator_input handler unavailable." });
+    }
+    return options.hostControlEmulatorInputHandler(args);
+  });
+
+  const runEmulatorScenario = defineJsonSchemaTool("run_emulator_scenario", async (args) => {
+    if (!options.hostRunEmulatorScenarioHandler) {
+      return JSON.stringify({ ok: false, error: "run_emulator_scenario handler unavailable." });
+    }
+    return options.hostRunEmulatorScenarioHandler(args);
+  });
+
   const registry: Record<string, Tool> = {
     list_files: listFiles,
     read_file: readFile,
@@ -426,6 +455,9 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     dartsnut_ask_question: askQuestion,
     reload_emulator: reloadEmulator,
     get_emulator_logs: getEmulatorLogs,
+    observe_emulator: observeEmulator,
+    control_emulator_input: controlEmulatorInput,
+    run_emulator_scenario: runEmulatorScenario,
     check_python: checkPython,
     dartsnut_machine_mcp: machineMcp
   };

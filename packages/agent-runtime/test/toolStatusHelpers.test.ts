@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emitToolStatusEvent } from "../src/toolStatusHelpers";
+import { buildToolStatusMessage, emitToolStatusEvent, extractPathFromArgumentsJson } from "../src/toolStatusHelpers";
 
 describe("toolStatusHelpers", () => {
   it("persists Dartsnut skill status rows with skill id metadata", () => {
@@ -39,5 +39,28 @@ describe("toolStatusHelpers", () => {
 
     expect(persisted).toHaveLength(1);
     expect(persisted[0]).toMatchObject({ kind: "tool_status" });
+  });
+
+  it("formats emulator observation and scenario tool statuses", () => {
+    expect(buildToolStatusMessage("observe_emulator", "call").text).toBe("Observing display…");
+    expect(buildToolStatusMessage("observe_emulator", "result").text).toBe("Observed display.");
+    expect(buildToolStatusMessage("run_emulator_scenario", "call").text).toBe("Running emulator scenario…");
+    expect(buildToolStatusMessage("run_emulator_scenario", "result").text).toBe("Ran emulator scenario.");
+  });
+
+  it("extracts the newest path from concatenated streamed argument objects", () => {
+    const concat =
+      "{\"content\":\"{}\",\"path\":\"conf.json\"}" +
+      "{\"content\":\"print(\\\"ok\\\")\",\"path\":\"main.py\"}";
+
+    expect(extractPathFromArgumentsJson(concat)).toBe("main.py");
+  });
+
+  it("does not reuse an older path when a newer concatenated object is still streaming", () => {
+    const concat =
+      "{\"content\":\"{}\",\"path\":\"conf.json\"}" +
+      "{\"content\":\"import math";
+
+    expect(extractPathFromArgumentsJson(concat)).toBeUndefined();
   });
 });

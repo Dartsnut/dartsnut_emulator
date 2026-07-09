@@ -27,6 +27,9 @@ describe("buildAgentTools profiles", () => {
       "get_dartsnut_skill",
       "reload_emulator",
       "get_emulator_logs",
+      "observe_emulator",
+      "control_emulator_input",
+      "run_emulator_scenario",
       "check_python",
       "dartsnut_project_intake",
       "dartsnut_ask_question",
@@ -43,6 +46,9 @@ describe("buildAgentTools profiles", () => {
     expect(names).toContain("glob_files");
     expect(names).toContain("write_file");
     expect(names).toContain("check_python");
+    expect(names).toContain("observe_emulator");
+    expect(names).toContain("control_emulator_input");
+    expect(names).toContain("run_emulator_scenario");
     expect(names).not.toContain("copy_asset_file");
     expect(names).not.toContain("dartsnut_project_intake");
     expect(names).not.toContain("dartsnut_ask_question");

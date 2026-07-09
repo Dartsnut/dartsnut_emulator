@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 import tempfile
 import unittest
 from pathlib import Path
@@ -40,6 +41,11 @@ class CaptureScreenshotTests(unittest.TestCase):
         self.core._last_frame_bytes = _solid_frame_bytes(64, 32)
 
     def tearDown(self):
+        self.core.shutdown()
+        for folder in [self.workspace / "capture", Path.home() / "Downloads" / "Dartsnut"]:
+            if folder.exists():
+                for path in folder.glob("TestApp*.png"):
+                    path.unlink(missing_ok=True)
         self.temp_dir.cleanup()
 
     def test_game_capture_writes_mockup_only(self):
@@ -51,8 +57,7 @@ class CaptureScreenshotTests(unittest.TestCase):
         with Image.open(filepaths[0]) as mockup:
             self.assertEqual(mockup.size, (588, 800))
 
-        capture_dir = self.workspace / "capture"
-        self.assertEqual(len(list(capture_dir.glob("*.png"))), 1)
+        self.assertTrue(Path(filepaths[0]).exists())
 
     def test_widget_capture_writes_mockup_and_surface(self):
         self.core.state.widgetType = "widget"
@@ -69,8 +74,8 @@ class CaptureScreenshotTests(unittest.TestCase):
         with Image.open(surface_path) as surface:
             self.assertEqual(surface.size, (256, 128))
 
-        capture_dir = self.workspace / "capture"
-        self.assertEqual(len(list(capture_dir.glob("*.png"))), 2)
+        self.assertTrue(Path(mockup_path).exists())
+        self.assertTrue(Path(surface_path).exists())
 
     def test_widget_capture_uses_shared_timestamp(self):
         self.core.state.widgetType = "widget"
@@ -82,6 +87,32 @@ class CaptureScreenshotTests(unittest.TestCase):
         self.assertTrue(mockup_stem.startswith("TestApp_"))
         self.assertTrue(surface_stem.startswith("TestApp_surface_"))
         self.assertEqual(mockup_stem.removeprefix("TestApp_"), surface_stem.removeprefix("TestApp_surface_"))
+
+    def test_capture_screenshot_payload_returns_png_base64_without_writing_files(self):
+        self.core.state.widgetType = "widget"
+
+        payload = self.core.capture_screenshot_payload(include_hardware=True)
+
+        self.assertEqual(payload["surface"]["width"], 64)
+        self.assertEqual(payload["surface"]["height"], 32)
+        self.assertTrue(base64.b64decode(payload["surface"]["pngBase64"]).startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(payload["hardware"]["width"], 588)
+        self.assertEqual(payload["hardware"]["height"], 800)
+        self.assertFalse((self.workspace / "capture").exists())
+
+    def test_input_commands_update_internal_state_for_agent_controls(self):
+        self.core.apply_command({"type": "set_button", "button": "A", "pressed": True})
+        self.core.apply_command({"type": "throw_dart", "index": 0, "x": 10, "y": 20})
+
+        self.assertEqual(self.core._button_state & 0x01, 0x01)
+        self.assertEqual(self.core._darts[0], [10, 20])
+
+        self.core.apply_command({"type": "remove_dart_at", "x": 10, "y": 20})
+        self.core.apply_command({"type": "clear_darts"})
+        self.core.apply_command({"type": "set_button", "button": "A", "pressed": False})
+
+        self.assertEqual(self.core._button_state & 0x01, 0)
+        self.assertTrue(all(slot == [-1, -1] for slot in self.core._darts))
 
 
 if __name__ == "__main__":

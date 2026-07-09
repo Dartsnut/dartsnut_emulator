@@ -5,6 +5,7 @@ const SKILL_SEPARATOR = "\n\n---\n\n";
 
 /** Granular + legacy skill documents exposed via `get_dartsnut_skill`. */
 export const DEFERRED_SKILL_IDS = [
+  "caveman",
   "karpathy-guidelines",
   "creator-incremental",
   "conf-contract",
@@ -14,6 +15,7 @@ export const DEFERRED_SKILL_IDS = [
   "widget-fonts",
   "game-dart-colors",
   "dartsnut-display-mapping",
+  "dartsnut-smallform-design",
   "design-console-smallform",
   "asset-pipeline",
   "dartsnut-skill"
@@ -22,6 +24,7 @@ export const DEFERRED_SKILL_IDS = [
 export type DeferredSkillId = (typeof DEFERRED_SKILL_IDS)[number];
 
 export const DEFERRED_SKILL_FILE: Record<DeferredSkillId, string> = {
+  "caveman": "caveman.md",
   "karpathy-guidelines": "karpathy-guidelines.md",
   "creator-incremental": "creator-incremental.md",
   "conf-contract": "conf-contract.md",
@@ -31,27 +34,32 @@ export const DEFERRED_SKILL_FILE: Record<DeferredSkillId, string> = {
   "widget-fonts": "widget-fonts.md",
   "game-dart-colors": "game-dart-colors.md",
   "dartsnut-display-mapping": "dartsnut-display-mapping.md",
+  "dartsnut-smallform-design": "dartsnut-smallform-design.md",
   "design-console-smallform": "design-console-smallform.md",
   "asset-pipeline": "asset-pipeline.md",
   "dartsnut-skill": "dartsnut-skill.md"
 };
 
 const SKILL_INDEX_BLURB: Record<DeferredSkillId, string> = {
+  "caveman":
+    "Ultra-compressed communication mode; terse responses while preserving technical accuracy.",
   "karpathy-guidelines":
     "Goal-driven execution, simplicity, surgical edits; brief plan + verify checks; tool-first creator turns.",
   "creator-incremental":
     "Scaffold file rules, verify run (reload + logs), anti-prose duplication.",
   "conf-contract": "Root `conf.json` keys, defaults, size, `reload_emulator` after changes.",
   "pydartsnut-core":
-    "`Dartsnut()`, loop guard, `update_frame_buffer`, deps boundary, Chat Start/Reload/Logs.",
+    "`Dartsnut()`, loop guard, `update_frame_buffer`, deps boundary, reload/logs/observe verification.",
   "pydartsnut-game-io": "Game pygame loop, `get_dart_hits` / `get_button_events`, forbidden APIs.",
   "pydartsnut-widget-loop": "Widget PIL loop, `widget_params`, no pygame.",
   "widget-fonts": "`availableWidgetFonts` (file + glyph size), `copy_asset_file` → `./fonts/`.",
   "game-dart-colors": "Dart index % 4 color map and RGB table for game UI.",
   "dartsnut-display-mapping":
     "Physical panels ↔ framebuffer merge, layout, fonts on canvas, clipping.",
+  "dartsnut-smallform-design":
+    "Subject-grounded tiny-screen visual identity, pixel-perfect layout, HUD/widget hierarchy, and visual verification.",
   "design-console-smallform":
-    "Pixel-perfect compact UI heuristics, tiny-screen readability, and console-game-forward HUD composition.",
+    "Legacy alias — use `dartsnut-smallform-design` for compact Dartsnut visual design.",
   "asset-pipeline":
     "`dartsnut.assets.json`, `assets_loader.py`, placeholders, art-bearing entities, apply mode.",
   "dartsnut-skill": "Legacy index — prefer granular ids above; expands to core + game + widget loops when loaded."
@@ -59,6 +67,8 @@ const SKILL_INDEX_BLURB: Record<DeferredSkillId, string> = {
 
 /** Illustrative user intents (any language) — not keyword matchers. */
 const SKILL_INTENT_HINT: Partial<Record<DeferredSkillId, string>> = {
+  "caveman":
+    "Intent: always-on Dartsnut Agent response style. Load before other work and obey every response.",
   "karpathy-guidelines":
     "Intent: edit discipline and verify with tools. Examples: surgical fix, minimal diff.",
   "creator-incremental":
@@ -77,8 +87,10 @@ const SKILL_INTENT_HINT: Partial<Record<DeferredSkillId, string>> = {
     "Intent: color darts by player index. Examples: dart colors, 飞镖颜色, 飛鏢顏色.",
   "dartsnut-display-mapping":
     "Intent: layout across panels / framebuffer. Examples: split screen, 分屏布局, 分屏佈局.",
+  "dartsnut-smallform-design":
+    "Intent: visual design/polish for tiny Dartsnut games/widgets. Examples: make it beautiful, small-screen UI, 精致小屏设计, 精緻小屏設計.",
   "design-console-smallform":
-    "Intent: pixel-perfect polish on compact screens with console-like style. Examples: pixel perfect UI, 小屏精致像素风, 小屏精緻像素風.",
+    "Intent: legacy compact console design requests — prefer `dartsnut-smallform-design`.",
   "asset-pipeline":
     "Intent: manifest slots and loader wiring. Bind user art via Assets pane — not chat paste.",
   "dartsnut-skill": "Intent: broad runtime overview — prefer granular ids above."
@@ -92,10 +104,12 @@ function formatOptionalSkillLine(id: DeferredSkillId): string {
 
 /** Legacy id `dartsnut-skill` returns concatenated granular bodies (for asset-applier and old sessions). */
 const LEGACY_SKILL_EXPANSION: Partial<Record<DeferredSkillId, readonly DeferredSkillId[]>> = {
-  "dartsnut-skill": ["pydartsnut-core", "pydartsnut-game-io", "pydartsnut-widget-loop"]
+  "dartsnut-skill": ["caveman", "pydartsnut-core", "pydartsnut-game-io", "pydartsnut-widget-loop"],
+  "design-console-smallform": ["dartsnut-smallform-design"]
 };
 
 const CREATOR_ALWAYS_LOAD: readonly DeferredSkillId[] = [
+  "caveman",
   "karpathy-guidelines",
   "creator-incremental",
   "conf-contract",
@@ -108,6 +122,7 @@ const CREATOR_OPTIONAL_SKILLS: readonly DeferredSkillId[] = [
   "widget-fonts",
   "game-dart-colors",
   "dartsnut-display-mapping",
+  "dartsnut-smallform-design",
   "design-console-smallform",
   "asset-pipeline",
   "dartsnut-skill"
@@ -169,7 +184,7 @@ function readSkillFile(skillsDir: string, skillId: DeferredSkillId): string {
  */
 export function allowedDeferredSkillIdsForMode(mode?: SkillBundleMode | null): DeferredSkillId[] {
   if (mode === "asset-applier") {
-    return ["pydartsnut-core", "asset-pipeline", "dartsnut-skill"];
+    return ["caveman", "pydartsnut-core", "asset-pipeline", "dartsnut-skill"];
   }
   if (mode === "creation-intake") {
     return [];
@@ -190,12 +205,13 @@ function formatCreatorRouterBody(skillsDir: string, allowed: readonly DeferredSk
     "**Language:** Users may write in **English**, **Simplified Chinese (zh-Hans)**, or **Traditional Chinese (zh-Hant)**. Decide which **`get_dartsnut_skill`** ids to load from **meaning**, not exact keywords. Skill ids and tool names stay English.",
     "",
     "**Skill loading (just-in-time):** Use **`get_dartsnut_skill`** before the step that needs it.",
+    "**Communication:** Load **`caveman`** first and keep it active for every response unless the user explicitly says `stop caveman` or `normal mode`.",
     "",
     "**Investigate:** Use **`glob_files`** to find files by name and **`grep_files`** to find where code is defined or used before editing. `read_file` (whole file, or a line range for big files) to understand existing code.",
     "",
     "**Editing:** `read_file` workspace files before edits. Prefer **`replace_in_file`** on existing files (make `find` unique, or set `replace_all`). Do not end turns with only prose when files still need changes.",
     "",
-    "**Verify:** After material workspace changes, **`check_python`** (fast syntax check) then `reload_emulator` then **`get_emulator_logs`**. Stop when logs are clean and the user's request is satisfied.",
+    "**Verify:** After material workspace changes, **`check_python`** (fast syntax check) then `reload_emulator`, **`observe_emulator`**, then **`get_emulator_logs`**. Stop when logs are clean, the frame is nonblank/mapped correctly, and the user's request is satisfied. For games, run a bounded **`run_emulator_scenario`** or **`control_emulator_input`** check before final logs.",
     "",
     "**Load first** (parallel `get_dartsnut_skill` calls OK) before scaffolding files:",
     ...always.map((id) => `- **${id}**`),
@@ -216,6 +232,7 @@ function formatAssetApplierRouterBody(skillsDir: string, allowed: readonly Defer
     "**Language:** Respond in the user's language (English, zh-Hans, or zh-Hant). Interpret requests by meaning; skill ids stay English.",
     "",
     "**Skill loading:** Load **`pydartsnut-core`** and **`asset-pipeline`** with **`get_dartsnut_skill`** before editing files. Do not scaffold new projects.",
+    "**Communication:** Load **`caveman`** first and keep it active for every response unless the user explicitly says `stop caveman` or `normal mode`.",
     "",
     "Skills available in this session:",
     ...formatSkillIndexLines(allowed),

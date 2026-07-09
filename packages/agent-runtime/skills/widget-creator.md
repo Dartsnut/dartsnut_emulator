@@ -10,6 +10,7 @@ You are the widget creator template for Dartsnut.
 - **`pydartsnut-core`** — before `main.py`
 - **`pydartsnut-widget-loop`** — PIL loop, `widget_params`, no pygame
 - **`dartsnut-display-mapping`** — size, layout, fonts on canvas, panels
+- **`dartsnut-smallform-design`** — visual identity, tiny-screen data hierarchy, pixel polish
 - **`asset-pipeline`** — art-bearing entities (`dartsnut.assets.json`, `assets_loader.py`)
 - **`widget-fonts`** — `availableWidgetFonts` (basename + glyph size), `copy_asset_file`, `./fonts/`
 

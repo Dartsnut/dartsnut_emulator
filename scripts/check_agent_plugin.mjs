@@ -10,6 +10,7 @@ const pluginRoot = path.join(repoRoot, "plugins", "dartsnut-agent");
 const sourceSkillsDir = path.join(repoRoot, "packages", "agent-runtime", "skills");
 
 const exportedSkills = [
+  "caveman",
   "karpathy-guidelines",
   "creator-incremental",
   "conf-contract",
@@ -19,6 +20,7 @@ const exportedSkills = [
   "widget-fonts",
   "game-dart-colors",
   "dartsnut-display-mapping",
+  "dartsnut-smallform-design",
   "design-console-smallform",
   "asset-pipeline",
   "dartsnut-skill"

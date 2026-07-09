@@ -15,7 +15,7 @@ const GET_DARTSNUT_SKILL_TOOL: ChatCompletionTool = {
     description: [
       "Load markdown for a **Dartsnut house skill** (incremental scaffold, conf contract, pydartsnut runtime, display mapping, assets, etc.).",
       "Load **just-in-time** when the **upcoming step** needs it — decide from **meaning** in English, Simplified Chinese, or Traditional Chinese, not exact keywords (e.g. user offers a picture → `asset-pipeline`, then Assets pane bind — not chat paste).",
-      "Per the router: always `creator-incremental`, `conf-contract`, `pydartsnut-core` first for new projects; other ids only when that step needs them.",
+      "Per the router: always load `caveman` first, then `creator-incremental`, `conf-contract`, `pydartsnut-core` first for new projects; other ids only when that step needs them.",
       "Call before write_file / replace_in_file / copy_asset_file for the step you are on. Not for workspace files — use read_file. Returns JSON with `content` when `ok` is true."
     ].join(" "),
     parameters: {
@@ -336,13 +336,106 @@ const RELOAD_EMULATOR_TOOL: ChatCompletionTool = {
   function: {
     name: "reload_emulator",
     description:
-      "Host-executed: re-applies the current workspace path to the embedded emulator, **re-reads `conf.json` from disk**, restarts the widget/game process, and refreshes deploy eligibility in the UI. After reload, call **get_emulator_logs** to confirm the project starts without Python errors.",
+      "Host-executed: re-applies the current workspace path to the embedded emulator, **re-reads `conf.json` from disk**, restarts the widget/game process, and refreshes deploy eligibility in the UI. Optional params are passed as widget/game launch params, clear_inputs resets buttons/darts before reload, and wait_for_frame_ms waits for a fresh frame. After reload, call **observe_emulator** and **get_emulator_logs** to confirm the project starts without Python errors.",
     parameters: {
       type: "object",
-      properties: {},
+      properties: {
+        params: {
+          type: "object",
+          description: "Optional JSON params passed to the app on reload, matching widget params semantics."
+        },
+        clear_inputs: {
+          type: "boolean",
+          description: "When true, clear all darts and release all buttons before reloading."
+        },
+        wait_for_frame_ms: {
+          type: "number",
+          description: "Optional maximum milliseconds for the host to wait for a fresh frame after reload."
+        }
+      },
       additionalProperties: false
     },
-    strict: true
+    strict: false
+  }
+};
+
+const OBSERVE_EMULATOR_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "observe_emulator",
+    description:
+      "Host-executed: waits for or reads the latest emulator frame and returns current emulator state, recent logs, display mapping metadata, frame hashes, non-black bounds/occupancy, dominant colors, and optional PNG base64 for the full surface, cropped main surface, cropped bottom surface, and hardware mockup. Use after reload_emulator and after input scenarios to verify the display is nonblank and mapped correctly.",
+    parameters: {
+      type: "object",
+      properties: {
+        include_png: {
+          type: "boolean",
+          description: "When true, include PNG base64 for the logical surface plus cropped main/bottom panel surfaces when available."
+        },
+        include_hardware_mockup: {
+          type: "boolean",
+          description: "When true with include_png, include the hardware/mockup PNG in addition to the surface PNG."
+        },
+        wait_for_frame_ms: {
+          type: "number",
+          description: "Maximum milliseconds to wait for a current frame before returning an actionable error."
+        },
+        max_log_lines: {
+          type: "number",
+          description: "Recent emulator log lines to include with the observation."
+        }
+      },
+      additionalProperties: false
+    },
+    strict: false
+  }
+};
+
+const CONTROL_EMULATOR_INPUT_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "control_emulator_input",
+    description:
+      "Host-executed: drives emulator input without using the renderer UI. Supports throw_dart, remove_dart, clear_darts, set_button, tap_button, and sequence. Use for game verification before observing the display and logs.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "object",
+          description:
+            "Input action. Shapes: {type:'throw_dart', index:0..11 or 'next', x, y}, {type:'remove_dart', x, y}, {type:'clear_darts'}, {type:'set_button', button, pressed}, {type:'tap_button', button, duration_ms}, or {type:'sequence', actions:[...]}"
+        }
+      },
+      required: ["action"],
+      additionalProperties: false
+    },
+    strict: false
+  }
+};
+
+const RUN_EMULATOR_SCENARIO_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "run_emulator_scenario",
+    description:
+      "Host-executed: runs a bounded emulator test scenario with steps such as reload, wait_frame, observe, input, delay, and logs. Hard caps are 30 steps, 30 seconds, and 4 observations. Use this for autonomous game/widget acceptance testing instead of many small tool calls.",
+    parameters: {
+      type: "object",
+      properties: {
+        steps: {
+          type: "array",
+          items: { type: "object" },
+          description: "Ordered scenario steps: reload, wait_frame, observe, input, delay, or logs."
+        },
+        timeout_ms: {
+          type: "number",
+          description: "Optional total scenario timeout, capped by the host at 30000ms."
+        }
+      },
+      required: ["steps"],
+      additionalProperties: false
+    },
+    strict: false
   }
 };
 
@@ -399,6 +492,9 @@ export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
   GET_DARTSNUT_SKILL_TOOL,
   RELOAD_EMULATOR_TOOL,
   GET_EMULATOR_LOGS_TOOL,
+  OBSERVE_EMULATOR_TOOL,
+  CONTROL_EMULATOR_INPUT_TOOL,
+  RUN_EMULATOR_SCENARIO_TOOL,
   CHECK_PYTHON_TOOL,
   DARTSNUT_ASK_QUESTION_TOOL,
   DARTSNUT_PROJECT_INTAKE_TOOL,
@@ -420,6 +516,9 @@ export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: ChatCompletionTool[] = [
   GET_DARTSNUT_SKILL_TOOL,
   RELOAD_EMULATOR_TOOL,
   GET_EMULATOR_LOGS_TOOL,
+  OBSERVE_EMULATOR_TOOL,
+  CONTROL_EMULATOR_INPUT_TOOL,
+  RUN_EMULATOR_SCENARIO_TOOL,
   CHECK_PYTHON_TOOL
 ];
 

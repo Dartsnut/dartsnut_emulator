@@ -51,6 +51,12 @@ describe("loadSkillBundle", () => {
     expect(content).not.toContain("Dartsnut creator overlay");
   });
 
+  it("loads caveman communication skill", () => {
+    const content = loadSkillBundle(path.join(SKILLS_DIR, "caveman.md"));
+    expect(content).toContain("Ultra-compressed communication mode");
+    expect(content).toContain("ACTIVE EVERY RESPONSE");
+  });
+
   it("loads the dartsnut display mapping skill", () => {
     const templatePath = path.join(SKILLS_DIR, "dartsnut-display-mapping.md");
     const content = loadSkillBundle(templatePath);
@@ -59,12 +65,13 @@ describe("loadSkillBundle", () => {
     expect(content).toContain("framebuffer merges");
   });
 
-  it("loads the compact console design skill", () => {
-    const templatePath = path.join(SKILLS_DIR, "design-console-smallform.md");
+  it("loads the Dartsnut small-form design skill", () => {
+    const templatePath = path.join(SKILLS_DIR, "dartsnut-smallform-design.md");
     const content = loadSkillBundle(templatePath);
-    expect(content).toContain("design-console-smallform");
+    expect(content).toContain("dartsnut-smallform-design");
     expect(content).toContain("pixel-perfect");
-    expect(content).toContain("console-game-favor");
+    expect(content).toContain("visual identity");
+    expect(content).toContain("observe_emulator");
   });
 
   it("concatenates multiple skills with a separator when given several paths", () => {
@@ -199,17 +206,20 @@ describe("bundleForTemplateMode", () => {
 describe("deferred skill router", () => {
   it("allowedDeferredSkillIdsForMode lists creator granular skills and asset-applier subset", () => {
     expect(allowedDeferredSkillIdsForMode("asset-applier")).toEqual([
+      "caveman",
       "pydartsnut-core",
       "asset-pipeline",
       "dartsnut-skill"
     ]);
     expect(allowedDeferredSkillIdsForMode("creation-intake")).toEqual([]);
     const creatorIds = allowedDeferredSkillIdsForMode("game-creator");
+    expect(creatorIds).toContain("caveman");
     expect(creatorIds).toContain("karpathy-guidelines");
     expect(creatorIds).toContain("creator-incremental");
     expect(creatorIds).toContain("conf-contract");
     expect(creatorIds).toContain("pydartsnut-core");
     expect(creatorIds).toContain("dartsnut-display-mapping");
+    expect(creatorIds).toContain("dartsnut-smallform-design");
     expect(creatorIds).toContain("design-console-smallform");
   });
 
@@ -218,6 +228,7 @@ describe("deferred skill router", () => {
     expect(router).toContain("just-in-time");
     expect(router).toContain("Simplified Chinese");
     expect(router).toContain("Load first");
+    expect(router).toContain("caveman");
     expect(router).toContain("creator-incremental");
     expect(router).toContain("conf-contract");
     expect(router).not.toContain("loaded **every** skill");
@@ -228,11 +239,13 @@ describe("deferred skill router", () => {
     expect(router).toContain("read_file");
     expect(router).toContain("**Verify:**");
     expect(router).toContain("get_emulator_logs");
-    expect(router).toContain("design-console-smallform");
+    expect(router).toContain("dartsnut-smallform-design");
+    expect(router).not.toContain("console-game-favor");
   });
 
   it("resolveSkillRouterPrompt for asset-applier mentions pydartsnut-core", () => {
     const router = resolveSkillRouterPrompt(SKILLS_DIR, "asset-applier");
+    expect(router).toContain("caveman");
     expect(router).toContain("pydartsnut-core");
     expect(router).toContain("asset-pipeline");
     expect(router).not.toContain("dartsnut-display-mapping");
@@ -241,8 +254,16 @@ describe("deferred skill router", () => {
   it("readDeferredSkillMarkdown expands legacy dartsnut-skill", () => {
     const body = readDeferredSkillMarkdown(SKILLS_DIR, "dartsnut-skill");
     expect(body).toContain("legacy index");
+    expect(body).toContain("ACTIVE EVERY RESPONSE");
     expect(body).toContain("update_frame_buffer");
     expect(body).toContain("get_dart_hits");
+  });
+
+  it("readDeferredSkillMarkdown expands legacy design-console-smallform", () => {
+    const body = readDeferredSkillMarkdown(SKILLS_DIR, "design-console-smallform");
+    expect(body).toContain("Legacy alias");
+    expect(body).toContain("dartsnut-smallform-design");
+    expect(body).toContain("subject-grounded");
   });
 
   it("readDeferredSkillMarkdown returns conf-contract body", () => {

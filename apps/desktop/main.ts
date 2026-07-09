@@ -115,14 +115,24 @@ import {
 import {
   EMULATOR_IPC_CHANNELS,
   beginEmulatorSwitch,
+  buildEmulatorObservationFromFrame,
   handleEmulatorSwitchFrame,
   handleEmulatorSwitchState,
   type EmulatorCommand,
   type EmulatorFrame,
+  type EmulatorInputAction,
   type EmulatorLogEntry,
+  type EmulatorScenarioStep,
   type EmulatorStateSnapshot,
   type EmulatorSwitchGate,
 } from "@dartsnut/emulator-protocol";
+import {
+  encodeHardwareMockupPngBase64,
+  encodePanelPngsBase64,
+  encodeRgbPngBase64,
+  normalizeEmulatorInputAction,
+  summarizeScenarioRequest
+} from "./emulatorAgentTools";
 import { AssetManager } from "./assetManager";
 import { DeployMachineSession } from "./deployMachine";
 import { createCommunityClient, type CommunityClient } from "./communityClient";
@@ -457,39 +467,233 @@ function executeHostGetEmulatorLogsForAgent(args?: { max_lines?: number }): stri
   });
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function recentEmulatorLogs(maxLines?: number): EmulatorLogEntry[] {
+  const requested =
+    typeof maxLines === "number" && Number.isFinite(maxLines)
+      ? Math.min(EMULATOR_LOG_MAX_REQUEST, Math.max(1, Math.floor(maxLines)))
+      : EMULATOR_LOG_DEFAULT_TAIL;
+  return emulatorLogRing.slice(-requested);
+}
+
+function ensureBridgeReady(): { ok: true } | { ok: false; error: string } {
+  if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
+    startPythonBridge();
+  }
+  if (!bridgeProcess?.stdin || bridgeProcess.stdin.destroyed) {
+    return { ok: false, error: "Emulator bridge is not available." };
+  }
+  return { ok: true };
+}
+
+function sendBridgeCommand(command: EmulatorCommand): void {
+  const ready = ensureBridgeReady();
+  if (!ready.ok || !bridgeProcess?.stdin || bridgeProcess.stdin.destroyed) {
+    throw new Error(ready.ok ? "Emulator bridge is not available." : ready.error);
+  }
+  bridgeProcess.stdin.write(`${JSON.stringify({ command })}\n`);
+}
+
+async function waitForEmulatorFrame(timeoutMs: number, afterTimestampMs = 0): Promise<EmulatorFrame | null> {
+  const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
+  while (Date.now() <= deadline) {
+    if (latestEmulatorFrame && latestEmulatorFrame.timestampMs >= afterTimestampMs) {
+      return latestEmulatorFrame;
+    }
+    await sleep(25);
+  }
+  return latestEmulatorFrame && latestEmulatorFrame.timestampMs >= afterTimestampMs ? latestEmulatorFrame : null;
+}
+
+async function executeHostObserveEmulatorForAgent(args?: Record<string, unknown>): Promise<string> {
+  const waitMs =
+    typeof args?.wait_for_frame_ms === "number" && Number.isFinite(args.wait_for_frame_ms)
+      ? Math.min(10_000, Math.max(0, Math.floor(args.wait_for_frame_ms)))
+      : 1000;
+  const observeStartedAt = Date.now();
+  const freshFrame = waitMs > 0 ? await waitForEmulatorFrame(waitMs, observeStartedAt) : null;
+  const frame = freshFrame ?? latestEmulatorFrame;
+  if (!frame) {
+    return JSON.stringify({
+      ok: false,
+      error: "No emulator frame is available yet. Call reload_emulator with wait_for_frame_ms, then observe again.",
+      emulator: emulatorState,
+      logs: recentEmulatorLogs(typeof args?.max_log_lines === "number" ? args.max_log_lines : undefined)
+    });
+  }
+  const includePng = args?.include_png === true;
+  const includeHardwareMockup = includePng && args?.include_hardware_mockup === true;
+  const surfacePngBase64 = includePng ? encodeRgbPngBase64(frame) : undefined;
+  const panelPngBase64 = includePng ? encodePanelPngsBase64(frame) : undefined;
+  const hardwarePngBase64 = includeHardwareMockup ? encodeHardwareMockupPngBase64(frame) : undefined;
+  const observation = buildEmulatorObservationFromFrame({
+    frame,
+    state: { ...emulatorState },
+    logs: recentEmulatorLogs(typeof args?.max_log_lines === "number" ? args.max_log_lines : undefined),
+    previousSurfaceHash: previousAgentObservationSurfaceHash,
+    includePngBase64: includePng,
+    surfacePngBase64,
+    panelPngBase64,
+    hardwarePngBase64
+  });
+  if (observation.frame?.surfaceHash) {
+    previousAgentObservationSurfaceHash = observation.frame.surfaceHash;
+  }
+  return JSON.stringify(observation);
+}
+
+async function executeHostControlEmulatorInputForAgent(args?: Record<string, unknown>): Promise<string> {
+  try {
+    const normalized = normalizeEmulatorInputAction(args?.action, agentDartSlots);
+    const applied: unknown[] = [];
+    for (const command of normalized.commands) {
+      if (command.type === "delay") {
+        await sleep(command.ms);
+        applied.push(command);
+        continue;
+      }
+      sendBridgeCommand(command);
+      applied.push(command);
+      if (command.type === "clear_darts") {
+        agentDartSlots = Array.from({ length: 12 }, () => [-1, -1]);
+      } else if (command.type === "throw_dart") {
+        agentDartSlots[command.index] = [command.x, command.y];
+      } else if (command.type === "remove_dart_at") {
+        agentDartSlots = agentDartSlots.map((slot) =>
+          slot[0] === command.x && slot[1] === command.y ? [-1, -1] : slot
+        );
+      }
+    }
+    return JSON.stringify({ ok: true, applied, darts: agentDartSlots });
+  } catch (error) {
+    return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 /** Agent tool `reload_emulator`: sync bridge path, reload widget (Python re-reads conf.json), refresh deploy UI. */
-async function executeHostReloadEmulatorForAgent(): Promise<string> {
+async function executeHostReloadEmulatorForAgent(args?: {
+  params?: Record<string, unknown>;
+  clear_inputs?: boolean;
+  wait_for_frame_ms?: number;
+}): Promise<string> {
   if (!workspaceRoot) {
     return JSON.stringify({
       ok: false,
       error: "No workspace is selected — finish intake or pick a project folder first."
     });
   }
-  if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
-    startPythonBridge();
-  }
-  if (!bridgeProcess?.stdin || bridgeProcess.stdin.destroyed) {
-    return JSON.stringify({ ok: false, error: "Emulator bridge is not available." });
+  const ready = ensureBridgeReady();
+  if (!ready.ok) {
+    return JSON.stringify({ ok: false, error: ready.error });
   }
   const baseRoot = getEmulatorWorkspaceRoot();
   let selectedPath = path.isAbsolute(workspaceRoot) ? workspaceRoot : path.join(baseRoot, workspaceRoot);
   if (!isWithinDirectory(workspaceRoot, selectedPath)) {
     selectedPath = workspaceRoot;
   }
+  if (args?.clear_inputs) {
+    sendBridgeCommand({ type: "clear_darts" });
+    agentDartSlots = Array.from({ length: 12 }, () => [-1, -1]);
+    for (const button of ["A", "B", "UP", "DOWN", "LEFT", "RIGHT"] as const) {
+      sendBridgeCommand({ type: "set_button", button, pressed: false });
+    }
+  }
+  if (args?.params && typeof args.params === "object" && !Array.isArray(args.params)) {
+    sendBridgeCommand({ type: "set_params", params: args.params });
+  }
   const setPath: EmulatorCommand = { type: "set_path", path: selectedPath };
   const reload: EmulatorCommand = { type: "reload_widget" };
-  bridgeProcess.stdin.write(`${JSON.stringify({ command: setPath })}\n`);
+  sendBridgeCommand(setPath);
   clearEmulatorLogsForReload();
   beginPendingEmulatorSwitch(selectedPath);
-  bridgeProcess.stdin.write(`${JSON.stringify({ command: reload })}\n`);
+  const reloadStartedAt = Date.now();
+  sendBridgeCommand(reload);
   lastWidgetDir = selectedPath;
   writeEmulatorState();
   startDeployConfWatcher(workspaceRoot);
+  let observedFrame: EmulatorFrame | null = null;
+  if (typeof args?.wait_for_frame_ms === "number" && args.wait_for_frame_ms > 0) {
+    observedFrame = await waitForEmulatorFrame(Math.min(10_000, Math.floor(args.wait_for_frame_ms)), reloadStartedAt);
+  }
   return JSON.stringify({
     ok: true,
+    observedFrame: observedFrame
+      ? { width: observedFrame.width, height: observedFrame.height, timestampMs: observedFrame.timestampMs }
+      : null,
     message:
-      "Emulator path re-applied and reload_widget sent; conf.json re-read on the Python side and deploy eligibility refreshed. Call get_emulator_logs next to confirm the widget starts without errors."
+      "Emulator path re-applied and reload_widget sent; conf.json re-read on the Python side and deploy eligibility refreshed. Call observe_emulator and get_emulator_logs next to confirm the widget starts without errors and renders a nonblank frame."
   });
+}
+
+async function executeHostRunEmulatorScenarioForAgent(args?: Record<string, unknown>): Promise<string> {
+  const summary = summarizeScenarioRequest({
+    steps: Array.isArray(args?.steps) ? (args.steps as EmulatorScenarioStep[]) : [],
+    timeout_ms: typeof args?.timeout_ms === "number" ? args.timeout_ms : undefined
+  });
+  const startedAt = Date.now();
+  const trace: unknown[] = [];
+  let observations = 0;
+  const observeStepIndices = summary.steps
+    .map((step, index) => (step.type === "observe" ? index : -1))
+    .filter((index) => index >= 0)
+    .slice(0, summary.observationLimit);
+  const finalObserveStepIndex = observeStepIndices.length > 0 ? observeStepIndices[observeStepIndices.length - 1] : undefined;
+  for (let i = 0; i < summary.steps.length; i += 1) {
+    if (Date.now() - startedAt > summary.timeoutMs) {
+      return JSON.stringify({ ok: false, error: "Scenario timed out.", summary, trace });
+    }
+    const step = summary.steps[i] as EmulatorScenarioStep;
+    try {
+      if (step.type === "reload") {
+        const result = JSON.parse(await executeHostReloadEmulatorForAgent({
+          params: step.params,
+          clear_inputs: step.clear_inputs,
+          wait_for_frame_ms: step.wait_for_frame_ms
+        }));
+        trace.push({ step: i, type: step.type, result });
+      } else if (step.type === "wait_frame") {
+        const waitStartedAt = Date.now();
+        const frame = await waitForEmulatorFrame(Math.min(10_000, Math.max(0, step.timeout_ms ?? 1000)), waitStartedAt);
+        trace.push({ step: i, type: step.type, frame: frame ? { width: frame.width, height: frame.height, timestampMs: frame.timestampMs } : null });
+      } else if (step.type === "observe") {
+        if (observations >= summary.observationLimit) {
+          trace.push({ step: i, type: step.type, skipped: "observation_limit" });
+          continue;
+        }
+        const includePng = step.include_png === true && (observations === 0 || i === finalObserveStepIndex);
+        const result = JSON.parse(await executeHostObserveEmulatorForAgent({
+          include_png: includePng,
+          include_hardware_mockup: includePng,
+          wait_for_frame_ms: 1000,
+          max_log_lines: step.max_log_lines
+        }));
+        trace.push({ step: i, type: step.type, result });
+        observations += 1;
+      } else if (step.type === "input") {
+        const result = JSON.parse(await executeHostControlEmulatorInputForAgent({ action: step.action as EmulatorInputAction }));
+        trace.push({ step: i, type: step.type, result });
+      } else if (step.type === "delay") {
+        const ms = Math.min(5000, Math.max(0, Math.floor(step.ms)));
+        await sleep(ms);
+        trace.push({ step: i, type: step.type, ms });
+      } else if (step.type === "logs") {
+        trace.push({ step: i, type: step.type, result: JSON.parse(executeHostGetEmulatorLogsForAgent({ max_lines: step.max_lines })) });
+      } else {
+        trace.push({ step: i, type: "unknown", error: `Unsupported scenario step: ${(step as { type?: unknown }).type}` });
+      }
+    } catch (error) {
+      return JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        summary,
+        trace
+      });
+    }
+  }
+  return JSON.stringify({ ok: true, summary, trace });
 }
 
 /** Agent tool `check_python`: `python -m py_compile` syntax check (no execution) on workspace files. */
@@ -548,6 +752,9 @@ const emulatorState: EmulatorStateSnapshot = {
 };
 let emulatorSwitchGate: EmulatorSwitchGate | null = null;
 let pendingEmulatorPathForReload: string | null = null;
+let latestEmulatorFrame: EmulatorFrame | null = null;
+let previousAgentObservationSurfaceHash: string | null = null;
+let agentDartSlots: [number, number][] = Array.from({ length: 12 }, () => [-1, -1]);
 
 const proofStatePath = () => path.join(app.getPath("userData"), "first-run-proof.json");
 const tempWorkspaceRecordPath = () => path.join(app.getPath("userData"), "temp-workspace.json");
@@ -1981,6 +2188,9 @@ function sendBridgeCommandSafe(command: EmulatorCommand): void {
 function applyIdleEmulatorMainState(): void {
   emulatorSwitchGate = null;
   pendingEmulatorPathForReload = null;
+  latestEmulatorFrame = null;
+  previousAgentObservationSurfaceHash = null;
+  agentDartSlots = Array.from({ length: 12 }, () => [-1, -1]);
   emulatorState.widgetPath = null;
   emulatorState.widgetId = null;
   emulatorState.widgetType = null;
@@ -2044,6 +2254,7 @@ function beginPendingEmulatorSwitch(targetWidgetPath: string): void {
 }
 
 function emitEmulatorFrame(frame: EmulatorFrame) {
+  latestEmulatorFrame = frame;
   const gated = handleEmulatorSwitchFrame(emulatorSwitchGate, frame);
   emulatorSwitchGate = gated.gate;
   if (gated.state) {
@@ -2306,10 +2517,13 @@ async function buildSession(
     hostIntakeToolHandler: extras?.hostIntakeToolHandler,
     hostAskQuestionHandler: extras?.hostAskQuestionHandler,
     hostIntakeReadyToFinish: extras?.hostIntakeReadyToFinish,
-    hostReloadEmulatorHandler: () => executeHostReloadEmulatorForAgent(),
+    hostReloadEmulatorHandler: (args) => executeHostReloadEmulatorForAgent(args),
     hostGetEmulatorLogsHandler: (args) => Promise.resolve(executeHostGetEmulatorLogsForAgent(args)),
     hostCheckPythonHandler: (args) => Promise.resolve(executeHostCheckPythonForAgent(args)),
     hostMachineMcpHandler: (args) => executeMachineMcpForAgent(args),
+    hostObserveEmulatorHandler: (args) => executeHostObserveEmulatorForAgent(args),
+    hostControlEmulatorInputHandler: (args) => executeHostControlEmulatorInputForAgent(args),
+    hostRunEmulatorScenarioHandler: (args) => executeHostRunEmulatorScenarioForAgent(args),
     skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve,
     sessionPersistence: extras?.sessionPersistence,
     initialConversation: extras?.initialConversation,

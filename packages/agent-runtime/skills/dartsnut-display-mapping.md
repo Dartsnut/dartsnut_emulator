@@ -17,6 +17,13 @@ The **framebuffer** passed to `update_frame_buffer` is always **`128` wide × `1
 
 The secondary panel is **left-aligned** in the lower band of the image. Its hardware firmware address origin is `(129, 0)` in the machine's own coordinate space — that does **not** map to image `x`/`y` directly. Always use the image pixel ranges in the table above when drawing.
 
+After reload, call **`observe_emulator`** and inspect the `display.panels` data:
+
+- `main` should contain the expected primary content bounds/colors for the `128×128` area.
+- `secondary` should contain only lower-band score/status content for `128×160` surfaces.
+- `surface` hash and `changedSincePrevious` help confirm input or animation changed the display.
+- If `nonBlackPixelRatio` is near zero or bounds are `null`, the app is visually blank even when logs are clean.
+
 ### Main vs secondary content
 
 - Place gameplay and dart feedback on the main **`128×128`** area when using a full **`128×160`** buffer.
@@ -26,6 +33,7 @@ The secondary panel is **left-aligned** in the lower band of the image. Its hard
 
 - Render a Pillow **`Image`** **exactly** at the configured **`[width, height]`** and pass it through **`pydartsnut`** as usual.
 - **Do not** manually composite these into a **`128×160`** buffer — **machine firmware performs framebuffer merges** for these sizes.
+- Use **`observe_emulator`** to confirm the observed frame size exactly matches `conf.json` `size`.
 
 ## Dart hit targets (critical)
 

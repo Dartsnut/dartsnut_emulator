@@ -8,7 +8,7 @@ Technical constraints for workspace files. Load **`karpathy-guidelines`** for ed
 |------|------|
 | Root config / `conf.json` | `conf-contract` |
 | Runnable `main.py` / loop | `pydartsnut-core` + widget or game loop skill |
-| Layout / fonts on canvas | `dartsnut-display-mapping`, `widget-fonts` |
+| Layout / fonts on canvas | `dartsnut-display-mapping`, `dartsnut-smallform-design`, `widget-fonts` |
 | Game I/O | `pydartsnut-game-io` |
 | Art slots / manifest | `asset-pipeline` |
 
@@ -24,7 +24,7 @@ When `conf.json` and `main.py` already exist: use **`glob_files`** / **`grep_fil
 
 ## Verify
 
-Use **`check_python`** (fast syntax check, no run) after writing/editing Python, then **`reload_emulator`** then **`get_emulator_logs`** after material changes. Stop when logs are clean **and** the user's request is met — do not declare done after a partial skeleton unless that satisfies what they asked for.
+Use **`check_python`** (fast syntax check, no run) after writing/editing Python, then **`reload_emulator`**, **`observe_emulator`**, then **`get_emulator_logs`** after material changes. Stop when logs are clean, the observed frame is nonblank and matches the requested display/layout, **and** the user's request is met. For games, also run **`control_emulator_input`** or **`run_emulator_scenario`** to verify at least one dart/button interaction before final logs.
 
 ## Anti-duplication
 

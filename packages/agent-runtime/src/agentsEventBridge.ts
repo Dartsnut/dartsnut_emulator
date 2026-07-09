@@ -10,11 +10,13 @@ import {
   computeReplaceDiff,
   computeWriteDiff,
   emitToolStatusEvent,
+  extractLatestArgumentsObject,
   extractPathFromArgumentsJson,
   safeParseObject,
   toRelPath,
   type ToolStatusContext
 } from "./toolStatusHelpers";
+import { mergeToolCallDeltas, type StreamingToolCallAccumulator } from "./toolCallDeltaMerge";
 import { addTokenUsage, normalizeTokenUsage } from "./tokenUsage";
 
 export type AgentsStreamBridgeHooks = {
@@ -22,6 +24,7 @@ export type AgentsStreamBridgeHooks = {
   persistTranscript?: (kind: "user" | "assistant" | "tool_status" | "thinking", text: string) => void;
   onActiveAgentChange?: (agentName: string) => void;
   onTokenUsage?: (runUsage: AgentTokenUsage) => void;
+  filePreviewPacingMs?: number;
 };
 
 export type AgentsStreamBridgeResult = {
@@ -34,12 +37,6 @@ export type AgentsStreamBridgeResult = {
   filesWrittenThisTurn: number;
   toolCallCount: number;
   tokenUsage?: AgentTokenUsage;
-};
-
-type StreamingToolCallAccumulator = {
-  id: string;
-  name: string;
-  argumentsJson: string;
 };
 
 function readReasoningDelta(delta: unknown): string {
@@ -58,52 +55,39 @@ function readReasoningDelta(delta: unknown): string {
   return "";
 }
 
-function mergeToolCallDeltas(
-  accumulators: Map<number, StreamingToolCallAccumulator>,
-  deltas: NonNullable<ChatCompletionChunk["choices"]>[number]["delta"]["tool_calls"]
-): void {
-  if (!Array.isArray(deltas)) {
-    return;
-  }
-  for (let i = 0; i < deltas.length; i += 1) {
-    const delta = deltas[i];
-    if (!delta) {
-      continue;
-    }
-    const index = typeof delta.index === "number" ? delta.index : i;
-    const existing = accumulators.get(index) ?? { id: "", name: "", argumentsJson: "" };
-    if (typeof delta.id === "string" && delta.id.length > 0) {
-      existing.id = delta.id;
-    }
-    const fn = delta.function;
-    if (fn) {
-      if (typeof fn.name === "string" && fn.name.length > 0) {
-        existing.name = fn.name;
-      }
-      if (typeof fn.arguments === "string" && fn.arguments.length > 0) {
-        existing.argumentsJson += fn.arguments;
-      }
-    }
-    accumulators.set(index, existing);
-  }
-}
-
 function resolveStreamingToolCallId(acc: StreamingToolCallAccumulator, index: number): string {
   return acc.id.length > 0 ? acc.id : `call_${index}`;
 }
 
-function emitFileToolCallDelta(
+const WRITE_FILE_PREVIEW_MIN_LINES = 24;
+const WRITE_FILE_PREVIEW_MAX_INTERMEDIATE_EVENTS = 5;
+const DEFAULT_FILE_PREVIEW_PACING_MS = 18;
+
+function sleep(ms: number): Promise<void> {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+function countTextLines(text: string): number {
+  return text.length === 0 ? 0 : text.split(/\r?\n/).length;
+}
+
+function firstLines(text: string, lineCount: number): string {
+  return text.split(/\r?\n/).slice(0, lineCount).join("\n");
+}
+
+function emitFileToolCallDeltaEvent(
   callId: string,
   toolName: string,
   argumentsJson: string,
   emit: (event: AgentEvent) => void,
-  streamedFileToolCallIds: Set<string>
+  streamedFileToolCallIds: Set<string>,
+  pathOverride?: string
 ): void {
   if (!isFileMutationToolName(toolName)) {
     return;
   }
   streamedFileToolCallIds.add(callId);
-  const relPath = extractPathFromArgumentsJson(argumentsJson);
+  const relPath = pathOverride ?? extractPathFromArgumentsJson(argumentsJson);
   emit({
     type: "tool_call_delta",
     at: Date.now(),
@@ -114,7 +98,60 @@ function emitFileToolCallDelta(
   });
 }
 
-function handleChatCompletionsChunk(
+async function emitFileToolCallDelta(
+  callId: string,
+  toolName: string,
+  argumentsJson: string,
+  emit: (event: AgentEvent) => void,
+  state: {
+    streamedFileToolCallIds: Set<string>;
+    filePreviewLineCounts: Map<string, number>;
+    filePreviewPacingMs: number;
+  }
+): Promise<void> {
+  if (toolName !== "write_file") {
+    emitFileToolCallDeltaEvent(callId, toolName, argumentsJson, emit, state.streamedFileToolCallIds);
+    return;
+  }
+
+  const args = extractLatestArgumentsObject(
+    argumentsJson,
+    (candidate) => typeof candidate.path === "string" && typeof candidate.content === "string"
+  );
+  const path = toRelPath(args?.path);
+  const content = typeof args?.content === "string" ? args.content : "";
+  const targetLines = countTextLines(content);
+  const previousLines = state.filePreviewLineCounts.get(callId) ?? 0;
+  const shouldPreview =
+    args &&
+    path &&
+    targetLines >= WRITE_FILE_PREVIEW_MIN_LINES &&
+    targetLines - previousLines > WRITE_FILE_PREVIEW_MIN_LINES;
+
+  if (shouldPreview) {
+    const step = Math.max(
+      1,
+      Math.ceil((targetLines - previousLines) / (WRITE_FILE_PREVIEW_MAX_INTERMEDIATE_EVENTS + 1))
+    );
+    const previewCounts: number[] = [];
+    for (let lines = previousLines + step; lines < targetLines; lines += step) {
+      previewCounts.push(lines);
+    }
+    for (const lines of previewCounts.slice(0, WRITE_FILE_PREVIEW_MAX_INTERMEDIATE_EVENTS)) {
+      const previewArgs = JSON.stringify({ ...args, content: firstLines(content, lines) });
+      emitFileToolCallDeltaEvent(callId, toolName, previewArgs, emit, state.streamedFileToolCallIds, path);
+      state.filePreviewLineCounts.set(callId, lines);
+      await sleep(state.filePreviewPacingMs);
+    }
+  }
+
+  emitFileToolCallDeltaEvent(callId, toolName, argumentsJson, emit, state.streamedFileToolCallIds, path);
+  if (targetLines > 0) {
+    state.filePreviewLineCounts.set(callId, targetLines);
+  }
+}
+
+async function handleChatCompletionsChunk(
   chunk: ChatCompletionChunk,
   state: {
     reasoningId: string;
@@ -122,12 +159,15 @@ function handleChatCompletionsChunk(
     stepReasoning: string;
     stepText: string;
     toolCallAccumulators: Map<number, StreamingToolCallAccumulator>;
+    activeModelResponseId: string;
     streamedFileToolCallIds: Set<string>;
+    filePreviewLineCounts: Map<string, number>;
+    filePreviewPacingMs: number;
     tokenUsage: AgentTokenUsage | null;
     onTokenUsage?: (runUsage: AgentTokenUsage) => void;
   },
   emit: (event: AgentEvent) => void
-): void {
+): Promise<void> {
   const chunkUsage = normalizeTokenUsage((chunk as { usage?: unknown }).usage);
   if (chunkUsage) {
     state.tokenUsage = state.tokenUsage ? addTokenUsage(state.tokenUsage, chunkUsage) : chunkUsage;
@@ -136,6 +176,13 @@ function handleChatCompletionsChunk(
   const delta = chunk.choices?.[0]?.delta;
   if (!delta) {
     return;
+  }
+  const chunkId = typeof chunk.id === "string" && chunk.id.length > 0 ? chunk.id : "";
+  if (chunkId && state.activeModelResponseId && state.activeModelResponseId !== chunkId) {
+    state.toolCallAccumulators.clear();
+  }
+  if (chunkId) {
+    state.activeModelResponseId = chunkId;
   }
   const contentDelta = delta.content ?? "";
   if (contentDelta) {
@@ -156,12 +203,16 @@ function handleChatCompletionsChunk(
   if (!Array.isArray(delta.tool_calls)) {
     return;
   }
-  mergeToolCallDeltas(state.toolCallAccumulators, delta.tool_calls);
-  for (const [index, acc] of state.toolCallAccumulators) {
+  const changedIndices = mergeToolCallDeltas(state.toolCallAccumulators, delta.tool_calls);
+  for (const index of changedIndices) {
+    const acc = state.toolCallAccumulators.get(index);
+    if (!acc) {
+      continue;
+    }
     if (!isFileMutationToolName(acc.name)) {
       continue;
     }
-    emitFileToolCallDelta(resolveStreamingToolCallId(acc, index), acc.name, acc.argumentsJson, emit, state.streamedFileToolCallIds);
+    await emitFileToolCallDelta(resolveStreamingToolCallId(acc, index), acc.name, acc.argumentsJson, emit, state);
   }
 }
 
@@ -173,7 +224,25 @@ function toolContextFromArgs(
 ): ToolStatusContext {
   let context: ToolStatusContext = { callId };
   try {
-    const args = safeParseObject(JSON.parse(argsJson));
+    const args = extractLatestArgumentsObject(argsJson, (candidate) => {
+      if (toolName === "write_file") {
+        return typeof candidate.path === "string" && typeof candidate.content === "string";
+      }
+      if (toolName === "replace_in_file") {
+        return (
+          typeof candidate.path === "string" &&
+          typeof candidate.find === "string" &&
+          typeof candidate.replace === "string"
+        );
+      }
+      if (toolName === "copy_asset_file") {
+        return typeof candidate.path === "string" || typeof candidate.source === "string";
+      }
+      if (toolName === "get_dartsnut_skill") {
+        return typeof candidate.skill_id === "string";
+      }
+      return true;
+    }) ?? safeParseObject(JSON.parse(argsJson));
     const pathArg = toRelPath(args.path);
     const sourceArg = toRelPath(args.source);
     const skillIdArg = toRelPath(args.skill_id);
@@ -205,7 +274,10 @@ export async function mapAgentsStreamToAgentEvents(
     stepReasoning: "",
     stepText: "",
     toolCallAccumulators: new Map<number, StreamingToolCallAccumulator>(),
+    activeModelResponseId: "",
     streamedFileToolCallIds: new Set<string>(),
+    filePreviewLineCounts: new Map<string, number>(),
+    filePreviewPacingMs: hooks.filePreviewPacingMs ?? DEFAULT_FILE_PREVIEW_PACING_MS,
     tokenUsage: null as AgentTokenUsage | null,
     onTokenUsage: hooks.onTokenUsage
   };
@@ -218,7 +290,7 @@ export async function mapAgentsStreamToAgentEvents(
 
   for await (const event of stream as AsyncIterable<RunStreamEvent>) {
     if (event.type === "raw_model_stream_event" && isOpenAIChatCompletionsRawModelStreamEvent(event)) {
-      handleChatCompletionsChunk(event.data.event, state, emit);
+      await handleChatCompletionsChunk(event.data.event, state, emit);
       continue;
     }
     if (event.type === "agent_updated_stream_event") {
@@ -260,7 +332,7 @@ export async function mapAgentsStreamToAgentEvents(
           const context = toolContextFromArgs(name, argsJson, callId, hooks);
           lastToolContext = context;
           if (isFileMutationToolName(name) && !state.streamedFileToolCallIds.has(callId)) {
-            emitFileToolCallDelta(callId, name, argsJson, emit, state.streamedFileToolCallIds);
+            await emitFileToolCallDelta(callId, name, argsJson, emit, state);
           }
           const skipCallStatus =
             isFileMutationToolName(name) && state.streamedFileToolCallIds.has(callId);

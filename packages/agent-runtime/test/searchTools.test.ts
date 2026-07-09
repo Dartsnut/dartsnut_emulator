@@ -193,4 +193,50 @@ describe("search + file tools", () => {
     expect(res.ok).toBe(true);
     expect(received?.paths).toEqual(["main.py"]);
   });
+
+  it("emulator autonomy tools delegate to host handlers with structured arguments", async () => {
+    const workspace = await seedWorkspace();
+    const calls: Array<{ name: string; args: unknown }> = [];
+    const tools = buildAgentTools({
+      workspacePolicy: new WorkspacePolicy(workspace),
+      profile: "full",
+      hostReloadEmulatorHandler: async (args) => {
+        calls.push({ name: "reload", args });
+        return JSON.stringify({ ok: true, reloaded: true });
+      },
+      hostObserveEmulatorHandler: async (args) => {
+        calls.push({ name: "observe", args });
+        return JSON.stringify({ ok: true, frame: { width: 128, height: 160, surfaceHash: "h" } });
+      },
+      hostControlEmulatorInputHandler: async (args) => {
+        calls.push({ name: "input", args });
+        return JSON.stringify({ ok: true, applied: true });
+      },
+      hostRunEmulatorScenarioHandler: async (args) => {
+        calls.push({ name: "scenario", args });
+        return JSON.stringify({ ok: true, trace: [] });
+      },
+    });
+
+    await exec(findTool(tools, "reload_emulator"), {
+      params: { mode: "demo" },
+      clear_inputs: true,
+      wait_for_frame_ms: 500,
+    });
+    await exec(findTool(tools, "observe_emulator"), { include_png: true, max_log_lines: 12 });
+    await exec(findTool(tools, "control_emulator_input"), {
+      action: { type: "tap_button", button: "A", duration_ms: 25 },
+    });
+    await exec(findTool(tools, "run_emulator_scenario"), {
+      steps: [{ type: "observe", include_png: false }],
+      timeout_ms: 1000,
+    });
+
+    expect(calls).toEqual([
+      { name: "reload", args: { params: { mode: "demo" }, clear_inputs: true, wait_for_frame_ms: 500 } },
+      { name: "observe", args: { include_png: true, max_log_lines: 12 } },
+      { name: "input", args: { action: { type: "tap_button", button: "A", duration_ms: 25 } } },
+      { name: "scenario", args: { steps: [{ type: "observe", include_png: false }], timeout_ms: 1000 } },
+    ]);
+  });
 });

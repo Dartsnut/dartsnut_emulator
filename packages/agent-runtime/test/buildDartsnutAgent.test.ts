@@ -43,6 +43,9 @@ describe("buildDartsnutAgent", () => {
     expect(toolNames).toContain("grep_files");
     expect(toolNames).toContain("glob_files");
     expect(toolNames).toContain("check_python");
+    expect(toolNames).toContain("observe_emulator");
+    expect(toolNames).toContain("control_emulator_input");
+    expect(toolNames).toContain("run_emulator_scenario");
     expect(toolNames).toContain("dartsnut_project_intake");
   });
 
@@ -77,5 +80,32 @@ describe("buildDartsnutAgent", () => {
     expect(agent.instructions).toContain("routing");
     expect(agent.instructions).toContain("tool choice");
     expect(agent.instructions).toContain("intake");
+  });
+
+  it("requires visual observation and input scenarios during emulator verification", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const ctx = makeContext(workspace);
+    const agent = buildDartsnutAgent({
+      model: "gpt-4.1-mini",
+      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
+      contextSnapshot: ctx,
+      getRunContext: () => ctx
+    });
+    expect(agent.instructions).toContain("observe_emulator");
+    expect(agent.instructions).toContain("run_emulator_scenario");
+    expect(agent.instructions).toContain("nonblank");
+  });
+
+  it("requires caveman communication mode", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const ctx = makeContext(workspace);
+    const agent = buildDartsnutAgent({
+      model: "gpt-4.1-mini",
+      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
+      contextSnapshot: ctx,
+      getRunContext: () => ctx
+    });
+    expect(agent.instructions).toContain("Always use **`caveman`** communication mode");
+    expect(agent.instructions).toContain("Load **`caveman`** first");
   });
 });

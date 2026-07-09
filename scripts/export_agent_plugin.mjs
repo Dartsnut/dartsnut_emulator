@@ -16,6 +16,7 @@ const codexMarketplacePath = path.join(repoRoot, ".agents", "plugins", "marketpl
 const claudeMarketplacePath = path.join(repoRoot, ".claude-plugin", "marketplace.json");
 
 const exportedSkills = [
+  "caveman",
   "karpathy-guidelines",
   "creator-incremental",
   "conf-contract",
@@ -25,12 +26,15 @@ const exportedSkills = [
   "widget-fonts",
   "game-dart-colors",
   "dartsnut-display-mapping",
+  "dartsnut-smallform-design",
   "design-console-smallform",
   "asset-pipeline",
   "dartsnut-skill"
 ];
 
 const skillDescriptions = {
+  "caveman":
+    "Ultra-compressed communication mode for terse, accurate Dartsnut Agent responses.",
   "karpathy-guidelines":
     "Behavioral guidelines for surgical coding changes, verification, assumptions, and avoiding overcomplicated edits.",
   "creator-incremental":
@@ -49,8 +53,10 @@ const skillDescriptions = {
     "Dartsnut game dart slot color mapping based on dart_index modulo four.",
   "dartsnut-display-mapping":
     "Dartsnut display and framebuffer mapping rules for panels, physical screens, layout, clipping, and fonts.",
+  "dartsnut-smallform-design":
+    "Dartsnut small-form visual design guidance for tiny games and widgets.",
   "design-console-smallform":
-    "Pixel-perfect compact UI guidance for console-style Dartsnut games and widgets.",
+    "Legacy compact-console design alias that routes to Dartsnut small-form design guidance.",
   "asset-pipeline":
     "Dartsnut asset manifest, loader-helper, placeholder, and apply-mode workflow for art-bearing entities.",
   "dartsnut-skill":

@@ -1,4 +1,5 @@
 import { POST_INTAKE_BUILD_REQUEST_PREFIX } from "./postIntakeCreatorPrompt";
+import type { ChatMediaAttachment } from "./chatMediaAttachments";
 import type { UserLocale } from "./userLocale";
 
 export const IPCChannels = {
@@ -156,6 +157,8 @@ export type AgentSessionIntent = "auto" | "resume" | "fresh";
 
 export interface PromptRequest {
   prompt: string;
+  /** Media files dropped onto the chat composer. Main copies these into the workspace before the agent sees them. */
+  chatMediaAttachments?: ChatMediaAttachment[];
   projectType?: ProjectType;
   widgetSize?: WidgetSize;
   workspacePath?: string;

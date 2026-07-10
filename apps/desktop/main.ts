@@ -77,6 +77,7 @@ import {
   type CommunityVersionSummary,
   type CommunityWorkspaceDefaults,
   type AgentSessionWorkspaceSummary,
+  buildPromptWithChatMediaAttachments,
   resolveSessionUserLocale,
   type UserLocale,
   buildCreationIntakeUserPrompt,
@@ -134,6 +135,7 @@ import {
   normalizeEmulatorInputAction,
   summarizeScenarioRequest
 } from "./emulatorAgentTools";
+import { copyEmulatorStateSnapshot } from "./emulatorState";
 import { AssetManager } from "./assetManager";
 import { DeployMachineSession } from "./deployMachine";
 import { createCommunityClient, type CommunityClient } from "./communityClient";
@@ -749,6 +751,7 @@ const emulatorState: EmulatorStateSnapshot = {
   running: false,
   fps: 0,
   status: "Idle",
+  audioMuted: false,
   lastCapturePath: null,
 };
 let emulatorSwitchGate: EmulatorSwitchGate | null = null;
@@ -2227,14 +2230,7 @@ function emitEmulatorState() {
 }
 
 function applyEmulatorStateSnapshot(nextState: EmulatorStateSnapshot): void {
-  emulatorState.widgetPath = nextState.widgetPath;
-  emulatorState.widgetId = nextState.widgetId;
-  emulatorState.widgetType = nextState.widgetType;
-  emulatorState.running = nextState.running;
-  emulatorState.fps = nextState.fps;
-  emulatorState.status = nextState.status;
-  emulatorState.lastError = nextState.lastError;
-  emulatorState.lastCapturePath = nextState.lastCapturePath;
+  copyEmulatorStateSnapshot(emulatorState, nextState);
 }
 
 function beginPendingEmulatorSwitch(targetWidgetPath: string): void {
@@ -2383,6 +2379,7 @@ function spawnBridgeAfterStop() {
           running: typeof payload.running === "boolean" ? payload.running : emulatorState.running,
           fps: typeof payload.fps === "number" ? payload.fps : emulatorState.fps,
           status: typeof payload.status === "string" ? payload.status : emulatorState.status,
+          audioMuted: typeof payload.audioMuted === "boolean" ? payload.audioMuted : emulatorState.audioMuted,
           lastError:
             typeof payload.lastError !== "undefined"
               ? payload.lastError
@@ -2460,6 +2457,7 @@ async function buildSession(
   extras?: {
     workspacePath?: string;
     completionTools?: typeof AGENT_TOOL_SCHEMAS;
+    chatMediaAttachments?: PromptRequest["chatMediaAttachments"];
     hostIntakeToolHandler?: (args: Record<string, unknown>) => Promise<string>;
     hostAskQuestionHandler?: (args: Record<string, unknown>) => Promise<string>;
     hostIntakeReadyToFinish?: () => boolean;
@@ -2505,7 +2503,8 @@ async function buildSession(
     skillLibrary,
     preferredUserLocale,
     assetRoots: {
-      widgetFonts: path.join(repoRoot, "assets", "fonts", "widgets")
+      widgetFonts: path.join(repoRoot, "assets", "fonts", "widgets"),
+      chatAttachments: extras?.chatMediaAttachments
     },
     completionTools: extras?.completionTools,
     hostIntakeToolHandler: extras?.hostIntakeToolHandler,
@@ -3793,46 +3792,51 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     agentEventEmitter = emitAgent;
     let sessionRouting: SendPromptResponse["sessionRouting"];
     const hostState: IntakeToolState = {};
-    const lastIntakeUserPrompt = req.prompt;
+    const effectiveWorkspacePath =
+      typeof req.workspacePath === "string" && req.workspacePath.length > 0 ? req.workspacePath : workspaceRoot;
+    const request: PromptRequest = {
+      ...req,
+      prompt: buildPromptWithChatMediaAttachments(req.prompt, req.chatMediaAttachments ?? [])
+    };
+    const lastIntakeUserPrompt = request.prompt;
     const sharedIntakeHandler = async (args: Record<string, unknown>) =>
       intakeHostToolExecute(args, hostState, lastIntakeUserPrompt);
 
-    const intent = req.agentSession?.intent ?? "auto";
+    const intent = request.agentSession?.intent ?? "auto";
     const persistence = buildWorkspaceSessionPersistence(workspaceRoot);
     if (intent === "fresh" && persistence) {
       persistence.archiveOrResetSession("renderer-fresh");
     }
     const initialConversation =
       persistence && intent !== "fresh" ? persistence.readConversation() : [];
-    const effectiveWorkspacePath =
-      typeof req.workspacePath === "string" && req.workspacePath.length > 0 ? req.workspacePath : workspaceRoot;
     const hintedRouting =
       effectiveWorkspacePath && fs.existsSync(effectiveWorkspacePath)
         ? readWorkspaceCreatorHints(effectiveWorkspacePath)
         : null;
     const routedTemplateMode =
-      req.templateMode === "game-creator" || req.templateMode === "widget-creator"
-        ? req.templateMode
+      request.templateMode === "game-creator" || request.templateMode === "widget-creator"
+        ? request.templateMode
         : hintedRouting?.templateMode;
     const routedProjectType =
-      req.projectType ??
+      request.projectType ??
       hintedRouting?.projectType ??
       (routedTemplateMode === "widget-creator"
         ? "widget"
         : routedTemplateMode === "game-creator"
           ? "game"
           : undefined);
-    const routedWidgetSize = req.widgetSize ?? hintedRouting?.widgetSize;
-    const preferredUserLocale = resolvePreferredUserLocaleForSession(req.prompt, persistence);
-    const session = await buildSession(req.templateMode, {
+    const routedWidgetSize = request.widgetSize ?? hintedRouting?.widgetSize;
+    const preferredUserLocale = resolvePreferredUserLocaleForSession(request.prompt, persistence);
+    const session = await buildSession(request.templateMode, {
       completionTools: AGENT_TOOL_SCHEMAS,
+      chatMediaAttachments: request.chatMediaAttachments,
       hostIntakeToolHandler: sharedIntakeHandler,
       hostAskQuestionHandler: (args) => askQuestionHostExecute(args, hostState, preferredUserLocale),
       hostIntakeReadyToFinish: () => isIntakeStateReady(hostState),
       sessionPersistence: persistence,
       initialConversation,
       preferredUserLocale,
-      latestUserTextForLocale: req.prompt,
+      latestUserTextForLocale: request.prompt,
       intakeState: hostState,
       projectType: routedProjectType ?? hintedRouting?.projectType,
       widgetSize: routedWidgetSize ?? hintedRouting?.widgetSize,
@@ -3847,9 +3851,9 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         ...(routedWidgetSize ? { widgetSize: routedWidgetSize } : {})
       };
     }
-    const prompt = buildRoutedPrompt(req, hostState);
+    const prompt = buildRoutedPrompt(request, hostState);
     terminalAgentLifecycleLog("[agent] runPrompt start", { promptChars: prompt.length });
-    await session.runPrompt(prompt, emitAgent, runAbort.signal, { userPrompt: req.prompt });
+    await session.runPrompt(prompt, emitAgent, runAbort.signal, { userPrompt: request.prompt });
 
     if (!firstRunComplete) {
       writeProofState(true);

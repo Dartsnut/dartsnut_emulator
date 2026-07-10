@@ -24,6 +24,7 @@ describe("buildAgentTools profiles", () => {
       "read_file",
       "write_file",
       "replace_in_file",
+      "copy_chat_attachment",
       "get_dartsnut_skill",
       "reload_emulator",
       "get_emulator_logs",
@@ -50,6 +51,7 @@ describe("buildAgentTools profiles", () => {
     expect(names).toContain("control_emulator_input");
     expect(names).toContain("run_emulator_scenario");
     expect(names).not.toContain("copy_asset_file");
+    expect(names).not.toContain("copy_chat_attachment");
     expect(names).not.toContain("dartsnut_project_intake");
     expect(names).not.toContain("dartsnut_ask_question");
     expect(names).not.toContain("dartsnut_machine_mcp");

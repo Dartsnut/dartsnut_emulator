@@ -1,4 +1,18 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  memo,
+  Suspense,
+  type CSSProperties,
+  type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import {
   type AgentEvent,
   type AgentSessionTokenUsage,
@@ -22,7 +36,10 @@ import {
   type CommunitySessionInfo,
   type CommunitySubmitProgress,
   type UserLocale,
-  getIntakeCopy
+  type ChatMediaAttachment,
+  getIntakeCopy,
+  inferChatMediaAttachmentKind,
+  mergeChatMediaAttachments
 } from "@dartsnut/shared-ipc";
 import { AskQuestionCard } from "./AskQuestionCard";
 import { AssetManagerPanel } from "./AssetManagerPanel";
@@ -48,6 +65,14 @@ import {
 import { ThemeSwitcherIcon } from "./ThemeSwitcher";
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
+import {
+  clampChatPaneWidth,
+  DEFAULT_CHAT_PANE_WIDTH,
+  maxChatPaneWidthForViewport,
+  MIN_CHAT_PANE_WIDTH,
+  MIN_EMULATOR_PANE_WIDTH,
+  nextChatPaneWidthFromDrag
+} from "./splitPaneSizing";
 
 /** Same order as `WIDGET_DISPLAY_SIZES` in `@dartsnut/shared-ipc` — defined here because Vite/Rollup does not resolve that value through the package’s compiled CJS `export *` shim. */
 const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
@@ -83,6 +108,7 @@ type UpdatePromptState = AppUpdateStatus & {
 };
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
+const DEPLOY_PANE_RESERVED_WIDTH_PX = 360;
 /** Keep in sync with composer textarea `max-h-[200px]` */
 const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 /**
@@ -92,6 +118,7 @@ const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 const COMPOSER_PROMPT_MULTILINE_EPSILON_PX = 1;
 const GREETING_TEXT =
   "What are we making today? Share your idea and I'll help turn it into a Dartsnut widget or game.";
+const CHAT_ATTACHMENT_ERROR_TIMEOUT_MS = 3500;
 
 const EMPTY_USER_DEFINE: UserDefineProviderSettings = {
   baseUrl: "",
@@ -104,6 +131,13 @@ const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
   custom: EMPTY_USER_DEFINE,
   userDefine: EMPTY_USER_DEFINE
 };
+
+function createChatMediaAttachmentId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `chat-${crypto.randomUUID()}`;
+  }
+  return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 const chromeIconBtnClass = "ui-chrome-btn";
 
@@ -544,6 +578,9 @@ export function App() {
     { id: "greeting-initial", role: "agent", text: GREETING_TEXT }
   ]);
   const [prompt, setPrompt] = useState("");
+  const [chatMediaAttachments, setChatMediaAttachments] = useState<ChatMediaAttachment[]>([]);
+  const [chatAttachmentError, setChatAttachmentError] = useState<string | null>(null);
+  const [composerDragActive, setComposerDragActive] = useState(false);
   const [sending, setSending] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [pythonRuntimeStatus, setPythonRuntimeStatus] = useState<string | null>(null);
@@ -615,6 +652,7 @@ export function App() {
     ok: false,
     reason: "no_workspace"
   });
+  const deployEligible = deployEligibility.ok;
   const [widgetParamsText, setWidgetParamsText] = useState("{}");
   const [widgetParamsError, setWidgetParamsError] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeId>(() => resolveThemeFromEnvironment());
@@ -636,8 +674,103 @@ export function App() {
     message: "Preparing submission..."
   });
   const [appUpdate, setAppUpdate] = useState<UpdatePromptState | null>(null);
+  const [chatPaneWidth, setChatPaneWidth] = useState(DEFAULT_CHAT_PANE_WIDTH);
+  const [chatPaneResizing, setChatPaneResizing] = useState(false);
+  const chatPaneResizeDragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startWidth: number;
+  } | null>(null);
+
+  const composerHasContent = prompt.trim().length > 0 || chatMediaAttachments.length > 0;
 
   const api = window.dartsnutApi;
+
+  const splitPaneViewportWidth = useCallback(() => {
+    const rawWidth = typeof window === "undefined" ? 1320 : window.innerWidth;
+    return rawWidth - (deployEligible ? DEPLOY_PANE_RESERVED_WIDTH_PX : 0);
+  }, [deployEligible]);
+
+  const mainGridTemplateColumns = useMemo(() => {
+    const leftColumn = `${chatPaneWidth}px`;
+    const emulatorColumn = `minmax(${MIN_EMULATOR_PANE_WIDTH}px,1fr)`;
+    return deployEligible
+      ? `${leftColumn} ${emulatorColumn} minmax(360px,420px)`
+      : `${leftColumn} ${emulatorColumn}`;
+  }, [chatPaneWidth, deployEligible]);
+
+  const mainGridStyle = useMemo(
+    () => ({
+      "--app-main-grid-cols": mainGridTemplateColumns
+    }) as CSSProperties,
+    [mainGridTemplateColumns]
+  );
+  const chatPaneResizeMax = maxChatPaneWidthForViewport(splitPaneViewportWidth());
+
+  const finishChatPaneResize = useCallback((target?: Element) => {
+    const activeDrag = chatPaneResizeDragRef.current;
+    if (activeDrag && target instanceof HTMLElement && target.hasPointerCapture(activeDrag.pointerId)) {
+      target.releasePointerCapture(activeDrag.pointerId);
+    }
+    chatPaneResizeDragRef.current = null;
+    setChatPaneResizing(false);
+  }, []);
+
+  const handleChatPaneResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    chatPaneResizeDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startWidth: chatPaneWidth
+    };
+    setChatPaneResizing(true);
+    event.preventDefault();
+  }, [chatPaneWidth]);
+
+  const handleChatPaneResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const activeDrag = chatPaneResizeDragRef.current;
+    if (!activeDrag || activeDrag.pointerId !== event.pointerId) {
+      return;
+    }
+    setChatPaneWidth(nextChatPaneWidthFromDrag({
+      startClientX: activeDrag.startClientX,
+      currentClientX: event.clientX,
+      startWidth: activeDrag.startWidth,
+      viewportWidth: splitPaneViewportWidth()
+    }));
+  }, [splitPaneViewportWidth]);
+
+  const handleChatPaneResizePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (chatPaneResizeDragRef.current?.pointerId === event.pointerId) {
+      finishChatPaneResize(event.currentTarget);
+    }
+  }, [finishChatPaneResize]);
+
+  const handleChatPaneResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 80 : 24;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setChatPaneWidth((current) => clampChatPaneWidth(current - step, splitPaneViewportWidth()));
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setChatPaneWidth((current) => clampChatPaneWidth(current + step, splitPaneViewportWidth()));
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      setChatPaneWidth(clampChatPaneWidth(MIN_CHAT_PANE_WIDTH, splitPaneViewportWidth()));
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      setChatPaneWidth(maxChatPaneWidthForViewport(splitPaneViewportWidth()));
+    }
+  }, [splitPaneViewportWidth]);
 
   const handleCommunitySubmitProgress = useCallback((progress: CommunitySubmitProgress | null) => {
     if (!progress) {
@@ -953,12 +1086,14 @@ export function App() {
   useEffect(() => {
     const onResize = () => {
       syncComposerPromptHeight();
+      setChatPaneWidth((current) => clampChatPaneWidth(current, splitPaneViewportWidth()));
     };
     window.addEventListener("resize", onResize);
+    onResize();
     return () => {
       window.removeEventListener("resize", onResize);
     };
-  }, []);
+  }, [splitPaneViewportWidth]);
 
   useEffect(() => {
     scrollTimelineToBottom();
@@ -1340,7 +1475,6 @@ export function App() {
     };
   }, [api, bootstrap?.workspaceRoot]);
 
-  const deployEligible = deployEligibility.ok;
   const deployPanelShowsWidgetParams = deployEligible && deployEligibility.projectType === "widget";
   const communityWorkspaceRefreshKey = [
     bootstrap?.workspaceRoot ?? "",
@@ -1467,6 +1601,14 @@ export function App() {
     });
   }, [api]);
 
+  useEffect(() => {
+    if (!chatAttachmentError) {
+      return;
+    }
+    const timer = window.setTimeout(() => setChatAttachmentError(null), CHAT_ATTACHMENT_ERROR_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [chatAttachmentError]);
+
   function resetChatSessionUi() {
     discardAgentEventsRef.current = true;
     clearActiveCoalescedStreamEntries();
@@ -1480,6 +1622,9 @@ export function App() {
     setWidgetSizePicker({ visible: false, sizes: [], locale: null });
     setProjectTypePicker({ visible: false, types: [], locale: null });
     setPrompt("");
+    setChatMediaAttachments([]);
+    setChatAttachmentError(null);
+    setComposerDragActive(false);
     setRuntimeError(null);
     setEntries([{ id: `greeting-${Date.now()}`, role: "agent", text: GREETING_TEXT }]);
   }
@@ -1703,8 +1848,65 @@ export function App() {
     }
   }
 
+  function resolveChatMediaAttachments(fileList: FileList): { accepted: ChatMediaAttachment[]; rejected: number } {
+    const files = Array.from(fileList);
+    const accepted: ChatMediaAttachment[] = [];
+    let rejected = 0;
+    for (const file of files) {
+      const filePath = api?.assets?.getPathForFile(file) ?? "";
+      const displayName = file.name || filePath.split(/[\\/]/).pop() || "media file";
+      const kind = inferChatMediaAttachmentKind(file.type, displayName);
+      if (!filePath || !kind) {
+        rejected += 1;
+        continue;
+      }
+      accepted.push({
+        id: createChatMediaAttachmentId(),
+        path: filePath,
+        name: displayName,
+        mimeType: file.type,
+        kind,
+        size: file.size
+      });
+    }
+    return { accepted, rejected };
+  }
+
+  function handleComposerDragOver(event: DragEvent<HTMLDivElement>) {
+    if (chatDisabled || !event.dataTransfer.types.includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setComposerDragActive(true);
+  }
+
+  function handleComposerDragLeave(event: DragEvent<HTMLDivElement>) {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+    setComposerDragActive(false);
+  }
+
+  function handleComposerDrop(event: DragEvent<HTMLDivElement>) {
+    if (chatDisabled) {
+      return;
+    }
+    event.preventDefault();
+    setComposerDragActive(false);
+    const { accepted, rejected } = resolveChatMediaAttachments(event.dataTransfer.files);
+    if (accepted.length > 0) {
+      setChatMediaAttachments((prev) => mergeChatMediaAttachments(prev, accepted));
+      setChatAttachmentError(null);
+    }
+    if (rejected > 0) {
+      setChatAttachmentError("Drop image, audio, or video files from your computer.");
+    }
+  }
+
   async function handleSend() {
-    if (!prompt.trim() || chatDisabled) {
+    if (!composerHasContent || chatDisabled) {
       return;
     }
     if (bootstrap?.providerStatus !== "ready") {
@@ -1712,12 +1914,22 @@ export function App() {
       setScreen("settings");
       return;
     }
-    const current = prompt.trim();
+    const visiblePrompt = prompt.trim();
+    const attachments = chatMediaAttachments;
+    const visibleUserText = attachments.length > 0
+      ? [
+        visiblePrompt || "Add the attached media files into the current game/widget.",
+        "",
+        `Attached: ${attachments.map((attachment) => attachment.name).join(", ")}`
+      ].join("\n")
+      : visiblePrompt;
     setPrompt("");
-    setEntries((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", text: current }]);
+    setChatMediaAttachments([]);
+    setEntries((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", text: visibleUserText }]);
 
     await submitPrompt({
-      prompt: current,
+      prompt: visiblePrompt,
+      chatMediaAttachments: attachments,
       workspacePath: bootstrap?.workspaceRoot ?? undefined,
       templateMode: bootstrap?.needsCreationIntake ? undefined : sessionTemplateMode ?? undefined,
       widgetSize: bootstrap?.needsCreationIntake ? undefined : sessionWidgetSize ?? undefined,
@@ -1745,13 +1957,13 @@ export function App() {
     <main
       className={cn(
         "app-shell grid h-full w-full items-stretch overflow-visible pt-0",
-        deployEligible
-          ? "grid-cols-[minmax(520px,700px)_minmax(420px,1fr)_minmax(360px,420px)]"
-          : "grid-cols-[minmax(620px,760px)_1fr]",
+        "grid-cols-[var(--app-main-grid-cols)]",
         "grid-rows-[auto_minmax(0,1fr)]",
         "pr-[var(--window-control-inset-right)] pb-[var(--window-control-inset-bottom)] pl-[var(--window-control-inset-left)]",
-        "max-[1100px]:grid-cols-1 max-[1100px]:grid-rows-[auto_minmax(0,1fr)]"
+        "max-[1100px]:grid-cols-1 max-[1100px]:grid-rows-[auto_minmax(0,1fr)]",
+        chatPaneResizing && "app-shell--chat-resizing"
       )}
+      style={mainGridStyle}
       aria-busy={submissionLock.active}
     >
       <header
@@ -2092,10 +2304,36 @@ export function App() {
             <div
               className={cn(
                 "ui-composer",
-                composerExpandedSticky && "flex-col items-stretch gap-2"
+                composerExpandedSticky && "flex-col items-stretch gap-2",
+                chatMediaAttachments.length > 0 && "ui-composer--has-attachments",
+                composerDragActive && "ui-composer--drag-active"
               )}
               data-expanded={composerExpandedSticky ? "true" : undefined}
+              onDragOver={handleComposerDragOver}
+              onDragLeave={handleComposerDragLeave}
+              onDrop={handleComposerDrop}
             >
+              {chatMediaAttachments.length > 0 ? (
+                <div className="ui-composer-attachments" aria-label="Attached media files">
+                  {chatMediaAttachments.map((attachment) => (
+                    <span key={attachment.path} className="ui-composer-attachment">
+                      <span className="ui-composer-attachment__kind">{attachment.kind}</span>
+                      <span className="ui-composer-attachment__name">{attachment.name}</span>
+                      <button
+                        type="button"
+                        className="ui-composer-attachment__remove"
+                        aria-label={`Remove ${attachment.name}`}
+                        disabled={chatDisabled}
+                        onClick={() =>
+                          setChatMediaAttachments((prev) => prev.filter((item) => item.path !== attachment.path))
+                        }
+                      >
+                        x
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               <textarea
                 ref={promptInputRef}
                 className={cn(
@@ -2148,7 +2386,7 @@ export function App() {
                 <button
                   type="button"
                   className="m-0 inline-flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-full border-0 bg-[var(--color-composer-send-bg)] p-0 text-[var(--color-composer-send-fg)] hover:enabled:bg-[var(--color-composer-send-hover)] disabled:cursor-not-allowed disabled:opacity-45"
-                  disabled={sending ? false : chatDisabled}
+                  disabled={sending ? false : chatDisabled || !composerHasContent}
                   aria-busy={false}
                   aria-label={sending ? "Stop" : "Send"}
                   onClick={() => (sending ? void handleStopAgent() : void handleSend())}
@@ -2172,9 +2410,30 @@ export function App() {
                 </button>
               </div>
             </div>
+            {chatAttachmentError ? (
+              <p className="ui-composer-attachment-error" role="status">
+                {chatAttachmentError}
+              </p>
+            ) : null}
           </section>
             </div>
           </div>
+          <div
+            className={cn("chat-emulator-splitter", chatPaneResizing && "chat-emulator-splitter--active")}
+            role="separator"
+            tabIndex={0}
+            aria-label="Resize chat and emulator panels"
+            aria-orientation="vertical"
+            aria-valuemin={MIN_CHAT_PANE_WIDTH}
+            aria-valuemax={chatPaneResizeMax}
+            aria-valuenow={chatPaneWidth}
+            title="Drag to resize chat and emulator panels"
+            onPointerDown={handleChatPaneResizePointerDown}
+            onPointerMove={handleChatPaneResizePointerMove}
+            onPointerUp={handleChatPaneResizePointerUp}
+            onPointerCancel={handleChatPaneResizePointerUp}
+            onKeyDown={handleChatPaneResizeKeyDown}
+          />
         </section>
       ) : (
         <section
@@ -2303,7 +2562,7 @@ export function App() {
       )}
       <aside
         className={cn(
-          "right-pane col-start-2 row-start-2 flex min-h-0 h-full min-w-[460px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+          "right-pane col-start-2 row-start-2 flex min-h-0 h-full min-w-[360px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
           showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
         )}
       >

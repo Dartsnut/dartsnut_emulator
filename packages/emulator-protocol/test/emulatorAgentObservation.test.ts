@@ -28,7 +28,7 @@ describe("agent emulator observation helpers", () => {
 
     const observation = buildEmulatorObservationFromFrame({
       frame,
-      state: { widgetPath: "/tmp/app", running: true, fps: 30, status: "", widgetType: "widget" },
+      state: { widgetPath: "/tmp/app", running: true, fps: 30, status: "", audioMuted: false, widgetType: "widget" },
       logs: [],
       previousSurfaceHash: null,
       includePngBase64: false,
@@ -67,7 +67,7 @@ describe("agent emulator observation helpers", () => {
 
     const observation = buildEmulatorObservationFromFrame({
       frame,
-      state: { widgetPath: "/tmp/app", running: true, fps: 30, status: "", widgetType: "widget" },
+      state: { widgetPath: "/tmp/app", running: true, fps: 30, status: "", audioMuted: false, widgetType: "widget" },
       logs: [],
       previousSurfaceHash: null,
       includePngBase64: true,

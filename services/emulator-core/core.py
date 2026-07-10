@@ -108,6 +108,7 @@ class EmulatorState:
     running: bool = False
     fps: int = 60
     status: str = "Idle"
+    audioMuted: bool = False
     lastError: str | None = None
     lastCapturePath: str | None = None
 
@@ -350,9 +351,12 @@ class EmulatorCore:
         # setdefault() would keep a host SDL_VIDEODRIVER (e.g. from Electron/shell),
         # which can block set_mode or prevent frames from reaching SHM on Windows.
         child_env["SDL_VIDEODRIVER"] = "dummy"
-        # Let pygame use the platform audio backend (coreaudio, WASAPI, pulse, etc.).
-        # Older builds forced SDL_AUDIODRIVER=dummy alongside dummy video, which muted all sound.
-        child_env.pop("SDL_AUDIODRIVER", None)
+        if self.state.audioMuted:
+            child_env["SDL_AUDIODRIVER"] = "dummy"
+        else:
+            # Let pygame use the platform audio backend (coreaudio, WASAPI, pulse, etc.).
+            # Older builds forced SDL_AUDIODRIVER=dummy alongside dummy video, which muted all sound.
+            child_env.pop("SDL_AUDIODRIVER", None)
         child_env.setdefault("PYTHONUNBUFFERED", "1")
         # Pygame prints a welcome banner to stderr unless this is set — absence of that line does not
         # mean the interpreter failed to start. Set DARTSNUT_EMULATOR_VERBOSE=1 (host env) to show it.
@@ -483,6 +487,17 @@ class EmulatorCore:
                     f"reload_widget requested for {self.current_path or '(no path set)'}"
                 )
                 self.start_widget_process_for_current()
+            elif action == "set_audio_muted":
+                muted = bool(command.get("muted", False))
+                was_running = self.widget_process is not None and self.widget_process.poll() is None
+                if self.state.audioMuted != muted:
+                    self.state.audioMuted = muted
+                    self.state.status = "Audio muted" if muted else "Audio unmuted"
+                    self._queue_bridge_log(f"emulator audio {'muted' if muted else 'unmuted'}")
+                    if was_running:
+                        self.start_widget_process_for_current()
+                else:
+                    self.state.status = "Audio muted" if muted else "Audio unmuted"
             elif action == "capture_screenshot":
                 filepaths = self._capture_screenshot_png()
                 basenames = ", ".join(os.path.basename(path) for path in filepaths)

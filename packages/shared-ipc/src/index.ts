@@ -3,6 +3,7 @@ export * from "./creationIntakePrompt";
 export * from "./creationIntakeInference";
 export * from "./intakeCopy";
 export * from "./postIntakeCreatorPrompt";
+export * from "./chatMediaAttachments";
 export * from "./userLocale";
 export * from "./creatorBuildPlan";
 export * from "./tempWorkspace";

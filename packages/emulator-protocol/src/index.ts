@@ -17,6 +17,7 @@ export type EmulatorCommand =
   | { type: "stop_widget" }
   | { type: "shutdown" }
   | { type: "reload_widget" }
+  | { type: "set_audio_muted"; muted: boolean }
   | { type: "set_button"; button: "A" | "B" | "UP" | "DOWN" | "LEFT" | "RIGHT"; pressed: boolean }
   | { type: "throw_dart"; index: number; x: number; y: number }
   | { type: "remove_dart_at"; x: number; y: number }
@@ -83,6 +84,7 @@ export type EmulatorStateSnapshot = {
   running: boolean;
   fps: number;
   status: string;
+  audioMuted: boolean;
   lastError?: string;
   lastCapturePath?: string | null;
 };
@@ -119,6 +121,7 @@ export function beginEmulatorSwitch(
       running: false,
       fps: currentState.fps,
       status: createVenvPrepStatus(),
+      audioMuted: currentState.audioMuted,
       lastError: undefined,
       lastCapturePath: currentState.lastCapturePath ?? null,
     },

@@ -32,6 +32,7 @@ const defaultState: EmulatorStateSnapshot = {
   running: false,
   fps: 0,
   status: "Idle",
+  audioMuted: false,
 };
 
 const DART_COLORS = Array.from({ length: 12 }, (_, idx) => {
@@ -123,6 +124,7 @@ export function EmulatorPanel({
   const stoppedWithError = isEmulatorStoppedWithError(state);
   const venvPreparing = venvPrepDisplay.visible;
   const venvPrepMessage = venvPrepDisplay.message;
+  const audioToggleLabel = state.audioMuted ? "Unmute emulator audio" : "Mute emulator audio";
 
   useEffect(() => {
     zoomOpenRef.current = zoomOpen;
@@ -722,6 +724,60 @@ export function EmulatorPanel({
               type="button"
               className={emuToolbarIconBtn}
               disabled={!bridgeReady}
+              onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "set_audio_muted", muted: !state.audioMuted })}
+              aria-label={audioToggleLabel}
+              title={audioToggleLabel}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M11 5L6 9H2v6h4l5 4V5z"
+                />
+                {state.audioMuted ? (
+                  <>
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      d="M23 9l-6 6"
+                    />
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      d="M17 9l6 6"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      d="M15 9.5a4 4 0 010 5"
+                    />
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      d="M18 7a8 8 0 010 10"
+                    />
+                  </>
+                )}
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={emuToolbarIconBtn}
+              disabled={!bridgeReady}
               onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "capture_screenshot" })}
               aria-label="Capture screenshot"
               title={
@@ -782,7 +838,7 @@ export function EmulatorPanel({
           </div>
         </div>
         {showParamsPanel ? (
-          <div className="mx-3.5 mb-0 mt-0">
+          <div className="mx-3.5 mb-3.5 mt-0">
             <WidgetParamsEditor
               bridgeReady={bridgeReady}
               widgetParamsText={widgetParamsText}
@@ -796,7 +852,7 @@ export function EmulatorPanel({
         ) : null}
         {showDartLegend ? (
           <div
-            className="box-border grid w-full shrink-0 grid-cols-6 justify-items-center gap-2 px-2 pb-2"
+            className="mb-3.5 box-border grid w-full shrink-0 grid-cols-6 justify-items-center gap-2 px-2 pb-2"
             aria-label="Dart indexes"
           >
             {DART_COLORS.map((color, idx) => {

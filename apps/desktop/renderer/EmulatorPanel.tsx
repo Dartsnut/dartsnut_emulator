@@ -782,7 +782,7 @@ export function EmulatorPanel({
           </div>
         </div>
         {showParamsPanel ? (
-          <div className="mx-3.5 mb-0 mt-0">
+          <div className="mx-3.5 mb-3.5 mt-0">
             <WidgetParamsEditor
               bridgeReady={bridgeReady}
               widgetParamsText={widgetParamsText}
@@ -796,7 +796,7 @@ export function EmulatorPanel({
         ) : null}
         {showDartLegend ? (
           <div
-            className="box-border grid w-full shrink-0 grid-cols-6 justify-items-center gap-2 px-2 pb-2"
+            className="mb-3.5 box-border grid w-full shrink-0 grid-cols-6 justify-items-center gap-2 px-2 pb-2"
             aria-label="Dart indexes"
           >
             {DART_COLORS.map((color, idx) => {

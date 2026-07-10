@@ -178,6 +178,63 @@ describe("search + file tools", () => {
     expect(fs.readFileSync(path.join(workspace, "dup.py"), "utf-8")).toBe("x = 2\nx = 2\n");
   });
 
+  it("copy_chat_attachment copies a dropped file to the agent-chosen workspace path", async () => {
+    const workspace = await seedWorkspace();
+    const source = path.join(os.tmpdir(), `dartsnut-chat-source-${Date.now()}.png`);
+    await fsp.writeFile(source, "png-data", "utf-8");
+    const tools = buildAgentTools({
+      workspacePolicy: new WorkspacePolicy(workspace),
+      profile: "full",
+      assetRoots: {
+        chatAttachments: [
+          { id: "chat-asset-1", path: source, name: "source.png", mimeType: "image/png", kind: "image" }
+        ]
+      }
+    });
+
+    const res = await exec(findTool(tools, "copy_chat_attachment"), {
+      attachment_id: "chat-asset-1",
+      path: "assets/title/source.png"
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.path).toBe("assets/title/source.png");
+    expect(await fsp.readFile(path.join(workspace, "assets/title/source.png"), "utf-8")).toBe("png-data");
+  });
+
+  it("copy_chat_attachment only replaces existing files when overwrite is explicit", async () => {
+    const workspace = await seedWorkspace();
+    const source = path.join(os.tmpdir(), `dartsnut-chat-replace-${Date.now()}.png`);
+    await fsp.writeFile(source, "new", "utf-8");
+    await fsp.mkdir(path.join(workspace, "assets"), { recursive: true });
+    await fsp.writeFile(path.join(workspace, "assets/existing.png"), "old", "utf-8");
+    const tools = buildAgentTools({
+      workspacePolicy: new WorkspacePolicy(workspace),
+      profile: "full",
+      assetRoots: {
+        chatAttachments: [
+          { id: "chat-asset-2", path: source, name: "replacement.png", mimeType: "image/png", kind: "image" }
+        ]
+      }
+    });
+
+    const blocked = await exec(findTool(tools, "copy_chat_attachment"), {
+      attachment_id: "chat-asset-2",
+      path: "assets/existing.png"
+    });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error).toMatch(/already exists/i);
+    expect(await fsp.readFile(path.join(workspace, "assets/existing.png"), "utf-8")).toBe("old");
+
+    const replaced = await exec(findTool(tools, "copy_chat_attachment"), {
+      attachment_id: "chat-asset-2",
+      path: "assets/existing.png",
+      overwrite: true
+    });
+    expect(replaced.ok).toBe(true);
+    expect(await fsp.readFile(path.join(workspace, "assets/existing.png"), "utf-8")).toBe("new");
+  });
+
   it("check_python delegates to the host handler", async () => {
     const workspace = await seedWorkspace();
     let received: { paths?: string[] } | undefined;

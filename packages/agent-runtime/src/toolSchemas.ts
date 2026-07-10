@@ -328,6 +328,34 @@ export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
       },
       strict: true
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "copy_chat_attachment",
+      description:
+        "Copy a media file the user dropped into chat into an agent-chosen workspace path. Use this before referencing a chat attachment in code/config. The source path is private; select by attachment_id from the user prompt. Set overwrite=true only when intentionally replacing an existing workspace asset.",
+      parameters: {
+        type: "object",
+        properties: {
+          attachment_id: {
+            type: "string",
+            description: "Attachment ID shown in the prompt, e.g. chat-..."
+          },
+          path: {
+            type: "string",
+            description: "Workspace-relative destination path, including filename."
+          },
+          overwrite: {
+            type: "boolean",
+            description: "When true, replace an existing file at path. Defaults to false."
+          }
+        },
+        required: ["attachment_id", "path"],
+        additionalProperties: false
+      },
+      strict: false
+    }
   }
 ];
 

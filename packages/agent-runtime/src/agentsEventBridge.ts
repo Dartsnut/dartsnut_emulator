@@ -238,6 +238,9 @@ function toolContextFromArgs(
       if (toolName === "copy_asset_file") {
         return typeof candidate.path === "string" || typeof candidate.source === "string";
       }
+      if (toolName === "copy_chat_attachment") {
+        return typeof candidate.path === "string" || typeof candidate.attachment_id === "string";
+      }
       if (toolName === "get_dartsnut_skill") {
         return typeof candidate.skill_id === "string";
       }
@@ -245,8 +248,9 @@ function toolContextFromArgs(
     }) ?? safeParseObject(JSON.parse(argsJson));
     const pathArg = toRelPath(args.path);
     const sourceArg = toRelPath(args.source);
+    const attachmentIdArg = typeof args.attachment_id === "string" ? args.attachment_id : undefined;
     const skillIdArg = toRelPath(args.skill_id);
-    context = { callId, path: pathArg, source: sourceArg, skillId: skillIdArg };
+    context = { callId, path: pathArg, source: sourceArg, attachment_id: attachmentIdArg, skillId: skillIdArg };
     if (toolName === "write_file") {
       const nextContent = typeof args.content === "string" ? args.content : "";
       const previousContent = pathArg ? hooks.readWorkspaceFileIfExists?.(pathArg) : undefined;

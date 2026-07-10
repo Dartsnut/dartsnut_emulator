@@ -23,6 +23,7 @@ const oldState: EmulatorStateSnapshot = {
   running: true,
   fps: 60,
   status: "",
+  audioMuted: false,
 };
 
 const targetState: EmulatorStateSnapshot = {
@@ -32,6 +33,7 @@ const targetState: EmulatorStateSnapshot = {
   running: true,
   fps: 60,
   status: "",
+  audioMuted: false,
 };
 
 describe("emulator switch gate", () => {
@@ -137,6 +139,7 @@ describe("emulator switch gate", () => {
       running: false,
       fps: 60,
       status: "Command failed",
+      audioMuted: false,
       lastError: "No widget path is configured",
     };
 

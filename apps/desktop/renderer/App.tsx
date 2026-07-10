@@ -1,4 +1,18 @@
-import { lazy, memo, Suspense, type DragEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  memo,
+  Suspense,
+  type CSSProperties,
+  type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import {
   type AgentEvent,
   type AgentSessionTokenUsage,
@@ -49,6 +63,14 @@ import {
 import { ThemeSwitcherIcon } from "./ThemeSwitcher";
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
+import {
+  clampChatPaneWidth,
+  DEFAULT_CHAT_PANE_WIDTH,
+  maxChatPaneWidthForViewport,
+  MIN_CHAT_PANE_WIDTH,
+  MIN_EMULATOR_PANE_WIDTH,
+  nextChatPaneWidthFromDrag
+} from "./splitPaneSizing";
 
 /** Same order as `WIDGET_DISPLAY_SIZES` in `@dartsnut/shared-ipc` — defined here because Vite/Rollup does not resolve that value through the package’s compiled CJS `export *` shim. */
 const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
@@ -88,6 +110,7 @@ type UpdatePromptState = AppUpdateStatus & {
 };
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
+const DEPLOY_PANE_RESERVED_WIDTH_PX = 360;
 /** Keep in sync with composer textarea `max-h-[200px]` */
 const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 /**
@@ -621,6 +644,7 @@ export function App() {
     ok: false,
     reason: "no_workspace"
   });
+  const deployEligible = deployEligibility.ok;
   const [widgetParamsText, setWidgetParamsText] = useState("{}");
   const [widgetParamsError, setWidgetParamsError] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeId>(() => resolveThemeFromEnvironment());
@@ -642,10 +666,103 @@ export function App() {
     message: "Preparing submission..."
   });
   const [appUpdate, setAppUpdate] = useState<UpdatePromptState | null>(null);
+  const [chatPaneWidth, setChatPaneWidth] = useState(DEFAULT_CHAT_PANE_WIDTH);
+  const [chatPaneResizing, setChatPaneResizing] = useState(false);
+  const chatPaneResizeDragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startWidth: number;
+  } | null>(null);
 
   const composerHasContent = prompt.trim().length > 0 || chatMediaAttachments.length > 0;
 
   const api = window.dartsnutApi;
+
+  const splitPaneViewportWidth = useCallback(() => {
+    const rawWidth = typeof window === "undefined" ? 1320 : window.innerWidth;
+    return rawWidth - (deployEligible ? DEPLOY_PANE_RESERVED_WIDTH_PX : 0);
+  }, [deployEligible]);
+
+  const mainGridTemplateColumns = useMemo(() => {
+    const leftColumn = `${chatPaneWidth}px`;
+    const emulatorColumn = `minmax(${MIN_EMULATOR_PANE_WIDTH}px,1fr)`;
+    return deployEligible
+      ? `${leftColumn} ${emulatorColumn} minmax(360px,420px)`
+      : `${leftColumn} ${emulatorColumn}`;
+  }, [chatPaneWidth, deployEligible]);
+
+  const mainGridStyle = useMemo(
+    () => ({
+      "--app-main-grid-cols": mainGridTemplateColumns
+    }) as CSSProperties,
+    [mainGridTemplateColumns]
+  );
+  const chatPaneResizeMax = maxChatPaneWidthForViewport(splitPaneViewportWidth());
+
+  const finishChatPaneResize = useCallback((target?: Element) => {
+    const activeDrag = chatPaneResizeDragRef.current;
+    if (activeDrag && target instanceof HTMLElement && target.hasPointerCapture(activeDrag.pointerId)) {
+      target.releasePointerCapture(activeDrag.pointerId);
+    }
+    chatPaneResizeDragRef.current = null;
+    setChatPaneResizing(false);
+  }, []);
+
+  const handleChatPaneResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    chatPaneResizeDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startWidth: chatPaneWidth
+    };
+    setChatPaneResizing(true);
+    event.preventDefault();
+  }, [chatPaneWidth]);
+
+  const handleChatPaneResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const activeDrag = chatPaneResizeDragRef.current;
+    if (!activeDrag || activeDrag.pointerId !== event.pointerId) {
+      return;
+    }
+    setChatPaneWidth(nextChatPaneWidthFromDrag({
+      startClientX: activeDrag.startClientX,
+      currentClientX: event.clientX,
+      startWidth: activeDrag.startWidth,
+      viewportWidth: splitPaneViewportWidth()
+    }));
+  }, [splitPaneViewportWidth]);
+
+  const handleChatPaneResizePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (chatPaneResizeDragRef.current?.pointerId === event.pointerId) {
+      finishChatPaneResize(event.currentTarget);
+    }
+  }, [finishChatPaneResize]);
+
+  const handleChatPaneResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 80 : 24;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setChatPaneWidth((current) => clampChatPaneWidth(current - step, splitPaneViewportWidth()));
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setChatPaneWidth((current) => clampChatPaneWidth(current + step, splitPaneViewportWidth()));
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      setChatPaneWidth(clampChatPaneWidth(MIN_CHAT_PANE_WIDTH, splitPaneViewportWidth()));
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      setChatPaneWidth(maxChatPaneWidthForViewport(splitPaneViewportWidth()));
+    }
+  }, [splitPaneViewportWidth]);
 
   const handleCommunitySubmitProgress = useCallback((progress: CommunitySubmitProgress | null) => {
     if (!progress) {
@@ -961,12 +1078,14 @@ export function App() {
   useEffect(() => {
     const onResize = () => {
       syncComposerPromptHeight();
+      setChatPaneWidth((current) => clampChatPaneWidth(current, splitPaneViewportWidth()));
     };
     window.addEventListener("resize", onResize);
+    onResize();
     return () => {
       window.removeEventListener("resize", onResize);
     };
-  }, []);
+  }, [splitPaneViewportWidth]);
 
   useEffect(() => {
     scrollTimelineToBottom();
@@ -1346,7 +1465,6 @@ export function App() {
     };
   }, [api, bootstrap?.workspaceRoot]);
 
-  const deployEligible = deployEligibility.ok;
   const deployPanelShowsWidgetParams = deployEligible && deployEligibility.projectType === "widget";
   const communityWorkspaceRefreshKey = [
     bootstrap?.workspaceRoot ?? "",
@@ -1829,13 +1947,13 @@ export function App() {
     <main
       className={cn(
         "app-shell grid h-full w-full items-stretch overflow-visible pt-0",
-        deployEligible
-          ? "grid-cols-[minmax(520px,700px)_minmax(420px,1fr)_minmax(360px,420px)]"
-          : "grid-cols-[minmax(620px,760px)_1fr]",
+        "grid-cols-[var(--app-main-grid-cols)]",
         "grid-rows-[auto_minmax(0,1fr)]",
         "pr-[var(--window-control-inset-right)] pb-[var(--window-control-inset-bottom)] pl-[var(--window-control-inset-left)]",
-        "max-[1100px]:grid-cols-1 max-[1100px]:grid-rows-[auto_minmax(0,1fr)]"
+        "max-[1100px]:grid-cols-1 max-[1100px]:grid-rows-[auto_minmax(0,1fr)]",
+        chatPaneResizing && "app-shell--chat-resizing"
       )}
+      style={mainGridStyle}
       aria-busy={submissionLock.active}
     >
       <header
@@ -2288,6 +2406,22 @@ export function App() {
           </section>
             </div>
           </div>
+          <div
+            className={cn("chat-emulator-splitter", chatPaneResizing && "chat-emulator-splitter--active")}
+            role="separator"
+            tabIndex={0}
+            aria-label="Resize chat and emulator panels"
+            aria-orientation="vertical"
+            aria-valuemin={MIN_CHAT_PANE_WIDTH}
+            aria-valuemax={chatPaneResizeMax}
+            aria-valuenow={chatPaneWidth}
+            title="Drag to resize chat and emulator panels"
+            onPointerDown={handleChatPaneResizePointerDown}
+            onPointerMove={handleChatPaneResizePointerMove}
+            onPointerUp={handleChatPaneResizePointerUp}
+            onPointerCancel={handleChatPaneResizePointerUp}
+            onKeyDown={handleChatPaneResizeKeyDown}
+          />
         </section>
       ) : (
         <section
@@ -2416,7 +2550,7 @@ export function App() {
       )}
       <aside
         className={cn(
-          "right-pane col-start-2 row-start-2 flex min-h-0 h-full min-w-[460px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+          "right-pane col-start-2 row-start-2 flex min-h-0 h-full min-w-[360px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
           showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
         )}
       >

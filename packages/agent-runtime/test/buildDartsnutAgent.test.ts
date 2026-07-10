@@ -96,6 +96,34 @@ describe("buildDartsnutAgent", () => {
     expect(agent.instructions).toContain("nonblank");
   });
 
+  it("introduces supported machine buttons when building games", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const ctx = makeContext(workspace, { templateMode: "game-creator" });
+    const agent = buildDartsnutAgent({
+      model: "gpt-4.1-mini",
+      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
+      contextSnapshot: ctx,
+      getRunContext: () => ctx
+    });
+    expect(agent.instructions).toContain("Supported machine buttons");
+    expect(agent.instructions).toContain("`A`, `B`, `UP`, `DOWN`, `LEFT`, `RIGHT`");
+    expect(agent.instructions).toContain("get_button_events()");
+    expect(agent.instructions).toContain("`btn_a`");
+    expect(agent.instructions).toContain("button_events.get(\"btn_a\")");
+  });
+
+  it("does not introduce game button guidance in asset-applier mode", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const ctx = makeContext(workspace, { assetApplierMode: true, templateMode: "asset-applier" });
+    const agent = buildDartsnutAgent({
+      model: "gpt-4.1-mini",
+      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
+      contextSnapshot: ctx,
+      getRunContext: () => ctx
+    });
+    expect(agent.instructions).not.toContain("Supported machine buttons");
+  });
+
   it("requires caveman communication mode", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     const ctx = makeContext(workspace);

@@ -1951,3 +1951,57 @@ kbd,
 .left-rail:not(:has(.chat-rail-overlay--top)) .timeline {
   scroll-padding-block-start: 12px;
 }
+
+.chat-emulator-splitter {
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  right: -7px;
+  bottom: 0;
+  width: 14px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.chat-emulator-splitter::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 6px;
+  width: 2px;
+  background: color-mix(in srgb, var(--color-border) 68%, transparent);
+  opacity: 0.55;
+  transition:
+    background-color 120ms ease,
+    opacity 120ms ease,
+    width 120ms ease;
+}
+
+.chat-emulator-splitter:hover::before,
+.chat-emulator-splitter:focus-visible::before,
+.chat-emulator-splitter--active::before {
+  left: 5px;
+  width: 4px;
+  background: color-mix(in srgb, var(--color-neon-mint) 62%, var(--color-border));
+  opacity: 1;
+}
+
+.chat-emulator-splitter:focus-visible {
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.app-shell--chat-resizing,
+.app-shell--chat-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+@media (max-width: 1100px) {
+  .chat-emulator-splitter {
+    display: none;
+  }
+}

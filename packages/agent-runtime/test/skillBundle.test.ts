@@ -293,5 +293,6 @@ describe("AGENT_TOOL_SCHEMAS", () => {
     expect(names).toContain("dartsnut_ask_question");
     expect(names).toContain("get_emulator_logs");
     expect(names).toContain("reload_emulator");
+    expect(names).toContain("copy_chat_attachment");
   });
 });

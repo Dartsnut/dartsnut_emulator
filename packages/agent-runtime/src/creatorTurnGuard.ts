@@ -3,7 +3,12 @@ export function isCreatorTemplateMode(mode: string | null | undefined): boolean 
 }
 
 export function isFileMutationToolName(name: string): boolean {
-  return name === "write_file" || name === "replace_in_file" || name === "copy_asset_file";
+  return (
+    name === "write_file" ||
+    name === "replace_in_file" ||
+    name === "copy_asset_file" ||
+    name === "copy_chat_attachment"
+  );
 }
 
 export function readCreatorArtifactStatus(

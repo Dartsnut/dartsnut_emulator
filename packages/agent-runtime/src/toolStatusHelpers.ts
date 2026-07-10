@@ -18,6 +18,7 @@ export type ToolStatusContext = {
   callId?: string;
   path?: string;
   source?: string;
+  attachment_id?: string;
   added?: number;
   deleted?: number;
   skillId?: string;
@@ -95,6 +96,16 @@ export function buildToolStatusMessage(
       };
     case "copy_asset_file": {
       const source = context?.source ?? "asset";
+      return {
+        text:
+          phase === "call"
+            ? `Copying ${source} to ${filePath ?? "destination"}…`
+            : `Copied ${source} → ${filePath ?? "destination"}.`,
+        ...(baseMeta ? { meta: baseMeta } : {})
+      };
+    }
+    case "copy_chat_attachment": {
+      const source = context?.attachment_id ?? "attachment";
       return {
         text:
           phase === "call"

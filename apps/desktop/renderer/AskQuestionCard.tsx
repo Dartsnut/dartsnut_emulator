@@ -11,6 +11,7 @@ export type AskQuestionCardProps = {
   questionTotal?: number;
   question: string;
   options?: AskQuestionOption[];
+  labels?: AskQuestionCardLabels;
   input?: {
     value: string;
     placeholder: string;
@@ -19,6 +20,24 @@ export type AskQuestionCardProps = {
     validate?: (value: string) => boolean;
   };
   onSubmit: (value: string) => void;
+};
+
+export type AskQuestionCardLabels = {
+  title: string;
+  groupAriaLabel: string;
+  answerChoicesAriaLabel: string;
+  continueLabel: string;
+  pagerLabel: (questionNumber: number, questionTotal: number) => string;
+  pagerText: (questionNumber: number, questionTotal: number) => string;
+};
+
+const DEFAULT_LABELS: AskQuestionCardLabels = {
+  title: "Questions",
+  groupAriaLabel: "Question",
+  answerChoicesAriaLabel: "Answer choices",
+  continueLabel: "Continue",
+  pagerLabel: (questionNumber, questionTotal) => `Question ${questionNumber} of ${questionTotal}`,
+  pagerText: (questionNumber, questionTotal) => `${questionNumber} of ${questionTotal}`
 };
 
 const OPTION_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -54,6 +73,7 @@ export function AskQuestionCard({
   questionTotal = 1,
   question,
   options = [],
+  labels = DEFAULT_LABELS,
   input,
   onSubmit,
 }: AskQuestionCardProps) {
@@ -108,19 +128,19 @@ export function AskQuestionCard({
     <div
       className="ui-ask-question"
       role="group"
-      aria-label="Question"
+      aria-label={labels.groupAriaLabel}
     >
       <header className="ui-ask-question__header">
         <div className="ui-ask-question__title-row">
           <QuestionsIcon />
-          <span className="ui-ask-question__title">Questions</span>
+          <span className="ui-ask-question__title">{labels.title}</span>
         </div>
-        <div className="ui-ask-question__pager" aria-label={`Question ${questionNumber} of ${questionTotal}`}>
+        <div className="ui-ask-question__pager" aria-label={labels.pagerLabel(questionNumber, questionTotal)}>
           <button type="button" className="ui-ask-question__pager-btn" disabled aria-hidden tabIndex={-1}>
             <ChevronIcon direction="up" />
           </button>
           <span className="ui-ask-question__pager-label tabular-nums">
-            {questionNumber} of {questionTotal}
+            {labels.pagerText(questionNumber, questionTotal)}
           </span>
           <button type="button" className="ui-ask-question__pager-btn" disabled aria-hidden tabIndex={-1}>
             <ChevronIcon direction="down" />
@@ -147,7 +167,7 @@ export function AskQuestionCard({
             {input.error ? <p className="ui-ask-question__input-error">{input.error}</p> : null}
           </div>
         ) : (
-          <ul className="ui-ask-question__options" role="listbox" aria-label="Answer choices">
+          <ul className="ui-ask-question__options" role="listbox" aria-label={labels.answerChoicesAriaLabel}>
             {options.map((option, index) => {
               const letter = OPTION_LETTERS[index] ?? String(index + 1);
               const selected = selectedIndex === index;
@@ -191,7 +211,7 @@ export function AskQuestionCard({
             }
           }}
         >
-          <span>Continue</span>
+          <span>{labels.continueLabel}</span>
           <kbd className="ui-ask-question__kbd ui-ask-question__kbd--continue" aria-hidden>
             ↵
           </kbd>

@@ -20,6 +20,7 @@
     "communityClient.ts",
     "googleOAuth.ts",
     "communityAuth.ts",
-    "emulatorAgentTools.ts"
+    "emulatorAgentTools.ts",
+    "intakePromptEvents.ts"
   ]
 }

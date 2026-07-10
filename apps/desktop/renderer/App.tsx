@@ -35,7 +35,9 @@ import {
   type WidgetSize,
   type CommunitySessionInfo,
   type CommunitySubmitProgress,
+  type UserLocale,
   type ChatMediaAttachment,
+  getIntakeCopy,
   inferChatMediaAttachmentKind,
   mergeChatMediaAttachments
 } from "@dartsnut/shared-ipc";
@@ -77,10 +79,6 @@ const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x
 
 const CREATION_INTAKE_PROJECT_TYPES: readonly ProjectType[] = ["game", "widget"];
 const AgentMarkdownRenderer = lazy(() => import("./AgentMarkdownRenderer"));
-
-function projectTypeChipLabel(pt: ProjectType): string {
-  return pt === "game" ? "Game" : "Widget";
-}
 
 function isValidMachineHost(value: string): boolean {
   const trimmed = value.trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
@@ -604,12 +602,14 @@ export function App() {
   const [projectTypePicker, setProjectTypePicker] = useState<{
     visible: boolean;
     types: ProjectType[];
-  }>({ visible: false, types: [] });
+    locale: UserLocale | null;
+  }>({ visible: false, types: [], locale: null });
   /** Shown after intake records `widget` but not yet `set_widget_size` (host pushes `intake_widget_size_prompt`). */
   const [widgetSizePicker, setWidgetSizePicker] = useState<{
     visible: boolean;
     sizes: WidgetSize[];
-  }>({ visible: false, sizes: [] });
+    locale: UserLocale | null;
+  }>({ visible: false, sizes: [], locale: null });
   const [machineMcpPicker, setMachineMcpPicker] = useState<{
     visible: boolean;
     machines: MachineMcpQuestionMachine[];
@@ -620,6 +620,14 @@ export function App() {
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
+  const projectTypeIntakeCopy = useMemo(
+    () => getIntakeCopy(projectTypePicker.locale),
+    [projectTypePicker.locale]
+  );
+  const widgetSizeIntakeCopy = useMemo(
+    () => getIntakeCopy(widgetSizePicker.locale),
+    [widgetSizePicker.locale]
+  );
   const activeStreamDeltaRef = useRef("");
   const activeReasoningStreamEntryIdRef = useRef<string | null>(null);
   const activeReasoningIdRef = useRef<string | null>(null);
@@ -1140,6 +1148,7 @@ export function App() {
         }
         setProjectTypePicker({
           visible: event.visible,
+          locale: event.visible ? event.locale ?? null : null,
           types:
             event.visible && event.options && event.options.length > 0
               ? event.options
@@ -1155,6 +1164,7 @@ export function App() {
         }
         setWidgetSizePicker({
           visible: event.visible,
+          locale: event.visible ? event.locale ?? null : null,
           sizes:
             event.visible && event.sizes && event.sizes.length > 0
               ? event.sizes
@@ -1166,8 +1176,8 @@ export function App() {
       }
       if (event.type === "machine_mcp_prompt") {
         if (event.visible) {
-          setProjectTypePicker({ visible: false, types: [] });
-          setWidgetSizePicker({ visible: false, sizes: [] });
+          setProjectTypePicker({ visible: false, types: [], locale: null });
+          setWidgetSizePicker({ visible: false, sizes: [], locale: null });
           setMachineMcpManualIp("");
           setMachineMcpInputError(null);
         }
@@ -1609,8 +1619,8 @@ export function App() {
     setSessionWidgetSize(null);
     setSessionProjectType(null);
     setTokenUsage(null);
-    setWidgetSizePicker({ visible: false, sizes: [] });
-    setProjectTypePicker({ visible: false, types: [] });
+    setWidgetSizePicker({ visible: false, sizes: [], locale: null });
+    setProjectTypePicker({ visible: false, types: [], locale: null });
     setPrompt("");
     setChatMediaAttachments([]);
     setChatAttachmentError(null);
@@ -1646,8 +1656,8 @@ export function App() {
   }
 
   async function submitPrompt(request: PromptRequest) {
-    setWidgetSizePicker({ visible: false, sizes: [] });
-    setProjectTypePicker({ visible: false, types: [] });
+    setWidgetSizePicker({ visible: false, sizes: [], locale: null });
+    setProjectTypePicker({ visible: false, types: [], locale: null });
     discardAgentEventsRef.current = false;
     setSending(true);
     if (!api) {
@@ -1784,9 +1794,9 @@ export function App() {
     const res = await api.intakeSubmitQuestionAnswer({ kind: "project_type", value: projectType });
     if (!res.ok) {
       if (res.reason === "no_pending") {
-        postStatus("Nothing is waiting for a Game/Widget choice right now — send your idea in the chat first.");
+        postStatus(projectTypeIntakeCopy.status.noPendingProjectType);
       } else if (res.reason === "kind_mismatch" || res.reason === "invalid_value") {
-        postStatus("That choice does not match the current question.");
+        postStatus(projectTypeIntakeCopy.status.choiceMismatch);
       }
     }
   }
@@ -1798,9 +1808,9 @@ export function App() {
     const res = await api.intakeSubmitQuestionAnswer({ kind: "widget_size", value: size });
     if (!res.ok) {
       if (res.reason === "no_pending") {
-        postStatus("Nothing is waiting for a widget size choice right now.");
+        postStatus(widgetSizeIntakeCopy.status.noPendingWidgetSize);
       } else if (res.reason === "kind_mismatch" || res.reason === "invalid_value") {
-        postStatus("That choice does not match the current question.");
+        postStatus(widgetSizeIntakeCopy.status.choiceMismatch);
       }
     }
   }
@@ -1933,8 +1943,8 @@ export function App() {
     }
     clearActiveCoalescedStreamEntries();
     activeToolStatusEntryByKeyRef.current.clear();
-    setWidgetSizePicker({ visible: false, sizes: [] });
-    setProjectTypePicker({ visible: false, types: [] });
+    setWidgetSizePicker({ visible: false, sizes: [], locale: null });
+    setProjectTypePicker({ visible: false, types: [], locale: null });
     setSending(false);
     try {
       await api.cancelAgent();
@@ -2235,16 +2245,18 @@ export function App() {
           {/* Blocking `dartsnut_ask_question` UI — shown while the host waits for an answer. */}
           {projectTypePicker.visible && projectTypePicker.types.length > 0 ? (
             <AskQuestionCard
-              question="Are you building a game or a widget?"
+              question={projectTypeIntakeCopy.projectTypeQuestion}
+              labels={projectTypeIntakeCopy.card}
               options={projectTypePicker.types.map((pt) => ({
                 value: pt,
-                label: projectTypeChipLabel(pt),
+                label: projectTypeIntakeCopy.projectTypeLabels[pt],
               }))}
               onSubmit={(value) => void handleProjectTypeChip(value as ProjectType)}
             />
           ) : widgetSizePicker.visible && widgetSizePicker.sizes.length > 0 ? (
             <AskQuestionCard
-              question="Which widget display size do you want?"
+              question={widgetSizeIntakeCopy.widgetSizeQuestion}
+              labels={widgetSizeIntakeCopy.card}
               options={widgetSizePicker.sizes.map((sz) => ({
                 value: sz,
                 label: sz,

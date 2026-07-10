@@ -344,6 +344,53 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     }
   });
 
+  const copyChatAttachment = defineJsonSchemaTool("copy_chat_attachment", async (args) => {
+    const blocked = fileMutationBlockedReason();
+    if (blocked) {
+      return JSON.stringify({ ok: false, error: blocked });
+    }
+    const attachmentId = typeof args.attachment_id === "string" ? args.attachment_id : "";
+    const toRaw = typeof args.path === "string" ? args.path : "";
+    const overwrite = args.overwrite === true;
+    if (!attachmentId) {
+      return JSON.stringify({ ok: false, error: "attachment_id is required" });
+    }
+    if (!toRaw) {
+      return JSON.stringify({ ok: false, error: "path is required" });
+    }
+    const attachment = options.assetRoots?.chatAttachments?.find((item) => item.id === attachmentId);
+    if (!attachment) {
+      return JSON.stringify({ ok: false, error: `Unknown chat attachment: ${attachmentId}` });
+    }
+    try {
+      const sourceStat = await fsp.stat(attachment.path);
+      if (!sourceStat.isFile()) {
+        return JSON.stringify({ ok: false, error: `Chat attachment is not a file: ${attachment.name}` });
+      }
+      const destAbs = options.workspacePolicy.resolveWithinRoot(toRaw);
+      if (!overwrite && fs.existsSync(destAbs)) {
+        return JSON.stringify({
+          ok: false,
+          error: `Destination already exists: ${toRaw}. Pass overwrite=true only if replacing it is intentional.`
+        });
+      }
+      await fsp.mkdir(path.dirname(destAbs), { recursive: true });
+      await fsp.copyFile(attachment.path, destAbs);
+      return JSON.stringify({
+        ok: true,
+        attachment_id: attachmentId,
+        name: attachment.name,
+        path: toRaw,
+        overwritten: overwrite
+      });
+    } catch (error) {
+      return JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
   const getSkill = defineJsonSchemaTool("get_dartsnut_skill", async (args) => {
     const skillIdRaw = typeof args.skill_id === "string" ? args.skill_id : "";
     if (!isDeferredSkillId(skillIdRaw)) {
@@ -450,6 +497,7 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     write_file: writeFile,
     replace_in_file: replaceInFile,
     copy_asset_file: copyAssetFile,
+    copy_chat_attachment: copyChatAttachment,
     get_dartsnut_skill: getSkill,
     dartsnut_project_intake: projectIntake,
     dartsnut_ask_question: askQuestion,

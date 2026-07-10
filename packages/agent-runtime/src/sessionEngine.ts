@@ -6,6 +6,7 @@ import { run, type StreamedRunResult } from "@openai/agents";
 import {
   type AgentEvent,
   type AgentTokenUsage,
+  type ChatMediaAttachment,
   type UserLocale
 } from "@dartsnut/shared-ipc";
 import type { ChatMessage } from "./providerClient";
@@ -57,6 +58,7 @@ export interface SessionEngineOptions {
   skillLibrary?: AgentSkillLibrary;
   assetRoots?: {
     widgetFonts?: string;
+    chatAttachments?: ChatMediaAttachment[];
   };
   completionTools?: ChatCompletionTool[];
   hostIntakeToolHandler?: HostIntakeToolHandler;

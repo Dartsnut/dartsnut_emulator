@@ -1,4 +1,5 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
+import type { ChatMediaAttachment } from "@dartsnut/shared-ipc";
 import type { WorkspacePolicy } from "./workspacePolicy";
 import type { AgentSkillLibrary } from "./sessionEngine";
 import type { DartsnutRunContext } from "./dartsnutRunContext";
@@ -24,6 +25,7 @@ export type AgentToolsOptions = {
   skillLibrary?: AgentSkillLibrary;
   assetRoots?: {
     widgetFonts?: string;
+    chatAttachments?: ChatMediaAttachment[];
   };
   profile?: AgentToolProfile;
   completionTools?: ChatCompletionTool[];

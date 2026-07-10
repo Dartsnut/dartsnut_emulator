@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, type DragEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   type AgentEvent,
   type AgentSessionTokenUsage,
@@ -20,7 +20,10 @@ import {
   type MachineMcpQuestionMachine,
   type WidgetSize,
   type CommunitySessionInfo,
-  type CommunitySubmitProgress
+  type CommunitySubmitProgress,
+  type ChatMediaAttachment,
+  inferChatMediaAttachmentKind,
+  mergeChatMediaAttachments
 } from "@dartsnut/shared-ipc";
 import { AskQuestionCard } from "./AskQuestionCard";
 import { AssetManagerPanel } from "./AssetManagerPanel";
@@ -94,6 +97,7 @@ const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 const COMPOSER_PROMPT_MULTILINE_EPSILON_PX = 1;
 const GREETING_TEXT =
   "What are we making today? Share your idea and I'll help turn it into a Dartsnut widget or game.";
+const CHAT_ATTACHMENT_ERROR_TIMEOUT_MS = 3500;
 
 const EMPTY_USER_DEFINE: UserDefineProviderSettings = {
   baseUrl: "",
@@ -106,6 +110,13 @@ const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
   custom: EMPTY_USER_DEFINE,
   userDefine: EMPTY_USER_DEFINE
 };
+
+function createChatMediaAttachmentId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `chat-${crypto.randomUUID()}`;
+  }
+  return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 const chromeIconBtnClass = "ui-chrome-btn";
 
@@ -546,6 +557,9 @@ export function App() {
     { id: "greeting-initial", role: "agent", text: GREETING_TEXT }
   ]);
   const [prompt, setPrompt] = useState("");
+  const [chatMediaAttachments, setChatMediaAttachments] = useState<ChatMediaAttachment[]>([]);
+  const [chatAttachmentError, setChatAttachmentError] = useState<string | null>(null);
+  const [composerDragActive, setComposerDragActive] = useState(false);
   const [sending, setSending] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [pythonRuntimeStatus, setPythonRuntimeStatus] = useState<string | null>(null);
@@ -628,6 +642,8 @@ export function App() {
     message: "Preparing submission..."
   });
   const [appUpdate, setAppUpdate] = useState<UpdatePromptState | null>(null);
+
+  const composerHasContent = prompt.trim().length > 0 || chatMediaAttachments.length > 0;
 
   const api = window.dartsnutApi;
 
@@ -1457,6 +1473,14 @@ export function App() {
     });
   }, [api]);
 
+  useEffect(() => {
+    if (!chatAttachmentError) {
+      return;
+    }
+    const timer = window.setTimeout(() => setChatAttachmentError(null), CHAT_ATTACHMENT_ERROR_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [chatAttachmentError]);
+
   function resetChatSessionUi() {
     discardAgentEventsRef.current = true;
     clearActiveCoalescedStreamEntries();
@@ -1470,6 +1494,9 @@ export function App() {
     setWidgetSizePicker({ visible: false, sizes: [] });
     setProjectTypePicker({ visible: false, types: [] });
     setPrompt("");
+    setChatMediaAttachments([]);
+    setChatAttachmentError(null);
+    setComposerDragActive(false);
     setRuntimeError(null);
     setEntries([{ id: `greeting-${Date.now()}`, role: "agent", text: GREETING_TEXT }]);
   }
@@ -1693,8 +1720,65 @@ export function App() {
     }
   }
 
+  function resolveChatMediaAttachments(fileList: FileList): { accepted: ChatMediaAttachment[]; rejected: number } {
+    const files = Array.from(fileList);
+    const accepted: ChatMediaAttachment[] = [];
+    let rejected = 0;
+    for (const file of files) {
+      const filePath = api?.assets?.getPathForFile(file) ?? "";
+      const displayName = file.name || filePath.split(/[\\/]/).pop() || "media file";
+      const kind = inferChatMediaAttachmentKind(file.type, displayName);
+      if (!filePath || !kind) {
+        rejected += 1;
+        continue;
+      }
+      accepted.push({
+        id: createChatMediaAttachmentId(),
+        path: filePath,
+        name: displayName,
+        mimeType: file.type,
+        kind,
+        size: file.size
+      });
+    }
+    return { accepted, rejected };
+  }
+
+  function handleComposerDragOver(event: DragEvent<HTMLDivElement>) {
+    if (chatDisabled || !event.dataTransfer.types.includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setComposerDragActive(true);
+  }
+
+  function handleComposerDragLeave(event: DragEvent<HTMLDivElement>) {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+    setComposerDragActive(false);
+  }
+
+  function handleComposerDrop(event: DragEvent<HTMLDivElement>) {
+    if (chatDisabled) {
+      return;
+    }
+    event.preventDefault();
+    setComposerDragActive(false);
+    const { accepted, rejected } = resolveChatMediaAttachments(event.dataTransfer.files);
+    if (accepted.length > 0) {
+      setChatMediaAttachments((prev) => mergeChatMediaAttachments(prev, accepted));
+      setChatAttachmentError(null);
+    }
+    if (rejected > 0) {
+      setChatAttachmentError("Drop image, audio, or video files from your computer.");
+    }
+  }
+
   async function handleSend() {
-    if (!prompt.trim() || chatDisabled) {
+    if (!composerHasContent || chatDisabled) {
       return;
     }
     if (bootstrap?.providerStatus !== "ready") {
@@ -1702,12 +1786,22 @@ export function App() {
       setScreen("settings");
       return;
     }
-    const current = prompt.trim();
+    const visiblePrompt = prompt.trim();
+    const attachments = chatMediaAttachments;
+    const visibleUserText = attachments.length > 0
+      ? [
+        visiblePrompt || "Add the attached media files into the current game/widget.",
+        "",
+        `Attached: ${attachments.map((attachment) => attachment.name).join(", ")}`
+      ].join("\n")
+      : visiblePrompt;
     setPrompt("");
-    setEntries((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", text: current }]);
+    setChatMediaAttachments([]);
+    setEntries((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", text: visibleUserText }]);
 
     await submitPrompt({
-      prompt: current,
+      prompt: visiblePrompt,
+      chatMediaAttachments: attachments,
       workspacePath: bootstrap?.workspaceRoot ?? undefined,
       templateMode: bootstrap?.needsCreationIntake ? undefined : sessionTemplateMode ?? undefined,
       widgetSize: bootstrap?.needsCreationIntake ? undefined : sessionWidgetSize ?? undefined,
@@ -2080,10 +2174,36 @@ export function App() {
             <div
               className={cn(
                 "ui-composer",
-                composerExpandedSticky && "flex-col items-stretch gap-2"
+                composerExpandedSticky && "flex-col items-stretch gap-2",
+                chatMediaAttachments.length > 0 && "ui-composer--has-attachments",
+                composerDragActive && "ui-composer--drag-active"
               )}
               data-expanded={composerExpandedSticky ? "true" : undefined}
+              onDragOver={handleComposerDragOver}
+              onDragLeave={handleComposerDragLeave}
+              onDrop={handleComposerDrop}
             >
+              {chatMediaAttachments.length > 0 ? (
+                <div className="ui-composer-attachments" aria-label="Attached media files">
+                  {chatMediaAttachments.map((attachment) => (
+                    <span key={attachment.path} className="ui-composer-attachment">
+                      <span className="ui-composer-attachment__kind">{attachment.kind}</span>
+                      <span className="ui-composer-attachment__name">{attachment.name}</span>
+                      <button
+                        type="button"
+                        className="ui-composer-attachment__remove"
+                        aria-label={`Remove ${attachment.name}`}
+                        disabled={chatDisabled}
+                        onClick={() =>
+                          setChatMediaAttachments((prev) => prev.filter((item) => item.path !== attachment.path))
+                        }
+                      >
+                        x
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               <textarea
                 ref={promptInputRef}
                 className={cn(
@@ -2136,7 +2256,7 @@ export function App() {
                 <button
                   type="button"
                   className="m-0 inline-flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-full border-0 bg-[var(--color-composer-send-bg)] p-0 text-[var(--color-composer-send-fg)] hover:enabled:bg-[var(--color-composer-send-hover)] disabled:cursor-not-allowed disabled:opacity-45"
-                  disabled={sending ? false : chatDisabled}
+                  disabled={sending ? false : chatDisabled || !composerHasContent}
                   aria-busy={false}
                   aria-label={sending ? "Stop" : "Send"}
                   onClick={() => (sending ? void handleStopAgent() : void handleSend())}
@@ -2160,6 +2280,11 @@ export function App() {
                 </button>
               </div>
             </div>
+            {chatAttachmentError ? (
+              <p className="ui-composer-attachment-error" role="status">
+                {chatAttachmentError}
+              </p>
+            ) : null}
           </section>
             </div>
           </div>

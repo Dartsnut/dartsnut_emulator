@@ -37,6 +37,16 @@ describe("loadSkillBundle", () => {
     expect(content).toContain("Dartsnut()");
   });
 
+  it("loads pydartsnut game I/O with supported machine buttons", () => {
+    const content = loadSkillBundle(path.join(SKILLS_DIR, "pydartsnut-game-io.md"));
+    expect(content).toContain("Supported machine buttons");
+    expect(content).toContain("`A`, `B`, `UP`, `DOWN`, `LEFT`, `RIGHT`");
+    expect(content).toContain("get_button_events()");
+    expect(content).toContain("`btn_a`");
+    expect(content).toContain("button_events.get(\"btn_a\")");
+    expect(content).toContain("Do **not** write `for button, pressed in engine.get_button_events()`");
+  });
+
   it("loads creator-incremental scaffold constraints skill", () => {
     const content = loadSkillBundle(path.join(SKILLS_DIR, "creator-incremental.md"));
     expect(content).toContain("## Verify");

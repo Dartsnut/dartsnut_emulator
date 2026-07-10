@@ -134,6 +134,7 @@ import {
   normalizeEmulatorInputAction,
   summarizeScenarioRequest
 } from "./emulatorAgentTools";
+import { copyEmulatorStateSnapshot } from "./emulatorState";
 import { AssetManager } from "./assetManager";
 import { DeployMachineSession } from "./deployMachine";
 import { createCommunityClient, type CommunityClient } from "./communityClient";
@@ -749,6 +750,7 @@ const emulatorState: EmulatorStateSnapshot = {
   running: false,
   fps: 0,
   status: "Idle",
+  audioMuted: false,
   lastCapturePath: null,
 };
 let emulatorSwitchGate: EmulatorSwitchGate | null = null;
@@ -2234,14 +2236,7 @@ function emitEmulatorState() {
 }
 
 function applyEmulatorStateSnapshot(nextState: EmulatorStateSnapshot): void {
-  emulatorState.widgetPath = nextState.widgetPath;
-  emulatorState.widgetId = nextState.widgetId;
-  emulatorState.widgetType = nextState.widgetType;
-  emulatorState.running = nextState.running;
-  emulatorState.fps = nextState.fps;
-  emulatorState.status = nextState.status;
-  emulatorState.lastError = nextState.lastError;
-  emulatorState.lastCapturePath = nextState.lastCapturePath;
+  copyEmulatorStateSnapshot(emulatorState, nextState);
 }
 
 function beginPendingEmulatorSwitch(targetWidgetPath: string): void {
@@ -2390,6 +2385,7 @@ function spawnBridgeAfterStop() {
           running: typeof payload.running === "boolean" ? payload.running : emulatorState.running,
           fps: typeof payload.fps === "number" ? payload.fps : emulatorState.fps,
           status: typeof payload.status === "string" ? payload.status : emulatorState.status,
+          audioMuted: typeof payload.audioMuted === "boolean" ? payload.audioMuted : emulatorState.audioMuted,
           lastError:
             typeof payload.lastError !== "undefined"
               ? payload.lastError

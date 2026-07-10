@@ -32,6 +32,7 @@ const defaultState: EmulatorStateSnapshot = {
   running: false,
   fps: 0,
   status: "Idle",
+  audioMuted: false,
 };
 
 const DART_COLORS = Array.from({ length: 12 }, (_, idx) => {
@@ -123,6 +124,7 @@ export function EmulatorPanel({
   const stoppedWithError = isEmulatorStoppedWithError(state);
   const venvPreparing = venvPrepDisplay.visible;
   const venvPrepMessage = venvPrepDisplay.message;
+  const audioToggleLabel = state.audioMuted ? "Unmute emulator audio" : "Mute emulator audio";
 
   useEffect(() => {
     zoomOpenRef.current = zoomOpen;
@@ -716,6 +718,60 @@ export function EmulatorPanel({
                   strokeLinejoin="round"
                   d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36M20.49 15a9 9 0 01-14.85 3.36"
                 />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={emuToolbarIconBtn}
+              disabled={!bridgeReady}
+              onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "set_audio_muted", muted: !state.audioMuted })}
+              aria-label={audioToggleLabel}
+              title={audioToggleLabel}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M11 5L6 9H2v6h4l5 4V5z"
+                />
+                {state.audioMuted ? (
+                  <>
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      d="M23 9l-6 6"
+                    />
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      d="M17 9l6 6"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      d="M15 9.5a4 4 0 010 5"
+                    />
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      d="M18 7a8 8 0 010 10"
+                    />
+                  </>
+                )}
               </svg>
             </button>
             <button

@@ -7,6 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from 
 import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
+import { buildIntakeProjectTypePromptEvent, buildIntakeWidgetSizePromptEvent } from "./intakePromptEvents";
 import { createPublishTarball } from "./publishPackage";
 import { buildPythonScriptLaunch, pythonRuntimeDir, runtimeDir, uvBinaryPath, venvPythonPath } from "./pythonRuntime";
 import { ensureRuntime, type DownloadProgress } from "./pythonRuntimeDownloader";
@@ -1490,9 +1491,9 @@ function cancelAllIntakeUserInputPending(): void {
     intakeChipQuestionPending = null;
     if (agentEventEmitter) {
       if (kind === "project_type") {
-        agentEventEmitter({ type: "intake_project_type_prompt", at: Date.now(), visible: false });
+        agentEventEmitter(buildIntakeProjectTypePromptEvent(false, null, Date.now()));
       } else {
-        agentEventEmitter({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
+        agentEventEmitter(buildIntakeWidgetSizePromptEvent(false, WIDGET_DISPLAY_SIZES, null, Date.now()));
       }
     }
     resolve(
@@ -1586,7 +1587,8 @@ async function intakeHostToolExecute(
 
 async function askQuestionHostExecute(
   args: Record<string, unknown>,
-  state: IntakeToolState
+  state: IntakeToolState,
+  preferredUserLocale?: UserLocale | null
 ): Promise<string> {
   const precheck = precheckAskQuestion(args, state);
   if (precheck.handled && precheck.response !== undefined) {
@@ -1603,23 +1605,15 @@ async function askQuestionHostExecute(
     });
   }
   if (questionId === "project_type") {
-    agentEventEmitter?.({
-      type: "intake_project_type_prompt",
-      at: Date.now(),
-      visible: true,
-      options: ["game", "widget"]
-    });
+    agentEventEmitter?.(buildIntakeProjectTypePromptEvent(true, preferredUserLocale, Date.now()));
     return await new Promise<string>((resolve) => {
       intakeChipQuestionPending = { kind: "project_type", resolve, state };
     });
   }
   if (questionId === "widget_display_size") {
-    agentEventEmitter?.({
-      type: "intake_widget_size_prompt",
-      at: Date.now(),
-      visible: true,
-      sizes: [...WIDGET_DISPLAY_SIZES]
-    });
+    agentEventEmitter?.(
+      buildIntakeWidgetSizePromptEvent(true, WIDGET_DISPLAY_SIZES, preferredUserLocale, Date.now())
+    );
     return await new Promise<string>((resolve) => {
       intakeChipQuestionPending = { kind: "widget_size", resolve, state };
     });
@@ -3593,7 +3587,7 @@ ipcMain.handle(
       if (body.value === "game") {
         state.widgetSize = undefined;
       }
-      agentEventEmitter?.({ type: "intake_project_type_prompt", at: Date.now(), visible: false });
+      agentEventEmitter?.(buildIntakeProjectTypePromptEvent(false, null, Date.now()));
       resolve(
         JSON.stringify({
           ok: true,
@@ -3614,7 +3608,7 @@ ipcMain.handle(
       intakeChipQuestionPending = null;
       state.widgetSize = body.value;
       state.widgetSizeUserConfirmed = true;
-      agentEventEmitter?.({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
+      agentEventEmitter?.(buildIntakeWidgetSizePromptEvent(false, WIDGET_DISPLAY_SIZES, null, Date.now()));
       resolve(
         JSON.stringify({
           ok: true,
@@ -3832,14 +3826,16 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
           ? "game"
           : undefined);
     const routedWidgetSize = request.widgetSize ?? hintedRouting?.widgetSize;
+    const preferredUserLocale = resolvePreferredUserLocaleForSession(request.prompt, persistence);
     const session = await buildSession(request.templateMode, {
       completionTools: AGENT_TOOL_SCHEMAS,
       chatMediaAttachments: request.chatMediaAttachments,
       hostIntakeToolHandler: sharedIntakeHandler,
-      hostAskQuestionHandler: (args) => askQuestionHostExecute(args, hostState),
+      hostAskQuestionHandler: (args) => askQuestionHostExecute(args, hostState, preferredUserLocale),
       hostIntakeReadyToFinish: () => isIntakeStateReady(hostState),
       sessionPersistence: persistence,
       initialConversation,
+      preferredUserLocale,
       latestUserTextForLocale: request.prompt,
       intakeState: hostState,
       projectType: routedProjectType ?? hintedRouting?.projectType,

@@ -1,5 +1,6 @@
 import { POST_INTAKE_BUILD_REQUEST_PREFIX } from "./postIntakeCreatorPrompt";
 import type { ChatMediaAttachment } from "./chatMediaAttachments";
+import type { UserLocale } from "./userLocale";
 
 export const IPCChannels = {
   bootstrapState: "agent:bootstrap-state",
@@ -431,6 +432,8 @@ export type AgentEvent =
     at: number;
     /** When true, the renderer shows the size chip row (`sizes`) after the model calls `dartsnut_ask_question` with `question_id` `widget_display_size`. When false, hide it. */
     visible: boolean;
+    /** Locale for visible chip-dialog copy. Hide events omit this. */
+    locale?: UserLocale;
     /** Supported WxH tokens for chips; set when `visible` is true. */
     sizes?: WidgetSize[];
   }
@@ -439,6 +442,8 @@ export type AgentEvent =
     at: number;
     /** When true, the renderer shows the Game / Widget chip row (`options`) after the model calls `dartsnut_ask_question` with `question_id` `project_type`. When false, hide it. */
     visible: boolean;
+    /** Locale for visible chip-dialog copy. Hide events omit this. */
+    locale?: UserLocale;
     options?: ProjectType[];
   }
   | {

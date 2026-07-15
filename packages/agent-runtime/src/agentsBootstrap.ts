@@ -39,7 +39,8 @@ export function configureAgentsSdk(config: AgentModelConfig, options?: { force?:
     apiKey: config.apiKey,
     baseURL: baseUrl,
     timeout: timeoutMs,
-    maxRetries: 0
+    maxRetries: 0,
+    fetch: config.fetchImpl
   });
   setDefaultOpenAIClient(client);
   setOpenAIAPI("chat_completions");

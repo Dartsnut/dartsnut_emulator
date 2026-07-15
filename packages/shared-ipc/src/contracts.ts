@@ -193,9 +193,19 @@ export interface PromptRequest {
   };
 }
 
-/** IPC return from `sendPrompt` — optional routing snapshot for the renderer session chrome. */
+export type DartsnutLlmFailureReason =
+  | "auth_required"
+  | "no_bound_machine"
+  | "daily_quota_exceeded"
+  | "run_already_active"
+  | "run_expired"
+  | "service_unavailable";
+
+/** IPC return from `sendPrompt` — optional routing snapshot or typed Dartsnut LLM rejection. */
 export interface SendPromptResponse {
   ok: boolean;
+  failureReason?: DartsnutLlmFailureReason;
+  message?: string;
   sessionRouting?: {
     templateMode: "game-creator" | "widget-creator";
     projectType: ProjectType;

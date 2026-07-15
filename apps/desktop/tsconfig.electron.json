@@ -12,7 +12,7 @@
   "include": [
     "main.ts",
     "appUpdater.ts",
-    "dartsnutLlmConfig.ts",
+    "dartsnutLlmBridge.ts",
     "packagedEnv.generated.ts",
     "preload.ts",
     "pythonRuntime.ts",

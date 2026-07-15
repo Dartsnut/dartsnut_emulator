@@ -6,9 +6,16 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = path.join(repoRoot, ".env");
 const outputPath = path.join(repoRoot, "apps", "desktop", "packagedEnv.generated.ts");
+const legacyDartsnutLlmArtifacts = [
+  path.join(repoRoot, "apps", "desktop", "dist-electron", "dartsnutLlmConfig.js"),
+  path.join(repoRoot, "apps", "desktop", "dist-electron", "dartsnutLlmConfig.js.map"),
+  path.join(repoRoot, "apps", "desktop", "dist-electron", "dartsnutLlmConfig.d.ts")
+];
+for (const artifact of legacyDartsnutLlmArtifacts) {
+  fs.rmSync(artifact, { force: true });
+}
 
 const allowList = [
-  "DARTSNUT_MODEL_DECRYPTION_KEY",
   "DARTSNUT_BASE_API",
   "DARTSNUT_SUPABASE_URL",
   "DARTSNUT_SUPABASE_ANON_KEY",

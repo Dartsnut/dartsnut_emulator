@@ -55,6 +55,7 @@ import { EmulatorPanel } from "./EmulatorPanel";
 import { MyGamesPanel } from "./MyGamesPanel";
 import {
   agentEventTimelineRole,
+  describeTimelineError,
   formatAgentEventForTimeline,
   mergeTimelineSkillStatusEntry,
   parseToolStatusMessage,
@@ -93,7 +94,7 @@ function machineOptionLabel(machine: MachineMcpQuestionMachine): string {
 
 type RightPaneTab = "emulator" | "assets";
 type DeployPaneTab = "deploy" | "games";
-type CommunityAuthIntent = "deploy-devices" | "my-games";
+type CommunityAuthIntent = "deploy-devices" | "my-games" | "llm-use";
 
 type AppScreen = "main" | "settings";
 type SubmissionLockState = {
@@ -273,6 +274,31 @@ type TimelineEntryViewProps = {
   onToggleReasoning: (entryId: string) => void;
 };
 
+function TimelineErrorCard({ text }: { text: string }) {
+  const error = describeTimelineError(text);
+  return (
+    <div className="timeline-error-card" role="alert">
+      <div className="timeline-error-card__signal" aria-hidden>
+        <svg width="14" height="14" viewBox="0 0 16 16">
+          <path d="M8 2.25v6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <circle cx="8" cy="11.75" r="1" fill="currentColor" />
+        </svg>
+      </div>
+      <div className="timeline-error-card__content">
+        <span className="timeline-error-card__eyebrow">Run interrupted</span>
+        <strong className="timeline-error-card__title">{error.title}</strong>
+        <p className="timeline-error-card__message">{error.message}</p>
+        {error.technicalDetail ? (
+          <details className="timeline-error-card__details">
+            <summary>Technical details</summary>
+            <code>{error.technicalDetail}</code>
+          </details>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 const TimelineEntryView = memo(function TimelineEntryView({
   entry,
   onToggleReasoning
@@ -338,7 +364,7 @@ const TimelineEntryView = memo(function TimelineEntryView({
       ) : entry.role === "status" ? (
         <div className="entry-text">{entry.text}</div>
       ) : (
-        <pre className="entry-json">{entry.text}</pre>
+        <TimelineErrorCard text={entry.text} />
       )}
     </div>
   );
@@ -858,9 +884,13 @@ export function App() {
     }
   }, [communitySession.loggedIn]);
 
-  const requestCommunityAuth = useCallback((intent: CommunityAuthIntent) => {
+  const requestCommunityAuth = useCallback((intent: CommunityAuthIntent, force = false) => {
     setCommunityAuthIntent(intent);
-    if (!communitySession.loggedIn && !isCommunityAuthSkippedForSession()) {
+    if (
+      force ||
+      (!communitySession.loggedIn &&
+        (intent === "llm-use" || !isCommunityAuthSkippedForSession()))
+    ) {
       setDeployAuthGateOpen(true);
     }
   }, [communitySession.loggedIn]);
@@ -1668,7 +1698,17 @@ export function App() {
       const result: SendPromptResponse = await api.sendPrompt(request);
       const refreshed = await api.getBootstrapState();
       setBootstrap(refreshed);
-      if (result.ok && result.sessionRouting) {
+      if (!result.ok) {
+        if (result.failureReason === "auth_required") {
+          await refreshCommunitySession();
+          requestCommunityAuth("llm-use", true);
+        }
+        if (result.message) {
+          postStatus(result.message);
+        }
+        return;
+      }
+      if (result.sessionRouting) {
         setSessionTemplateMode(result.sessionRouting.templateMode);
         setSessionProjectType(result.sessionRouting.projectType);
         setSessionWidgetSize(result.sessionRouting.widgetSize ?? null);
@@ -2692,12 +2732,21 @@ export function App() {
       <DeployAuthGate
         open={deployAuthGateOpen}
         googleSignInAvailable={communitySession.googleSignInAvailable}
-        title={communityAuthIntent === "my-games" ? "Sign in to publish apps" : "Sign in to pick a device"}
+        title={
+          communityAuthIntent === "my-games"
+            ? "Sign in to publish apps"
+            : communityAuthIntent === "llm-use"
+              ? "Sign in to use Dartsnut LLM"
+              : "Sign in to pick a device"
+        }
         description={
           communityAuthIntent === "my-games"
             ? "Log in with your Dartsnut account to publish games and widgets."
-            : "Log in with your Dartsnut account to select a bound machine and use its IP automatically. You can continue without signing in and enter an IP manually."
+            : communityAuthIntent === "llm-use"
+              ? "Dartsnut LLM requires a signed-in account with at least one bound machine."
+              : "Log in with your Dartsnut account to select a bound machine and use its IP automatically. You can continue without signing in and enter an IP manually."
         }
+        allowSkip={communityAuthIntent !== "llm-use"}
         onSkip={() => {
           setCommunityAuthSkippedForSession();
           setCommunityAuthSkippedVersion((v) => v + 1);

@@ -28,6 +28,7 @@ export type DeployAuthGateProps = {
   googleSignInAvailable: boolean;
   title?: string;
   description?: string;
+  allowSkip?: boolean;
   onSkip: () => void;
   onSuccess: (account: string) => void;
 };
@@ -39,6 +40,7 @@ export function DeployAuthGate({
   googleSignInAvailable,
   title = "Sign in to Dartsnut",
   description = "Log in with your Dartsnut account to use community features. You can continue without signing in and enter an IP manually.",
+  allowSkip = true,
   onSkip,
   onSuccess
 }: DeployAuthGateProps) {
@@ -186,9 +188,11 @@ export function DeployAuthGate({
           {busy === "google" ? "Opening browser…" : "Continue with Google"}
         </button>
 
-        <button type="button" className={cn(toolbarBtn, "w-full justify-center")} disabled={busy !== null} onClick={handleSkip}>
-          Continue without account
-        </button>
+        {allowSkip ? (
+          <button type="button" className={cn(toolbarBtn, "w-full justify-center")} disabled={busy !== null} onClick={handleSkip}>
+            Continue without account
+          </button>
+        ) : null}
       </div>
     </div>
   );

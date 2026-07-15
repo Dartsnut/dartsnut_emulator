@@ -6,6 +6,7 @@ export interface AgentModelConfig {
   model: string;
   baseUrl?: string;
   apiKey?: string;
+  fetchImpl?: typeof fetch;
   endpointKind: AgentEndpointKind;
 }
 
@@ -16,6 +17,7 @@ export function buildAgentModelConfig(input: {
   model: string;
   baseUrl?: string;
   apiKey?: string;
+  fetchImpl?: typeof fetch;
 }): AgentModelConfig {
   const isOpenAiFirstParty = (url: string | undefined): boolean => {
     if (!url) {
@@ -36,6 +38,7 @@ export function buildAgentModelConfig(input: {
     model,
     baseUrl,
     apiKey,
+    fetchImpl: input.fetchImpl,
     endpointKind: isOpenAiFirstParty(baseUrl) ? "openai" : "openai-compatible"
   };
 }

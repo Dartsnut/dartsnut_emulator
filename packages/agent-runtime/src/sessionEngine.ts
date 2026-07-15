@@ -2,7 +2,7 @@ import "./agentsBootstrap";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { run, type StreamedRunResult } from "@openai/agents";
+import { Runner, run, type StreamedRunResult } from "@openai/agents";
 import {
   type AgentEvent,
   type AgentTokenUsage,
@@ -98,11 +98,9 @@ export class SessionEngine {
   private sessionId: string = randomUUID();
   private stoppedOnCleanEmulator = false;
   private readonly completionTools: ChatCompletionTool[];
-  private readonly runFn: typeof run;
 
   constructor(private readonly options: SessionEngineOptions) {
     this.completionTools = options.completionTools ?? AGENT_TOOL_SCHEMAS;
-    this.runFn = options.runFn ?? run;
     const existingSessionId = options.sessionPersistence?.readManifest()?.sessionId;
     if (typeof existingSessionId === "string" && existingSessionId.length > 0) {
       this.sessionId = existingSessionId;
@@ -236,7 +234,7 @@ export class SessionEngine {
     this.stoppedOnCleanEmulator = false;
 
     const cfg = this.resolveModelConfig();
-    configureAgentsSdk(cfg);
+    const modelProvider = configureAgentsSdk(cfg);
 
     const runContext = this.buildRunContext(runOptions?.userPrompt ?? prompt);
     refreshDartsnutRunContext(
@@ -271,14 +269,22 @@ export class SessionEngine {
         throw new Error(AGENT_STOPPED_MESSAGE);
       }
 
-      const stream = (await this.runFn(agent, prompt, {
+      const sdkRunOptions = {
         session,
-        stream: true,
+        stream: true as const,
         signal: abortSignal,
         maxTurns: SessionEngine.MAIN_AGENT_MAX_TURNS,
         context: runContext,
         callModelInputFilter: fixReasoningContentEcho
-      })) as StreamedRunResult<DartsnutRunContext, any>;
+      };
+      // @openai/agents' process-global run() caches its first model provider.
+      // A per-run Runner keeps provider switches and bridge fetch injection authoritative.
+      const stream = (await (this.options.runFn
+        ? this.options.runFn(agent, prompt, sdkRunOptions)
+        : new Runner({ modelProvider }).run(agent, prompt, sdkRunOptions))) as StreamedRunResult<
+        DartsnutRunContext,
+        any
+      >;
 
       const tokenUsageBase = this.options.sessionPersistence?.readTokenUsage() ?? null;
       const bridgeResult = await mapAgentsStreamToAgentEvents(stream, onEvent, {

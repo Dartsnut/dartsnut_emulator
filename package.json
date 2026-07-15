@@ -16,7 +16,11 @@
     "export:agent-plugin": "node scripts/export_agent_plugin.mjs",
     "check:agent-plugin": "node scripts/export_agent_plugin.mjs --check && node scripts/check_agent_plugin.mjs",
     "setup:python": "node scripts/setup_python_env.mjs",
-    "bundle:python": "node scripts/build_bundled_python.mjs"
+    "bundle:python": "node scripts/build_bundled_python.mjs",
+    "test:e2e:agent": "node --test e2e/agent-bridge.e2e.js",
+    "e2e:up": "npm --prefix ../dartsnut-community-api run e2e:up",
+    "e2e:down": "npm --prefix ../dartsnut-community-api run e2e:down",
+    "test:e2e": "npm --prefix ../dartsnut-community-api run test:e2e && DARTSNUT_E2E_API_BASE=http://127.0.0.1:13300 node --test e2e/agent-bridge.e2e.js"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",

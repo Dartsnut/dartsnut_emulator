@@ -1,6 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
+import { randomUUID } from "node:crypto";
 import dotenv from "dotenv";
 import { spawn, spawnSync } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
@@ -105,15 +106,20 @@ import {
   precheckAskQuestion,
   isIntakeStateReady,
   type IntakeToolState,
-  type ChatMessage
+  type ChatMessage,
+  type AgentModelConfig,
+  type ProviderConfig
 } from "@dartsnut/agent-runtime";
 import { formatAgentEventForConsole } from "./agentEventConsole";
 import { PACKAGED_ENV } from "./packagedEnv.generated";
 import {
-  ensureRuntimeDartsnutLlmConfig,
-  primeRuntimeDartsnutLlmConfig,
-  readCachedRuntimeDartsnutLlmConfig
-} from "./dartsnutLlmConfig";
+  DARTSNUT_LLM_BRIDGE_API_KEY_PLACEHOLDER,
+  DARTSNUT_LLM_MODEL_ALIAS,
+  dartsnutLlmBridgeModelBaseUrl,
+  startDartsnutLlmBridgeRun,
+  type DartsnutLlmBridgeFailure,
+  type DartsnutLlmBridgeRun
+} from "./dartsnutLlmBridge";
 import {
   EMULATOR_IPC_CHANNELS,
   beginEmulatorSwitch,
@@ -210,14 +216,6 @@ if (app.isPackaged) {
 } else if (fs.existsSync(repoEnvPath)) {
   dotenv.config({ path: repoEnvPath });
 }
-void primeRuntimeDartsnutLlmConfig()
-  .catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    devLog.warn(`[provider] Dartsnut LLM config load failed: ${message}`);
-  })
-  .finally(() => {
-    emitBootstrapStateToRenderer();
-  });
 let pythonExec: string | null = null;
 let pythonRuntimeStatus: string | null = null;
 let pythonRuntimeProgress: PythonRuntimeProgress = {
@@ -851,10 +849,6 @@ function persistProviderSettings(settings: ProviderSettings): void {
   fs.writeFileSync(providerSettingsPath(), JSON.stringify(providerSettingsForDisk(settings), null, 2));
 }
 
-function sameProviderSettings(a: UserDefineProviderSettings, b: UserDefineProviderSettings): boolean {
-  return a.baseUrl === b.baseUrl && a.apiKey === b.apiKey && a.model === b.model;
-}
-
 function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): ProviderSettings {
   const legacyFlat =
     input != null &&
@@ -878,11 +872,7 @@ function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): P
 
   const legacyUserDefine = normalizeUserDefineSettings(input?.userDefine);
   const customSource = input?.custom ?? input?.userDefine;
-  let custom = normalizeUserDefineSettings(customSource);
-  const builtin = normalizeUserDefineSettings(readCachedRuntimeDartsnutLlmConfig());
-  if (custom.apiKey && sameProviderSettings(custom, builtin)) {
-    custom = normalizeUserDefineSettings();
-  }
+  const custom = normalizeUserDefineSettings(customSource);
   const activeProvider =
     input == null
       ? "dartsnut-llm"
@@ -941,26 +931,19 @@ function readProviderSettings(): ProviderSettings {
 
 async function validateProviderSettingsInput(input: SaveProviderSettingsRequest): Promise<{ ok: true } | { ok: false; error: string }> {
   const normalized = normalizeProviderSettings(input);
-  let ud: UserDefineProviderSettings;
   if (normalized.activeProvider === "dartsnut-llm") {
-    try {
-      ud = await ensureRuntimeDartsnutLlmConfig();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, error: `Dartsnut LLM configuration could not be loaded. ${message}` };
-    }
-  } else {
-    ud = normalized.custom;
+    return { ok: true };
   }
-  if (!ud.apiKey) {
+  const custom = normalized.custom;
+  if (!custom.apiKey) {
     return { ok: false, error: "API key is required." };
   }
-  if (!ud.model) {
+  if (!custom.model) {
     return { ok: false, error: "Model is required." };
   }
-  if (ud.baseUrl) {
+  if (custom.baseUrl) {
     try {
-      new URL(ud.baseUrl);
+      new URL(custom.baseUrl);
     } catch {
       return { ok: false, error: "Endpoint must be a valid URL." };
     }
@@ -978,31 +961,28 @@ async function writeProviderSettings(input: SaveProviderSettingsRequest): Promis
   return normalized;
 }
 
-async function resolveProviderConfigForDesktop(providerSettings: ProviderSettings) {
+function resolveDartsnutBridgeProviderConfig(): ProviderConfig {
+  const baseApi = getCommunityClient().getConfig().baseApi;
+  return {
+    baseUrl: dartsnutLlmBridgeModelBaseUrl(baseApi),
+    apiKey: DARTSNUT_LLM_BRIDGE_API_KEY_PLACEHOLDER,
+    model: DARTSNUT_LLM_MODEL_ALIAS
+  };
+}
+
+function resolveProviderConfigForDesktop(providerSettings: ProviderSettings): ProviderConfig {
   if (providerSettings.activeProvider === "dartsnut-llm") {
-    try {
-      return await ensureRuntimeDartsnutLlmConfig();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Dartsnut LLM configuration could not be loaded. ${message}`);
-    }
+    return resolveDartsnutBridgeProviderConfig();
   }
   return loadProviderConfig({ providerSettings });
 }
 
-function resolveCachedProviderConfigForDesktop(providerSettings: ProviderSettings) {
-  if (providerSettings.activeProvider === "dartsnut-llm") {
-    const config = readCachedRuntimeDartsnutLlmConfig();
-    if (!config) {
-      return null;
-    }
-    return config;
-  }
-  return loadProviderConfig({ providerSettings });
+function resolveCachedProviderConfigForDesktop(providerSettings: ProviderSettings): ProviderConfig {
+  return resolveProviderConfigForDesktop(providerSettings);
 }
 
-async function buildAgentModelConfigFromProviderSettings(providerSettings: ProviderSettings) {
-  const config = await resolveProviderConfigForDesktop(providerSettings);
+function buildAgentModelConfigFromProviderSettings(providerSettings: ProviderSettings) {
+  const config = resolveProviderConfigForDesktop(providerSettings);
   return buildAgentModelConfig({
     model: config.model,
     baseUrl: config.baseUrl,
@@ -1010,8 +990,65 @@ async function buildAgentModelConfigFromProviderSettings(providerSettings: Provi
   });
 }
 
-async function reconfigureAgentsSdkFromProviderSettings(providerSettings: ProviderSettings): Promise<void> {
-  configureAgentsSdk(await buildAgentModelConfigFromProviderSettings(providerSettings), { force: true });
+function reconfigureAgentsSdkFromProviderSettings(providerSettings: ProviderSettings): void {
+  if (providerSettings.activeProvider === "dartsnut-llm") {
+    return;
+  }
+  configureAgentsSdk(buildAgentModelConfigFromProviderSettings(providerSettings), { force: true });
+}
+
+type PreparedAgentProvider =
+  | { ok: true; modelConfig: AgentModelConfig; bridgeRun: DartsnutLlmBridgeRun | null }
+  | { ok: false; failure: DartsnutLlmBridgeFailure };
+
+async function prepareAgentProvider(providerSettings: ProviderSettings): Promise<PreparedAgentProvider> {
+  if (providerSettings.activeProvider === "custom") {
+    const config = resolveProviderConfigForDesktop(providerSettings);
+    const validation = validateProviderConfig(config);
+    if (!validation.ok) {
+      return {
+        ok: false,
+        failure: { reason: "service_unavailable", message: validation.error || "Custom provider is not configured." }
+      };
+    }
+    return {
+      ok: true,
+      bridgeRun: null,
+      modelConfig: buildAgentModelConfig({
+        model: config.model,
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        fetchImpl: config.fetchImpl
+      })
+    };
+  }
+
+  const auth = readCommunityAuth(getCommunityUserDataPath());
+  if (!auth?.token) {
+    return {
+      ok: false,
+      failure: {
+        reason: "auth_required",
+        message: "Sign in to your Dartsnut account to use Dartsnut LLM."
+      }
+    };
+  }
+  const started = await startDartsnutLlmBridgeRun({
+    baseApi: getCommunityClient().getConfig().baseApi,
+    token: auth.token,
+    runId: randomUUID()
+  });
+  if (!started.ok) {
+    if (started.failure.reason === "auth_required") {
+      clearCommunityAuth(getCommunityUserDataPath());
+    }
+    return started;
+  }
+  return {
+    ok: true,
+    modelConfig: started.run.modelConfig,
+    bridgeRun: started.run
+  };
 }
 
 function readProofState() {
@@ -2472,18 +2509,14 @@ async function buildSession(
     projectType?: ProjectType;
     widgetSize?: WidgetSize;
     assetApplierMode?: boolean;
+    agentModelConfig?: AgentModelConfig;
   }
 ): Promise<AgentSessionRuntime> {
   const workspacePath = extras?.workspacePath ?? workspaceRoot;
   if (!workspacePath) {
     throw new Error("Workspace is not selected.");
   }
-  const providerSettings = readProviderSettings();
-  const config = await resolveProviderConfigForDesktop(providerSettings);
-  const validation = validateProviderConfig(config);
-  if (!validation.ok) {
-    throw new Error(validation.error);
-  }
+  const agentModelConfig = extras?.agentModelConfig ?? buildAgentModelConfigFromProviderSettings(readProviderSettings());
   const skillBundleMode =
     extras?.skillBundleMode !== undefined ? extras.skillBundleMode : templateMode ?? null;
   const { skillPrompt, skillLibrary } = resolveSkillSessionContext(skillBundleMode);
@@ -2493,11 +2526,7 @@ async function buildSession(
       ? resolvePreferredUserLocaleForSession(extras.latestUserTextForLocale, extras.sessionPersistence)
       : null);
   const engine = new SessionEngine({
-    agentModelConfig: buildAgentModelConfig({
-      model: config.model,
-      baseUrl: config.baseUrl,
-      apiKey: config.apiKey
-    }),
+    agentModelConfig,
     workspacePolicy: new WorkspacePolicy(workspacePath),
     skillPrompt,
     skillLibrary,
@@ -3489,7 +3518,7 @@ ipcMain.handle(IPCChannels.getPythonRuntimeStatus, () => pythonRuntimeStatus);
 ipcMain.handle(IPCChannels.getPythonRuntimeProgress, () => pythonRuntimeProgress);
 ipcMain.handle(IPCChannels.saveProviderSettings, async (_event: unknown, request: SaveProviderSettingsRequest) => {
   const saved = await writeProviderSettings(request);
-  await reconfigureAgentsSdkFromProviderSettings(saved);
+  reconfigureAgentsSdkFromProviderSettings(saved);
   emitBootstrapStateToRenderer();
   return saved;
 });
@@ -3733,10 +3762,17 @@ ipcMain.handle(
       const message = error instanceof Error ? error.message : "failed to parse conf.json";
       return { ok: false, reason: "missing_conf", message };
     }
+    let bridgeRun: DartsnutLlmBridgeRun | null = null;
     try {
+      const prepared = await prepareAgentProvider(readProviderSettings());
+      if (!prepared.ok) {
+        return { ok: false, reason: "unknown", message: prepared.failure.message };
+      }
+      bridgeRun = prepared.bridgeRun;
       const session = await buildSession("asset-applier", {
         workspacePath: targetWorkspace,
-        assetApplierMode: true
+        assetApplierMode: true,
+        agentModelConfig: prepared.modelConfig
       });
       const prompt = buildRoutedPrompt({
         prompt: "",
@@ -3755,6 +3791,10 @@ ipcMain.handle(
       } finally {
         assetEmit.flush();
       }
+      const bridgeFailure = bridgeRun?.readFailure();
+      if (bridgeFailure) {
+        return { ok: false, reason: "unknown", message: bridgeFailure.message };
+      }
       assetManager.clearPending(targetWorkspace, requestedSlots);
       // Re-emit a snapshot so the UI clears the pending badge.
       sendToRenderer(IPCChannels.assetsSubscribeManifest, assetManager.getSnapshot(targetWorkspace));
@@ -3764,6 +3804,8 @@ ipcMain.handle(
       const event: AgentEvent = { type: "error", message, at: Date.now() };
       sendToRenderer(IPCChannels.subscribeEvents, event);
       return { ok: false, reason: "unknown", message };
+    } finally {
+      await bridgeRun?.finish();
     }
   }
 );
@@ -3787,9 +3829,20 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
   sendPromptAbortController = runAbort;
   const emitAgentSink = createEmitAgentToRenderer();
   const emitAgent = (agentEvent: AgentEvent) => emitAgentSink.emit(agentEvent);
+  let bridgeRun: DartsnutLlmBridgeRun | null = null;
   try {
     ensureTemporaryWorkspaceRootAllocated();
     agentEventEmitter = emitAgent;
+    const prepared = await prepareAgentProvider(readProviderSettings());
+    if (!prepared.ok) {
+      emitAgent({ type: "error", message: prepared.failure.message, at: Date.now() });
+      return {
+        ok: false,
+        failureReason: prepared.failure.reason,
+        message: prepared.failure.message
+      };
+    }
+    bridgeRun = prepared.bridgeRun;
     let sessionRouting: SendPromptResponse["sessionRouting"];
     const hostState: IntakeToolState = {};
     const effectiveWorkspacePath =
@@ -3840,7 +3893,8 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
       intakeState: hostState,
       projectType: routedProjectType ?? hintedRouting?.projectType,
       widgetSize: routedWidgetSize ?? hintedRouting?.widgetSize,
-      getIntakeState: () => hostState
+      getIntakeState: () => hostState,
+      agentModelConfig: prepared.modelConfig
     });
     if (routedTemplateMode) {
       sessionRouting = {
@@ -3854,6 +3908,18 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     const prompt = buildRoutedPrompt(request, hostState);
     terminalAgentLifecycleLog("[agent] runPrompt start", { promptChars: prompt.length });
     await session.runPrompt(prompt, emitAgent, runAbort.signal, { userPrompt: request.prompt });
+
+    const bridgeFailure = bridgeRun?.readFailure();
+    if (bridgeFailure) {
+      if (bridgeFailure.reason === "auth_required") {
+        clearCommunityAuth(getCommunityUserDataPath());
+      }
+      return {
+        ok: false,
+        failureReason: bridgeFailure.reason,
+        message: bridgeFailure.message
+      };
+    }
 
     if (!firstRunComplete) {
       writeProofState(true);
@@ -3878,6 +3944,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     }
     return { ok: false };
   } finally {
+    await bridgeRun?.finish();
     emitAgentSink.flush();
     cancelAllIntakeUserInputPending();
     agentEventEmitter = null;

@@ -12,6 +12,7 @@ import { normalizeProviderBaseUrl } from "./providerConfig";
 
 let configuredKey: string | undefined;
 let lastConfiguredClient: OpenAI | undefined;
+let lastConfiguredProvider: OpenAIProvider | undefined;
 
 // @openai/agents registers an OpenAI trace exporter on import. Third-party keys
 // (MiMo, etc.) are not valid for https://api.openai.com/v1/traces/ingest.
@@ -25,32 +26,34 @@ setTraceProcessors([]);
  * key changes. The SDK's global OpenAIProvider caches its first client; updating the client
  * alone is not enough after switching LLM providers in the desktop selector.
  */
-export function configureAgentsSdk(config: AgentModelConfig, options?: { force?: boolean }): void {
+export function configureAgentsSdk(config: AgentModelConfig, options?: { force?: boolean }): OpenAIProvider {
   if (!config.model || !config.apiKey) {
     throw new Error("Provider config missing: model and apiKey are required.");
   }
   const baseUrl = normalizeProviderBaseUrl(config.baseUrl ?? "https://api.openai.com/v1");
   const cacheKey = `${baseUrl}\0${config.apiKey}`;
-  if (!options?.force && configuredKey === cacheKey) {
-    return;
+  if (!options?.force && configuredKey === cacheKey && lastConfiguredProvider) {
+    return lastConfiguredProvider;
   }
   const timeoutMs = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS) || 180_000;
   const client = new OpenAI({
     apiKey: config.apiKey,
     baseURL: baseUrl,
     timeout: timeoutMs,
-    maxRetries: 0
+    maxRetries: 0,
+    fetch: config.fetchImpl
+  });
+  const provider = new OpenAIProvider({
+    openAIClient: client,
+    cacheResponsesWebSocketModels: false
   });
   setDefaultOpenAIClient(client);
   setOpenAIAPI("chat_completions");
-  setDefaultModelProvider(
-    new OpenAIProvider({
-      openAIClient: client,
-      cacheResponsesWebSocketModels: false
-    })
-  );
+  setDefaultModelProvider(provider);
   configuredKey = cacheKey;
   lastConfiguredClient = client;
+  lastConfiguredProvider = provider;
+  return provider;
 }
 
 /** Test helper — last OpenAI client passed to the SDK bootstrap. */
@@ -58,8 +61,14 @@ export function getLastConfiguredOpenAIClientForTests(): OpenAI | undefined {
   return lastConfiguredClient;
 }
 
+/** Test helper — last model provider bound to the configured OpenAI client. */
+export function getLastConfiguredModelProviderForTests(): OpenAIProvider | undefined {
+  return lastConfiguredProvider;
+}
+
 /** Test helper — reset bootstrap cache between cases. */
 export function resetAgentsBootstrapForTests(): void {
   configuredKey = undefined;
   lastConfiguredClient = undefined;
+  lastConfiguredProvider = undefined;
 }

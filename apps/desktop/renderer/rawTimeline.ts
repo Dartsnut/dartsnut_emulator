@@ -1,6 +1,12 @@
 import type { AgentEvent, AgentSessionTranscriptLine } from "@dartsnut/shared-ipc";
 import { stripIntakeUiMarkers, transcriptUserBubbleText } from "@dartsnut/shared-ipc";
 
+export interface TimelineErrorPresentation {
+  title: string;
+  message: string;
+  technicalDetail?: string;
+}
+
 export interface TimelineEntry {
   id: string;
   role: "user" | "agent" | "status" | "error";
@@ -20,6 +26,9 @@ export interface TimelineEntry {
 }
 
 export function formatAgentEventForTimeline(event: AgentEvent): string {
+  if (event.type === "error") {
+    return event.message;
+  }
   if (event.type === "tool_call_delta") {
     const pathText = event.path ? ` ${event.path}` : "";
     return `[tool_call_delta] ${event.toolName}${pathText} (${event.argumentsJson.length} chars streamed)`;
@@ -28,6 +37,81 @@ export function formatAgentEventForTimeline(event: AgentEvent): string {
 }
 
 const TOOL_STATUS_META_PREFIX = " @@tool_status_meta@@";
+
+function errorMessageFromTimelineText(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("{")) {
+    return trimmed;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as { message?: unknown };
+    if (typeof parsed.message === "string" && parsed.message.trim()) {
+      return parsed.message.trim();
+    }
+  } catch {
+    // Older timeline entries may contain plain text that starts with a brace.
+  }
+  return trimmed;
+}
+
+export function describeTimelineError(input: string): TimelineErrorPresentation {
+  const message = errorMessageFromTimelineText(input);
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes("daily dartsnut llm token limit") || normalized.includes("daily_quota_exceeded")) {
+    return {
+      title: "Daily token limit reached",
+      message: "This account has used today’s Dartsnut LLM allowance. New runs unlock at 00:00 UTC."
+    };
+  }
+  if (
+    normalized.includes("token verification failed") ||
+    normalized.includes("please sign in again") ||
+    normalized.includes("auth_required")
+  ) {
+    return {
+      title: "Sign-in expired",
+      message: "Sign in again from the account menu, then retry this request."
+    };
+  }
+  if (normalized.includes("bound machine") || normalized.includes("no_bound_machine")) {
+    return {
+      title: "Machine binding required",
+      message: "Bind a Dartsnut machine to this account before starting another agent run."
+    };
+  }
+  if (normalized.includes("another dartsnut llm run") || normalized.includes("run_already_active")) {
+    return {
+      title: "Another run is active",
+      message: "Wait for the current agent run to finish, then try again."
+    };
+  }
+  if (
+    normalized.includes("distributor") ||
+    normalized.includes("无可用渠道") ||
+    /(^|\s)503(\s|$)/.test(normalized)
+  ) {
+    return {
+      title: "Model route unavailable",
+      message: "Dartsnut LLM could not find an available model channel. Try again shortly.",
+      technicalDetail: message
+    };
+  }
+  if (normalized.includes("temporarily unavailable") || normalized.includes("service_unavailable")) {
+    return {
+      title: "Service temporarily unavailable",
+      message: "The model service did not accept this request. Try again in a moment.",
+      technicalDetail: message
+    };
+  }
+
+  const looksTechnical = message.length > 180 || /request id|\b[45]\d\d\b/i.test(message);
+  return {
+    title: "Agent run interrupted",
+    message: looksTechnical ? "The model request could not be completed." : message || "The agent run stopped unexpectedly.",
+    ...(looksTechnical ? { technicalDetail: message } : {})
+  };
+}
 
 export function parseToolStatusMessage(input: string): {
   text: string;

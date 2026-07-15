@@ -55,6 +55,7 @@ import { EmulatorPanel } from "./EmulatorPanel";
 import { MyGamesPanel } from "./MyGamesPanel";
 import {
   agentEventTimelineRole,
+  describeTimelineError,
   formatAgentEventForTimeline,
   mergeTimelineSkillStatusEntry,
   parseToolStatusMessage,
@@ -273,6 +274,31 @@ type TimelineEntryViewProps = {
   onToggleReasoning: (entryId: string) => void;
 };
 
+function TimelineErrorCard({ text }: { text: string }) {
+  const error = describeTimelineError(text);
+  return (
+    <div className="timeline-error-card" role="alert">
+      <div className="timeline-error-card__signal" aria-hidden>
+        <svg width="14" height="14" viewBox="0 0 16 16">
+          <path d="M8 2.25v6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <circle cx="8" cy="11.75" r="1" fill="currentColor" />
+        </svg>
+      </div>
+      <div className="timeline-error-card__content">
+        <span className="timeline-error-card__eyebrow">Run interrupted</span>
+        <strong className="timeline-error-card__title">{error.title}</strong>
+        <p className="timeline-error-card__message">{error.message}</p>
+        {error.technicalDetail ? (
+          <details className="timeline-error-card__details">
+            <summary>Technical details</summary>
+            <code>{error.technicalDetail}</code>
+          </details>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 const TimelineEntryView = memo(function TimelineEntryView({
   entry,
   onToggleReasoning
@@ -338,7 +364,7 @@ const TimelineEntryView = memo(function TimelineEntryView({
       ) : entry.role === "status" ? (
         <div className="entry-text">{entry.text}</div>
       ) : (
-        <pre className="entry-json">{entry.text}</pre>
+        <TimelineErrorCard text={entry.text} />
       )}
     </div>
   );

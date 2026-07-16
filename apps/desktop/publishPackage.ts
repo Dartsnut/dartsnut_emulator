@@ -12,6 +12,7 @@ const PUBLISH_ALLOWED_EXTENSIONS = new Set([
   ".bmp",
   ".flac",
   ".gif",
+  ".json",
   ".jpeg",
   ".jpg",
   ".m4a",
@@ -44,6 +45,10 @@ const PUBLISH_SKIP_DIRECTORIES = new Set([
 export function isPublishAllowedFile(relativePath: string): boolean {
   const normalized = relativePath.split(path.sep).join("/");
   const baseName = path.basename(normalized).toLowerCase();
+  const parentDirectories = path.posix.dirname(normalized).split("/");
+  if (parentDirectories.some((directory) => PUBLISH_SKIP_DIRECTORIES.has(directory))) {
+    return false;
+  }
   if (!normalized.includes("/") && PUBLISH_ALLOWED_ROOT_FILES.has(baseName)) {
     return true;
   }

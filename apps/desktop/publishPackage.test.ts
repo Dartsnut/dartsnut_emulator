@@ -27,9 +27,10 @@ test("publish allowlist includes app source, config, images and sounds", () => {
   assert.equal(isPublishAllowedFile("conf.json"), true);
   assert.equal(isPublishAllowedFile("pyproject.toml"), true);
   assert.equal(isPublishAllowedFile("main.py"), true);
-  assert.equal(isPublishAllowedFile("sprites/player.PNG"), true);
-  assert.equal(isPublishAllowedFile("sounds/click.wav"), true);
-  assert.equal(isPublishAllowedFile(".dartsnut/agent-session/conversation.json"), false);
+    assert.equal(isPublishAllowedFile("data/game.json"), true);
+    assert.equal(isPublishAllowedFile("sprites/player.PNG"), true);
+    assert.equal(isPublishAllowedFile("sounds/click.wav"), true);
+    assert.equal(isPublishAllowedFile(".dartsnut/agent-session/conversation.json"), false);
   assert.equal(isPublishAllowedFile("uv.lock"), false);
 });
 
@@ -44,6 +45,7 @@ test("stagePublishWorkspace skips venvs and agent session files", () => {
     fs.writeFileSync(path.join(workspace, "assets", "img", "hero.png"), "png");
     fs.mkdirSync(path.join(workspace, "assets", "sounds"), { recursive: true });
     fs.writeFileSync(path.join(workspace, "assets", "sounds", "hit.ogg"), "ogg");
+    fs.writeFileSync(path.join(workspace, "assets", "game.json"), "{}");
     fs.mkdirSync(path.join(workspace, ".venv", "bin"), { recursive: true });
     fs.writeFileSync(path.join(workspace, ".venv", "bin", "python"), "broken");
     fs.mkdirSync(path.join(workspace, ".dartsnut", "agent-session"), { recursive: true });
@@ -54,13 +56,14 @@ test("stagePublishWorkspace skips venvs and agent session files", () => {
     stagePath = staged.stagePath;
 
     assert.deepEqual(listRelativeFiles(stagePath), [
+      "assets/game.json",
       "assets/img/hero.png",
       "assets/sounds/hit.ogg",
       "conf.json",
       "main.py",
       "pyproject.toml"
     ]);
-    assert.equal(staged.fileCount, 5);
+    assert.equal(staged.fileCount, 6);
   } finally {
     if (stagePath) {
       fs.rmSync(stagePath, { recursive: true, force: true });

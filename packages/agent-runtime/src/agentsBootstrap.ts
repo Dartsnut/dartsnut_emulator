@@ -30,7 +30,7 @@ export function configureAgentsSdk(config: AgentModelConfig, options?: { force?:
   if (!config.model || !config.apiKey) {
     throw new Error("Provider config missing: model and apiKey are required.");
   }
-  const baseUrl = normalizeProviderBaseUrl(config.baseUrl ?? "https://api.openai.com/v1");
+  const baseUrl = normalizeProviderBaseUrl(config.baseUrl ?? "");
   const cacheKey = `${baseUrl}\0${config.apiKey}`;
   if (!options?.force && configuredKey === cacheKey && lastConfiguredProvider) {
     return lastConfiguredProvider;

@@ -27,7 +27,10 @@ test("starts run and injects account token plus run id into model requests", asy
   const calls = [];
   const fetchImpl = async (input, init) => {
     calls.push({ url: String(input), init });
-    return new Response(JSON.stringify({ code: 1001, data: {} }), {
+    return new Response(JSON.stringify({
+      code: 1001,
+      data: { url: "https://upstream.example.com/v1", key: "must-not-reach-desktop", name: "upstream-model" }
+    }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
@@ -41,6 +44,10 @@ test("starts run and injects account token plus run id into model requests", asy
   });
   assert.equal(result.ok, true);
   if (!result.ok) return;
+  assert.equal(result.run.modelConfig.apiKey, "dartsnut-api-bridge-run-1");
+  assert.equal(result.run.modelConfig.model, "dartsnut-llm");
+  assert.equal(JSON.stringify(result.run.modelConfig).includes("must-not-reach-desktop"), false);
+  assert.equal(JSON.stringify(result.run.modelConfig).includes("community-secret"), false);
 
   await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/chat/completions", {
     method: "POST",

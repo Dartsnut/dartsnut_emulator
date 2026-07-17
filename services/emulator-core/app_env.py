@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
+import re
 import subprocess
 import sys
 import time
@@ -74,6 +74,14 @@ def _materialize_pyproject(workspace_dir: str, app_type: str, log: LogFn | None 
     dest = _pyproject_path(workspace_dir)
     template = _template_path(app_type)
     template_text = template.read_text(encoding="utf-8")
+    app_id = _read_conf(workspace_dir).get("id")
+    if app_id is not None:
+        template_text = re.sub(
+            r'(?m)^name = "[^"\n]*"$',
+            lambda _match: f"name = {json.dumps(str(app_id))}",
+            template_text,
+            count=1,
+        )
     if os.path.isfile(dest):
         if not _is_managed_default_pyproject(dest):
             if log:
@@ -82,11 +90,11 @@ def _materialize_pyproject(workspace_dir: str, app_type: str, log: LogFn | None 
         with open(dest, encoding="utf-8") as f:
             if f.read() == template_text:
                 return
-        shutil.copy2(template, dest)
+        Path(dest).write_text(template_text, encoding="utf-8")
         if log:
             log(f"Refreshed default pyproject.toml (type={app_type})", "stdout")
         return
-    shutil.copy2(template, dest)
+    Path(dest).write_text(template_text, encoding="utf-8")
     if log:
         log(f"Materialized default pyproject.toml (type={app_type})", "stdout")
 

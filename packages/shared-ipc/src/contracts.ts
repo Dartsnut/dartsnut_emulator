@@ -63,6 +63,7 @@ export const IPCChannels = {
   communityListDeployDevices: "community:list-deploy-devices",
   communityListMyGames: "community:list-my-games",
   communityGetPublishOptions: "community:get-publish-options",
+  communityListAppVersions: "community:list-app-versions",
   communityCreateApp: "community:create-app",
   communitySubmitAppVersion: "community:submit-app-version",
   /** Main → renderer: current package/upload/review stage for the blocking submission overlay. */
@@ -673,6 +674,10 @@ export type CommunityVersionSummary = {
   description: string;
   status: string;
   createdAt: string | null;
+  updatedAt: string | null;
+  reviewAction: string;
+  reviewComment: string;
+  reviewedAt: string | null;
 };
 
 export type CommunityWorkspaceDefaults = {
@@ -695,9 +700,17 @@ export type CommunityGetPublishOptionsResponse =
       gameControls: CommunityControlOption[];
       widgetControls: CommunityControlOption[];
       widgetSizes: CommunitySizeOption[];
-      currentVersions: CommunityVersionSummary[];
       workspace: CommunityWorkspaceDefaults;
     }
+  | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
+
+export type CommunityListAppVersionsRequest = {
+  projectType: ProjectType;
+  appSystemId: number | string;
+};
+
+export type CommunityListAppVersionsResponse =
+  | { ok: true; versions: CommunityVersionSummary[]; total: number }
   | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
 export type CommunityCreateAppRequest = {
@@ -758,7 +771,6 @@ export type CommunitySubmitAppVersionResponse =
 export type CommunityWithdrawAppVersionRequest = {
   projectType: ProjectType;
   versionId: number | string;
-  appSystemId: number | string;
 };
 
 export type CommunityWithdrawAppVersionResponse =

@@ -64,6 +64,8 @@ import {
   type CommunityListDeployDevicesResponse,
   type CommunityListMyGamesResponse,
   type CommunityGetPublishOptionsResponse,
+  type CommunityListAppVersionsRequest,
+  type CommunityListAppVersionsResponse,
   type CommunityCreateAppRequest,
   type CommunityCreateAppResponse,
   type CommunityUploadNativeImageRequest,
@@ -75,7 +77,6 @@ import {
   type CommunityWithdrawAppVersionRequest,
   type CommunityWithdrawAppVersionResponse,
   type CommunityAppSummary,
-  type CommunityVersionSummary,
   type CommunityWorkspaceDefaults,
   type AgentSessionWorkspaceSummary,
   buildPromptWithChatMediaAttachments,
@@ -3091,20 +3092,6 @@ ipcMain.handle(
       status: game.status,
       createdAt: game.createdAt
     }));
-    const currentApp = workspace.projectType
-      ? [...normalizedGames, ...widgets.widgets].find(
-          (appRow) => appRow.projectType === workspace.projectType && appRow.appId === workspace.appId
-        ) || null
-      : null;
-    let currentVersions: CommunityVersionSummary[] = [];
-    if (currentApp && hasResolvableCommunityAppSystemId(currentApp.id)) {
-      const versions = await client.listAppVersions(auth.token, currentApp.projectType, currentApp.id);
-      if (!versions.ok) {
-        clearAuthIfExpired(versions.code);
-        return authRequiredResponse(versions.code, versions.message, versions.serverMessage);
-      }
-      currentVersions = versions.versions;
-    }
     return {
       ok: true,
       games: normalizedGames,
@@ -3114,9 +3101,28 @@ ipcMain.handle(
       gameControls: gameControls.controls,
       widgetControls: widgetStatus.controls,
       widgetSizes: widgetStatus.sizes,
-      currentVersions,
       workspace
     };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communityListAppVersions,
+  async (_event, request: CommunityListAppVersionsRequest): Promise<CommunityListAppVersionsResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const projectType = request?.projectType === "widget" ? "widget" : "game";
+    if (!hasResolvableCommunityAppSystemId(request?.appSystemId)) {
+      return { ok: false, code: "api_error", message: `Could not resolve backend ${projectType} id.` };
+    }
+    const result = await getCommunityClient().listAppVersions(auth.token, projectType, request.appSystemId);
+    if (!result.ok) {
+      clearAuthIfExpired(result.code);
+      return authRequiredResponse(result.code, result.message, result.serverMessage);
+    }
+    return { ok: true, versions: result.versions, total: result.total };
   }
 );
 
@@ -3303,9 +3309,6 @@ ipcMain.handle(
       return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
     }
     const projectType = request?.projectType === "widget" ? "widget" : "game";
-    if (!hasResolvableCommunityAppSystemId(request.appSystemId)) {
-      return { ok: false, code: "api_error", message: `Could not resolve backend ${projectType} id for this app.` };
-    }
     const versionId =
       typeof request.versionId === "number" ? request.versionId : String(request.versionId || "").trim();
     if (!versionId) {
@@ -3313,8 +3316,7 @@ ipcMain.handle(
     }
     const result = await getCommunityClient().withdrawAppVersion(auth.token, {
       projectType,
-      versionId,
-      appSystemId: request.appSystemId
+      versionId
     });
     if (!result.ok) {
       clearAuthIfExpired(result.code);

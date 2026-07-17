@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -38,6 +39,7 @@ class AppEnvTests(unittest.TestCase):
             self.assertTrue(pyproject.is_file())
             text = pyproject.read_text(encoding="utf-8")
             self.assertTrue(text.startswith(module.MANAGED_PYPROJECT_HEADER))
+            self.assertEqual(tomllib.loads(text)["project"]["name"], "demo")
             self.assertIn("pygame-ce==2.5.7", text)
 
     def test_materializes_widget_template_for_widget_type(self):
@@ -51,6 +53,7 @@ class AppEnvTests(unittest.TestCase):
             )
             module._materialize_pyproject(str(workspace), "widget")
             text = (workspace / "pyproject.toml").read_text(encoding="utf-8")
+            self.assertEqual(tomllib.loads(text)["project"]["name"], "demo")
             self.assertIn("aiohttp==3.13.3", text)
             self.assertNotIn("evdev==", text)
 

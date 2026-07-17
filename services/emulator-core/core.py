@@ -319,7 +319,7 @@ class EmulatorCore:
         )
         if uv_bin and os.path.isfile(uv_bin) and os.path.isfile(venv_python):
             app_env = _load_app_env()
-            command = [uv_bin, "run", "--directory", launch_cwd, "main.py", *script_args]
+            command = [uv_bin, "run", "--no-sync", "--directory", launch_cwd, "main.py", *script_args]
             child_env = app_env.workspace_launch_env()
         else:
             main_py = os.path.join(launch_cwd, "main.py")

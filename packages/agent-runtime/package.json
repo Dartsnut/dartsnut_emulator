@@ -11,7 +11,6 @@
   "dependencies": {
     "@dartsnut/shared-ipc": "workspace:*",
     "@openai/agents": "^0.11.6",
-    "dotenv": "^16.5.0",
     "openai": "^6.35.0",
     "zod": "^4.0.0"
   },

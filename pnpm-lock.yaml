@@ -111,9 +111,6 @@ importers:
       '@openai/agents':
         specifier: ^0.11.6
         version: 0.11.6(supports-color@5.5.0)(ws@8.21.0)(zod@4.4.3)
-      dotenv:
-        specifier: ^16.5.0
-        version: 16.6.1
       openai:
         specifier: ^6.35.0
         version: 6.41.0(ws@8.21.0)(zod@4.4.3)

@@ -24,7 +24,13 @@ test("generate_packaged_env excludes all Dartsnut LLM credentials", () => {
         "DARTSNUT_GOOGLE_DESKTOP_CLIENT_SECRET=desktop-secret",
         "XIAOMI_BASE_URL=https://legacy.example.com",
         "XIAOMI_API_KEY=legacy-key",
-        "XIAOMI_MODEL=legacy-model"
+        "XIAOMI_MODEL=legacy-model",
+        "GPT_BASE_URL=https://gpt.example.com",
+        "GPT_API_KEY=gpt-key",
+        "GPT_MODEL=gpt-model",
+        "OPENAI_BASE_URL=https://openai.example.com",
+        "OPENAI_API_KEY=openai-key",
+        "OPENAI_MODEL=openai-model"
       ].join("\n")
     );
 
@@ -38,7 +44,10 @@ test("generate_packaged_env excludes all Dartsnut LLM credentials", () => {
     assert.doesNotMatch(generated, /DARTSNUT_MODEL_DECRYPTION_KEY/);
     assert.match(generated, /DARTSNUT_GOOGLE_DESKTOP_CLIENT_ID/);
     assert.match(generated, /DARTSNUT_GOOGLE_DESKTOP_CLIENT_SECRET/);
-    assert.doesNotMatch(generated, /XIAOMI_BASE_URL|XIAOMI_API_KEY|XIAOMI_MODEL/);
+    assert.doesNotMatch(
+      generated,
+      /XIAOMI_(?:BASE_URL|API_KEY|MODEL)|GPT_(?:BASE_URL|API_KEY|MODEL)|OPENAI_(?:BASE_URL|API_KEY|MODEL)/
+    );
     assert.equal(
       fs.existsSync(path.join(tempRoot, "apps", "desktop", "dist-electron", "dartsnutLlmConfig.js")),
       false

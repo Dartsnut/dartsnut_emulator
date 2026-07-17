@@ -87,6 +87,10 @@ export type CommunityVersionRow = {
   description: string;
   status: string;
   createdAt: string | null;
+  updatedAt: string | null;
+  reviewAction: string;
+  reviewComment: string;
+  reviewedAt: string | null;
 };
 
 export type CommunityCreateAppInput = {
@@ -130,7 +134,6 @@ export type CommunityVersionSubmitResult = {
 export type CommunityWithdrawAppVersionInput = {
   projectType: "game" | "widget";
   versionId: number | string;
-  appSystemId: number | string;
 };
 
 export type CommunityUploadZipResult = {
@@ -380,7 +383,11 @@ export function normalizeCommunityVersions(list: unknown[], projectType: "game" 
         version,
         description: String(r.description || r.desc || "").trim(),
         status: String(r.status ?? "").trim(),
-        createdAt: r.created_at != null ? String(r.created_at) : r.createdAt != null ? String(r.createdAt) : null
+        createdAt: r.created_at != null ? String(r.created_at) : r.createdAt != null ? String(r.createdAt) : null,
+        updatedAt: r.updated_at != null ? String(r.updated_at) : r.updatedAt != null ? String(r.updatedAt) : null,
+        reviewAction: String(r.review_action || r.reviewAction || "").trim(),
+        reviewComment: String(r.review_comment || r.reviewComment || "").trim(),
+        reviewedAt: r.reviewed_at != null ? String(r.reviewed_at) : r.reviewedAt != null ? String(r.reviewedAt) : null
       };
     })
     .filter((row): row is CommunityVersionRow => row !== null);
@@ -1306,66 +1313,36 @@ export class CommunityClient {
       return { ok: false, code: "session_expired", message: "Please sign in first." };
     }
     const isWidget = input.projectType === "widget";
-    const appSystemKey = isWidget ? "widget_system_id" : "game_system_id";
     const versionId = typeof input.versionId === "number" ? input.versionId : String(input.versionId).trim();
-    const appSystemId =
-      typeof input.appSystemId === "number" ? input.appSystemId : String(input.appSystemId).trim();
-    const payload = {
-      id: versionId,
-      version_id: versionId,
-      [appSystemKey]: appSystemId,
-      submit_mode: "draft",
-      status: 0
-    };
-    const endpoints = [
-      `/community/${isWidget ? "widget" : "game"}-version/withdraw`,
-      `/community/${isWidget ? "widget" : "game"}-version/cancel-review`,
-      `/community/${isWidget ? "widget" : "game"}-version/cancel`,
-      `/community/${isWidget ? "widget" : "game"}-version/update`
-    ];
-    let lastMessage = `Failed to pull ${input.projectType} version out of review.`;
-    let lastServerMessage: string | undefined;
-    let lastCode: CommunityAuthErrorCode = "api_error";
-    for (const endpoint of endpoints) {
-      try {
-        const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}${endpoint}`, {
+    try {
+      const res = await this.fetchWithDartsnutHeaders(
+        `${this.config.baseApi}/community/${isWidget ? "widget" : "game"}-version/withdraw`,
+        {
           method: "POST",
           headers: { token: token.trim(), "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify(payload)
-        });
-        const raw = await res.json().catch(() => null);
-        const parsed = normalizeApiJson(raw) || {};
-        const code = Number(parsed.code);
-        const serverMessage = apiServerMessage(parsed);
-        const message = serverMessage || lastMessage;
-        if (res.status === 403) {
-          return {
-            ok: false,
-            code: "session_expired",
-            message: message || "Please sign in again.",
-            serverMessage
-          };
+          body: JSON.stringify({ id: versionId })
         }
-        if (res.status === 404 || code === 404) {
-          lastMessage = message;
-          lastServerMessage = serverMessage;
-          continue;
-        }
-        if (!isApiSuccess(code)) {
-          lastCode = mapApiErrorCode(code);
-          lastMessage = message;
-          lastServerMessage = serverMessage;
-          continue;
-        }
-        const data = parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : {};
-        return { ok: true, status: String(data.status ?? "0") };
-      } catch (error) {
-        lastCode = "network_error";
-        lastMessage = error instanceof Error ? error.message : String(error);
-        lastServerMessage = undefined;
+      );
+      const raw = await res.json().catch(() => null);
+      const parsed = normalizeApiJson(raw) || {};
+      const code = Number(parsed.code);
+      const serverMessage = apiServerMessage(parsed);
+      if (res.status === 403) {
+        return { ok: false, code: "session_expired", message: serverMessage || "Please sign in again.", serverMessage };
       }
+      if (!isApiSuccess(code)) {
+        return {
+          ok: false,
+          code: mapApiErrorCode(code),
+          message: serverMessage || `Failed to withdraw ${input.projectType} version.`,
+          serverMessage
+        };
+      }
+      const data = parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : {};
+      return { ok: true, status: String(data.status ?? "-2") };
+    } catch (error) {
+      return { ok: false, code: "network_error", message: error instanceof Error ? error.message : String(error) };
     }
-    return { ok: false, code: lastCode, message: lastMessage, serverMessage: lastServerMessage };
   }
 
   async submitGameVersion(

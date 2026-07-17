@@ -37,6 +37,8 @@ import type {
   CommunityListDeployDevicesResponse,
   CommunityListMyGamesResponse,
   CommunityGetPublishOptionsResponse,
+  CommunityListAppVersionsRequest,
+  CommunityListAppVersionsResponse,
   CommunityCreateAppRequest,
   CommunityCreateAppResponse,
   CommunityUploadNativeImageRequest,
@@ -115,6 +117,9 @@ declare global {
       communityListDeployDevices: () => Promise<CommunityListDeployDevicesResponse>;
       communityListMyGames: () => Promise<CommunityListMyGamesResponse>;
       communityGetPublishOptions: () => Promise<CommunityGetPublishOptionsResponse>;
+      communityListAppVersions: (
+        request: CommunityListAppVersionsRequest
+      ) => Promise<CommunityListAppVersionsResponse>;
       communityCreateApp: (request: CommunityCreateAppRequest) => Promise<CommunityCreateAppResponse>;
       communityUploadNativeImage: (
         request: CommunityUploadNativeImageRequest

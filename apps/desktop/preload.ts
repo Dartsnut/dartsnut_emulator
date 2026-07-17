@@ -39,6 +39,8 @@ import {
   type CommunityListDeployDevicesResponse,
   type CommunityListMyGamesResponse,
   type CommunityGetPublishOptionsResponse,
+  type CommunityListAppVersionsRequest,
+  type CommunityListAppVersionsResponse,
   type CommunityCreateAppRequest,
   type CommunityCreateAppResponse,
   type CommunityUploadNativeImageRequest,
@@ -207,6 +209,8 @@ const api = {
     ipcRenderer.invoke(IPCChannels.communityListMyGames) as Promise<CommunityListMyGamesResponse>,
   communityGetPublishOptions: () =>
     ipcRenderer.invoke(IPCChannels.communityGetPublishOptions) as Promise<CommunityGetPublishOptionsResponse>,
+  communityListAppVersions: (request: CommunityListAppVersionsRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityListAppVersions, request) as Promise<CommunityListAppVersionsResponse>,
   communityCreateApp: (request: CommunityCreateAppRequest) =>
     ipcRenderer.invoke(IPCChannels.communityCreateApp, request) as Promise<CommunityCreateAppResponse>,
   communityUploadNativeImage: (request: CommunityUploadNativeImageRequest) =>

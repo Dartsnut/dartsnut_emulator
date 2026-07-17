@@ -10,6 +10,12 @@ import type {
   CommunityWorkspaceDefaults,
   ProjectType
 } from "@dartsnut/shared-ipc";
+import {
+  communityProjectMatchesWorkspace,
+  communityVersionState,
+  hasBlockingCommunityVersion,
+  hasCommunityVersionNumber
+} from "@dartsnut/shared-ipc";
 import { isCommunityAuthSkippedForSession } from "./DeployAuthGate";
 import {
   CommunityErrorSnackbar,
@@ -29,12 +35,12 @@ export type MyGamesPanelProps = {
   onSubmitProgress: (progress: CommunitySubmitProgress | null) => void;
 };
 
-type UploadTile = {
+type Screen = "portfolio" | "project" | "submit";
+
+type StagedImage = {
   filePath: string;
   name: string;
-  url: string;
-  uploading: boolean;
-  error: string | null;
+  previewUrl: string;
 };
 
 type PublishForm = {
@@ -50,10 +56,7 @@ type PublishForm = {
   fields: string;
 };
 
-type ApiErrorSnackbarState = {
-  message: string;
-  detail?: string;
-};
+type ApiErrorSnackbarState = { message: string; detail?: string };
 
 const emptyWorkspace: CommunityWorkspaceDefaults = {
   eligible: false,
@@ -65,13 +68,8 @@ const emptyWorkspace: CommunityWorkspaceDefaults = {
   widgetSize: ""
 };
 
-const publishInputClass = "ui-input h-10 min-h-10 w-full px-3 py-0 leading-none";
-const publishTextAreaClass = "ui-input min-h-24 w-full resize-none px-3 py-2 leading-relaxed";
-const publishSubmitClass = cn(
-  "ui-btn-primary mt-3 flex min-h-11 w-full items-center justify-center px-3 py-2 text-center text-[13px]",
-  "enabled:shadow-[0_10px_26px_rgba(0,0,0,0.18)]",
-  "disabled:border disabled:border-edge disabled:bg-[var(--color-surface)] disabled:shadow-none"
-);
+const inputClass = "ui-input h-10 min-h-10 w-full px-3 py-0 leading-none";
+const textAreaClass = "ui-input min-h-24 w-full resize-none px-3 py-2 leading-relaxed";
 
 function defaultForm(workspace: CommunityWorkspaceDefaults = emptyWorkspace): PublishForm {
   return {
@@ -88,45 +86,41 @@ function defaultForm(workspace: CommunityWorkspaceDefaults = emptyWorkspace): Pu
   };
 }
 
-function versionStatusLabel(status: string): string {
-  switch (String(status)) {
-    case "-2":
-      return "Revoked";
-    case "-1":
-      return "Rejected";
-    case "0":
-      return "Pending Submit";
-    case "1":
-      return "In Review";
-    case "2":
-      return "Pending Publish";
-    case "3":
-      return "Approved";
-    default:
-      return status ? `Status ${status}` : "Created";
-  }
-}
-
-function formatDate(value: string | null): string {
-  if (!value) {
-    return "";
-  }
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-function shortFileName(name: string): string {
-  if (name.length <= 22) {
-    return name;
-  }
-  return `${name.slice(0, 10)}...${name.slice(-9)}`;
+function projectKey(project: Pick<CommunityAppSummary, "projectType" | "id">): string {
+  return `${project.projectType}:${String(project.id)}`;
 }
 
 function projectLabel(projectType: ProjectType | null): string {
-  return projectType === "widget" ? "Widget" : projectType === "game" ? "Game" : "App";
+  return projectType === "widget" ? "Widget" : projectType === "game" ? "Game" : "Project";
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function statusTone(key: ReturnType<typeof communityVersionState>["key"]): string {
+  switch (key) {
+    case "review":
+      return "border-amber-400/35 bg-amber-400/10 text-amber-700 dark:text-amber-200";
+    case "rejected":
+      return "border-red-500/35 bg-red-500/10 text-red-700 dark:text-red-200";
+    case "approved":
+      return "border-sky-400/35 bg-sky-400/10 text-sky-700 dark:text-sky-200";
+    case "published":
+      return "border-emerald-400/35 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200";
+    case "withdrawn":
+    case "revoked":
+      return "border-edge bg-[var(--color-surface)] text-[var(--color-text-subtle)]";
+    default:
+      return "border-edge bg-[var(--color-surface)] text-[var(--color-text-muted)]";
+  }
+}
+
+function revokeStaged(image: StagedImage | null): void {
+  if (image?.previewUrl.startsWith("blob:")) URL.revokeObjectURL(image.previewUrl);
 }
 
 export const MyGamesPanel = memo(function MyGamesPanel({
@@ -141,80 +135,109 @@ export const MyGamesPanel = memo(function MyGamesPanel({
   const api = window.dartsnutApi;
   const iconInputRef = useRef<HTMLInputElement | null>(null);
   const previewInputRef = useRef<HTMLInputElement | null>(null);
+  const stagedImagesRef = useRef<{ icon: StagedImage | null; previews: StagedImage[] }>({ icon: null, previews: [] });
+  const lastWorkspaceRefreshKeyRef = useRef(communityWorkspaceRefreshKey);
+
+  const [screen, setScreen] = useState<Screen>("portfolio");
   const [apps, setApps] = useState<CommunityAppSummary[]>([]);
+  const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
+  const [versions, setVersions] = useState<CommunityVersionSummary[]>([]);
+  const [workspace, setWorkspace] = useState<CommunityWorkspaceDefaults>(emptyWorkspace);
   const [gameCategories, setGameCategories] = useState<CommunityCategoryOption[]>([]);
   const [widgetCategories, setWidgetCategories] = useState<CommunityCategoryOption[]>([]);
   const [gameControls, setGameControls] = useState<CommunityControlOption[]>([]);
   const [widgetControls, setWidgetControls] = useState<CommunityControlOption[]>([]);
   const [widgetSizes, setWidgetSizes] = useState<CommunitySizeOption[]>([]);
-  const [currentVersions, setCurrentVersions] = useState<CommunityVersionSummary[]>([]);
-  const [workspace, setWorkspace] = useState<CommunityWorkspaceDefaults>(emptyWorkspace);
   const [form, setForm] = useState<PublishForm>(() => defaultForm());
-  const [icon, setIcon] = useState<UploadTile | null>(null);
-  const [previews, setPreviews] = useState<UploadTile[]>([]);
+  const [icon, setIcon] = useState<StagedImage | null>(null);
+  const [previews, setPreviews] = useState<StagedImage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [versionsLoading, setVersionsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [withdrawingVersionId, setWithdrawingVersionId] = useState<string | null>(null);
-  const [submitStage, setSubmitStage] = useState<string | null>(null);
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [withdrawTarget, setWithdrawTarget] = useState<CommunityVersionSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [apiErrorSnackbar, setApiErrorSnackbar] = useState<ApiErrorSnackbarState | null>(null);
-  const lastWorkspaceRefreshKeyRef = useRef(communityWorkspaceRefreshKey);
 
-  const projectType = workspace.projectType;
-  const isWidget = projectType === "widget";
+  useEffect(() => {
+    stagedImagesRef.current = { icon, previews };
+  }, [icon, previews]);
+
+  useEffect(() => () => {
+    revokeStaged(stagedImagesRef.current.icon);
+    stagedImagesRef.current.previews.forEach(revokeStaged);
+  }, []);
+
+  const selectedProject = useMemo(
+    () => apps.find((project) => projectKey(project) === selectedProjectKey) || null,
+    [apps, selectedProjectKey]
+  );
+  const currentWorkspaceProject = useMemo(
+    () => apps.find((project) => communityProjectMatchesWorkspace(project, workspace)) || null,
+    [apps, workspace]
+  );
+  const sortedApps = useMemo(() => {
+    const currentKey = currentWorkspaceProject ? projectKey(currentWorkspaceProject) : "";
+    return [...apps].sort((a, b) => {
+      if (projectKey(a) === currentKey) return -1;
+      if (projectKey(b) === currentKey) return 1;
+      return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+    });
+  }, [apps, currentWorkspaceProject]);
+
+  const submissionProject = screen === "submit" ? selectedProject : null;
+  const submissionType = submissionProject?.projectType || workspace.projectType;
+  const isNewProject = !submissionProject;
+  const isWidget = submissionType === "widget";
   const categories = isWidget ? widgetCategories : gameCategories;
   const controls = isWidget ? widgetControls : gameControls;
-  const activeApp = useMemo(
-    () => apps.find((app) => app.projectType === projectType && app.appId === form.appId.trim()) || null,
-    [apps, form.appId, projectType]
-  );
-  const hasVersionInReview = currentVersions.some((version) => String(version.status) === "1");
-
-  const canSubmit = useMemo(() => {
-    return Boolean(
-      workspace.eligible &&
-        projectType &&
-        form.appName.trim() &&
-        form.appId.trim() &&
-        form.categoryId.trim() &&
-        form.controlValues.length > 0 &&
-        (!isWidget || form.widgetSize.trim()) &&
-        form.version.trim() &&
-        form.description.trim() &&
-        icon?.url &&
-        previews.some((preview) => preview.url)
-    );
-  }, [form, icon?.url, isWidget, previews, projectType, workspace.eligible]);
+  const workspaceMatchesSelection = communityProjectMatchesWorkspace(selectedProject, workspace);
+  const blockingVersion = hasBlockingCommunityVersion(versions);
+  const duplicateVersion = hasCommunityVersionNumber(versions, form.version);
 
   const applyAuthFailure = useCallback(async () => {
     await onCommunitySessionChange();
-    if (!isCommunityAuthSkippedForSession()) {
-      onAuthRequired();
-    }
+    if (!isCommunityAuthSkippedForSession()) onAuthRequired();
   }, [onAuthRequired, onCommunitySessionChange]);
 
-  const surfaceApiFailure = useCallback(
-    async (res: CommunityApiFailure, message?: string) => {
-      if (isCommunityAuthFailure(res)) {
-        await applyAuthFailure();
+  const surfaceApiFailure = useCallback(async (res: CommunityApiFailure, message?: string) => {
+    if (isCommunityAuthFailure(res)) {
+      await applyAuthFailure();
+      return;
+    }
+    if (shouldShowCommunityErrorSnackbar(res)) {
+      setApiErrorSnackbar({ message: message || res.message, detail: res.serverMessage?.trim() });
+    }
+  }, [applyAuthFailure]);
+
+  const loadVersions = useCallback(async (project: CommunityAppSummary | null) => {
+    if (!project || !api?.communityListAppVersions) {
+      setVersions([]);
+      return;
+    }
+    setVersionsLoading(true);
+    try {
+      const res = await api.communityListAppVersions({ projectType: project.projectType, appSystemId: project.id });
+      if (!res.ok) {
+        setVersions([]);
+        await surfaceApiFailure(res, `Failed to load ${projectLabel(project.projectType).toLowerCase()} versions.`);
         return;
       }
-      if (shouldShowCommunityErrorSnackbar(res)) {
-        const detail = res.serverMessage?.trim();
-        setApiErrorSnackbar(message ? { message, detail } : { message: detail });
-      }
-    },
-    [applyAuthFailure]
-  );
+      setVersions(res.versions);
+    } catch (cause) {
+      setVersions([]);
+      setApiErrorSnackbar({ message: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      setVersionsLoading(false);
+    }
+  }, [api, surfaceApiFailure]);
 
   const loadPublishOptions = useCallback(async () => {
     if (!active || !api?.communityGetPublishOptions || (!communitySession.loggedIn && isCommunityAuthSkippedForSession())) {
       setApps([]);
-      setCurrentVersions([]);
       setWorkspace(emptyWorkspace);
-      setForm(defaultForm());
-      setError(null);
+      setSelectedProjectKey(null);
       return;
     }
     setLoading(true);
@@ -223,136 +246,156 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       const res = await api.communityGetPublishOptions();
       if (!res.ok) {
         setApps([]);
-        setCurrentVersions([]);
-        if (isCommunityAuthFailure(res)) {
-          await surfaceApiFailure(res);
-          setError(null);
-          return;
-        }
-        await surfaceApiFailure(res);
+        if (isCommunityAuthFailure(res)) await surfaceApiFailure(res);
+        else await surfaceApiFailure(res, "Failed to load community projects.");
         return;
       }
-      setApps([...res.games, ...res.widgets]);
-      setCurrentVersions(res.currentVersions);
+      const nextApps = [...res.games, ...res.widgets];
+      const currentProject = nextApps.find((project) => communityProjectMatchesWorkspace(project, res.workspace)) || null;
+      setApps(nextApps);
+      setWorkspace(res.workspace);
       setGameCategories(res.gameCategories);
       setWidgetCategories(res.widgetCategories);
       setGameControls(res.gameControls);
       setWidgetControls(res.widgetControls);
       setWidgetSizes(res.widgetSizes);
-      setWorkspace(res.workspace);
-      const nextProjectType = res.workspace.projectType;
-      const nextCategories = nextProjectType === "widget" ? res.widgetCategories : res.gameCategories;
-      const nextControls = nextProjectType === "widget" ? res.widgetControls : res.gameControls;
-      const nextCategoryIds = new Set(nextCategories.map((category) => String(category.id)));
-      const nextControlValues = new Set(nextControls.map((control) => control.value));
-      const nextWidgetSizeValues = new Set(res.widgetSizes.map((size) => size.value));
+      setSelectedProjectKey((current) => {
+        if (current && nextApps.some((project) => projectKey(project) === current)) return current;
+        return currentProject ? projectKey(currentProject) : null;
+      });
       setForm((current) => {
         const base = defaultForm(res.workspace);
-        const validControls = current.controlValues.filter((value) => nextControlValues.has(value));
+        const projectType = res.workspace.projectType;
+        const nextCategories = projectType === "widget" ? res.widgetCategories : res.gameCategories;
+        const nextControls = projectType === "widget" ? res.widgetControls : res.gameControls;
+        const sameWorkspace = current.appId === base.appId;
         return {
-          ...base,
-          categoryId: nextCategoryIds.has(current.categoryId)
-            ? current.categoryId
-            : String(nextCategories[0]?.id || ""),
-          controlValues: validControls.length ? validControls : nextControls[0]?.value ? [nextControls[0].value] : [],
-          widgetSize: nextWidgetSizeValues.has(current.widgetSize)
-            ? current.widgetSize
-            : nextWidgetSizeValues.has(base.widgetSize)
-              ? base.widgetSize
-              : String(res.widgetSizes[0]?.value || "")
+          ...(sameWorkspace ? current : base),
+          appName: sameWorkspace ? current.appName : base.appName,
+          appId: base.appId,
+          version: sameWorkspace ? current.version : base.version,
+          description: sameWorkspace ? current.description : base.description,
+          categoryId: current.categoryId || String(nextCategories[0]?.id || ""),
+          controlValues: current.controlValues.length ? current.controlValues : nextControls[0]?.value ? [nextControls[0].value] : [],
+          widgetSize: current.widgetSize || base.widgetSize || String(res.widgetSizes[0]?.value || "")
         };
       });
-    } catch (e) {
+    } catch (cause) {
       setApps([]);
-      setApiErrorSnackbar({ message: e instanceof Error ? e.message : String(e) });
+      setApiErrorSnackbar({ message: cause instanceof Error ? cause.message : String(cause) });
     } finally {
       setLoading(false);
     }
   }, [active, api, communitySession.loggedIn, surfaceApiFailure]);
 
   useEffect(() => {
-    if (lastWorkspaceRefreshKeyRef.current === communityWorkspaceRefreshKey) {
-      return;
-    }
-    lastWorkspaceRefreshKeyRef.current = communityWorkspaceRefreshKey;
-    setIcon(null);
-    setPreviews([]);
-    setError(null);
-    setNotice(null);
-    setApiErrorSnackbar(null);
-    setSubmitStage(null);
-  }, [communityWorkspaceRefreshKey]);
-
-  useEffect(() => {
     void loadPublishOptions();
   }, [loadPublishOptions, communitySessionVersion, communityWorkspaceRefreshKey]);
 
-  async function uploadImageFile(file: File): Promise<UploadTile> {
-    const filePath = api.assets.getPathForFile(file);
-    const pending: UploadTile = {
-      filePath,
-      name: file.name,
-      url: "",
-      uploading: true,
-      error: null
-    };
-    if (!filePath) {
-      return { ...pending, uploading: false, error: "Could not resolve file path." };
-    }
-    const res = await api.communityUploadNativeImage({ filePath });
-      if (!res.ok) {
-        await surfaceApiFailure(res, "Failed to upload image.");
-        return { ...pending, uploading: false, error: res.message };
-      }
-    return { ...pending, url: res.url, uploading: false };
-  }
-
-  async function handleIconFile(file: File | null | undefined) {
-    if (!file) {
-      return;
-    }
-    setNotice(null);
-    setIcon({ filePath: "", name: file.name, url: "", uploading: true, error: null });
-    const uploaded = await uploadImageFile(file);
-    setIcon(uploaded);
-  }
-
-  async function handlePreviewFiles(files: FileList | null | undefined) {
-    if (!files?.length) {
-      return;
-    }
-    setNotice(null);
-    const selected = Array.from(files);
-    const pending = selected.map<UploadTile>((file) => ({
-      filePath: "",
-      name: file.name,
-      url: "",
-      uploading: true,
-      error: null
-    }));
-    setPreviews((current) => [...current, ...pending]);
-    const uploaded = await Promise.all(selected.map((file) => uploadImageFile(file)));
-    setPreviews((current) => [...current.slice(0, current.length - pending.length), ...uploaded]);
-  }
-
-  function updateWidgetControl(value: string, checked: boolean) {
-    setForm((current) => ({
-      ...current,
-      controlValues: checked
-        ? Array.from(new Set([...current.controlValues, value]))
-        : current.controlValues.filter((item) => item !== value)
-    }));
-  }
-
-  async function submitForReview() {
+  useEffect(() => {
+    if (lastWorkspaceRefreshKeyRef.current === communityWorkspaceRefreshKey) return;
+    lastWorkspaceRefreshKeyRef.current = communityWorkspaceRefreshKey;
+    revokeStaged(icon);
+    previews.forEach(revokeStaged);
+    setIcon(null);
+    setPreviews([]);
+    setForm(defaultForm());
+    setScreen("portfolio");
     setError(null);
     setNotice(null);
-    if (!workspace.eligible || !projectType) {
-      setError("Open a valid game or widget workspace before submitting.");
-      return;
+    setApiErrorSnackbar(null);
+  }, [communityWorkspaceRefreshKey, icon, previews]);
+
+  useEffect(() => {
+    if ((screen === "project" || (screen === "submit" && selectedProject)) && selectedProject) {
+      void loadVersions(selectedProject);
     }
-    if (!canSubmit || !icon?.url) {
-      setError(`Fill in ${projectLabel(projectType).toLowerCase()} details, upload an icon, and add at least one preview image.`);
+  }, [loadVersions, screen, selectedProject]);
+
+  function stageFile(file: File): StagedImage | null {
+    const filePath = api?.assets.getPathForFile(file) || "";
+    if (!filePath) {
+      setError(`Could not read ${file.name}.`);
+      return null;
+    }
+    return { filePath, name: file.name, previewUrl: URL.createObjectURL(file) };
+  }
+
+  function chooseIcon(file: File | null | undefined): void {
+    if (!file) return;
+    const staged = stageFile(file);
+    if (!staged) return;
+    revokeStaged(icon);
+    setIcon(staged);
+    setError(null);
+  }
+
+  function choosePreviews(files: FileList | null | undefined): void {
+    if (!files?.length) return;
+    const staged = Array.from(files).map(stageFile).filter((item): item is StagedImage => Boolean(item));
+    setPreviews((current) => [...current, ...staged]);
+    setError(null);
+  }
+
+  async function uploadImage(image: StagedImage): Promise<string | null> {
+    const res = await api.communityUploadNativeImage({ filePath: image.filePath });
+    if (!res.ok) {
+      await surfaceApiFailure(res, `Failed to upload ${image.name}.`);
+      return null;
+    }
+    return res.url;
+  }
+
+  function openProject(project: CommunityAppSummary): void {
+    setSelectedProjectKey(projectKey(project));
+    setScreen("project");
+    setNotice(null);
+    setError(null);
+  }
+
+  function openNewProjectSubmission(): void {
+    setSelectedProjectKey(null);
+    setVersions([]);
+    setForm((current) => ({ ...defaultForm(workspace), categoryId: current.categoryId, controlValues: current.controlValues }));
+    setScreen("submit");
+    setNotice(null);
+    setError(null);
+  }
+
+  function openVersionSubmission(): void {
+    if (!selectedProject || !workspaceMatchesSelection) return;
+    setForm((current) => ({
+      ...current,
+      appName: selectedProject.appName,
+      appId: selectedProject.appId,
+      version: workspace.version || current.version,
+      description: workspace.description || current.description
+    }));
+    setScreen("submit");
+    setNotice(null);
+    setError(null);
+  }
+
+  const submitDisabledReason = useMemo(() => {
+    if (!workspace.eligible || !submissionType) return "Open a valid game or widget workspace first.";
+    if (!isNewProject && !communityProjectMatchesWorkspace(submissionProject, workspace)) return "Open this project’s workspace to submit a version.";
+    if (!isNewProject && blockingVersion) return "Withdraw the current draft or review before submitting another version.";
+    if (!isNewProject && duplicateVersion) return `Version ${form.version.trim()} already exists. Bump the version in conf.json.`;
+    if (!form.version.trim()) return "Set a version in conf.json.";
+    if (!form.description.trim()) return "Add release notes.";
+    if (!previews.length) return "Add at least one preview image.";
+    if (isNewProject && (!form.appName.trim() || !form.appId.trim() || !form.categoryId.trim())) return "Complete the project details.";
+    if (isNewProject && !form.controlValues.length) return "Choose at least one control type.";
+    if (isNewProject && isWidget && !form.widgetSize.trim()) return "Choose a widget size.";
+    if (isNewProject && !icon) return "Choose a project icon.";
+    return null;
+  }, [blockingVersion, duplicateVersion, form, icon, isNewProject, isWidget, previews.length, submissionProject, submissionType, workspace]);
+
+  async function submitForReview(): Promise<void> {
+    setError(null);
+    setNotice(null);
+    if (submitDisabledReason || !submissionType) {
+      setError(submitDisabledReason || "Submission is not ready.");
       return;
     }
     const minPersonal = form.minPersonal ? Number(form.minPersonal) : null;
@@ -361,491 +404,386 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       setError("Min players cannot be greater than max players.");
       return;
     }
+
     setSubmitting(true);
-    const setSubmitProgress = (progress: CommunitySubmitProgress) => {
-      setSubmitStage(progress.message);
-      onSubmitProgress(progress);
-    };
+    let targetProject = submissionProject;
+    const progress = (stage: CommunitySubmitProgress["stage"], message: string) => onSubmitProgress({ stage, message });
     try {
-      setSubmitProgress({
-        stage: "creating",
-        message: activeApp ? "Using existing app record..." : "Creating app record..."
-      });
-      const create = await api.communityCreateApp({
-        projectType,
-        mainCover: icon.url,
-        appName: form.appName.trim(),
-        appId: form.appId.trim(),
-        categoryId: form.categoryId,
-        minPersonal: isWidget ? null : minPersonal,
-        maxPersonal: isWidget ? null : maxPersonal,
-        control: form.controlValues,
-        widgetSize: isWidget ? form.widgetSize : undefined
-      });
-      if (!create.ok) {
-        await surfaceApiFailure(create, `Failed to create ${projectLabel(projectType).toLowerCase()} app.`);
+      if (!targetProject) {
+        progress("creating", "Uploading project icon...");
+        const mainCover = icon ? await uploadImage(icon) : null;
+        if (!mainCover) return;
+        progress("creating", "Registering community project...");
+        const create = await api.communityCreateApp({
+          projectType: submissionType,
+          mainCover,
+          appName: form.appName.trim(),
+          appId: form.appId.trim(),
+          categoryId: form.categoryId,
+          minPersonal: isWidget ? null : minPersonal,
+          maxPersonal: isWidget ? null : maxPersonal,
+          control: form.controlValues,
+          widgetSize: isWidget ? form.widgetSize : undefined
+        });
+        if (!create.ok) {
+          await surfaceApiFailure(create, `Failed to register ${projectLabel(submissionType).toLowerCase()} project.`);
+          return;
+        }
+        targetProject = create.app;
+        setApps((current) => current.some((project) => projectKey(project) === projectKey(create.app)) ? current : [create.app, ...current]);
+        setSelectedProjectKey(projectKey(create.app));
+      }
+
+      progress("uploading", "Uploading preview images...");
+      const previewUrls = await Promise.all(previews.map(uploadImage));
+      if (previewUrls.some((url) => !url)) {
+        setError("One or more preview images could not be uploaded.");
         return;
       }
-      setSubmitProgress({ stage: "packaging", message: "Preparing workspace package..." });
+
       const submit = await api.communitySubmitAppVersion({
-        projectType,
-        appSystemId: create.app.id,
+        projectType: submissionType,
+        appSystemId: targetProject.id,
         version: form.version.trim(),
         description: form.description.trim(),
         fields: form.fields.trim(),
-        preview: previews.map((preview) => preview.url).filter(Boolean)
+        preview: previewUrls.filter((url): url is string => Boolean(url))
       });
       if (!submit.ok) {
-        await surfaceApiFailure(submit, `Failed to submit ${projectLabel(projectType).toLowerCase()} version for review.`);
+        await surfaceApiFailure(submit, `Failed to submit ${projectLabel(submissionType).toLowerCase()} version for review.`);
         return;
       }
-      setNotice(`${projectLabel(projectType)} version ${form.version.trim()} submitted for review.`);
+
+      const completedProject = targetProject;
+      previews.forEach(revokeStaged);
+      setPreviews([]);
+      revokeStaged(icon);
+      setIcon(null);
+      setNotice(`${projectLabel(submissionType)} version ${form.version.trim()} submitted for official review.`);
       await loadPublishOptions();
+      setSelectedProjectKey(projectKey(completedProject));
+      await loadVersions(completedProject);
+      setScreen("project");
     } finally {
-      setSubmitStage(null);
       onSubmitProgress(null);
       setSubmitting(false);
     }
   }
 
-  async function withdrawFromReview(version: CommunityVersionSummary) {
-    if (!projectType || !activeApp) {
-      setError("Could not resolve the app record for this submission.");
-      return;
-    }
-    const versionId = String(version.id || "").trim();
-    if (!versionId) {
-      setError("Could not resolve the version id for this submission.");
-      return;
-    }
+  async function confirmWithdraw(): Promise<void> {
+    if (!withdrawTarget) return;
+    setWithdrawing(true);
     setError(null);
-    setNotice(null);
-    setWithdrawingVersionId(versionId);
     try {
       const res = await api.communityWithdrawAppVersion({
-        projectType,
-        versionId: version.id,
-        appSystemId: activeApp.id
+        projectType: withdrawTarget.projectType,
+        versionId: withdrawTarget.id
       });
       if (!res.ok) {
-        await surfaceApiFailure(res, `Failed to pull ${appLabel.toLowerCase()} version out of review.`);
+        await surfaceApiFailure(res, `Failed to withdraw version ${withdrawTarget.version}.`);
         return;
       }
-      setNotice(`${appLabel} version ${version.version || versionId} pulled out of review.`);
-      await loadPublishOptions();
+      setNotice(`Version ${withdrawTarget.version} withdrawn. Bump the version in conf.json before submitting again.`);
+      setWithdrawTarget(null);
+      await loadVersions(selectedProject);
     } finally {
-      setWithdrawingVersionId(null);
+      setWithdrawing(false);
     }
   }
 
-  const appLabel = projectLabel(projectType);
-  const canShowSubmitForm = !hasVersionInReview;
+  if (!communitySession.loggedIn) {
+    return (
+      <section className="flex min-h-0 flex-1 flex-col items-center justify-center px-5 text-center">
+        <p className="font-[family-name:var(--font-display)] text-base font-semibold text-[var(--color-text-primary)]">Community releases</p>
+        <p className="mt-2 max-w-[280px] text-sm leading-relaxed text-[var(--color-text-subtle)]">
+          Sign in to submit projects, track review decisions, and read official feedback.
+        </p>
+        <button type="button" className="ui-btn-primary mt-4 min-h-10 px-4" onClick={onAuthRequired}>Sign in</button>
+      </section>
+    );
+  }
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col gap-3 p-3">
-      <div className="flex shrink-0 items-start justify-between gap-3">
-        <div>
-          <h2 className="ui-panel-title">Community</h2>
-          <p className="mt-1 text-[13px] text-[var(--color-text-subtle)]">
-            Submit the active game or widget workspace for community review.
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {projectType ? (
-            <span className="rounded-md border border-edge bg-[var(--color-surface-elevated)] px-2 py-1 text-[11px] uppercase tracking-wide text-[var(--color-text-subtle)]">
-              {projectType}
-            </span>
+    <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-right-pane-bg)]">
+      <header className="shrink-0 border-b border-edge px-3 py-3">
+        <div className="flex items-center gap-2">
+          {screen !== "portfolio" ? (
+            <button
+              type="button"
+              className="ui-toolbar-btn h-8 w-8 shrink-0 px-0 text-base"
+              aria-label="Back"
+              onClick={() => {
+                setError(null);
+                setNotice(null);
+                setScreen(screen === "submit" && selectedProject ? "project" : "portfolio");
+              }}
+            >
+              ←
+            </button>
           ) : null}
-          <button
-            type="button"
-            className="ui-toolbar-btn"
-            disabled={loading || submitting}
-            onClick={() => void loadPublishOptions()}
-          >
-            {loading ? "Refreshing..." : "Refresh"}
-          </button>
+          <div className="min-w-0 flex-1">
+            <p className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.18em] text-[var(--color-text-hint)]">
+              {screen === "portfolio" ? "Creator portfolio" : screen === "submit" ? "Review submission" : projectLabel(selectedProject?.projectType || null)}
+            </p>
+            <h2 className="truncate font-[family-name:var(--font-display)] text-[15px] font-semibold text-[var(--color-text-strong)]">
+              {screen === "portfolio"
+                ? "Community releases"
+                : screen === "submit"
+                  ? `${isNewProject ? "Submit new" : "Submit new version ·"} ${isNewProject ? projectLabel(submissionType) : selectedProject?.appName || "project"}`
+                  : selectedProject?.appName || "Project"}
+            </h2>
+          </div>
+          {screen === "portfolio" ? (
+            <button type="button" className="ui-toolbar-btn h-8 px-2 text-xs" disabled={loading} onClick={() => void loadPublishOptions()}>
+              {loading ? "Loading" : "Refresh"}
+            </button>
+          ) : null}
         </div>
-      </div>
+      </header>
 
-      {error ? (
-        <p className="shrink-0 rounded-lg border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-[13px] text-[var(--color-error-text)]">
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p className="shrink-0 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[13px] text-emerald-700 dark:text-emerald-300">
-          {notice}
-        </p>
-      ) : null}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {notice ? <div className="mx-3 mt-3 rounded-md border border-emerald-400/25 bg-emerald-400/10 px-3 py-2 text-xs leading-relaxed text-emerald-700 dark:text-emerald-200">{notice}</div> : null}
+        {error ? <div className="mx-3 mt-3 rounded-md border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-xs leading-relaxed text-[var(--color-error-text)]">{error}</div> : null}
 
-      <div className="min-h-0 flex-1 overflow-auto pr-1">
-        <div className="flex flex-col gap-3">
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-[13px] font-semibold text-[var(--color-text-primary)]">My Submissions</h3>
-              <span className="text-xs text-[var(--color-text-subtle)]">{currentVersions.length}</span>
-            </div>
-            {loading ? (
-              <p className="text-[13px] text-[var(--color-text-subtle)]">Loading submissions...</p>
-            ) : !workspace.eligible || !projectType ? (
-              <p className="rounded-lg border border-edge bg-[var(--color-surface-elevated)] px-3 py-2 text-[13px] text-[var(--color-text-subtle)]">
-                Open a game or widget workspace to view submissions for the current app id.
-              </p>
-            ) : !activeApp ? (
-              <p className="rounded-lg border border-edge bg-[var(--color-surface-elevated)] px-3 py-2 text-[13px] text-[var(--color-text-subtle)]">
-                No app record exists yet for {form.appId || "this workspace"}.
-              </p>
-            ) : currentVersions.length === 0 ? (
-              <p className="rounded-lg border border-edge bg-[var(--color-surface-elevated)] px-3 py-2 text-[13px] text-[var(--color-text-subtle)]">
-                No version submissions found for {activeApp.appName || activeApp.appId}.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {currentVersions.map((version) => (
-                  <article
-                    key={`${version.projectType}-${version.id}`}
-                    className="rounded-lg border border-edge bg-[var(--color-surface-elevated)] p-2.5"
-                  >
-                    <div className="flex min-w-0 items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <h3 className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">
-                          Version {version.version || String(version.id)}
-                        </h3>
-                        <p className="mt-0.5 truncate text-xs text-[var(--color-text-subtle)]">
-                          {activeApp.appName || activeApp.appId}
-                          {formatDate(version.createdAt) ? ` · ${formatDate(version.createdAt)}` : ""}
-                        </p>
-                      </div>
-                      <span
+        {screen === "portfolio" ? (
+          <div className="space-y-4 p-3 pb-6">
+            <section className="community-workspace-card">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.14em] text-[var(--color-neon-mint)]">Open workspace</p>
+                  <h3 className="mt-1 truncate text-sm font-semibold text-[var(--color-text-strong)]">
+                    {workspace.eligible ? workspace.appName || workspace.appId : "No publishable workspace"}
+                  </h3>
+                  <p className="mt-1 text-xs text-[var(--color-text-subtle)]">
+                    {workspace.eligible
+                      ? `${projectLabel(workspace.projectType)} · ${workspace.appId} · v${workspace.version || "unset"}`
+                      : "Open a project with a valid conf.json to submit it."}
+                  </p>
+                </div>
+                {workspace.eligible ? <span className="community-workspace-pulse" aria-hidden /> : null}
+              </div>
+              {workspace.eligible ? (
+                <button
+                  type="button"
+                  className="ui-btn-primary mt-3 min-h-10 w-full px-3 text-[13px]"
+                  onClick={() => currentWorkspaceProject ? openProject(currentWorkspaceProject) : openNewProjectSubmission()}
+                >
+                  {currentWorkspaceProject ? "Manage this project" : "Submit this workspace"}
+                </button>
+              ) : null}
+            </section>
+
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-muted)]">Your projects</h3>
+                <span className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--color-text-hint)]">{apps.length}</span>
+              </div>
+              {loading ? (
+                <p className="py-8 text-center text-xs text-[var(--color-text-subtle)]">Loading portfolio…</p>
+              ) : !sortedApps.length ? (
+                <div className="rounded-lg border border-dashed border-edge px-3 py-6 text-center text-xs leading-relaxed text-[var(--color-text-subtle)]">
+                  Your submitted games and widgets will appear here.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {sortedApps.map((project) => {
+                    const isCurrent = communityProjectMatchesWorkspace(project, workspace);
+                    return (
+                      <button
+                        key={projectKey(project)}
+                        type="button"
                         className={cn(
-                          "shrink-0 rounded px-1.5 py-0.5 text-[10px]",
-                          String(version.status) === "1"
-                            ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                            : "bg-[var(--color-surface)] text-[var(--color-text-subtle)]"
+                          "group flex w-full items-center gap-3 rounded-lg border bg-[var(--color-surface-elevated)] p-2.5 text-left transition",
+                          isCurrent ? "border-[var(--color-neon-coral-dim)] shadow-[inset_3px_0_0_var(--color-neon-coral)]" : "border-edge hover:border-[var(--color-border-strong)]"
                         )}
+                        onClick={() => openProject(project)}
                       >
-                        {versionStatusLabel(version.status)}
-                      </span>
-                    </div>
-                    {version.description ? (
-                      <p className="mt-1 line-clamp-2 text-xs text-[var(--color-text-subtle)]">
-                        {version.description}
-                      </p>
-                    ) : null}
-                    {String(version.status) === "1" ? (
-                      <div className="mt-2 flex justify-end">
-                        <button
-                          type="button"
-                          className="ui-toolbar-btn h-7 px-2 text-xs"
-                          disabled={submitting || withdrawingVersionId === String(version.id)}
-                          onClick={() => void withdrawFromReview(version)}
-                        >
-                          {withdrawingVersionId === String(version.id) ? "Pulling..." : "Pull out of review"}
-                        </button>
+                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-edge bg-[var(--color-surface)]">
+                          {project.mainCover ? <img src={project.mainCover} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center font-[family-name:var(--font-display)] text-lg text-[var(--color-text-hint)]">{project.appName.slice(0, 1).toUpperCase()}</div>}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{project.appName || project.appId}</span>
+                            {isCurrent ? <span className="rounded bg-[var(--color-neon-coral-dim)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-[var(--color-text-strong)]">Open</span> : null}
+                          </div>
+                          <p className="mt-0.5 truncate font-[family-name:var(--font-mono)] text-[10px] text-[var(--color-text-subtle)]">{projectLabel(project.projectType)} · {project.appId}</p>
+                        </div>
+                        <span className="text-[var(--color-text-hint)] transition group-hover:translate-x-0.5 group-hover:text-[var(--color-text-primary)]">›</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
+        ) : null}
+
+        {screen === "project" && selectedProject ? (
+          <div className="p-3 pb-6">
+            <section className="flex items-center gap-3 rounded-lg border border-edge bg-[var(--color-surface-elevated)] p-3">
+              <div className="h-14 w-14 shrink-0 overflow-hidden rounded-md border border-edge bg-[var(--color-surface)]">
+                {selectedProject.mainCover ? <img src={selectedProject.mainCover} alt="" className="h-full w-full object-cover" /> : null}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-hint)]">{selectedProject.appId}</p>
+                <p className="mt-1 text-xs leading-relaxed text-[var(--color-text-subtle)]">
+                  {workspaceMatchesSelection ? `Open workspace · v${workspace.version || "unset"}` : "Open this project’s workspace to upload another version."}
+                </p>
+              </div>
+            </section>
+
+            {workspaceMatchesSelection ? (
+              <button
+                type="button"
+                className="ui-btn-primary mt-3 min-h-10 w-full px-3 text-[13px]"
+                disabled={versionsLoading || blockingVersion}
+                onClick={openVersionSubmission}
+              >
+                {blockingVersion ? "Submission already active" : "Submit new version"}
+              </button>
+            ) : null}
+
+            <div className="mb-3 mt-5 flex items-center justify-between">
+              <div>
+                <p className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-hint)]">Release rail</p>
+                <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">Version history</h3>
+              </div>
+              <span className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--color-text-hint)]">{versions.length}</span>
+            </div>
+
+            {versionsLoading ? (
+              <p className="py-8 text-center text-xs text-[var(--color-text-subtle)]">Loading versions…</p>
+            ) : !versions.length ? (
+              <div className="rounded-lg border border-dashed border-edge px-3 py-6 text-center text-xs text-[var(--color-text-subtle)]">No versions submitted yet.</div>
+            ) : (
+              <div className="community-release-rail">
+                {versions.map((version) => {
+                  const state = communityVersionState(version.status, version.reviewAction);
+                  const feedbackIsOfficial = Boolean(version.reviewComment) && (state.key === "rejected" || state.key === "revoked");
+                  return (
+                    <article key={String(version.id)} className={cn("community-release-entry", `community-release-entry--${state.key}`)}>
+                      <span className="community-release-node" aria-hidden />
+                      <div className="rounded-lg border border-edge bg-[var(--color-surface-elevated)] p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="font-[family-name:var(--font-mono)] text-sm font-semibold text-[var(--color-text-strong)]">v{version.version || "—"}</p>
+                            <p className="mt-0.5 text-[10px] text-[var(--color-text-hint)]">{formatDate(version.updatedAt || version.createdAt)}</p>
+                          </div>
+                          <span className={cn("rounded-md border px-2 py-1 text-[10px] font-semibold", statusTone(state.key))}>{state.label}</span>
+                        </div>
+                        {version.description ? <p className="mt-2 text-xs leading-relaxed text-[var(--color-text-subtle)]">{version.description}</p> : null}
+                        {feedbackIsOfficial ? (
+                          <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-2">
+                            <p className="font-[family-name:var(--font-mono)] text-[9px] font-bold uppercase tracking-[0.14em] text-red-700 dark:text-red-200">Official review feedback</p>
+                            <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-red-800 dark:text-red-100">{version.reviewComment}</p>
+                            {version.reviewedAt ? <p className="mt-1.5 text-[10px] text-red-700/70 dark:text-red-200/70">{formatDate(version.reviewedAt)}</p> : null}
+                          </div>
+                        ) : null}
+                        {state.canWithdraw ? (
+                          <button type="button" className="ui-toolbar-btn mt-3 h-8 w-full px-2 text-xs" onClick={() => setWithdrawTarget(version)}>
+                            Withdraw submission
+                          </button>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
               </div>
             )}
           </div>
+        ) : null}
 
-          {hasVersionInReview ? (
-            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-800 dark:text-amber-200">
-              A version is already in review for this {appLabel.toLowerCase()}. Pull it out of review to submit a new version.
-            </p>
-          ) : null}
-
-          {canShowSubmitForm ? (
-          <div className="rounded-lg border border-edge bg-[var(--color-surface-elevated)] p-3">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h3 className="text-[13px] font-semibold text-[var(--color-text-primary)]">
-                  Submit Current {appLabel}
-                </h3>
-                <p className="mt-0.5 text-xs text-[var(--color-text-subtle)]">
-                  Creates a review version from this workspace.
-                </p>
-              </div>
-              {activeApp ? (
-                <span className="rounded-md bg-[var(--color-surface)] px-2 py-1 text-[11px] text-[var(--color-text-subtle)]">
-                  Existing app
-                </span>
-              ) : null}
-            </div>
-
-            {!workspace.eligible ? (
-              <p className="mt-3 rounded-md border border-edge bg-[var(--color-surface)] px-2.5 py-2 text-xs text-[var(--color-text-subtle)]">
-                Open or create a game or widget workspace with a valid conf.json to enable submission.
-              </p>
-            ) : null}
-
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <label className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">
-                {appLabel} Name
-                <input
-                  className={publishInputClass}
-                  value={form.appName}
-                  maxLength={50}
-                  disabled={!workspace.eligible || submitting}
-                  onChange={(event) => setForm((current) => ({ ...current, appName: event.target.value }))}
-                />
-              </label>
-              <label className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">
-                {appLabel} ID
-                <input
-                  className={publishInputClass}
-                  value={form.appId}
-                  maxLength={100}
-                  disabled={!workspace.eligible || submitting}
-                  onChange={(event) => setForm((current) => ({ ...current, appId: event.target.value }))}
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">
-                Category
-                <select
-                  className={publishInputClass}
-                  value={form.categoryId}
-                  disabled={!workspace.eligible || submitting}
-                  onChange={(event) => setForm((current) => ({ ...current, categoryId: event.target.value }))}
-                >
-                  <option value="">Select</option>
-                  {categories.map((category) => (
-                    <option key={String(category.id)} value={String(category.id)}>
-                      {category.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {isWidget ? (
-                <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">
-                  Widget Size
-                  <select
-                    className={publishInputClass}
-                    value={form.widgetSize}
-                    disabled={!workspace.eligible || submitting}
-                    onChange={(event) => setForm((current) => ({ ...current, widgetSize: event.target.value }))}
-                  >
-                    <option value="">Select</option>
-                    {widgetSizes.map((size) => (
-                      <option key={size.value} value={size.value}>
-                        {size.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : (
-                <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">
-                  Control
-                  <select
-                    className={publishInputClass}
-                    value={form.controlValues[0] || ""}
-                    disabled={!workspace.eligible || submitting}
-                    onChange={(event) => setForm((current) => ({ ...current, controlValues: event.target.value ? [event.target.value] : [] }))}
-                  >
-                    <option value="">Select</option>
-                    {controls.map((control) => (
-                      <option key={control.value} value={control.value}>
-                        {control.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {isWidget ? (
-                <div className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">
-                  Control
-                  <div className="grid grid-cols-2 gap-1.5 rounded-md border border-edge bg-[var(--color-surface)] p-2">
-                    {controls.map((control) => (
-                      <label key={control.value} className="flex min-w-0 flex-row items-center gap-2 text-xs text-[var(--color-text-primary)]">
-                        <input
-                          type="checkbox"
-                          checked={form.controlValues.includes(control.value)}
-                          disabled={!workspace.eligible || submitting}
-                          onChange={(event) => updateWidgetControl(control.value, event.target.checked)}
-                        />
-                        <span className="truncate">{control.label}</span>
-                      </label>
-                    ))}
-                  </div>
+        {screen === "submit" ? (
+          <div className="space-y-3 p-3 pb-28">
+            {isNewProject ? (
+              <section className="rounded-lg border border-edge bg-[var(--color-surface-elevated)] p-3">
+                <div className="mb-3">
+                  <p className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.14em] text-[var(--color-neon-coral)]">Project registration</p>
+                  <h3 className="mt-0.5 text-sm font-semibold text-[var(--color-text-primary)]">Identify this {projectLabel(submissionType).toLowerCase()}</h3>
                 </div>
-              ) : (
-                <>
-                  <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">
-                    Min Players
-                    <input
-                      className={publishInputClass}
-                      type="number"
-                      min={1}
-                      max={16}
-                      value={form.minPersonal}
-                      disabled={!workspace.eligible || submitting}
-                      onChange={(event) => setForm((current) => ({ ...current, minPersonal: event.target.value }))}
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">
-                    Max Players
-                    <input
-                      className={publishInputClass}
-                      type="number"
-                      min={1}
-                      max={16}
-                      value={form.maxPersonal}
-                      disabled={!workspace.eligible || submitting}
-                      onChange={(event) => setForm((current) => ({ ...current, maxPersonal: event.target.value }))}
-                    />
-                  </label>
-                </>
-              )}
-              <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">
-                Version
-                <input
-                  className={publishInputClass}
-                  value={form.version}
-                  maxLength={50}
-                  disabled={!workspace.eligible || submitting}
-                  onChange={(event) => setForm((current) => ({ ...current, version: event.target.value }))}
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">
-                Fields JSON
-                <input
-                  className={publishInputClass}
-                  value={form.fields}
-                  maxLength={1000}
-                  placeholder="Optional"
-                  disabled={!workspace.eligible || submitting}
-                  onChange={(event) => setForm((current) => ({ ...current, fields: event.target.value }))}
-                />
-              </label>
-              <label className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">
-                Review Notes
-                <textarea
-                  className={publishTextAreaClass}
-                  value={form.description}
-                  maxLength={255}
-                  disabled={!workspace.eligible || submitting}
-                  onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-                />
-              </label>
-            </div>
-
-            <div className="mt-3 grid grid-cols-[72px_1fr] gap-3">
-              <div>
-                <p className="mb-1 text-xs text-[var(--color-text-subtle)]">Icon</p>
-                <button
-                  type="button"
-                  className={cn(
-                    "flex aspect-square w-[72px] items-center justify-center overflow-hidden rounded-md border border-dashed border-edge bg-[var(--color-surface)] text-[11px] font-semibold text-[var(--color-text-subtle)]",
-                    workspace.eligible && !submitting && "hover:border-[var(--color-text-primary)]"
-                  )}
-                  disabled={!workspace.eligible || submitting}
-                  onClick={() => iconInputRef.current?.click()}
-                >
-                  {icon?.url ? (
-                    <img src={icon.url} alt="" className="h-full w-full object-cover" />
-                  ) : icon?.uploading ? (
-                    "Uploading"
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Name<input className={inputClass} value={form.appName} maxLength={50} onChange={(event) => setForm((current) => ({ ...current, appName: event.target.value }))} /></label>
+                  <label className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Project ID<input className={inputClass} value={form.appId} disabled /></label>
+                  <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Category<select className={inputClass} value={form.categoryId} onChange={(event) => setForm((current) => ({ ...current, categoryId: event.target.value }))}><option value="">Select</option>{categories.map((category) => <option key={String(category.id)} value={String(category.id)}>{category.name}</option>)}</select></label>
+                  {isWidget ? (
+                    <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Size<select className={inputClass} value={form.widgetSize} onChange={(event) => setForm((current) => ({ ...current, widgetSize: event.target.value }))}><option value="">Select</option>{widgetSizes.map((size) => <option key={size.value} value={size.value}>{size.label}</option>)}</select></label>
                   ) : (
-                    "Choose"
+                    <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Control<select className={inputClass} value={form.controlValues[0] || ""} onChange={(event) => setForm((current) => ({ ...current, controlValues: event.target.value ? [event.target.value] : [] }))}><option value="">Select</option>{controls.map((control) => <option key={control.value} value={control.value}>{control.label}</option>)}</select></label>
                   )}
-                </button>
-                {icon?.error ? <p className="mt-1 text-[11px] text-[var(--color-error-text)]">{icon.error}</p> : null}
-              </div>
-              <div className="min-w-0">
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <p className="text-xs text-[var(--color-text-subtle)]">Preview Images</p>
-                  <button
-                    type="button"
-                    className="ui-toolbar-btn h-7 px-2 text-xs"
-                    disabled={!workspace.eligible || submitting}
-                    onClick={() => previewInputRef.current?.click()}
-                  >
-                    Add
+                  {isWidget ? (
+                    <div className="col-span-2 rounded-md border border-edge bg-[var(--color-surface)] p-2">
+                      <p className="mb-2 text-xs text-[var(--color-text-subtle)]">Controls</p>
+                      <div className="grid grid-cols-2 gap-2">{controls.map((control) => <label key={control.value} className="flex items-center gap-2 text-xs text-[var(--color-text-primary)]"><input type="checkbox" checked={form.controlValues.includes(control.value)} onChange={(event) => setForm((current) => ({ ...current, controlValues: event.target.checked ? Array.from(new Set([...current.controlValues, control.value])) : current.controlValues.filter((value) => value !== control.value) }))} /><span className="truncate">{control.label}</span></label>)}</div>
+                    </div>
+                  ) : (
+                    <><label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Min players<input type="number" min={1} max={16} className={inputClass} value={form.minPersonal} onChange={(event) => setForm((current) => ({ ...current, minPersonal: event.target.value }))} /></label><label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Max players<input type="number" min={1} max={16} className={inputClass} value={form.maxPersonal} onChange={(event) => setForm((current) => ({ ...current, maxPersonal: event.target.value }))} /></label></>
+                  )}
+                </div>
+                <div className="mt-3">
+                  <p className="mb-1 text-xs text-[var(--color-text-subtle)]">Project icon</p>
+                  <button type="button" className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-lg border border-dashed border-edge bg-[var(--color-surface)] text-xs text-[var(--color-text-subtle)] hover:border-[var(--color-neon-coral-dim)]" onClick={() => iconInputRef.current?.click()}>
+                    {icon ? <img src={icon.previewUrl} alt="Selected project icon" className="h-full w-full object-cover" /> : "Choose icon"}
                   </button>
                 </div>
-                <div className="grid grid-cols-3 gap-1.5">
+              </section>
+            ) : null}
+
+            <section className="rounded-lg border border-edge bg-[var(--color-surface-elevated)] p-3">
+              <div className="mb-3">
+                <p className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.14em] text-[var(--color-neon-mint)]">Version package</p>
+                <h3 className="mt-0.5 text-sm font-semibold text-[var(--color-text-primary)]">Send for official review</h3>
+                <p className="mt-1 text-xs leading-relaxed text-[var(--color-text-subtle)]">Publication is handled by the Dartsnut review team after approval.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Version<input className={inputClass} value={form.version} disabled /></label>
+                <div className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]"><span>Source</span><div className="flex h-10 items-center rounded-md border border-edge bg-[var(--color-surface)] px-3 font-[family-name:var(--font-mono)] text-[10px] text-[var(--color-text-muted)]">conf.json</div></div>
+                <label className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Release notes<textarea className={textAreaClass} value={form.description} maxLength={2000} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} /></label>
+                <label className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Optional fields<textarea className={cn(textAreaClass, "min-h-16")} value={form.fields} maxLength={2000} onChange={(event) => setForm((current) => ({ ...current, fields: event.target.value }))} /></label>
+              </div>
+              {duplicateVersion ? <p className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-700 dark:text-red-200">Version {form.version} already exists. Update the version in conf.json before submitting.</p> : null}
+              {blockingVersion ? <p className="mt-3 rounded-md border border-amber-400/30 bg-amber-400/10 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-200">This project already has a draft or version under review. Withdraw it before uploading another version.</p> : null}
+
+              <div className="mt-3">
+                <div className="mb-2 flex items-center justify-between"><p className="text-xs text-[var(--color-text-subtle)]">Preview images</p><button type="button" className="ui-toolbar-btn h-7 px-2 text-xs" onClick={() => previewInputRef.current?.click()}>Add</button></div>
+                <div className="grid grid-cols-3 gap-2">
                   {previews.map((preview, index) => (
-                    <div
-                      key={`${preview.name}-${index}`}
-                      className="group relative aspect-square overflow-hidden rounded-md border border-edge bg-[var(--color-surface)]"
-                      title={preview.name}
-                    >
-                      {preview.url ? (
-                        <img src={preview.url} alt="" className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center px-1 text-center text-[10px] text-[var(--color-text-subtle)]">
-                          {preview.uploading ? "Uploading" : shortFileName(preview.name)}
-                        </div>
-                      )}
-                      <button
-                        type="button"
-                        className="absolute right-1 top-1 hidden rounded bg-black/65 px-1.5 py-0.5 text-[10px] text-white group-hover:block"
-                        disabled={submitting}
-                        onClick={() => setPreviews((current) => current.filter((_, i) => i !== index))}
-                      >
-                        Remove
-                      </button>
+                    <div key={`${preview.filePath}-${index}`} className="group relative aspect-square overflow-hidden rounded-md border border-edge bg-[var(--color-surface)]">
+                      <img src={preview.previewUrl} alt={preview.name} className="h-full w-full object-cover" />
+                      <button type="button" aria-label={`Remove ${preview.name}`} className="absolute right-1 top-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100" onClick={() => { revokeStaged(preview); setPreviews((current) => current.filter((_, itemIndex) => itemIndex !== index)); }}>Remove</button>
                     </div>
                   ))}
-                  {!previews.length ? (
-                    <button
-                      type="button"
-                      className="aspect-square rounded-md border border-dashed border-edge bg-[var(--color-surface)] text-[11px] text-[var(--color-text-subtle)]"
-                      disabled={!workspace.eligible || submitting}
-                      onClick={() => previewInputRef.current?.click()}
-                    >
-                      Add
-                    </button>
-                  ) : null}
+                  {!previews.length ? <button type="button" className="aspect-square rounded-md border border-dashed border-edge bg-[var(--color-surface)] text-xs text-[var(--color-text-subtle)]" onClick={() => previewInputRef.current?.click()}>Add preview</button> : null}
                 </div>
-                {previews.some((preview) => preview.error) ? (
-                  <p className="mt-1 text-[11px] text-[var(--color-error-text)]">
-                    Some previews failed to upload. Remove them or add another image.
-                  </p>
-                ) : null}
               </div>
-            </div>
-
-            <input
-              ref={iconInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              className="hidden"
-              onChange={(event) => {
-                void handleIconFile(event.target.files?.[0]);
-                event.currentTarget.value = "";
-              }}
-            />
-            <input
-              ref={previewInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              multiple
-              className="hidden"
-              onChange={(event) => {
-                void handlePreviewFiles(event.target.files);
-                event.currentTarget.value = "";
-              }}
-            />
-
-            <button
-              type="button"
-              className={publishSubmitClass}
-              disabled={!canSubmit || submitting}
-              onClick={() => void submitForReview()}
-            >
-              {submitting ? submitStage || "Submitting..." : `Submit ${appLabel} Version for Review`}
-            </button>
+            </section>
           </div>
-          ) : null}
-        </div>
+        ) : null}
       </div>
-      <CommunityErrorSnackbar
-        message={apiErrorSnackbar?.message ?? null}
-        detail={apiErrorSnackbar?.detail}
-        onDismiss={() => setApiErrorSnackbar(null)}
-      />
+
+      {screen === "submit" ? (
+        <div className="community-submit-dock">
+          {submitDisabledReason ? <p className="mb-2 text-[11px] leading-relaxed text-[var(--color-text-subtle)]">{submitDisabledReason}</p> : null}
+          <button type="button" className="ui-btn-primary min-h-11 w-full px-3 text-[13px]" disabled={Boolean(submitDisabledReason) || submitting} onClick={() => void submitForReview()}>
+            {submitting ? "Submitting…" : "Submit for official review"}
+          </button>
+        </div>
+      ) : null}
+
+      <input ref={iconInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(event) => { chooseIcon(event.target.files?.[0]); event.currentTarget.value = ""; }} />
+      <input ref={previewInputRef} type="file" accept="image/png,image/jpeg,image/webp" multiple className="hidden" onChange={(event) => { choosePreviews(event.target.files); event.currentTarget.value = ""; }} />
+
+      {withdrawTarget ? (
+        <div className="community-confirm-layer" role="dialog" aria-modal="true" aria-labelledby="withdraw-title">
+          <div className="community-confirm-card">
+            <p className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.16em] text-[var(--color-neon-coral)]">Permanent withdrawal</p>
+            <h3 id="withdraw-title" className="mt-1 font-[family-name:var(--font-display)] text-base font-semibold text-[var(--color-text-strong)]">Withdraw version {withdrawTarget.version}?</h3>
+            <p className="mt-2 text-xs leading-relaxed text-[var(--color-text-subtle)]">It will remain in release history as Withdrawn and cannot be reused. Bump the version in conf.json before submitting again.</p>
+            <div className="mt-4 grid grid-cols-2 gap-2"><button type="button" className="ui-toolbar-btn min-h-10 px-3 text-xs" disabled={withdrawing} onClick={() => setWithdrawTarget(null)}>Keep in review</button><button type="button" className="min-h-10 rounded-md border border-red-500/40 bg-red-500/15 px-3 text-xs font-semibold text-red-700 hover:bg-red-500/20 dark:text-red-200" disabled={withdrawing} onClick={() => void confirmWithdraw()}>{withdrawing ? "Withdrawing…" : "Withdraw"}</button></div>
+          </div>
+        </div>
+      ) : null}
+
+      <CommunityErrorSnackbar message={apiErrorSnackbar?.message ?? null} detail={apiErrorSnackbar?.detail} onDismiss={() => setApiErrorSnackbar(null)} />
     </section>
   );
 });

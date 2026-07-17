@@ -80,7 +80,18 @@ test("normalizeCommunityGameControls maps control options", () => {
 test("normalizeCommunityVersions maps game and widget version rows", () => {
   assert.deepEqual(
     normalizeCommunityVersions([
-      { id: 9, game_system_id: 2, version: "1.2.3", status: 1, description: "review", created_at: "2026-01-02" },
+      {
+        id: 9,
+        game_system_id: 2,
+        version: "1.2.3",
+        status: -1,
+        description: "review",
+        created_at: "2026-01-02",
+        updated_at: "2026-01-03",
+        review_action: "reject",
+        review_comment: "Add clearer instructions.",
+        reviewed_at: "2026-01-03"
+      },
       { id: "", version: "" }
     ], "game"),
     [
@@ -90,8 +101,12 @@ test("normalizeCommunityVersions maps game and widget version rows", () => {
         projectType: "game",
         version: "1.2.3",
         description: "review",
-        status: "1",
-        createdAt: "2026-01-02"
+        status: "-1",
+        createdAt: "2026-01-02",
+        updatedAt: "2026-01-03",
+        reviewAction: "reject",
+        reviewComment: "Add clearer instructions.",
+        reviewedAt: "2026-01-03"
       }
     ]
   );
@@ -153,7 +168,7 @@ test("CommunityClient adds source header to Dartsnut Supabase requests", async (
   assert.equal(calls[0].init.headers.source, "agent");
 });
 
-test("withdrawAppVersion falls back across review withdrawal routes", async () => {
+test("withdrawAppVersion calls the permanent withdrawal endpoint", async () => {
   const calls = [];
   const client = new CommunityClient(
     {
@@ -168,36 +183,22 @@ test("withdrawAppVersion falls back across review withdrawal routes", async () =
     },
     async (url, init) => {
       calls.push({ url, init });
-      if (String(url).endsWith("/community/game-version/withdraw")) {
-        return {
-          status: 404,
-          json: async () => ({ code: 404, msg: "missing" })
-        };
-      }
       return {
         status: 200,
-        json: async () => ({ code: 1001, data: { status: 0 } })
+        json: async () => ({ code: 1001, data: { id: 9, status: -2 } })
       };
     }
   );
 
   const result = await client.withdrawAppVersion("token-1", {
     projectType: "game",
-    versionId: 9,
-    appSystemId: 2
+    versionId: 9
   });
 
-  assert.deepEqual(result, { ok: true, status: "0" });
-  assert.equal(calls.length, 2);
+  assert.deepEqual(result, { ok: true, status: "-2" });
+  assert.equal(calls.length, 1);
   assert.equal(calls[0]?.url, "https://api.example.com/community/game-version/withdraw");
-  assert.equal(calls[1]?.url, "https://api.example.com/community/game-version/cancel-review");
-  assert.deepEqual(JSON.parse(calls[1]?.init.body), {
-    id: 9,
-    version_id: 9,
-    game_system_id: 2,
-    submit_mode: "draft",
-    status: 0
-  });
+  assert.deepEqual(JSON.parse(calls[0]?.init.body), { id: 9 });
 });
 
 test("mergeDeployDevices pulls ip and ssid from state", () => {

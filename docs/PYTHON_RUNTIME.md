@@ -40,11 +40,11 @@ The bridge process and one-shot tools (e.g. asset preprocess) use **bundled** `p
 
 When a workspace is loaded, the bridge mirrors `dartsnut_rpi` `ensure_app_venv`:
 
-1. If `pyproject.toml` is missing, materialize the managed default for `conf.json` `type` (`game` or `widget`) from `services/emulator-core/app_defaults/`.
-2. Run `uv sync --directory <workspace>` using bundled uv + bundled base Python (`UV_PYTHON`).
-3. Launch with `uv run --directory <workspace> main.py …` so the workspace `.venv` is used (same model as deploy on device).
+1. Materialize or refresh the managed default for `conf.json` `type` (`game` or `widget`) from `services/emulator-core/app_defaults/`; custom `pyproject.toml` files are left unchanged.
+2. Before every preview, run exact-default `uv sync --directory <workspace>` using bundled uv + bundled base Python (`UV_PYTHON`). The existing `.venv` is reused, but undeclared packages are removed.
+3. Launch with `uv run --no-sync --directory <workspace> main.py …` so the exact preparation step is the only dependency sync and the workspace `.venv` is used.
 
-If the workspace already has a custom `pyproject.toml` (not a managed default), it is synced as-is.
+Workspace sync and launch strip inherited Python path, Python home, user-site, virtualenv, and uv project overrides so host or bundled-runtime packages cannot mask missing project dependencies.
 
 ```bash
 uv run --no-project --python <bundled-venv-python> <script.py> [args...]

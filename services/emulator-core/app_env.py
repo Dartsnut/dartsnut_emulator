@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -17,7 +16,6 @@ from typing import Any
 _log = logging.getLogger(__name__)
 
 DEFAULTS_DIR = Path(__file__).resolve().parent / "app_defaults"
-STAMP_FILENAME = ".dartsnut_stamp"
 MANAGED_PYPROJECT_HEADER = "# Dartsnut managed default app dependencies"
 PYPI_MIRRORS = [
     "https://pypi.org/simple",
@@ -36,18 +34,8 @@ def _bundled_python() -> str:
     return os.environ.get("UV_PYTHON", "").strip() or sys.executable
 
 
-def _venv_python(workspace_dir: str) -> str:
-    if sys.platform == "win32":
-        return os.path.join(workspace_dir, ".venv", "Scripts", "python.exe")
-    return os.path.join(workspace_dir, ".venv", "bin", "python")
-
-
 def _pyproject_path(workspace_dir: str) -> str:
     return os.path.join(workspace_dir, "pyproject.toml")
-
-
-def _stamp_path(workspace_dir: str) -> str:
-    return os.path.join(workspace_dir, ".venv", STAMP_FILENAME)
 
 
 def _read_conf(workspace_dir: str) -> dict[str, Any]:
@@ -64,10 +52,6 @@ def _read_conf(workspace_dir: str) -> dict[str, Any]:
 def _read_conf_type(workspace_dir: str) -> str:
     app_type = _read_conf(workspace_dir).get("type")
     return str(app_type) if app_type else "widget"
-
-
-def _read_conf_version(workspace_dir: str) -> str:
-    return str(_read_conf(workspace_dir).get("version") or "")
 
 
 def _template_path(app_type: str) -> Path:
@@ -107,44 +91,44 @@ def _materialize_pyproject(workspace_dir: str, app_type: str, log: LogFn | None 
         log(f"Materialized default pyproject.toml (type={app_type})", "stdout")
 
 
-def _stamp_payload(workspace_dir: str, app_type: str) -> str:
-    pyproject = _pyproject_path(workspace_dir)
-    content = ""
-    if os.path.isfile(pyproject):
-        with open(pyproject, encoding="utf-8") as f:
-            content = f.read()
-    template_fp = _template_path(app_type).read_text(encoding="utf-8")
-    version = _read_conf_version(workspace_dir)
-    return f"{content}\n---\n{template_fp}\n---\n{version}"
+_WORKSPACE_ENV_REMOVE = (
+    "VIRTUAL_ENV",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONUSERBASE",
+    "UV_NO_PROJECT",
+    "UV_NO_SYNC",
+    "UV_PROJECT_ENVIRONMENT",
+)
 
 
-def _compute_stamp(workspace_dir: str, app_type: str) -> str:
-    return hashlib.sha256(_stamp_payload(workspace_dir, app_type).encode("utf-8")).hexdigest()
+def _clean_workspace_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    env = dict(os.environ if base_env is None else base_env)
+    for key in _WORKSPACE_ENV_REMOVE:
+        env.pop(key, None)
+    env["PYTHONNOUSERSITE"] = "1"
+    return env
 
 
-def workspace_venv_ready(workspace_dir: str, app_type: str) -> bool:
-    python_path = _venv_python(workspace_dir)
-    stamp_path = _stamp_path(workspace_dir)
-    if not os.path.isfile(python_path) or not os.path.isfile(stamp_path):
-        return False
-    try:
-        with open(stamp_path, encoding="utf-8") as f:
-            stored = f.read().strip()
-        return stored == _compute_stamp(workspace_dir, app_type)
-    except OSError:
-        return False
+def _python_home_for(python_exe: str) -> str | None:
+    if sys.platform == "win32":
+        return None
+    bin_dir = os.path.dirname(os.path.abspath(python_exe))
+    if os.path.basename(bin_dir) != "bin":
+        return None
+    return os.path.dirname(bin_dir)
 
 
 def _uv_env() -> dict[str, str]:
-    env = dict(os.environ)
-    env.pop("UV_NO_SYNC", None)
-    env.pop("UV_NO_PROJECT", None)
-    env.pop("VIRTUAL_ENV", None)  # Avoid mismatch warning with workspace .venv
+    env = _clean_workspace_env()
     env["UV_NO_PYTHON_DOWNLOADS"] = "never"
     env["UV_NO_MANAGED_PYTHON"] = "1"
     python_exe = _bundled_python()
     if python_exe:
         env["UV_PYTHON"] = python_exe
+        python_home = _python_home_for(python_exe)
+        if python_home:
+            env["PYTHONHOME"] = python_home
 
     # Use preferred PyPI index URL if available (set by TypeScript side)
     pypi_index = os.environ.get("DARTSNUT_PYPI_INDEX_URL", "").strip()
@@ -179,6 +163,7 @@ def _uv_sync(workspace_dir: str) -> None:
                 mirror_env = dict(env)
                 mirror_env["UV_INDEX_URL"] = mirror
 
+                # uv sync is exact by default; bundled uv 0.11.19 exposes only the --inexact opt-out.
                 subprocess.run(
                     [uv, "sync", "--directory", workspace_dir],
                     check=True,
@@ -208,18 +193,10 @@ def _uv_sync(workspace_dir: str) -> None:
         raise RuntimeError("uv sync failed with unknown error")
 
 
-def _write_stamp(workspace_dir: str, app_type: str) -> None:
-    stamp_path = _stamp_path(workspace_dir)
-    os.makedirs(os.path.dirname(stamp_path), exist_ok=True)
-    with open(stamp_path, "w", encoding="utf-8") as f:
-        f.write(_compute_stamp(workspace_dir, app_type))
-
-
 def ensure_workspace_venv(
     workspace_dir: str,
     *,
     app_type: str | None = None,
-    force: bool = False,
     log: LogFn | None = None,
     status: StatusFn | None = None,
 ) -> bool:
@@ -235,25 +212,19 @@ def ensure_workspace_venv(
         return False
 
     resolved_type = app_type or _read_conf_type(workspace_dir)
-    if not force and workspace_venv_ready(workspace_dir, resolved_type):
-        if log:
-            log("Workspace .venv is up to date", "stdout")
-        return True
-
     started = time.monotonic()
     try:
         if status:
             status("Preparing workspace environment…")
-        if not os.path.isfile(_pyproject_path(workspace_dir)):
-            if status:
-                status("Setting up pyproject.toml…")
-            _materialize_pyproject(workspace_dir, resolved_type, log=log)
-        elif log:
+        had_pyproject = os.path.isfile(_pyproject_path(workspace_dir))
+        if not had_pyproject and status:
+            status("Setting up pyproject.toml…")
+        _materialize_pyproject(workspace_dir, resolved_type, log=log)
+        if had_pyproject and log:
             log("Syncing workspace dependencies from pyproject.toml", "stdout")
         if status:
             status("Syncing dependencies…")
         _uv_sync(workspace_dir)
-        _write_stamp(workspace_dir, resolved_type)
         if log:
             log(
                 f"Workspace .venv ready (type={resolved_type}, elapsed={time.monotonic() - started:.1f}s)",
@@ -275,10 +246,7 @@ def ensure_workspace_venv(
 
 
 def workspace_launch_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
-    env = dict(base_env or os.environ)
-    env.pop("UV_NO_SYNC", None)
-    env.pop("UV_NO_PROJECT", None)
-    env.pop("VIRTUAL_ENV", None)  # Avoid mismatch warning with workspace .venv
+    env = _clean_workspace_env(base_env)
     env.setdefault("PYTHONUNBUFFERED", "1")
     env["UV_NO_PYTHON_DOWNLOADS"] = "never"
     env["UV_NO_MANAGED_PYTHON"] = "1"

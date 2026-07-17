@@ -80,6 +80,28 @@ class LifecycleLoggingTests(unittest.TestCase):
             self.assertTrue(any("launch command" in text for text in texts), texts)
             self.assertTrue(any("spawn broken" in text for text in texts), texts)
 
+    def test_failed_workspace_prep_aborts_before_process_launch(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            _write_widget_conf(workspace, "demo")
+            (workspace / "demo" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+            core.apply_command({"type": "set_path", "path": "demo"})
+
+            with (
+                mock.patch.object(module.time, "sleep", lambda _: None),
+                mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=False),
+                mock.patch.object(module.subprocess, "Popen") as popen,
+            ):
+                state = core.apply_command({"type": "reload_widget"})
+
+            popen.assert_not_called()
+            self.assertEqual(state["status"], "Command failed")
+            self.assertIn("Failed to prepare workspace Python environment", state["lastError"])
+
     def test_reload_widget_invalidates_stale_shared_memory_frame_before_launch(self):
         module = _load_core_module()
         with tempfile.TemporaryDirectory() as workspace_dir:
@@ -112,7 +134,7 @@ class LifecycleLoggingTests(unittest.TestCase):
 
 
 class WidgetLaunchCommandTests(unittest.TestCase):
-    def test_widget_launch_uses_uv_workspace_run_when_venv_ready(self):
+    def test_widget_launch_uses_clean_uv_workspace_run_after_sync(self):
         module = _load_core_module()
         with tempfile.TemporaryDirectory() as workspace_dir:
             workspace = Path(workspace_dir)
@@ -148,7 +170,13 @@ class WidgetLaunchCommandTests(unittest.TestCase):
                     {
                         "DARTSNUT_UV_BIN": uv_bin,
                         "UV_PYTHON": "/tmp/dartsnut-python-test",
+                        "VIRTUAL_ENV": "/host/venv",
+                        "PYTHONHOME": "/host/python",
+                        "PYTHONPATH": "/host/packages",
+                        "PYTHONUSERBASE": "/host/userbase",
                         "UV_NO_SYNC": "1",
+                        "UV_NO_PROJECT": "1",
+                        "UV_PROJECT_ENVIRONMENT": "/other/venv",
                     },
                     clear=False,
                 ),
@@ -158,11 +186,20 @@ class WidgetLaunchCommandTests(unittest.TestCase):
 
             command = captured.get("command", [])
             child_env = captured.get("env", {})
-            self.assertNotIn("UV_NO_SYNC", child_env)
-            self.assertNotIn("UV_NO_PROJECT", child_env)
+            for key in (
+                "VIRTUAL_ENV",
+                "PYTHONHOME",
+                "PYTHONPATH",
+                "PYTHONUSERBASE",
+                "UV_NO_SYNC",
+                "UV_NO_PROJECT",
+                "UV_PROJECT_ENVIRONMENT",
+            ):
+                self.assertNotIn(key, child_env)
+            self.assertEqual(child_env.get("PYTHONNOUSERSITE"), "1")
             self.assertEqual(command[0], uv_bin)
-            self.assertEqual(command[1:4], ["run", "--directory", str(demo_dir)])
-            self.assertEqual(command[4], "main.py")
+            self.assertEqual(command[1:5], ["run", "--no-sync", "--directory", str(demo_dir)])
+            self.assertEqual(command[5], "main.py")
 
 
 class ShutdownCommandTests(unittest.TestCase):

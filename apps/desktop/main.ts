@@ -42,7 +42,7 @@ import {
   type ReadPreviewRequest,
   type ReadPreviewResponse,
   type SaveProviderSettingsRequest,
-  type UserDefineProviderSettings,
+  type CustomProviderSettings,
   type UnbindSlotRequest,
   type UnbindSlotResponse,
   validateDeployWorkspaceConf,
@@ -817,7 +817,7 @@ function writeWindowState(state: PersistedWindowState): void {
   );
 }
 
-function normalizeUserDefineSettings(input?: Partial<UserDefineProviderSettings> | null): UserDefineProviderSettings {
+function normalizeCustomProviderSettings(input?: Partial<CustomProviderSettings> | null): CustomProviderSettings {
   return {
     baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl.trim() : "",
     apiKey: typeof input?.apiKey === "string" ? input.apiKey.trim() : "",
@@ -827,7 +827,8 @@ function normalizeUserDefineSettings(input?: Partial<UserDefineProviderSettings>
 
 type LegacyProviderSettingsFile = Omit<Partial<ProviderSettings>, "activeProvider" | "custom"> & {
   activeProvider?: string;
-  custom?: Partial<UserDefineProviderSettings>;
+  custom?: Partial<CustomProviderSettings>;
+  userDefine?: Partial<CustomProviderSettings>;
   baseUrl?: string;
   apiKey?: string;
   model?: string;
@@ -837,7 +838,7 @@ function normalizeProviderId(value: unknown): ProviderId {
   return value === "custom" ? "custom" : "dartsnut-llm";
 }
 
-function providerSettingsForDisk(settings: ProviderSettings): Omit<ProviderSettings, "userDefine"> {
+function providerSettingsForDisk(settings: ProviderSettings): ProviderSettings {
   return {
     activeProvider: settings.activeProvider,
     custom: settings.custom
@@ -858,21 +859,20 @@ function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): P
     input.userDefine == null;
 
   if (legacyFlat) {
-    const custom = normalizeUserDefineSettings({
+    const custom = normalizeCustomProviderSettings({
       baseUrl: input.baseUrl,
       apiKey: input.apiKey,
       model: input.model
     });
     return {
       activeProvider: "custom",
-      custom,
-      userDefine: custom
+      custom
     };
   }
 
-  const legacyUserDefine = normalizeUserDefineSettings(input?.userDefine);
+  const legacyUserDefine = normalizeCustomProviderSettings(input?.userDefine);
   const customSource = input?.custom ?? input?.userDefine;
-  const custom = normalizeUserDefineSettings(customSource);
+  const custom = normalizeCustomProviderSettings(customSource);
   const activeProvider =
     input == null
       ? "dartsnut-llm"
@@ -888,17 +888,14 @@ function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): P
     !legacyUserDefine.model &&
     !legacyUserDefine.baseUrl;
   if (legacyBuiltinProvider) {
-    const envCustom = normalizeUserDefineSettings();
     return {
       activeProvider: "dartsnut-llm",
-      custom: envCustom,
-      userDefine: envCustom
+      custom: normalizeCustomProviderSettings()
     };
   }
   return {
     activeProvider,
-    custom,
-    userDefine: custom
+    custom
   };
 }
 
@@ -935,18 +932,19 @@ async function validateProviderSettingsInput(input: SaveProviderSettingsRequest)
     return { ok: true };
   }
   const custom = normalized.custom;
+  if (!custom.baseUrl) {
+    return { ok: false, error: "Endpoint is required." };
+  }
   if (!custom.apiKey) {
     return { ok: false, error: "API key is required." };
   }
   if (!custom.model) {
     return { ok: false, error: "Model is required." };
   }
-  if (custom.baseUrl) {
-    try {
-      new URL(custom.baseUrl);
-    } catch {
-      return { ok: false, error: "Endpoint must be a valid URL." };
-    }
+  try {
+    new URL(custom.baseUrl);
+  } catch {
+    return { ok: false, error: "Endpoint must be a valid URL." };
   }
   return { ok: true };
 }

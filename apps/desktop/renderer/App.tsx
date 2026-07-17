@@ -26,7 +26,7 @@ import {
   type ProviderSettings,
   type PythonRuntimeProgress,
   type ProjectType,
-  type UserDefineProviderSettings,
+  type CustomProviderSettings,
   type PromptRequest,
   type SendPromptResponse,
   type SaveTempWorkspaceResponse,
@@ -121,7 +121,7 @@ const GREETING_TEXT =
   "What are we making today? Share your idea and I'll help turn it into a Dartsnut widget or game.";
 const CHAT_ATTACHMENT_ERROR_TIMEOUT_MS = 3500;
 
-const EMPTY_USER_DEFINE: UserDefineProviderSettings = {
+const EMPTY_CUSTOM_PROVIDER: CustomProviderSettings = {
   baseUrl: "",
   apiKey: "",
   model: ""
@@ -129,8 +129,7 @@ const EMPTY_USER_DEFINE: UserDefineProviderSettings = {
 
 const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
   activeProvider: "dartsnut-llm",
-  custom: EMPTY_USER_DEFINE,
-  userDefine: EMPTY_USER_DEFINE
+  custom: EMPTY_CUSTOM_PROVIDER
 };
 
 function createChatMediaAttachmentId(): string {
@@ -383,13 +382,11 @@ function maskApiKey(value: string): string {
 
 function withProviderCustom(
   settings: ProviderSettings,
-  updater: (custom: UserDefineProviderSettings) => UserDefineProviderSettings
+  updater: (custom: CustomProviderSettings) => CustomProviderSettings
 ): ProviderSettings {
-  const custom = updater(settings.custom ?? settings.userDefine ?? EMPTY_USER_DEFINE);
   return {
     ...settings,
-    custom,
-    userDefine: custom
+    custom: updater(settings.custom)
   };
 }
 
@@ -400,8 +397,8 @@ function withProviderId(settings: ProviderSettings, activeProvider: ProviderId):
   };
 }
 
-function providerCustom(settings: ProviderSettings): UserDefineProviderSettings {
-  return settings.custom ?? settings.userDefine ?? EMPTY_USER_DEFINE;
+function providerCustom(settings: ProviderSettings): CustomProviderSettings {
+  return settings.custom;
 }
 
 function workspaceFolderBasename(workspaceRoot: string): string {
@@ -1788,6 +1785,10 @@ export function App() {
     setProviderSettingsNotice(null);
     const custom = providerCustom(providerSettings);
     if (providerSettings.activeProvider === "custom") {
+      if (!custom.baseUrl.trim()) {
+        setProviderSettingsError("Endpoint is required.");
+        return;
+      }
       if (!custom.apiKey.trim()) {
         setProviderSettingsError("API key is required.");
         return;
@@ -1796,13 +1797,11 @@ export function App() {
         setProviderSettingsError("Model is required.");
         return;
       }
-      if (custom.baseUrl.trim()) {
-        try {
-          new URL(custom.baseUrl.trim());
-        } catch {
-          setProviderSettingsError("Endpoint must be a valid URL.");
-          return;
-        }
+      try {
+        new URL(custom.baseUrl.trim());
+      } catch {
+        setProviderSettingsError("Endpoint must be a valid URL.");
+        return;
       }
     }
     setSavingProviderSettings(true);
@@ -2549,7 +2548,7 @@ export function App() {
                           withProviderCustom(prev, (custom) => ({ ...custom, baseUrl: event.target.value }))
                         )
                       }
-                      placeholder="https://api.openai.com/v1"
+                      placeholder="https://provider.example.com/v1"
                     />
                   </label>
                   <label className="flex flex-col gap-1.5">
@@ -2563,7 +2562,7 @@ export function App() {
                           withProviderCustom(prev, (custom) => ({ ...custom, apiKey: event.target.value }))
                         )
                       }
-                      placeholder="sk-..."
+                      placeholder="provider-key"
                     />
                   </label>
                   <div className="text-xs text-fg-muted">
@@ -2581,7 +2580,7 @@ export function App() {
                           withProviderCustom(prev, (custom) => ({ ...custom, model: event.target.value }))
                         )
                       }
-                      placeholder="gpt-4.1-mini"
+                      placeholder="model-name"
                     />
                   </label>
                 </>

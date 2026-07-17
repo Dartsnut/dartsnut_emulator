@@ -367,7 +367,7 @@ export interface PickWorkspaceResponse {
   reason?: "cancelled" | "non_empty";
 }
 
-export interface UserDefineProviderSettings {
+export interface CustomProviderSettings {
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -377,9 +377,7 @@ export type ProviderId = "dartsnut-llm" | "custom";
 
 export interface ProviderSettings {
   activeProvider: ProviderId;
-  custom: UserDefineProviderSettings;
-  /** @deprecated Legacy alias for `custom`; kept for older callers during migration. */
-  userDefine?: UserDefineProviderSettings;
+  custom: CustomProviderSettings;
 }
 
 export type SaveProviderSettingsRequest = ProviderSettings;

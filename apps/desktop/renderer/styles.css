@@ -1962,6 +1962,76 @@ kbd,
   opacity: 0.45;
 }
 
+.google-signin-brand-button {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 40px;
+  flex-shrink: 0;
+  cursor: pointer;
+  appearance: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #8e918f;
+  border-radius: var(--radius-md);
+  background: #131314;
+  padding: 0;
+  color: #e3e3e3;
+  font-family: "Google Sans", Roboto, Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.google-signin-brand-button:hover:enabled {
+  background: #1f1f1f;
+}
+
+.google-signin-brand-button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.google-signin-brand-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.google-signin-brand-button__logo {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  display: block;
+  width: 20px;
+  height: 20px;
+  transform: translateY(-50%);
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+.google-signin-brand-button__label {
+  display: block;
+  padding: 0 42px;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-theme="light"] .google-signin-brand-button {
+  border-color: #747775;
+  background: #ffffff;
+  color: #1f1f1f;
+}
+
+[data-theme="light"] .google-signin-brand-button:hover:enabled {
+  background: #f8faff;
+}
+
 .ui-toolbar-icon-btn {
   width: 32px;
   height: 32px;

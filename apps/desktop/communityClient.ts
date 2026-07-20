@@ -500,7 +500,8 @@ export class CommunityClient {
   }
 
   async loginWithGoogleIdToken(
-    idToken: string
+    idToken: string,
+    signal?: AbortSignal
   ): Promise<
     | { ok: true; token: string; account: string }
     | CommunityApiError
@@ -512,7 +513,8 @@ export class CommunityClient {
       const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/google/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ idToken: idToken.trim() })
+        body: JSON.stringify({ idToken: idToken.trim() }),
+        signal
       });
       const raw = await res.json().catch(() => null);
       const parsed = normalizeApiJson(raw) || {};

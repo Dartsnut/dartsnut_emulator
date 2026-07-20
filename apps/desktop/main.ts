@@ -59,6 +59,7 @@ import {
   type MachineMcpSubmitQuestionAnswerRequest,
   type MachineMcpSubmitQuestionAnswerResponse,
   type CommunitySessionInfo,
+  type CommunityCancelGoogleLoginResponse,
   type CommunityLoginRequest,
   type CommunityLoginResponse,
   type CommunityLogoutResponse,
@@ -249,6 +250,9 @@ let deployMachineSession: DeployMachineSession | null = null;
 
 /** Set while `sendPrompt` is running; used to abort the provider + tool loop from the renderer Stop control. */
 let sendPromptAbortController: AbortController | null = null;
+
+/** Set while desktop Google OAuth is waiting for the browser callback or login API. */
+let communityGoogleLoginAbortController: AbortController | null = null;
 
 /** Poll `conf.json` like `AssetManager` does for the manifest — survives atomic writes; works before the file exists. */
 const DEPLOY_CONF_POLL_MS = 600;
@@ -2975,20 +2979,33 @@ ipcMain.handle(
     }
     if (request.method === "googleOAuth") {
       const config = client.getConfig();
-      const oauthResult = await signInWithGoogleOAuth({
-        clientId: config.googleDesktopClientId,
-        clientSecret: config.googleDesktopClientSecret,
-        openExternal: (url) => shell.openExternal(url)
-      });
-      if (!oauthResult.ok) {
-        return { ok: false, code: oauthResult.code, message: oauthResult.message };
+      communityGoogleLoginAbortController?.abort();
+      const loginAbort = new AbortController();
+      communityGoogleLoginAbortController = loginAbort;
+      try {
+        const oauthResult = await signInWithGoogleOAuth({
+          clientId: config.googleDesktopClientId,
+          clientSecret: config.googleDesktopClientSecret,
+          openExternal: (url) => shell.openExternal(url),
+          signal: loginAbort.signal
+        });
+        if (!oauthResult.ok) {
+          return { ok: false, code: oauthResult.code, message: oauthResult.message };
+        }
+        const result = await client.loginWithGoogleIdToken(oauthResult.idToken, loginAbort.signal);
+        if (loginAbort.signal.aborted) {
+          return { ok: false, code: "cancelled", message: "Google sign-in was cancelled." };
+        }
+        if (!result.ok) {
+          return { ok: false, code: result.code, message: result.message };
+        }
+        writeCommunityAuth(getCommunityUserDataPath(), { token: result.token, account: result.account });
+        return { ok: true, account: result.account };
+      } finally {
+        if (communityGoogleLoginAbortController === loginAbort) {
+          communityGoogleLoginAbortController = null;
+        }
       }
-      const result = await client.loginWithGoogleIdToken(oauthResult.idToken);
-      if (!result.ok) {
-        return { ok: false, code: result.code, message: result.message };
-      }
-      writeCommunityAuth(getCommunityUserDataPath(), { token: result.token, account: result.account });
-      return { ok: true, account: result.account };
     }
     const idToken = String(request.idToken || "").trim();
     if (!idToken) {
@@ -3002,6 +3019,11 @@ ipcMain.handle(
     return { ok: true, account: result.account };
   }
 );
+
+ipcMain.handle(IPCChannels.communityCancelGoogleLogin, (): CommunityCancelGoogleLoginResponse => {
+  communityGoogleLoginAbortController?.abort();
+  return { ok: true };
+});
 
 ipcMain.handle(IPCChannels.communityLogout, (): CommunityLogoutResponse => {
   clearCommunityAuth(getCommunityUserDataPath());

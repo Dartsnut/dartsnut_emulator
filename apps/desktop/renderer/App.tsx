@@ -2117,7 +2117,7 @@ export function App() {
               <UpdateDownloadPill status={appUpdate} />
               <CommunityAuthStatus
                 communitySession={communitySession}
-                onAuthRequired={() => requestCommunityAuth("deploy-devices")}
+                onAuthRequired={() => requestCommunityAuth("deploy-devices", true)}
                 onSignOut={async () => {
                   if (!api?.communityLogout) {
                     return;
@@ -2746,6 +2746,12 @@ export function App() {
               : "Log in with your Dartsnut account to select a bound machine and use its IP automatically. You can continue without signing in and enter an IP manually."
         }
         allowSkip={communityAuthIntent !== "llm-use"}
+        onClose={() => {
+          setDeployAuthGateOpen(false);
+          if (communityAuthIntent === "my-games") {
+            setDeployPaneTab("deploy");
+          }
+        }}
         onSkip={() => {
           setCommunityAuthSkippedForSession();
           setCommunityAuthSkippedVersion((v) => v + 1);

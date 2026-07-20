@@ -47,6 +47,8 @@ import {
   type CommunityUploadNativeImageResponse,
   type CommunitySubmitAppVersionRequest,
   type CommunitySubmitAppVersionResponse,
+  type CommunityUpdateWorkspaceVersionRequest,
+  type CommunityUpdateWorkspaceVersionResponse,
   type CommunitySubmitProgress,
   type CommunityWithdrawAppVersionRequest,
   type CommunityWithdrawAppVersionResponse,
@@ -217,6 +219,8 @@ const api = {
     ipcRenderer.invoke(IPCChannels.communityUploadNativeImage, request) as Promise<CommunityUploadNativeImageResponse>,
   communitySubmitAppVersion: (request: CommunitySubmitAppVersionRequest) =>
     ipcRenderer.invoke(IPCChannels.communitySubmitAppVersion, request) as Promise<CommunitySubmitAppVersionResponse>,
+  communityUpdateWorkspaceVersion: (request: CommunityUpdateWorkspaceVersionRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityUpdateWorkspaceVersion, request) as Promise<CommunityUpdateWorkspaceVersionResponse>,
   onCommunitySubmitProgress: (listener: (progress: CommunitySubmitProgress) => void) => {
     const handler = (_: unknown, progress: CommunitySubmitProgress) => listener(progress);
     ipcRenderer.on(IPCChannels.communitySubmitProgress, handler);

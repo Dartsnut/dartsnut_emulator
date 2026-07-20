@@ -70,26 +70,66 @@ def _is_managed_default_pyproject(path: str) -> bool:
         return False
 
 
+def _sync_pyproject_project_metadata(text: str, app_id: str, version: str) -> str:
+    """Apply canonical conf.json identity to only the [project] TOML section."""
+    project_match = re.search(r"(?m)^\s*\[project\]\s*(?:#.*)?$", text)
+    if not project_match:
+        separator = "" if not text or text.endswith("\n") else "\n"
+        return (
+            f"{text}{separator}\n[project]\n"
+            f"name = {json.dumps(app_id)}\nversion = {json.dumps(version)}\n"
+        )
+
+    section_start = project_match.end()
+    next_section = re.search(r"(?m)^\s*\[[^]\n]+\]\s*(?:#.*)?$", text[section_start:])
+    section_end = section_start + next_section.start() if next_section else len(text)
+    section = text[section_start:section_end]
+    missing: list[str] = []
+    for key, value in (("name", app_id), ("version", version)):
+        assignment = re.compile(rf"(?m)^(\s*){re.escape(key)}\s*=.*$")
+        if assignment.search(section):
+            section = assignment.sub(
+                lambda match, current_key=key, current_value=value: (
+                    f"{match.group(1)}{current_key} = {json.dumps(current_value)}"
+                ),
+                section,
+                count=1,
+            )
+        else:
+            missing.append(f"{key} = {json.dumps(value)}")
+    if missing:
+        leading_break = "\n" if section.startswith("\n") else ""
+        inserted = "\n".join(missing)
+        section = f"{leading_break}\n{inserted}\n{section[len(leading_break):]}"
+    return text[:section_start] + section + text[section_end:]
+
+
 def _materialize_pyproject(workspace_dir: str, app_type: str, log: LogFn | None = None) -> None:
     dest = _pyproject_path(workspace_dir)
     template = _template_path(app_type)
-    template_text = template.read_text(encoding="utf-8")
-    app_id = _read_conf(workspace_dir).get("id")
-    if app_id is not None:
-        template_text = re.sub(
-            r'(?m)^name = "[^"\n]*"$',
-            lambda _match: f"name = {json.dumps(str(app_id))}",
-            template_text,
-            count=1,
-        )
-    if os.path.isfile(dest):
-        if not _is_managed_default_pyproject(dest):
+    conf = _read_conf(workspace_dir)
+    app_id = str(conf.get("id") or "").strip()
+    version = str(conf.get("version") or "").strip()
+    if not app_id or not version:
+        raise ValueError("conf.json must contain non-empty id and version fields")
+
+    if Path(dest).is_file() and not _is_managed_default_pyproject(dest):
+        current_text = Path(dest).read_text(encoding="utf-8")
+        synced_text = _sync_pyproject_project_metadata(current_text, app_id, version)
+        if synced_text != current_text:
+            Path(dest).write_text(synced_text, encoding="utf-8")
             if log:
-                log(f"Using existing pyproject.toml in {workspace_dir}", "stdout")
+                log("Synchronized pyproject.toml name and version from conf.json", "stdout")
+        elif log:
+            log(f"Using existing pyproject.toml in {workspace_dir}", "stdout")
+        return
+
+    template_text = _sync_pyproject_project_metadata(
+        template.read_text(encoding="utf-8"), app_id, version
+    )
+    if Path(dest).is_file():
+        if Path(dest).read_text(encoding="utf-8") == template_text:
             return
-        with open(dest, encoding="utf-8") as f:
-            if f.read() == template_text:
-                return
         Path(dest).write_text(template_text, encoding="utf-8")
         if log:
             log(f"Refreshed default pyproject.toml (type={app_type})", "stdout")

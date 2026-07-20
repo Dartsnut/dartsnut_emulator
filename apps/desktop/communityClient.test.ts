@@ -12,6 +12,7 @@ const {
   normalizeBoundDevices,
   normalizeCommunityGameCategories,
   normalizeCommunityGameControls,
+  normalizeCommunityPreviewUrls,
   normalizeCommunityVersions,
   pickUploadMd5,
   pickUploadUrl,
@@ -90,7 +91,8 @@ test("normalizeCommunityVersions maps game and widget version rows", () => {
         updated_at: "2026-01-03",
         review_action: "reject",
         review_comment: "Add clearer instructions.",
-        reviewed_at: "2026-01-03"
+        reviewed_at: "2026-01-03",
+        preview: '["https://cdn.example/one.png", "https://cdn.example/two.webp"]'
       },
       { id: "", version: "" }
     ], "game"),
@@ -106,7 +108,8 @@ test("normalizeCommunityVersions maps game and widget version rows", () => {
         updatedAt: "2026-01-03",
         reviewAction: "reject",
         reviewComment: "Add clearer instructions.",
-        reviewedAt: "2026-01-03"
+        reviewedAt: "2026-01-03",
+        preview: ["https://cdn.example/one.png", "https://cdn.example/two.webp"]
       }
     ]
   );
@@ -114,6 +117,19 @@ test("normalizeCommunityVersions maps game and widget version rows", () => {
     normalizeCommunityVersions([{ id: "w1", widget_system_id: "7", version: "2.0.0" }], "widget")[0]?.appSystemId,
     "7"
   );
+});
+
+
+test("normalizeCommunityPreviewUrls accepts API arrays and serialized legacy arrays", () => {
+  assert.deepEqual(
+    normalizeCommunityPreviewUrls([" https://cdn.example/one.png ", "https://cdn.example/one.png", ""]),
+    ["https://cdn.example/one.png"]
+  );
+  assert.deepEqual(
+    normalizeCommunityPreviewUrls('["https://cdn.example/one.png", "https://cdn.example/two.webp"]'),
+    ["https://cdn.example/one.png", "https://cdn.example/two.webp"]
+  );
+  assert.deepEqual(normalizeCommunityPreviewUrls("https://cdn.example/only.jpg"), ["https://cdn.example/only.jpg"]);
 });
 
 test("upload result helpers accept community response aliases", () => {
@@ -166,6 +182,80 @@ test("CommunityClient adds source header to Dartsnut Supabase requests", async (
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /^https:\/\/base\.dartsnut\.com\/rest\/v1\/remote_devices\?/);
   assert.equal(calls[0].init.headers.source, "agent");
+});
+
+test("uploadWidgetZip includes required widget identity form fields", async () => {
+  const calls = [];
+  const client = new CommunityClient(
+    {
+      baseApi: "https://api.example.com",
+      supabaseUrl: "",
+      supabaseAnonKey: "",
+      supabaseDeviceTable: "remote_devices",
+      googleClientId: "",
+      googleDesktopClientId: "",
+      googleDesktopClientSecret: "",
+      hasSupabase: false
+    },
+    async (url, init) => {
+      calls.push({ url, init });
+      return { status: 200, json: async () => ({ code: 1001, data: { url: "https://cdn.example/widget.tar.gz", md5: "abc" } }) };
+    }
+  );
+
+  const result = await client.uploadWidgetZip("token-1", new Blob(["widget"]), "scoreboard.tar.gz", 12, "scoreboard");
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0]?.url, "https://api.example.com/community/upload/upload-widget-zip");
+  const form = calls[0]?.init.body;
+  assert.equal(form.get("system_id"), "12");
+  assert.equal(form.get("widget_id"), "scoreboard");
+});
+
+test("submitAppVersion includes the canonical widget app id", async () => {
+  const calls = [];
+  const client = new CommunityClient(
+    {
+      baseApi: "https://api.example.com",
+      supabaseUrl: "",
+      supabaseAnonKey: "",
+      supabaseDeviceTable: "remote_devices",
+      googleClientId: "",
+      googleDesktopClientId: "",
+      googleDesktopClientSecret: "",
+      hasSupabase: false
+    },
+    async (url, init) => {
+      calls.push({ url, init });
+      return { status: 200, json: async () => ({ code: 1001, data: { id: 8, status: 1 } }) };
+    }
+  );
+
+  const result = await client.submitAppVersion("token-1", {
+    projectType: "widget",
+    appSystemId: 12,
+    appId: "scoreboard",
+    version: "1.0.1",
+    downloadUrl: "https://cdn.example/scoreboard.tar.gz",
+    downloadMd5: "md5",
+    description: "Release notes",
+    preview: ["https://cdn.example/preview.png"]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0]?.url, "https://api.example.com/community/widget-version/add");
+  assert.deepEqual(JSON.parse(calls[0]?.init.body), {
+    widget_system_id: 12,
+    widget_id: "scoreboard",
+    app_id: "scoreboard",
+    version: "1.0.1",
+    widget_download_url: "https://cdn.example/scoreboard.tar.gz",
+    widget_download_md5: "md5",
+    description: "Release notes",
+    fields: "",
+    preview: ["https://cdn.example/preview.png"],
+    submit_mode: "review"
+  });
 });
 
 test("withdrawAppVersion calls the permanent withdrawal endpoint", async () => {

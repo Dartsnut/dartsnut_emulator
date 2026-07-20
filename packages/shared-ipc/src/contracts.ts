@@ -66,6 +66,7 @@ export const IPCChannels = {
   communityListAppVersions: "community:list-app-versions",
   communityCreateApp: "community:create-app",
   communitySubmitAppVersion: "community:submit-app-version",
+  communityUpdateWorkspaceVersion: "community:update-workspace-version",
   /** Main → renderer: current package/upload/review stage for the blocking submission overlay. */
   communitySubmitProgress: "community:submit-progress",
   communityWithdrawAppVersion: "community:withdraw-app-version",
@@ -676,6 +677,7 @@ export type CommunityVersionSummary = {
   reviewAction: string;
   reviewComment: string;
   reviewedAt: string | null;
+  preview: string[];
 };
 
 export type CommunityWorkspaceDefaults = {
@@ -765,6 +767,18 @@ export type CommunitySubmitAppVersionResponse =
       downloadMd5: string;
     }
   | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
+
+export type CommunityUpdateWorkspaceVersionRequest = {
+  version: string;
+};
+
+export type CommunityUpdateWorkspaceVersionResponse =
+  | { ok: true; workspace: CommunityWorkspaceDefaults }
+  | {
+      ok: false;
+      code: "no_workspace" | "invalid_version" | "invalid_workspace" | "write_failed";
+      message: string;
+    };
 
 export type CommunityWithdrawAppVersionRequest = {
   projectType: ProjectType;

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "./cn";
+import googleGLogo from "./assets/google-g-logo.png";
 
 const DEPLOY_AUTH_SKIPPED_KEY = "deploy_auth_skipped";
 
@@ -29,6 +30,7 @@ export type DeployAuthGateProps = {
   title?: string;
   description?: string;
   allowSkip?: boolean;
+  onClose: () => void;
   onSkip: () => void;
   onSuccess: (account: string) => void;
 };
@@ -41,6 +43,7 @@ export function DeployAuthGate({
   title = "Sign in to Dartsnut",
   description = "Log in with your Dartsnut account to use community features. You can continue without signing in and enter an IP manually.",
   allowSkip = true,
+  onClose,
   onSkip,
   onSuccess
 }: DeployAuthGateProps) {
@@ -48,10 +51,12 @@ export function DeployAuthGate({
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
   const [hint, setHint] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"password" | "google" | null>(null);
+  const [busy, setBusy] = useState<"password" | "google" | "google-cancelling" | null>(null);
 
   useEffect(() => {
     if (!open) {
+      setAccount("");
+      setPassword("");
       setHint(null);
       setBusy(null);
     }
@@ -95,7 +100,9 @@ export function DeployAuthGate({
     try {
       const res = await api.communityLogin({ method: "googleOAuth" });
       if (!res.ok) {
-        setHint(res.message);
+        if (res.code !== "cancelled") {
+          setHint(res.message);
+        }
         return;
       }
       onSuccess(res.account);
@@ -105,6 +112,36 @@ export function DeployAuthGate({
       setBusy(null);
     }
   }, [api, googleSignInAvailable, onSuccess]);
+
+  const handleCancelGoogleLogin = useCallback(async () => {
+    if (!api?.communityCancelGoogleLogin || busy !== "google") {
+      return;
+    }
+    setBusy("google-cancelling");
+    try {
+      await api.communityCancelGoogleLogin();
+    } catch (e) {
+      setHint(e instanceof Error ? e.message : String(e));
+      setBusy("google");
+    }
+  }, [api, busy]);
+
+  const handleClose = useCallback(async () => {
+    if (busy === "google") {
+      if (!api?.communityCancelGoogleLogin) {
+        return;
+      }
+      setBusy("google-cancelling");
+      try {
+        await api.communityCancelGoogleLogin();
+      } catch (e) {
+        setHint(e instanceof Error ? e.message : String(e));
+        setBusy("google");
+        return;
+      }
+    }
+    onClose();
+  }, [api, busy, onClose]);
 
   const handleSkip = useCallback(() => {
     setDeployAuthSkippedForSession();
@@ -127,13 +164,27 @@ export function DeployAuthGate({
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
       >
-        <div>
-          <h2 id="deploy-auth-title" className="ui-panel-title">
-            {title}
-          </h2>
-          <p className="mt-1 text-[13px] text-[var(--color-text-subtle)]">
-            {description}
-          </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 id="deploy-auth-title" className="ui-panel-title">
+              {title}
+            </h2>
+            <p className="mt-1 text-[13px] text-[var(--color-text-subtle)]">
+              {description}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="inline-flex h-7 w-7 shrink-0 cursor-pointer appearance-none items-center justify-center rounded-full border-0 bg-transparent p-0 text-[var(--color-text-muted)] transition-colors hover:enabled:bg-[var(--color-emulator-toolbar-bg-hover)] hover:enabled:text-[var(--color-text)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
+            disabled={busy === "google-cancelling"}
+            onClick={() => void handleClose()}
+            aria-label="Close sign-in"
+            title="Close sign-in"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+              <path d="M5.5 5.5l13 13M18.5 5.5l-13 13" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" />
+            </svg>
+          </button>
         </div>
 
         <label className="flex flex-col gap-1.5 text-[13px]">
@@ -179,14 +230,27 @@ export function DeployAuthGate({
           {busy === "password" ? "Signing in…" : "Sign in"}
         </button>
 
-        <button
-          type="button"
-          className={cn(toolbarBtn, "w-full justify-center")}
-          disabled={busy !== null || !googleSignInAvailable}
-          onClick={() => void handleGoogleLogin()}
-        >
-          {busy === "google" ? "Opening browser…" : "Continue with Google"}
-        </button>
+        {busy === "google" || busy === "google-cancelling" ? (
+          <button
+            type="button"
+            className={cn(toolbarBtn, "h-10 w-full justify-center")}
+            disabled={busy === "google-cancelling"}
+            onClick={() => void handleCancelGoogleLogin()}
+          >
+            {busy === "google-cancelling" ? "Cancelling…" : "Cancel Google sign-in"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="google-signin-brand-button"
+            disabled={busy === "password" || !googleSignInAvailable}
+            onClick={() => void handleGoogleLogin()}
+            aria-label="Sign in with Google"
+          >
+            <img className="google-signin-brand-button__logo" src={googleGLogo} alt="" draggable={false} />
+            <span className="google-signin-brand-button__label">Sign in with Google</span>
+          </button>
+        )}
 
         {allowSkip ? (
           <button type="button" className={cn(toolbarBtn, "w-full justify-center")} disabled={busy !== null} onClick={handleSkip}>

@@ -59,6 +59,7 @@ export const IPCChannels = {
   deployLog: "deploy:log",
   communityGetSession: "community:get-session",
   communityLogin: "community:login",
+  communityCancelGoogleLogin: "community:cancel-google-login",
   communityLogout: "community:logout",
   communityListDeployDevices: "community:list-deploy-devices",
   communityListMyGames: "community:list-my-games",
@@ -609,6 +610,8 @@ export type CommunityLoginRequest =
 export type CommunityLoginResponse =
   | { ok: true; account: string }
   | { ok: false; code: string; message: string };
+
+export type CommunityCancelGoogleLoginResponse = { ok: true };
 
 export type CommunityLogoutResponse = { ok: true };
 

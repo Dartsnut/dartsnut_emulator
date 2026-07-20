@@ -24,6 +24,7 @@ import {
   type CommunityApiFailure
 } from "./CommunityErrorSnackbar";
 import { cn } from "./cn";
+import { mergeCommunityVersionHistory, isSameCommunityVersion } from "../communityVersionHistory";
 
 export type MyGamesPanelProps = {
   active: boolean;
@@ -41,6 +42,7 @@ type StagedImage = {
   filePath: string;
   name: string;
   previewUrl: string;
+  existingUrl?: string;
 };
 
 type PublishForm = {
@@ -57,6 +59,7 @@ type PublishForm = {
 };
 
 type ApiErrorSnackbarState = { message: string; detail?: string };
+type VersionConflictState = { currentVersion: string; nextVersion: string };
 
 const emptyWorkspace: CommunityWorkspaceDefaults = {
   eligible: false,
@@ -123,6 +126,16 @@ function revokeStaged(image: StagedImage | null): void {
   if (image?.previewUrl.startsWith("blob:")) URL.revokeObjectURL(image.previewUrl);
 }
 
+function stagedRemotePreview(url: string, index: number): StagedImage {
+  const normalized = url.trim();
+  return {
+    filePath: "",
+    name: `Previous preview ${index + 1}`,
+    previewUrl: normalized,
+    existingUrl: normalized
+  };
+}
+
 export const MyGamesPanel = memo(function MyGamesPanel({
   active,
   communitySession,
@@ -136,6 +149,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
   const iconInputRef = useRef<HTMLInputElement | null>(null);
   const previewInputRef = useRef<HTMLInputElement | null>(null);
   const stagedImagesRef = useRef<{ icon: StagedImage | null; previews: StagedImage[] }>({ icon: null, previews: [] });
+  const optimisticVersionsRef = useRef(new Map<string, CommunityVersionSummary[]>());
   const lastWorkspaceRefreshKeyRef = useRef(communityWorkspaceRefreshKey);
 
   const [screen, setScreen] = useState<Screen>("portfolio");
@@ -156,6 +170,9 @@ export const MyGamesPanel = memo(function MyGamesPanel({
   const [submitting, setSubmitting] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawTarget, setWithdrawTarget] = useState<CommunityVersionSummary | null>(null);
+  const [versionConflict, setVersionConflict] = useState<VersionConflictState | null>(null);
+  const [versionUpdateError, setVersionUpdateError] = useState<string | null>(null);
+  const [updatingVersion, setUpdatingVersion] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [apiErrorSnackbar, setApiErrorSnackbar] = useState<ApiErrorSnackbarState | null>(null);
@@ -207,7 +224,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       return;
     }
     if (shouldShowCommunityErrorSnackbar(res)) {
-      setApiErrorSnackbar({ message: message || res.message, detail: res.serverMessage?.trim() });
+      setApiErrorSnackbar({ message: message || res.message || "Community request failed.", detail: res.serverMessage?.trim() });
     }
   }, [applyAuthFailure]);
 
@@ -216,17 +233,26 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       setVersions([]);
       return;
     }
+    const key = projectKey(project);
     setVersionsLoading(true);
     try {
       const res = await api.communityListAppVersions({ projectType: project.projectType, appSystemId: project.id });
       if (!res.ok) {
-        setVersions([]);
+        // Keep the currently rendered history intact. In particular, the
+        // version endpoint may already have confirmed a just-submitted row.
         await surfaceApiFailure(res, `Failed to load ${projectLabel(project.projectType).toLowerCase()} versions.`);
         return;
       }
-      setVersions(res.versions);
+      const merged = mergeCommunityVersionHistory(
+        res.versions,
+        optimisticVersionsRef.current.get(key) || []
+      );
+      if (merged.pendingVersions.length) optimisticVersionsRef.current.set(key, merged.pendingVersions);
+      else optimisticVersionsRef.current.delete(key);
+      setVersions(merged.versions);
     } catch (cause) {
-      setVersions([]);
+      // Do not clear the release rail after a successful submission merely
+      // because the follow-up history request is temporarily unavailable.
       setApiErrorSnackbar({ message: cause instanceof Error ? cause.message : String(cause) });
     } finally {
       setVersionsLoading(false);
@@ -304,6 +330,8 @@ export const MyGamesPanel = memo(function MyGamesPanel({
     setError(null);
     setNotice(null);
     setApiErrorSnackbar(null);
+    setVersionConflict(null);
+    setVersionUpdateError(null);
   }, [communityWorkspaceRefreshKey, icon, previews]);
 
   useEffect(() => {
@@ -338,6 +366,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
   }
 
   async function uploadImage(image: StagedImage): Promise<string | null> {
+    if (image.existingUrl) return image.existingUrl;
     const res = await api.communityUploadNativeImage({ filePath: image.filePath });
     if (!res.ok) {
       await surfaceApiFailure(res, `Failed to upload ${image.name}.`);
@@ -347,6 +376,8 @@ export const MyGamesPanel = memo(function MyGamesPanel({
   }
 
   function openProject(project: CommunityAppSummary): void {
+    setVersionConflict(null);
+    setVersionUpdateError(null);
     setSelectedProjectKey(projectKey(project));
     setScreen("project");
     setNotice(null);
@@ -354,6 +385,8 @@ export const MyGamesPanel = memo(function MyGamesPanel({
   }
 
   function openNewProjectSubmission(): void {
+    setVersionConflict(null);
+    setVersionUpdateError(null);
     setSelectedProjectKey(null);
     setVersions([]);
     setForm((current) => ({ ...defaultForm(workspace), categoryId: current.categoryId, controlValues: current.controlValues }));
@@ -364,6 +397,12 @@ export const MyGamesPanel = memo(function MyGamesPanel({
 
   function openVersionSubmission(): void {
     if (!selectedProject || !workspaceMatchesSelection) return;
+    setVersionConflict(null);
+    setVersionUpdateError(null);
+    const previousVersion = versions.find((version) => version.preview.length > 0) || null;
+    if (!previews.length && previousVersion) {
+      setPreviews(previousVersion.preview.map(stagedRemotePreview));
+    }
     setForm((current) => ({
       ...current,
       appName: selectedProject.appName,
@@ -372,7 +411,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       description: workspace.description || current.description
     }));
     setScreen("submit");
-    setNotice(null);
+    setNotice(previousVersion ? `Prefilled ${previousVersion.preview.length} preview image${previousVersion.preview.length === 1 ? "" : "s"} from v${previousVersion.version}.` : null);
     setError(null);
   }
 
@@ -380,7 +419,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
     if (!workspace.eligible || !submissionType) return "Open a valid game or widget workspace first.";
     if (!isNewProject && !communityProjectMatchesWorkspace(submissionProject, workspace)) return "Open this project’s workspace to submit a version.";
     if (!isNewProject && blockingVersion) return "Withdraw the current draft or review before submitting another version.";
-    if (!isNewProject && duplicateVersion) return `Version ${form.version.trim()} already exists. Bump the version in conf.json.`;
+    if (!isNewProject && duplicateVersion) return `Version ${form.version.trim()} already exists. Choose a new version before submitting.`;
     if (!form.version.trim()) return "Set a version in conf.json.";
     if (!form.description.trim()) return "Add release notes.";
     if (!previews.length) return "Add at least one preview image.";
@@ -455,18 +494,76 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       }
 
       const completedProject = targetProject;
+      const completedVersion = form.version.trim();
+      const submittedAt = new Date().toISOString();
+      const submittedVersion: CommunityVersionSummary = {
+        id: submit.versionId ?? `pending:${projectKey(completedProject)}:${completedVersion}`,
+        appSystemId: completedProject.id,
+        projectType: completedProject.projectType,
+        version: completedVersion,
+        description: form.description.trim(),
+        status: submit.status || "1",
+        createdAt: submittedAt,
+        updatedAt: submittedAt,
+        reviewAction: "",
+        reviewComment: "",
+        reviewedAt: null,
+        preview: previewUrls.filter((url): url is string => Boolean(url))
+      };
+      const completedProjectKey = projectKey(completedProject);
+      const previousPending = optimisticVersionsRef.current.get(completedProjectKey) || [];
+      optimisticVersionsRef.current.set(
+        completedProjectKey,
+        [submittedVersion, ...previousPending.filter((version) => !isSameCommunityVersion(version, submittedVersion))]
+      );
+      setVersions((current) => [submittedVersion, ...current.filter((version) => !isSameCommunityVersion(version, submittedVersion))]);
       previews.forEach(revokeStaged);
       setPreviews([]);
       revokeStaged(icon);
       setIcon(null);
-      setNotice(`${projectLabel(submissionType)} version ${form.version.trim()} submitted for official review.`);
-      await loadPublishOptions();
+      // Transition first: the new-project and new-version paths both return to this release rail.
       setSelectedProjectKey(projectKey(completedProject));
-      await loadVersions(completedProject);
       setScreen("project");
+      setNotice(`${projectLabel(submissionType)} version ${completedVersion} submitted for official review.`);
+      // Refresh the portfolio and history after navigation; a transient refresh failure must not strand
+      // the creator on the submission form after a successful server response.
+      void (async () => {
+        await loadPublishOptions();
+        await loadVersions(completedProject);
+      })();
     } finally {
       onSubmitProgress(null);
       setSubmitting(false);
+    }
+  }
+
+  async function confirmVersionUpdate(): Promise<void> {
+    if (!versionConflict || updatingVersion) return;
+    const nextVersion = versionConflict.nextVersion.trim();
+    if (!nextVersion) {
+      setVersionUpdateError("Enter a new version.");
+      return;
+    }
+    if (nextVersion.toLowerCase() === versionConflict.currentVersion.trim().toLowerCase()) {
+      setVersionUpdateError("Choose a version different from the one the server rejected.");
+      return;
+    }
+    setVersionUpdateError(null);
+    setUpdatingVersion(true);
+    try {
+      const result = await api.communityUpdateWorkspaceVersion({ version: nextVersion });
+      if (!result.ok) {
+        setVersionUpdateError(result.message);
+        return;
+      }
+      setWorkspace(result.workspace);
+      setForm((current) => ({ ...current, version: result.workspace.version }));
+      setVersionConflict(null);
+      setVersionUpdateError(null);
+      setError(null);
+      setNotice(`Updated conf.json and pyproject.toml to version ${result.workspace.version}. Submit again when ready.`);
+    } finally {
+      setUpdatingVersion(false);
     }
   }
 
@@ -736,15 +833,29 @@ export const MyGamesPanel = memo(function MyGamesPanel({
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Version<input className={inputClass} value={form.version} disabled /></label>
-                <div className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]"><span>Source</span><div className="flex h-10 items-center rounded-md border border-edge bg-[var(--color-surface)] px-3 font-[family-name:var(--font-mono)] text-[10px] text-[var(--color-text-muted)]">conf.json</div></div>
+                <div className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]"><span>Source</span><div className="flex h-10 items-center rounded-md border border-edge bg-[var(--color-surface)] px-3 font-[family-name:var(--font-mono)] text-[10px] text-[var(--color-text-muted)]">conf.json · canonical</div></div>
                 <label className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Release notes<textarea className={textAreaClass} value={form.description} maxLength={2000} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} /></label>
                 <label className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Optional fields<textarea className={cn(textAreaClass, "min-h-16")} value={form.fields} maxLength={2000} onChange={(event) => setForm((current) => ({ ...current, fields: event.target.value }))} /></label>
               </div>
-              {duplicateVersion ? <p className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-700 dark:text-red-200">Version {form.version} already exists. Update the version in conf.json before submitting.</p> : null}
+              {duplicateVersion ? (
+                <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-2.5 text-red-700 dark:text-red-200">
+                  <p className="text-xs leading-relaxed">Version {form.version} already exists in project history. Choose a new version before submitting.</p>
+                  <button
+                    type="button"
+                    className="mt-2 min-h-8 rounded-md border border-red-500/35 bg-red-500/10 px-2.5 text-xs font-semibold hover:bg-red-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/70"
+                    onClick={() => {
+                      setVersionConflict({ currentVersion: form.version.trim(), nextVersion: "" });
+                      setVersionUpdateError(null);
+                    }}
+                  >
+                    Change workspace version
+                  </button>
+                </div>
+              ) : null}
               {blockingVersion ? <p className="mt-3 rounded-md border border-amber-400/30 bg-amber-400/10 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-200">This project already has a draft or version under review. Withdraw it before uploading another version.</p> : null}
 
               <div className="mt-3">
-                <div className="mb-2 flex items-center justify-between"><p className="text-xs text-[var(--color-text-subtle)]">Preview images</p><button type="button" className="ui-toolbar-btn h-7 px-2 text-xs" onClick={() => previewInputRef.current?.click()}>Add</button></div>
+                <div className="mb-2 flex items-center justify-between"><p className="text-xs text-[var(--color-text-subtle)]">Preview images{previews.some((preview) => preview.existingUrl) ? " · previous release" : ""}</p><button type="button" className="ui-toolbar-btn h-7 px-2 text-xs" onClick={() => previewInputRef.current?.click()}>Add</button></div>
                 <div className="grid grid-cols-3 gap-2">
                   {previews.map((preview, index) => (
                     <div key={`${preview.filePath}-${index}`} className="group relative aspect-square overflow-hidden rounded-md border border-edge bg-[var(--color-surface)]">
@@ -771,6 +882,46 @@ export const MyGamesPanel = memo(function MyGamesPanel({
 
       <input ref={iconInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(event) => { chooseIcon(event.target.files?.[0]); event.currentTarget.value = ""; }} />
       <input ref={previewInputRef} type="file" accept="image/png,image/jpeg,image/webp" multiple className="hidden" onChange={(event) => { choosePreviews(event.target.files); event.currentTarget.value = ""; }} />
+
+      {versionConflict ? (
+        <div className="community-confirm-layer" role="dialog" aria-modal="true" aria-labelledby="version-conflict-title">
+          <div className="community-confirm-card">
+            <p className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.16em] text-[var(--color-neon-coral)]">Version conflict</p>
+            <h3 id="version-conflict-title" className="mt-1 font-[family-name:var(--font-display)] text-base font-semibold text-[var(--color-text-strong)]">Choose a new version</h3>
+            <p className="mt-2 text-xs leading-relaxed text-[var(--color-text-subtle)]">Version {versionConflict.currentVersion} is already in project history. Confirming updates the open workspace in both places; your release notes and staged previews stay here.</p>
+            <label className="mt-4 flex flex-col gap-1.5 text-xs text-[var(--color-text-subtle)]">
+              New version
+              <input
+                autoFocus
+                className={inputClass}
+                value={versionConflict.nextVersion}
+                placeholder="For example, 1.0.1"
+                disabled={updatingVersion}
+                onChange={(event) => {
+                  setVersionConflict((current) => current ? { ...current, nextVersion: event.target.value } : current);
+                  setVersionUpdateError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void confirmVersionUpdate();
+                  if (event.key === "Escape" && !updatingVersion) {
+                    setVersionConflict(null);
+                    setVersionUpdateError(null);
+                  }
+                }}
+              />
+            </label>
+            {versionUpdateError ? <p className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs leading-relaxed text-red-700 dark:text-red-200">{versionUpdateError}</p> : null}
+            <div className="mt-3 rounded-md border border-edge bg-[var(--color-surface)] px-3 py-2 font-[family-name:var(--font-mono)] text-[10px] leading-relaxed text-[var(--color-text-muted)]">
+              <div>conf.json → version</div>
+              <div>pyproject.toml → project.version</div>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button type="button" className="ui-toolbar-btn min-h-10 px-3 text-xs" disabled={updatingVersion} onClick={() => { setVersionConflict(null); setVersionUpdateError(null); }}>Keep current</button>
+              <button type="button" className="ui-btn-primary min-h-10 px-3 text-xs" disabled={updatingVersion || !versionConflict.nextVersion.trim()} onClick={() => void confirmVersionUpdate()}>{updatingVersion ? "Updating…" : "Update both files"}</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {withdrawTarget ? (
         <div className="community-confirm-layer" role="dialog" aria-modal="true" aria-labelledby="withdraw-title">

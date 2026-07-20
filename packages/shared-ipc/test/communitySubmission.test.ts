@@ -18,7 +18,8 @@ const version = (status: string, versionNumber = "1.0.0", reviewAction = ""): Co
   updatedAt: null,
   reviewAction,
   reviewComment: "",
-  reviewedAt: null
+  reviewedAt: null,
+  preview: []
 });
 
 it("maps the creator lifecycle statuses", () => {

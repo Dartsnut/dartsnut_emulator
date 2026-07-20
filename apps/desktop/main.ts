@@ -10,6 +10,7 @@ import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBat
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
 import { buildIntakeProjectTypePromptEvent, buildIntakeWidgetSizePromptEvent } from "./intakePromptEvents";
 import { createPublishTarball } from "./publishPackage";
+import { syncWorkspaceProjectMetadata } from "./workspaceProjectMetadata";
 import { buildPythonScriptLaunch, pythonRuntimeDir, runtimeDir, uvBinaryPath, venvPythonPath } from "./pythonRuntime";
 import { ensureRuntime, type DownloadProgress } from "./pythonRuntimeDownloader";
 import {
@@ -72,6 +73,8 @@ import {
   type CommunityUploadNativeImageResponse,
   type CommunitySubmitAppVersionRequest,
   type CommunitySubmitAppVersionResponse,
+  type CommunityUpdateWorkspaceVersionRequest,
+  type CommunityUpdateWorkspaceVersionResponse,
   type CommunitySubmitProgress,
   type CommunitySubmitProgressStage,
   type CommunityWithdrawAppVersionRequest,
@@ -263,6 +266,20 @@ function stopDeployConfWatcher(): void {
   deployConfWatch = null;
 }
 
+function syncWorkspaceMetadataFromConf(workspacePath: string): void {
+  if (
+    !fs.existsSync(path.join(workspacePath, "conf.json")) ||
+    !fs.existsSync(path.join(workspacePath, "pyproject.toml"))
+  ) {
+    return;
+  }
+  try {
+    syncWorkspaceProjectMetadata(workspacePath);
+  } catch (error) {
+    devLog.warn("[workspace] Could not synchronize pyproject.toml from conf.json:", error);
+  }
+}
+
 function startDeployConfWatcher(workspacePath: string): void {
   stopDeployConfWatcher();
   const watchedPath = path.join(workspacePath, "conf.json");
@@ -270,9 +287,11 @@ function startDeployConfWatcher(workspacePath: string): void {
     if (!deployConfWatch || deployConfWatch.workspacePath !== workspaceRoot) {
       return;
     }
+    syncWorkspaceMetadataFromConf(workspacePath);
     sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
   });
   deployConfWatch = { watchedPath, workspacePath };
+  syncWorkspaceMetadataFromConf(workspacePath);
   sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
 }
 
@@ -3233,6 +3252,37 @@ ipcMain.handle(
 );
 
 ipcMain.handle(
+  IPCChannels.communityUpdateWorkspaceVersion,
+  async (
+    _event,
+    request: CommunityUpdateWorkspaceVersionRequest
+  ): Promise<CommunityUpdateWorkspaceVersionResponse> => {
+    if (!workspaceRoot) {
+      return { ok: false, code: "no_workspace", message: "Open a workspace before changing its version." };
+    }
+    const version = String(request?.version || "").trim();
+    if (!version) {
+      return { ok: false, code: "invalid_version", message: "Enter a new version." };
+    }
+    try {
+      syncWorkspaceProjectMetadata(workspaceRoot, version);
+      const workspace = readCommunityWorkspaceDefaults();
+      if (!workspace.eligible) {
+        return { ok: false, code: "invalid_workspace", message: "The current workspace configuration is invalid." };
+      }
+      sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
+      return { ok: true, workspace };
+    } catch (error) {
+      return {
+        ok: false,
+        code: "write_failed",
+        message: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+);
+
+ipcMain.handle(
   IPCChannels.communitySubmitAppVersion,
   async (_event, request: CommunitySubmitAppVersionRequest): Promise<CommunitySubmitAppVersionResponse> => {
     const auth = readCommunityAuth(getCommunityUserDataPath());
@@ -3253,14 +3303,33 @@ ipcMain.handle(
     }
     let tarballPath: string | null = null;
     try {
+      const metadata = syncWorkspaceProjectMetadata(workspaceRoot);
+      if (metadata.appId !== elig.appId) {
+        return { ok: false, code: "api_error", message: "Workspace identity changed. Refresh Community and try again." };
+      }
+      if (String(request.version || "").trim() !== metadata.version) {
+        return { ok: false, code: "api_error", message: "Submission version must match conf.json." };
+      }
       emitCommunitySubmitProgress("packaging", "Packaging workspace and running tar...");
       tarballPath = await createPublishTarball(workspaceRoot, elig.appId);
       const client = getCommunityClient();
       emitCommunitySubmitProgress("uploading", "Uploading packaged workspace...");
       const packageUpload =
         projectType === "widget"
-          ? await client.uploadWidgetZip(auth.token, fileBlobFromPath(tarballPath, "application/gzip"), `${elig.appId}.tar.gz`)
-          : await client.uploadGameZip(auth.token, fileBlobFromPath(tarballPath, "application/gzip"), `${elig.appId}.tar.gz`);
+          ? await client.uploadWidgetZip(
+              auth.token,
+              fileBlobFromPath(tarballPath, "application/gzip"),
+              `${elig.appId}.tar.gz`,
+              request.appSystemId,
+              metadata.appId
+            )
+          : await client.uploadGameZip(
+              auth.token,
+              fileBlobFromPath(tarballPath, "application/gzip"),
+              `${elig.appId}.tar.gz`,
+              request.appSystemId,
+              metadata.appId
+            );
       if (!packageUpload.ok) {
         clearAuthIfExpired(packageUpload.code);
         return authRequiredResponse(packageUpload.code, packageUpload.message, packageUpload.serverMessage);
@@ -3269,6 +3338,7 @@ ipcMain.handle(
       const submit = await client.submitAppVersion(auth.token, {
         projectType,
         appSystemId: request.appSystemId,
+        appId: metadata.appId,
         version: String(request.version || "").trim(),
         description: String(request.description || "").trim(),
         fields: String(request.fields || "").trim(),

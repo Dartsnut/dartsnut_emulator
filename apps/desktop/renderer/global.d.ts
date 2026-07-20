@@ -45,6 +45,8 @@ import type {
   CommunityUploadNativeImageResponse,
   CommunitySubmitAppVersionRequest,
   CommunitySubmitAppVersionResponse,
+  CommunityUpdateWorkspaceVersionRequest,
+  CommunityUpdateWorkspaceVersionResponse,
   CommunitySubmitProgress,
   CommunityWithdrawAppVersionRequest,
   CommunityWithdrawAppVersionResponse,
@@ -127,6 +129,9 @@ declare global {
       communitySubmitAppVersion: (
         request: CommunitySubmitAppVersionRequest
       ) => Promise<CommunitySubmitAppVersionResponse>;
+      communityUpdateWorkspaceVersion: (
+        request: CommunityUpdateWorkspaceVersionRequest
+      ) => Promise<CommunityUpdateWorkspaceVersionResponse>;
       onCommunitySubmitProgress: (listener: (progress: CommunitySubmitProgress) => void) => () => void;
       communityWithdrawAppVersion: (
         request: CommunityWithdrawAppVersionRequest

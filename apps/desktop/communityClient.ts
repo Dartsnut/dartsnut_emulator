@@ -91,6 +91,7 @@ export type CommunityVersionRow = {
   reviewAction: string;
   reviewComment: string;
   reviewedAt: string | null;
+  preview: string[];
 };
 
 export type CommunityCreateAppInput = {
@@ -108,6 +109,7 @@ export type CommunityCreateAppInput = {
 export type CommunitySubmitAppVersionInput = {
   projectType: "game" | "widget";
   appSystemId: number | string;
+  appId: string;
   version: string;
   downloadUrl: string;
   downloadMd5: string;
@@ -118,6 +120,7 @@ export type CommunitySubmitAppVersionInput = {
 
 export type CommunitySubmitGameVersionInput = {
   gameSystemId: number | string;
+  gameId: string;
   version: string;
   gameDownloadUrl: string;
   gameDownloadMd5: string;
@@ -365,6 +368,22 @@ export function normalizeCommunitySizes(list: unknown[]): CommunitySizeRow[] {
     .filter((row): row is CommunitySizeRow => row !== null);
 }
 
+export function normalizeCommunityPreviewUrls(value: unknown): string[] {
+  const normalize = (items: unknown[]): string[] =>
+    [...new Set(items.map((item) => String(item || "").trim()).filter(Boolean))];
+  if (Array.isArray(value)) return normalize(value);
+  if (typeof value !== "string") return [];
+  const text = value.trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed)) return normalize(parsed);
+  } catch {
+    // The legacy API can return a single URL instead of an array.
+  }
+  return [text];
+}
+
 export function normalizeCommunityVersions(list: unknown[], projectType: "game" | "widget"): CommunityVersionRow[] {
   return list
     .map((row) => {
@@ -387,7 +406,8 @@ export function normalizeCommunityVersions(list: unknown[], projectType: "game" 
         updatedAt: r.updated_at != null ? String(r.updated_at) : r.updatedAt != null ? String(r.updatedAt) : null,
         reviewAction: String(r.review_action || r.reviewAction || "").trim(),
         reviewComment: String(r.review_comment || r.reviewComment || "").trim(),
-        reviewedAt: r.reviewed_at != null ? String(r.reviewed_at) : r.reviewedAt != null ? String(r.reviewedAt) : null
+        reviewedAt: r.reviewed_at != null ? String(r.reviewed_at) : r.reviewedAt != null ? String(r.reviewedAt) : null,
+        preview: normalizeCommunityPreviewUrls(r.preview ?? r.preview_images ?? r.previewImages ?? r.previews)
       };
     })
     .filter((row): row is CommunityVersionRow => row !== null);
@@ -1122,12 +1142,21 @@ export class CommunityClient {
   async uploadGameZip(
     token: string,
     file: Blob,
-    filename: string
+    filename: string,
+    appSystemId: number | string,
+    appId: string
   ): Promise<
     | { ok: true; upload: CommunityUploadZipResult }
     | CommunityApiError
   > {
-    const result = await this.uploadFileForUrl(token, "/community/upload/upload-game-zip", file, filename, "package");
+    const result = await this.uploadFileForUrl(
+      token,
+      "/community/upload/upload-game-zip",
+      file,
+      filename,
+      "package",
+      { system_id: String(appSystemId), game_id: appId }
+    );
     if (!result.ok) {
       return result;
     }
@@ -1141,12 +1170,21 @@ export class CommunityClient {
   async uploadWidgetZip(
     token: string,
     file: Blob,
-    filename: string
+    filename: string,
+    appSystemId: number | string,
+    appId: string
   ): Promise<
     | { ok: true; upload: CommunityUploadZipResult }
     | CommunityApiError
   > {
-    const result = await this.uploadFileForUrl(token, "/community/upload/upload-widget-zip", file, filename, "package");
+    const result = await this.uploadFileForUrl(
+      token,
+      "/community/upload/upload-widget-zip",
+      file,
+      filename,
+      "package",
+      { system_id: String(appSystemId), widget_id: appId }
+    );
     if (!result.ok) {
       return result;
     }
@@ -1162,7 +1200,8 @@ export class CommunityClient {
     endpoint: string,
     file: Blob,
     filename: string,
-    label: string
+    label: string,
+    fields: Record<string, string> = {}
   ): Promise<
     | { ok: true; url: string; data: unknown }
     | CommunityApiError
@@ -1176,6 +1215,9 @@ export class CommunityClient {
     try {
       const formData = new FormData();
       formData.append("file", file, filename);
+      for (const [key, value] of Object.entries(fields)) {
+        formData.append(key, value);
+      }
       const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}${endpoint}`, {
         method: "POST",
         headers: { token: token.trim(), Accept: "application/json" },
@@ -1235,6 +1277,8 @@ export class CommunityClient {
           isWidget
             ? {
                 widget_system_id: Number(input.appSystemId),
+                widget_id: input.appId,
+                app_id: input.appId,
                 version: input.version,
                 widget_download_url: input.downloadUrl,
                 widget_download_md5: input.downloadMd5,
@@ -1245,6 +1289,8 @@ export class CommunityClient {
               }
             : {
                 game_system_id: Number(input.appSystemId),
+                game_id: input.appId,
+                app_id: input.appId,
                 version: input.version,
                 game_download_url: input.downloadUrl,
                 game_download_md5: input.downloadMd5,
@@ -1355,6 +1401,7 @@ export class CommunityClient {
     return this.submitAppVersion(token, {
       projectType: "game",
       appSystemId: input.gameSystemId,
+      appId: input.gameId,
       version: input.version,
       downloadUrl: input.gameDownloadUrl,
       downloadMd5: input.gameDownloadMd5,

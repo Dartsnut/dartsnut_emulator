@@ -18,6 +18,8 @@
     "pythonRuntime.ts",
     "assetManager.ts",
     "communityClient.ts",
+    "communityVersionHistory.ts",
+    "workspaceProjectMetadata.ts",
     "googleOAuth.ts",
     "communityAuth.ts",
     "emulatorAgentTools.ts",

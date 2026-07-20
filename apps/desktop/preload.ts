@@ -33,6 +33,7 @@ import {
   type DeployActionResponse,
   type DeployLaunchRequest,
   type CommunitySessionInfo,
+  type CommunityCancelGoogleLoginResponse,
   type CommunityLoginRequest,
   type CommunityLoginResponse,
   type CommunityLogoutResponse,
@@ -203,6 +204,8 @@ const api = {
     ipcRenderer.invoke(IPCChannels.communityGetSession) as Promise<CommunitySessionInfo>,
   communityLogin: (request: CommunityLoginRequest) =>
     ipcRenderer.invoke(IPCChannels.communityLogin, request) as Promise<CommunityLoginResponse>,
+  communityCancelGoogleLogin: () =>
+    ipcRenderer.invoke(IPCChannels.communityCancelGoogleLogin) as Promise<CommunityCancelGoogleLoginResponse>,
   communityLogout: () =>
     ipcRenderer.invoke(IPCChannels.communityLogout) as Promise<CommunityLogoutResponse>,
   communityListDeployDevices: () =>

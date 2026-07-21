@@ -181,6 +181,7 @@ export async function startDartsnutLlmBridgeRun(options: {
   }
 
   let latestFailure: DartsnutLlmBridgeFailure | null = null;
+  let finishPromise: Promise<void> | null = null;
   const bridgeFetch: FetchLike = async (input, init) => {
     let response: Response;
     try {
@@ -215,12 +216,32 @@ export async function startDartsnutLlmBridgeRun(options: {
         fetchImpl: bridgeFetch
       },
       readFailure: () => latestFailure,
-      finish: async () => {
-        try {
-          await postRunEndpoint(options.baseApi, "finish", token, options.runId, fetchImpl);
-        } catch {
-          // Backend expires abandoned runs; finish remains best effort during shutdown/network loss.
+      finish: () => {
+        if (!finishPromise) {
+          finishPromise = (async () => {
+            try {
+              const response = await postRunEndpoint(options.baseApi, "finish", token, options.runId, fetchImpl);
+              if (!response.ok) {
+                console.warn("[agent] backend run finish failed", {
+                  runId: options.runId,
+                  status: response.status
+                });
+              } else {
+                console.info("[agent] backend run finished", {
+                  runId: options.runId,
+                  status: response.status
+                });
+              }
+            } catch (error) {
+              // A failed finish cannot keep the desktop open forever, but must be visible in logs.
+              console.warn("[agent] backend run finish request failed", {
+                runId: options.runId,
+                error: error instanceof Error ? error.message : String(error)
+              });
+            }
+          })();
         }
+        return finishPromise;
       }
     }
   };

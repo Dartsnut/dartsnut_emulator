@@ -53,3 +53,14 @@ test("cancel is a no-op after the run has settled", async () => {
 
   assert.equal(await coordinator.cancelAndWait(), false);
 });
+
+test("reports whether a run still needs backend cleanup", async () => {
+  const coordinator = new AgentRunCoordinator();
+  assert.equal(coordinator.hasActiveRun(), false);
+
+  const run = await coordinator.begin();
+  assert.equal(coordinator.hasActiveRun(), true);
+
+  run.settle();
+  assert.equal(coordinator.hasActiveRun(), false);
+});

@@ -67,6 +67,10 @@ export class AgentRunCoordinator {
     }
   }
 
+  hasActiveRun(): boolean {
+    return this.activeRun !== null;
+  }
+
   async cancelAndWait(): Promise<boolean> {
     const releaseTransition = await this.acquireTransition();
     try {

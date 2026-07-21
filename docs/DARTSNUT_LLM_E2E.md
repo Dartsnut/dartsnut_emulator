@@ -24,8 +24,8 @@ pnpm run e2e:down
 1. API E2E:
    - Account without bound machine rejected.
    - Bound account reaches mock LLM.
-   - Token usage crosses low E2E quota.
-   - Next run rejected.
+   - Token usage crosses low E2E quota and closes the current run.
+   - Another completion on that run and the next run are rejected.
 2. Agent bridge E2E:
    - Desktop bridge starts run.
    - Sends authenticated streaming request.

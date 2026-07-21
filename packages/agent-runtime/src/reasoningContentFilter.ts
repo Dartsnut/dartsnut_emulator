@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
 import type { CallModelInputFilter } from "@openai/agents";
 import type { AgentInputItem } from "@openai/agents";
 
 const REASONING_PROVIDER_KEY = "dartsnutReasoningContent";
+
+export const EMPTY_MODEL_RESPONSE_MESSAGE =
+  "The model returned no assistant response. The run was stopped to prevent a retry loop.";
 
 function readStoredReasoning(item: AgentInputItem): string | undefined {
   if (item.type === "reasoning") {
@@ -66,3 +70,30 @@ export const fixReasoningContentEcho: CallModelInputFilter = ({ modelData }) => 
     instructions: modelData.instructions
   };
 };
+
+function fingerprintModelInput(modelData: { input: AgentInputItem[]; instructions?: string }): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ input: modelData.input, instructions: modelData.instructions ?? "" }))
+    .digest("hex");
+}
+
+/**
+ * Adds a per-run no-progress guard to the reasoning replay filter.
+ *
+ * The Agents SDK calls the model again with identical input when a completion
+ * produces no message or tool call. Reject that second request before it can
+ * reach the provider and repeat indefinitely.
+ */
+export function createSafeCallModelInputFilter(): CallModelInputFilter {
+  let previousFingerprint: string | null = null;
+
+  return async (args) => {
+    const filtered = await fixReasoningContentEcho(args);
+    const fingerprint = fingerprintModelInput(filtered);
+    if (fingerprint === previousFingerprint) {
+      throw new Error(EMPTY_MODEL_RESPONSE_MESSAGE);
+    }
+    previousFingerprint = fingerprint;
+    return filtered;
+  };
+}

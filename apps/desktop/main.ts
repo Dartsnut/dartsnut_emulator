@@ -195,6 +195,10 @@ let emulatorBridgeTeardownInFlight: Promise<void> | null = null;
 let deployMachineRestoreDone = false;
 let deployMachineRestoreInFlight: Promise<void> | null = null;
 let quitCleanupRequitScheduled = false;
+/** In-flight agent cancellation; settles only after the backend run has been finished. */
+let agentRunStopOnQuitInFlight: Promise<boolean> | null = null;
+/** Current backend-backed LLM run, closed immediately when a user stops or quits the app. */
+let activeDartsnutLlmBridgeRun: DartsnutLlmBridgeRun | null = null;
 
 // Ensure consistent app name for getPath('userData') in both dev and packaged modes
 if (!app.isPackaged) {
@@ -1572,6 +1576,22 @@ function cancelAllIntakeUserInputPending(): void {
   }
 }
 
+/**
+ * Waits for the prompt handler's finalizer, which finishes the backend Dartsnut LLM run
+ * before settling the coordinator lease. Used by both the Stop control and app shutdown.
+ */
+async function stopActiveAgentRun(): Promise<boolean> {
+  cancelAllIntakeUserInputPending();
+
+  // Close the account's backend run immediately rather than waiting for the Agents SDK to
+  // unwind its stream/tool work. `finish()` is idempotent, so the prompt finalizer can await
+  // the same request before its coordinator lease settles.
+  const cancellation = sendPromptCoordinator.cancelAndWait();
+  const backendFinish = activeDartsnutLlmBridgeRun?.finish() ?? Promise.resolve();
+  const [cancelled] = await Promise.all([cancellation, backendFinish]);
+  return cancelled;
+}
+
 function allocateTemporaryWorkspaceRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-chat-"));
 }
@@ -2802,8 +2822,13 @@ app.on("before-quit", (event) => {
     connected: !!deployMachineSession?.connected,
     restoreInFlight: !!deployMachineRestoreInFlight
   });
-  devLog.info("[quit] before-quit → teardown actions", { bridge: action, deploy: deployAction });
-  if (action === "proceed" && deployAction === "proceed") {
+  const hasActiveAgentRun = sendPromptCoordinator.hasActiveRun();
+  devLog.info("[quit] before-quit → teardown actions", {
+    bridge: action,
+    deploy: deployAction,
+    agent: hasActiveAgentRun ? "cancel_active_run" : "proceed"
+  });
+  if (action === "proceed" && deployAction === "proceed" && !hasActiveAgentRun) {
     return;
   }
   if (action === "mark_teardown_done") {
@@ -2814,12 +2839,18 @@ app.on("before-quit", (event) => {
   }
   if (
     (action === "proceed" || action === "mark_teardown_done") &&
-    (deployAction === "proceed" || deployAction === "mark_restore_done")
+    (deployAction === "proceed" || deployAction === "mark_restore_done") &&
+    !hasActiveAgentRun
   ) {
     return;
   }
   event.preventDefault();
   devLog.info("[quit] before-quit → prevented; starting quit cleanup");
+  if (hasActiveAgentRun && !agentRunStopOnQuitInFlight) {
+    // The prompt handler settles its lease only after `bridgeRun.finish()` has told the
+    // backend to close the LLM run. Hold Electron's quit sequence until that cleanup completes.
+    agentRunStopOnQuitInFlight = stopActiveAgentRun();
+  }
   if (action === "start_teardown") {
     emulatorBridgeTeardownInFlight = gracefulStopEmulatorBridge(3000, { permanent: true })
       .catch(() => undefined);
@@ -2832,18 +2863,26 @@ app.on("before-quit", (event) => {
         emitDeployLog(`[deploy] Quit restore failed: ${message}`);
       });
   }
-  if (
-    (action === "wait_for_inflight_teardown" || action === "start_teardown") ||
-    (deployAction === "wait_for_inflight_restore" || deployAction === "start_restore")
-  ) {
+  const hasInFlightQuitCleanup =
+    hasActiveAgentRun ||
+    action === "wait_for_inflight_teardown" ||
+    action === "start_teardown" ||
+    deployAction === "wait_for_inflight_restore" ||
+    deployAction === "start_restore";
+  if (hasInFlightQuitCleanup) {
     if (!quitCleanupRequitScheduled) {
       quitCleanupRequitScheduled = true;
       Promise.all([
+        agentRunStopOnQuitInFlight ?? Promise.resolve(),
         emulatorBridgeTeardownInFlight ?? Promise.resolve(),
         deployMachineRestoreInFlight ?? Promise.resolve(),
       ])
+        .catch((error: unknown) => {
+          devLog.warn("[quit] agent run cleanup failed", error);
+        })
         .finally(() => {
           devLog.info("[quit] before-quit → cleanup complete, re-quitting", { t: Date.now() });
+          agentRunStopOnQuitInFlight = null;
           emulatorBridgeTeardownInFlight = null;
           deployMachineRestoreInFlight = null;
           quitCleanupRequitScheduled = false;
@@ -3952,6 +3991,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
       };
     }
     bridgeRun = prepared.bridgeRun;
+    activeDartsnutLlmBridgeRun = bridgeRun;
     let sessionRouting: SendPromptResponse["sessionRouting"];
     const hostState: IntakeToolState = {};
     const effectiveWorkspacePath =
@@ -4054,6 +4094,9 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     return { ok: false };
   } finally {
     await bridgeRun?.finish();
+    if (activeDartsnutLlmBridgeRun === bridgeRun) {
+      activeDartsnutLlmBridgeRun = null;
+    }
     emitAgentSink.flush();
     cancelAllIntakeUserInputPending();
     agentEventEmitter = null;
@@ -4062,8 +4105,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
 });
 
 ipcMain.handle(IPCChannels.cancelAgent, async () => {
-  cancelAllIntakeUserInputPending();
-  await sendPromptCoordinator.cancelAndWait();
+  await stopActiveAgentRun();
   return { ok: true };
 });
 

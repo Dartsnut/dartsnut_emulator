@@ -596,6 +596,8 @@ export interface DeployLaunchRequest {
 export type CommunitySessionInfo = {
   loggedIn: boolean;
   account: string | null;
+  analyticsUserId: string | null;
+  authMethod: "password" | "google" | null;
   hasSupabase: boolean;
   googleClientId: string;
   googleDesktopClientId: string;

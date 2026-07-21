@@ -322,6 +322,8 @@ export function AssetManagerPanel({
                 <button
                   type="button"
                   className="ui-btn-secondary whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
+                  data-analytics-id="asset_choose_file"
+                  data-analytics-area="assets"
                   onClick={() => pickFileForSlot(slot.id)}
                   disabled={busy}
                 >
@@ -331,6 +333,8 @@ export function AssetManagerPanel({
                   <button
                     type="button"
                     className="ui-btn-secondary border-transparent bg-transparent text-[var(--color-text-subtle)] hover:enabled:bg-[var(--color-slot-action-bg)] disabled:cursor-not-allowed disabled:opacity-50"
+                    data-analytics-id="asset_unbind"
+                    data-analytics-area="assets"
                     onClick={() => void handleUnbind(slot.id)}
                     disabled={busy}
                   >

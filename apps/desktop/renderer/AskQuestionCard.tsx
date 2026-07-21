@@ -178,6 +178,8 @@ export function AskQuestionCard({
                     role="option"
                     aria-selected={selected}
                     className={cn("ui-ask-question__option", selected && "ui-ask-question__option--selected")}
+                    data-analytics-id="agent_question_option"
+                    data-analytics-area="agent"
                     onClick={() => setSelectedIndex(index)}
                     onDoubleClick={() => onSubmit(option.value)}
                   >
@@ -197,6 +199,8 @@ export function AskQuestionCard({
         <button
           type="button"
           className="ui-ask-question__continue"
+          data-analytics-id="agent_question_continue"
+          data-analytics-area="agent"
           disabled={!canContinue}
           onClick={() => {
             if (input) {

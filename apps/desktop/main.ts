@@ -2953,6 +2953,8 @@ ipcMain.handle(IPCChannels.communityGetSession, (): CommunitySessionInfo => {
   return {
     loggedIn: Boolean(auth?.token),
     account: auth?.account ?? null,
+    analyticsUserId: auth?.analyticsUserId ?? null,
+    authMethod: auth?.authMethod ?? null,
     hasSupabase: config.hasSupabase,
     googleClientId: config.googleClientId,
     googleDesktopClientId: config.googleDesktopClientId,
@@ -2974,7 +2976,12 @@ ipcMain.handle(
       if (!result.ok) {
         return { ok: false, code: result.code, message: result.message };
       }
-      writeCommunityAuth(getCommunityUserDataPath(), { token: result.token, account: result.account });
+      writeCommunityAuth(getCommunityUserDataPath(), {
+        token: result.token,
+        account: result.account,
+        analyticsUserId: result.analyticsUserId,
+        authMethod: "password"
+      });
       return { ok: true, account: result.account };
     }
     if (request.method === "googleOAuth") {
@@ -2999,7 +3006,12 @@ ipcMain.handle(
         if (!result.ok) {
           return { ok: false, code: result.code, message: result.message };
         }
-        writeCommunityAuth(getCommunityUserDataPath(), { token: result.token, account: result.account });
+        writeCommunityAuth(getCommunityUserDataPath(), {
+          token: result.token,
+          account: result.account,
+          analyticsUserId: result.analyticsUserId,
+          authMethod: "google"
+        });
         return { ok: true, account: result.account };
       } finally {
         if (communityGoogleLoginAbortController === loginAbort) {
@@ -3015,7 +3027,12 @@ ipcMain.handle(
     if (!result.ok) {
       return { ok: false, code: result.code, message: result.message };
     }
-    writeCommunityAuth(getCommunityUserDataPath(), { token: result.token, account: result.account });
+    writeCommunityAuth(getCommunityUserDataPath(), {
+      token: result.token,
+      account: result.account,
+      analyticsUserId: result.analyticsUserId,
+      authMethod: "google"
+    });
     return { ok: true, account: result.account };
   }
 );

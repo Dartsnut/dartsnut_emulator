@@ -707,6 +707,8 @@ export function EmulatorPanel({
               disabled={!bridgeReady || !widgetPath.trim()}
               onClick={() => void applyWidgetPathAndReload(widgetPath)}
               aria-label="Start or reload"
+              data-analytics-id="emulator_start_reload"
+              data-analytics-area="emulator"
               title="Start / Reload"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
@@ -726,6 +728,8 @@ export function EmulatorPanel({
               disabled={!bridgeReady}
               onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "set_audio_muted", muted: !state.audioMuted })}
               aria-label={audioToggleLabel}
+              data-analytics-id="emulator_audio_toggle"
+              data-analytics-area="emulator"
               title={audioToggleLabel}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
@@ -780,6 +784,8 @@ export function EmulatorPanel({
               disabled={!bridgeReady}
               onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "capture_screenshot" })}
               aria-label="Capture screenshot"
+              data-analytics-id="emulator_capture"
+              data-analytics-area="emulator"
               title={
                 normalizedWidgetType === "widget"
                   ? "Capture device mockup and widget surface"
@@ -803,6 +809,8 @@ export function EmulatorPanel({
               className={emuToolbarIconBtn}
               onClick={() => setZoomOpen(true)}
               aria-label="Zoom 2x"
+              data-analytics-id="emulator_zoom"
+              data-analytics-area="emulator"
               title="Zoom 2x"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
@@ -822,6 +830,8 @@ export function EmulatorPanel({
               className={emuToolbarIconBtn}
               onClick={() => setLogsOpen((prev) => !prev)}
               aria-label={logsOpen ? "Hide Python logs" : "Show Python logs"}
+              data-analytics-id="emulator_logs_toggle"
+              data-analytics-area="emulator"
               title={logsOpen ? "Hide logs" : "Logs"}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>

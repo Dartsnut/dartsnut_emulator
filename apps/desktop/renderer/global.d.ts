@@ -34,6 +34,8 @@ import type {
   CommunityCancelGoogleLoginResponse,
   CommunityLoginRequest,
   CommunityLoginResponse,
+  CommunitySetPasswordRequest,
+  CommunitySetPasswordResponse,
   CommunityLogoutResponse,
   CommunityListDeployDevicesResponse,
   CommunityListMyGamesResponse,
@@ -117,6 +119,7 @@ declare global {
       onDeployLog: (listener: (line: string) => void) => () => void;
       communityGetSession: () => Promise<CommunitySessionInfo>;
       communityLogin: (request: CommunityLoginRequest) => Promise<CommunityLoginResponse>;
+      communitySetPassword: (request: CommunitySetPasswordRequest) => Promise<CommunitySetPasswordResponse>;
       communityCancelGoogleLogin: () => Promise<CommunityCancelGoogleLoginResponse>;
       communityLogout: () => Promise<CommunityLogoutResponse>;
       communityListDeployDevices: () => Promise<CommunityListDeployDevicesResponse>;

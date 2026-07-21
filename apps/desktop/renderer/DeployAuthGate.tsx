@@ -50,6 +50,9 @@ export function DeployAuthGate({
   const api = window.dartsnutApi;
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [googleAccount, setGoogleAccount] = useState("");
+  const [passwordSetupOpen, setPasswordSetupOpen] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [busy, setBusy] = useState<"password" | "google" | "google-cancelling" | null>(null);
 
@@ -57,6 +60,9 @@ export function DeployAuthGate({
     if (!open) {
       setAccount("");
       setPassword("");
+      setConfirmPassword("");
+      setGoogleAccount("");
+      setPasswordSetupOpen(false);
       setHint(null);
       setBusy(null);
     }
@@ -105,6 +111,13 @@ export function DeployAuthGate({
         }
         return;
       }
+      if (res.needsPasswordSetup) {
+        setGoogleAccount(res.account);
+        setPassword("");
+        setConfirmPassword("");
+        setPasswordSetupOpen(true);
+        return;
+      }
       onSuccess(res.account);
     } catch (e) {
       setHint(e instanceof Error ? e.message : String(e));
@@ -112,6 +125,34 @@ export function DeployAuthGate({
       setBusy(null);
     }
   }, [api, googleSignInAvailable, onSuccess]);
+
+  const handleSetPassword = useCallback(async () => {
+    if (!api?.communitySetPassword) {
+      return;
+    }
+    if (!password || !confirmPassword) {
+      setHint("Please enter and confirm your password.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setHint("The passwords do not match.");
+      return;
+    }
+    setHint(null);
+    setBusy("password");
+    try {
+      const res = await api.communitySetPassword({ password });
+      if (!res.ok) {
+        setHint(res.message);
+        return;
+      }
+      onSuccess(res.account || googleAccount);
+    } catch (e) {
+      setHint(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }, [api, confirmPassword, googleAccount, onSuccess, password]);
 
   const handleCancelGoogleLogin = useCallback(async () => {
     if (!api?.communityCancelGoogleLogin || busy !== "google") {
@@ -167,10 +208,12 @@ export function DeployAuthGate({
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 id="deploy-auth-title" className="ui-panel-title">
-              {title}
+              {passwordSetupOpen ? "Set your password" : title}
             </h2>
             <p className="mt-1 text-[13px] text-[var(--color-text-subtle)]">
-              {description}
+              {passwordSetupOpen
+                ? "Add a password to use email and password sign-in in the future."
+                : description}
             </p>
           </div>
           <button
@@ -189,7 +232,42 @@ export function DeployAuthGate({
           </button>
         </div>
 
-        <label className="flex flex-col gap-1.5 text-[13px]">
+        {passwordSetupOpen ? (
+          <>
+            <p className="rounded-[var(--radius-sm)] bg-[var(--color-emulator-toolbar-bg)] px-3 py-2 text-[13px] text-[var(--color-text-subtle)]">
+              {googleAccount}
+            </p>
+            <label className="flex flex-col gap-1.5 text-[13px]">
+              <span className="text-[var(--color-text-subtle)]">New password</span>
+              <input
+                type="password"
+                className="ui-input"
+                autoComplete="new-password"
+                value={password}
+                disabled={busy !== null}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-[13px]">
+              <span className="text-[var(--color-text-subtle)]">Confirm password</span>
+              <input
+                type="password"
+                className="ui-input"
+                autoComplete="new-password"
+                value={confirmPassword}
+                disabled={busy !== null}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    void handleSetPassword();
+                  }
+                }}
+              />
+            </label>
+          </>
+        ) : (
+          <>
+            <label className="flex flex-col gap-1.5 text-[13px]">
           <span className="text-[var(--color-text-subtle)]">Email</span>
           <input
             type="email"
@@ -199,8 +277,8 @@ export function DeployAuthGate({
             disabled={busy !== null}
             onChange={(e) => setAccount(e.target.value)}
           />
-        </label>
-        <label className="flex flex-col gap-1.5 text-[13px]">
+            </label>
+            <label className="flex flex-col gap-1.5 text-[13px]">
           <span className="text-[var(--color-text-subtle)]">Password</span>
           <input
             type="password"
@@ -215,7 +293,9 @@ export function DeployAuthGate({
               }
             }}
           />
-        </label>
+            </label>
+          </>
+        )}
 
         {hint ? (
           <p className="text-[13px] text-[var(--color-error-text)]" role="alert">
@@ -229,12 +309,12 @@ export function DeployAuthGate({
           disabled={busy !== null}
           data-analytics-id="community_login_password"
           data-analytics-area="community_auth"
-          onClick={() => void handlePasswordLogin()}
+          onClick={() => void (passwordSetupOpen ? handleSetPassword() : handlePasswordLogin())}
         >
-          {busy === "password" ? "Signing in…" : "Sign in"}
+          {busy === "password" ? (passwordSetupOpen ? "Saving…" : "Signing in…") : (passwordSetupOpen ? "Set password" : "Sign in")}
         </button>
 
-        {busy === "google" || busy === "google-cancelling" ? (
+        {!passwordSetupOpen && (busy === "google" || busy === "google-cancelling") ? (
           <button
             type="button"
             className={cn(toolbarBtn, "h-10 w-full justify-center")}
@@ -245,7 +325,7 @@ export function DeployAuthGate({
           >
             {busy === "google-cancelling" ? "Cancelling…" : "Cancel Google sign-in"}
           </button>
-        ) : (
+        ) : !passwordSetupOpen ? (
           <button
             type="button"
             className="google-signin-brand-button"
@@ -260,7 +340,7 @@ export function DeployAuthGate({
           </button>
         )}
 
-        {allowSkip ? (
+        {allowSkip && !passwordSetupOpen ? (
           <button type="button" className={cn(toolbarBtn, "w-full justify-center")} disabled={busy !== null} data-analytics-id="community_auth_skip" data-analytics-area="community_auth" onClick={handleSkip}>
             Continue without account
           </button>

@@ -11,6 +11,7 @@
   },
   "include": [
     "main.ts",
+    "agentRunCoordinator.ts",
     "appUpdater.ts",
     "dartsnutLlmBridge.ts",
     "packagedEnv.generated.ts",

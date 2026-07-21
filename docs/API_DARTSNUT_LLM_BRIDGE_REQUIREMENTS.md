@@ -36,7 +36,7 @@ Processing:
 2. Query current bound machines; reject empty list.
 3. Use UTC date for quota row.
 4. Atomically reject when `total_tokens >= 10000000`.
-5. Atomically reject another unexpired active run.
+5. If another active run has no pending completion, atomically mark it expired with `RUN_SUPERSEDED`; pending completion/accounting work still fails closed.
 6. Create run with 30-minute absolute lifetime, 5-minute inactivity lease, and maximum 128 completion requests.
 
 Success:
@@ -112,7 +112,6 @@ Chat endpoint returns equivalent OpenAI-compatible error with stable `error.code
 |---|---|---|
 | 401 | `AUTH_REQUIRED` | Missing, invalid, or expired community session |
 | 403 | `NO_BOUND_MACHINE` | Account has no bound machine |
-| 409 | `RUN_ALREADY_ACTIVE` | Account already has active run |
 | 409 | `RUN_EXPIRED` | Run finished, expired, or account/run mismatch |
 | 429 | `DAILY_QUOTA_EXCEEDED` | Daily total reached before run start or during the preceding completion |
 | 429 | `RUN_REQUEST_LIMIT_REACHED` | Granted run exceeded 128 completions |

@@ -2,6 +2,7 @@ packages:
   - "apps/*"
   - "packages/*"
 allowBuilds:
+  '@firebase/util': true
   cpu-features: true
   electron: true
   electron-winstaller: true

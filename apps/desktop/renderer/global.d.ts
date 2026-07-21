@@ -101,6 +101,7 @@ declare global {
       pickWidgetPath: () => Promise<{ path: string | null }>;
       getLastWidgetPath: () => Promise<{ path: string | null }>;
       getEmulatorBackground: () => Promise<{ url: string | null }>;
+      openCaptureFolder: (folderPath: string) => Promise<void>;
       onEmulatorState: (listener: (state: EmulatorStateSnapshot) => void) => () => void;
       onEmulatorFrame: (listener: (frame: EmulatorFrame) => void) => () => void;
       onEmulatorLog: (listener: (entry: EmulatorLogEntry) => void) => () => void;

@@ -4,6 +4,8 @@ import path from "node:path";
 export type PersistedCommunityAuth = {
   token: string;
   account: string;
+  analyticsUserId?: string | null;
+  authMethod?: "password" | "google";
 };
 
 export function communityAuthPath(userDataPath: string): string {
@@ -22,7 +24,16 @@ export function readCommunityAuth(userDataPath: string): PersistedCommunityAuth 
     if (!token) {
       return null;
     }
-    return { token, account };
+    const analyticsUserId = String(parsed.analyticsUserId || "").trim();
+    const authMethod = parsed.authMethod === "google" || parsed.authMethod === "password"
+      ? parsed.authMethod
+      : undefined;
+    return {
+      token,
+      account,
+      analyticsUserId: analyticsUserId || null,
+      ...(authMethod ? { authMethod } : {})
+    };
   } catch {
     return null;
   }
@@ -33,7 +44,12 @@ export function writeCommunityAuth(userDataPath: string, auth: PersistedCommunit
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(
     file,
-    JSON.stringify({ token: auth.token.trim(), account: auth.account.trim() }, null, 2)
+    JSON.stringify({
+      token: auth.token.trim(),
+      account: auth.account.trim(),
+      analyticsUserId: auth.analyticsUserId?.trim() || null,
+      authMethod: auth.authMethod || null
+    }, null, 2)
   );
 }
 

@@ -9,6 +9,7 @@ const {
   isSessionExpiredCode,
   mergeDeployDevices,
   normalizeApiJson,
+  normalizeAnalyticsUserId,
   normalizeBoundDevices,
   normalizeCommunityGameCategories,
   normalizeCommunityGameControls,
@@ -329,4 +330,11 @@ test("readCommunityConfig reads desktop Google OAuth client id", () => {
   assert.equal(cfg.googleClientId, "web-client");
   assert.equal(cfg.googleDesktopClientId, "desktop-client");
   assert.equal(cfg.googleDesktopClientSecret, "desktop-secret");
+});
+
+
+test("normalizeAnalyticsUserId only accepts opaque member identifiers", () => {
+  assert.equal(normalizeAnalyticsUserId({ id: "member-123", account: "person@example.com" }, "person@example.com"), "member-123");
+  assert.equal(normalizeAnalyticsUserId({ id: "person@example.com", uuid: "" }, "person@example.com"), null);
+  assert.equal(normalizeAnalyticsUserId({ user_id: "192.168.1.4" }, "person@example.com"), null);
 });

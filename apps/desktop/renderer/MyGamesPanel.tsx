@@ -595,7 +595,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
         <p className="mt-2 max-w-[280px] text-sm leading-relaxed text-[var(--color-text-subtle)]">
           Sign in to submit projects, track review decisions, and read official feedback.
         </p>
-        <button type="button" className="ui-btn-primary mt-4 min-h-10 px-4" onClick={onAuthRequired}>Sign in</button>
+        <button type="button" className="ui-btn-primary mt-4 min-h-10 px-4" data-analytics-id="community_auth_required" data-analytics-area="community" onClick={onAuthRequired}>Sign in</button>
       </section>
     );
   }
@@ -631,7 +631,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
             </h2>
           </div>
           {screen === "portfolio" ? (
-            <button type="button" className="ui-toolbar-btn h-8 px-2 text-xs" disabled={loading} onClick={() => void loadPublishOptions()}>
+            <button type="button" className="ui-toolbar-btn h-8 px-2 text-xs" disabled={loading} data-analytics-id="community_refresh" data-analytics-area="community" onClick={() => void loadPublishOptions()}>
               {loading ? "Loading" : "Refresh"}
             </button>
           ) : null}
@@ -874,7 +874,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       {screen === "submit" ? (
         <div className="community-submit-dock">
           {submitDisabledReason ? <p className="mb-2 text-[11px] leading-relaxed text-[var(--color-text-subtle)]">{submitDisabledReason}</p> : null}
-          <button type="button" className="ui-btn-primary min-h-11 w-full px-3 text-[13px]" disabled={Boolean(submitDisabledReason) || submitting} onClick={() => void submitForReview()}>
+          <button type="button" className="ui-btn-primary min-h-11 w-full px-3 text-[13px]" disabled={Boolean(submitDisabledReason) || submitting} data-analytics-id="community_submit" data-analytics-area="community" onClick={() => void submitForReview()}>
             {submitting ? "Submitting…" : "Submit for official review"}
           </button>
         </div>
@@ -917,7 +917,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">
               <button type="button" className="ui-toolbar-btn min-h-10 px-3 text-xs" disabled={updatingVersion} onClick={() => { setVersionConflict(null); setVersionUpdateError(null); }}>Keep current</button>
-              <button type="button" className="ui-btn-primary min-h-10 px-3 text-xs" disabled={updatingVersion || !versionConflict.nextVersion.trim()} onClick={() => void confirmVersionUpdate()}>{updatingVersion ? "Updating…" : "Update both files"}</button>
+              <button type="button" className="ui-btn-primary min-h-10 px-3 text-xs" disabled={updatingVersion || !versionConflict.nextVersion.trim()} data-analytics-id="community_update_version" data-analytics-area="community" onClick={() => void confirmVersionUpdate()}>{updatingVersion ? "Updating…" : "Update both files"}</button>
             </div>
           </div>
         </div>
@@ -929,7 +929,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
             <p className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.16em] text-[var(--color-neon-coral)]">Permanent withdrawal</p>
             <h3 id="withdraw-title" className="mt-1 font-[family-name:var(--font-display)] text-base font-semibold text-[var(--color-text-strong)]">Withdraw version {withdrawTarget.version}?</h3>
             <p className="mt-2 text-xs leading-relaxed text-[var(--color-text-subtle)]">It will remain in release history as Withdrawn and cannot be reused. Bump the version in conf.json before submitting again.</p>
-            <div className="mt-4 grid grid-cols-2 gap-2"><button type="button" className="ui-toolbar-btn min-h-10 px-3 text-xs" disabled={withdrawing} onClick={() => setWithdrawTarget(null)}>Keep in review</button><button type="button" className="min-h-10 rounded-md border border-red-500/40 bg-red-500/15 px-3 text-xs font-semibold text-red-700 hover:bg-red-500/20 dark:text-red-200" disabled={withdrawing} onClick={() => void confirmWithdraw()}>{withdrawing ? "Withdrawing…" : "Withdraw"}</button></div>
+            <div className="mt-4 grid grid-cols-2 gap-2"><button type="button" className="ui-toolbar-btn min-h-10 px-3 text-xs" disabled={withdrawing} onClick={() => setWithdrawTarget(null)}>Keep in review</button><button type="button" className="min-h-10 rounded-md border border-red-500/40 bg-red-500/15 px-3 text-xs font-semibold text-red-700 hover:bg-red-500/20 dark:text-red-200" disabled={withdrawing} data-analytics-id="community_withdraw" data-analytics-area="community" onClick={() => void confirmWithdraw()}>{withdrawing ? "Withdrawing…" : "Withdraw"}</button></div>
           </div>
         </div>
       ) : null}

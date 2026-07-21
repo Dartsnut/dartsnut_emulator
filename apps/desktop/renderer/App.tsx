@@ -41,6 +41,15 @@ import {
   inferChatMediaAttachmentKind,
   mergeChatMediaAttachments
 } from "@dartsnut/shared-ipc";
+import {
+  getAnalyticsCollectionEnabled,
+  setAnalyticsCollectionEnabledPreference,
+  setAnalyticsViewContext,
+  trackAgentEvent,
+  trackPanelView,
+  trackScreenView,
+  updateAnalyticsUser
+} from "./analytics";
 import { AskQuestionCard } from "./AskQuestionCard";
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { cn } from "./cn";
@@ -255,11 +264,13 @@ function UpdateReadyOverlay({ status, installing, error, onInstallNow, onLater }
             type="button"
             className="ui-btn-primary app-update-panel__primary"
             disabled={installing}
+            data-analytics-id="app_update_install"
+            data-analytics-area="update"
             onClick={onInstallNow}
           >
             {installing ? "Preparing..." : "Update now"}
           </button>
-          <button type="button" className="app-update-panel__secondary" disabled={installing} onClick={onLater}>
+          <button type="button" className="app-update-panel__secondary" disabled={installing} data-analytics-id="app_update_later" data-analytics-area="update" onClick={onLater}>
             Next launch
           </button>
         </div>
@@ -657,6 +668,8 @@ export function App() {
   const activeReasoningStreamDeltaRef = useRef("");
   const activeReasoningStartedAtRef = useRef<number | null>(null);
   const activeToolStatusEntryByKeyRef = useRef<Map<string, string>>(new Map());
+  const seenAgentToolAnalyticsRef = useRef<Set<string>>(new Set());
+  const activeAgentRunRef = useRef<{ startedAt: number; finished: boolean } | null>(null);
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
   const lastAgentSessionHydrateKeyRef = useRef<string>("");
@@ -664,6 +677,7 @@ export function App() {
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [composerExpandedSticky, setComposerExpandedSticky] = useState(false);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>(DEFAULT_PROVIDER_SETTINGS);
+  const [analyticsEnabled, setAnalyticsEnabled] = useState(() => getAnalyticsCollectionEnabled());
   const [providerSettingsError, setProviderSettingsError] = useState<string | null>(null);
   const [providerSettingsNotice, setProviderSettingsNotice] = useState<string | null>(null);
   const [savingProviderSettings, setSavingProviderSettings] = useState(false);
@@ -682,6 +696,8 @@ export function App() {
   const [communitySession, setCommunitySession] = useState<CommunitySessionInfo>({
     loggedIn: false,
     account: null,
+    analyticsUserId: null,
+    authMethod: null,
     hasSupabase: false,
     googleClientId: "",
     googleDesktopClientId: "",
@@ -856,6 +872,8 @@ export function App() {
         const changed =
           prev.loggedIn !== session.loggedIn ||
           prev.account !== session.account ||
+          prev.analyticsUserId !== session.analyticsUserId ||
+          prev.authMethod !== session.authMethod ||
           prev.hasSupabase !== session.hasSupabase ||
           prev.googleClientId !== session.googleClientId ||
           prev.googleDesktopClientId !== session.googleDesktopClientId ||
@@ -880,6 +898,33 @@ export function App() {
       setDeployAuthGateOpen(false);
     }
   }, [communitySession.loggedIn]);
+  useEffect(() => {
+    updateAnalyticsUser({
+      analyticsUserId: communitySession.analyticsUserId,
+      loggedIn: communitySession.loggedIn,
+      authMethod: communitySession.authMethod
+    });
+  }, [communitySession.analyticsUserId, communitySession.authMethod, communitySession.loggedIn]);
+
+  useEffect(() => {
+    trackScreenView(screen);
+    setAnalyticsViewContext(screen, screen === "settings" ? null : rightPaneTab);
+  }, [screen, rightPaneTab]);
+
+  useEffect(() => {
+    if (screen !== "main") {
+      return;
+    }
+    trackPanelView(rightPaneTab, "right_pane");
+  }, [rightPaneTab, screen]);
+
+  useEffect(() => {
+    if (screen !== "main" || !deployEligible) {
+      return;
+    }
+    trackPanelView(deployPaneTab === "games" ? "community" : "deploy", "deploy_pane");
+  }, [deployEligible, deployPaneTab, screen]);
+
 
   const requestCommunityAuth = useCallback((intent: CommunityAuthIntent, force = false) => {
     setCommunityAuthIntent(intent);
@@ -1306,6 +1351,16 @@ export function App() {
         eventSeqRef.current += 1;
         const parsed = parseToolStatusMessage(event.message);
         const meta = parsed.meta;
+        if (meta?.phase === "result" && meta.toolName) {
+          const analyticsKey = meta.callId ?? `${meta.toolName}:${meta.skillId ?? ""}`;
+          if (!seenAgentToolAnalyticsRef.current.has(analyticsKey)) {
+            seenAgentToolAnalyticsRef.current.add(analyticsKey);
+            trackAgentEvent("agent_tool_used", {
+              tool_name: meta.toolName,
+              phase: "result"
+            });
+          }
+        }
         if (shouldHideTimelineStatus({ text: parsed.text, toolStatusMeta: meta })) {
           return;
         }
@@ -1640,6 +1695,8 @@ export function App() {
     discardAgentEventsRef.current = true;
     clearActiveCoalescedStreamEntries();
     activeToolStatusEntryByKeyRef.current.clear();
+    seenAgentToolAnalyticsRef.current.clear();
+    activeAgentRunRef.current = null;
     eventSeqRef.current = 0;
     lastAgentSessionHydrateKeyRef.current = "";
     setSessionTemplateMode(null);
@@ -1682,6 +1739,20 @@ export function App() {
     setEntries((prev) => [...prev, { id: `status-${Date.now()}`, role: "status", text }]);
   }
 
+  function finishAgentRun(outcome: "success" | "rejected" | "failed" | "cancelled", failureReason?: string): void {
+    const run = activeAgentRunRef.current;
+    if (!run || run.finished) {
+      return;
+    }
+    run.finished = true;
+    trackAgentEvent("agent_run_finished", {
+      outcome,
+      duration_ms: Math.max(0, Date.now() - run.startedAt),
+      ...(failureReason ? { failure_reason: failureReason } : {})
+    });
+    activeAgentRunRef.current = null;
+  }
+
   async function submitPrompt(request: PromptRequest) {
     setWidgetSizePicker({ visible: false, sizes: [], locale: null });
     setProjectTypePicker({ visible: false, types: [], locale: null });
@@ -1691,11 +1762,24 @@ export function App() {
       setSending(false);
       return;
     }
+    seenAgentToolAnalyticsRef.current.clear();
+    activeAgentRunRef.current = { startedAt: Date.now(), finished: false };
+    trackAgentEvent("agent_run_started", {
+      provider: providerSettings.activeProvider,
+      template_mode: request.templateMode ?? (request.creationIntake ? "creation_intake" : "follow_up"),
+      project_type: request.projectType ?? sessionProjectType ?? "unknown",
+      workspace_kind: request.workspacePath
+        ? (bootstrap?.isTemporaryWorkspace ? "temporary" : "persisted")
+        : "none",
+      attachment_count: request.chatMediaAttachments?.length ?? 0,
+      creation_intake: request.creationIntake === true
+    });
     try {
       const result: SendPromptResponse = await api.sendPrompt(request);
       const refreshed = await api.getBootstrapState();
       setBootstrap(refreshed);
       if (!result.ok) {
+        finishAgentRun("rejected", result.failureReason);
         if (result.failureReason === "auth_required") {
           await refreshCommunitySession();
           requestCommunityAuth("llm-use", true);
@@ -1710,6 +1794,10 @@ export function App() {
         setSessionProjectType(result.sessionRouting.projectType);
         setSessionWidgetSize(result.sessionRouting.widgetSize ?? null);
       }
+      finishAgentRun("success");
+    } catch (error) {
+      finishAgentRun("failed");
+      throw error;
     } finally {
       setSending(false);
     }
@@ -1831,6 +1919,11 @@ export function App() {
       return;
     }
     const res = await api.intakeSubmitQuestionAnswer({ kind: "project_type", value: projectType });
+    trackAgentEvent("agent_question_answered", {
+      question_type: "project_type",
+      answer_method: "chip",
+      outcome: res.ok ? "success" : "rejected"
+    });
     if (!res.ok) {
       if (res.reason === "no_pending") {
         postStatus(projectTypeIntakeCopy.status.noPendingProjectType);
@@ -1845,6 +1938,11 @@ export function App() {
       return;
     }
     const res = await api.intakeSubmitQuestionAnswer({ kind: "widget_size", value: size });
+    trackAgentEvent("agent_question_answered", {
+      question_type: "widget_size",
+      answer_method: "chip",
+      outcome: res.ok ? "success" : "rejected"
+    });
     if (!res.ok) {
       if (res.reason === "no_pending") {
         postStatus(widgetSizeIntakeCopy.status.noPendingWidgetSize);
@@ -1868,6 +1966,11 @@ export function App() {
       deviceId: machine.deviceId,
       ipAddress: machine.ipAddress
     });
+    trackAgentEvent("agent_question_answered", {
+      question_type: "machine",
+      answer_method: "known_machine",
+      outcome: res.ok ? "success" : "rejected"
+    });
     if (!res.ok) {
       postStatus("The machine selection could not be used. Enter the IP manually.");
     }
@@ -1882,6 +1985,11 @@ export function App() {
       return;
     }
     const res = await api.machineMcpSubmitQuestionAnswer({ kind: "manual_ip", value });
+    trackAgentEvent("agent_question_answered", {
+      question_type: "machine",
+      answer_method: "manual_host",
+      outcome: res.ok ? "success" : "rejected"
+    });
     if (!res.ok) {
       setMachineMcpInputError("That address could not be used.");
     }
@@ -1985,6 +2093,7 @@ export function App() {
     setWidgetSizePicker({ visible: false, sizes: [], locale: null });
     setProjectTypePicker({ visible: false, types: [], locale: null });
     setSending(false);
+    finishAgentRun("cancelled");
     try {
       await api.cancelAgent();
     } catch {
@@ -2036,6 +2145,8 @@ export function App() {
                 type="button"
                 className={chromeIconBtnClass}
                 onClick={() => void handleStartNewProject()}
+                data-analytics-id="project_new"
+                data-analytics-area="project"
                 disabled={sending}
                 aria-label="Start new project"
                 title="Start new project"
@@ -2064,6 +2175,8 @@ export function App() {
                   type="button"
                   className={chromeIconBtnClass}
                   onClick={() => void handleSaveTempWorkspace()}
+                  data-analytics-id="project_save"
+                  data-analytics-area="project"
                   disabled={sending}
                   aria-label="Save project to a folder"
                   title="Save project to a folder"
@@ -2092,6 +2205,8 @@ export function App() {
                 type="button"
                 className={chromeIconBtnClass}
                 onClick={() => void handlePickWorkspace()}
+                data-analytics-id="project_open"
+                data-analytics-area="project"
                 disabled={sending}
                 aria-label="Open an existing project"
                 title="Open an existing project"
@@ -2146,6 +2261,8 @@ export function App() {
                 }}
                 aria-label="Back to main view"
                 title="Back to main view"
+                data-analytics-id="settings_back"
+                data-analytics-area="navigation"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
                   <path
@@ -2362,6 +2479,8 @@ export function App() {
                         type="button"
                         className="ui-composer-attachment__remove"
                         aria-label={`Remove ${attachment.name}`}
+                        data-analytics-id="agent_attachment_remove"
+                        data-analytics-area="agent"
                         disabled={chatDisabled}
                         onClick={() =>
                           setChatMediaAttachments((prev) => prev.filter((item) => item.path !== attachment.path))
@@ -2405,6 +2524,8 @@ export function App() {
                     className="m-0 inline-flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-full border border-[var(--color-composer-scroll-border)] bg-[var(--color-composer-scroll-bg)] p-0 text-[var(--color-composer-scroll-fg)] hover:bg-[var(--color-composer-scroll-hover)]"
                     aria-label="Scroll to bottom and enable auto-scroll"
                     title="Scroll to bottom and enable auto-scroll"
+                    data-analytics-id="agent_scroll_to_bottom"
+                    data-analytics-area="agent"
                     onClick={() => {
                       scrollTimelineToBottom();
                       setAutoScrollEnabled(true);
@@ -2428,6 +2549,8 @@ export function App() {
                   disabled={sending ? false : chatDisabled || !composerHasContent}
                   aria-busy={false}
                   aria-label={sending ? "Stop" : "Send"}
+                  data-analytics-id={sending ? "agent_stop" : "agent_send"}
+                  data-analytics-area="agent"
                   onClick={() => (sending ? void handleStopAgent() : void handleSend())}
                 >
                   {sending ? (
@@ -2510,6 +2633,26 @@ export function App() {
               </button>
             </nav>
             <div className="flex min-h-0 flex-col gap-3 overflow-auto p-4 text-[13px]">
+              <label className="flex items-start gap-2 rounded-[var(--radius-md)] border border-edge bg-[var(--color-settings-layout-bg)] p-3">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={analyticsEnabled}
+                  data-analytics-id="analytics_toggle"
+                  data-analytics-area="settings"
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setAnalyticsEnabled(enabled);
+                    setAnalyticsCollectionEnabledPreference(enabled);
+                  }}
+                />
+                <span className="flex min-w-0 flex-col gap-1">
+                  <span className="font-medium text-fg-strong">Share anonymous usage analytics</span>
+                  <span className="text-xs leading-relaxed text-fg-muted">
+                    Helps improve Dartsnut Agent. Chat text, model responses, file paths, IP addresses, device IDs, credentials, account names, and email addresses are never sent.
+                  </span>
+                </span>
+              </label>
               <label className="flex flex-col gap-1.5">
                 <span className="text-[var(--color-text-subtle)]">Provider</span>
                 <select
@@ -2590,6 +2733,8 @@ export function App() {
                   type="button"
                   className="ui-btn-primary mt-0 disabled:cursor-not-allowed disabled:opacity-55"
                   onClick={() => void handleSaveProviderSettings()}
+                  data-analytics-id="provider_save"
+                  data-analytics-area="settings"
                   disabled={savingProviderSettings}
                 >
                   {savingProviderSettings ? "Saving..." : "Save"}
@@ -2613,6 +2758,8 @@ export function App() {
                 role="tab"
                 aria-selected={rightPaneTab === "emulator"}
                 onClick={() => setRightPaneTab("emulator")}
+                data-analytics-id="panel_emulator"
+                data-analytics-area="navigation"
               >
                 Emulator
               </button>
@@ -2623,6 +2770,8 @@ export function App() {
                   role="tab"
                   aria-selected={rightPaneTab === "assets"}
                   onClick={() => setRightPaneTab("assets")}
+                  data-analytics-id="panel_assets"
+                  data-analytics-area="navigation"
                 >
                   Assets
                   {pendingChangeSlotIds.length > 0 ? (
@@ -2679,6 +2828,8 @@ export function App() {
               role="tab"
               aria-selected={deployPaneTab === "deploy"}
               onClick={() => setDeployPaneTab("deploy")}
+              data-analytics-id="panel_deploy"
+              data-analytics-area="navigation"
             >
               Deploy
             </button>
@@ -2689,6 +2840,8 @@ export function App() {
               aria-selected={deployPaneTab === "games"}
               aria-disabled={gamesTabDisabled}
               disabled={gamesTabDisabled}
+              data-analytics-id="panel_community"
+              data-analytics-area="navigation"
               onClick={() => {
                 if (!gamesTabDisabled) {
                   setCommunityAuthIntent("my-games");

@@ -331,6 +331,8 @@ export const DeployPanel = memo(function DeployPanel({
                 type="button"
                 className={toolbarBtn}
                 disabled={busyAction !== null || !canConnect}
+                data-analytics-id="deploy_connect"
+                data-analytics-area="deploy"
                 onClick={() => void handleConnect()}
               >
                 Retry Connect
@@ -338,6 +340,8 @@ export const DeployPanel = memo(function DeployPanel({
               <button
                 type="button"
                 className={toolbarBtn}
+                data-analytics-id="deploy_open_network_settings"
+                data-analytics-area="deploy"
                 onClick={() => void handleOpenLocalNetworkSettings()}
               >
                 Open System Settings
@@ -412,6 +416,8 @@ export const DeployPanel = memo(function DeployPanel({
           type="button"
           className={toolbarBtn}
           disabled={busyAction !== null || (!connected && !canConnect)}
+          data-analytics-id="deploy_disconnect"
+          data-analytics-area="deploy"
           onClick={() => {
             if (connected) {
               void handleDisconnect();
@@ -450,14 +456,16 @@ export const DeployPanel = memo(function DeployPanel({
           type="button"
           className="ui-btn-primary"
           disabled={busyAction !== null || !connected}
+          data-analytics-id="deploy_run"
+          data-analytics-area="deploy"
           onClick={() => void run("run")}
         >
           {busyAction === "run" ? "Running…" : "Run"}
         </button>
-        <button type="button" className={toolbarBtn} disabled={busyAction !== null || !connected} onClick={() => void run("reload")}>
+        <button type="button" className={toolbarBtn} disabled={busyAction !== null || !connected} data-analytics-id="deploy_reload" data-analytics-area="deploy" onClick={() => void run("reload")}>
           {busyAction === "reload" ? "Reloading…" : "Reload"}
         </button>
-        <button type="button" className={toolbarBtn} disabled={busyAction !== null || !connected} onClick={() => void run("stop")}>
+        <button type="button" className={toolbarBtn} disabled={busyAction !== null || !connected} data-analytics-id="deploy_stop" data-analytics-area="deploy" onClick={() => void run("stop")}>
           {busyAction === "stop" ? "Stopping…" : "Stop"}
         </button>
       </div>

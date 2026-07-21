@@ -36,6 +36,8 @@ export function ThemeSwitcher({ value, onChange, id, className }: ThemeSwitcherP
         value={value}
         onChange={(event) => onChange(event.target.value as ThemeId)}
         aria-label="Appearance"
+        data-analytics-id="theme_select"
+        data-analytics-area="theme"
       >
         <option value="dark">Dark</option>
         <option value="light">Light</option>
@@ -60,6 +62,8 @@ export function ThemeSwitcherIcon({ value, onChange, id }: ThemeSwitcherIconProp
       className={themeIconBtnClass}
       aria-label={label}
       title={value === "light" ? "Switch to Dark theme" : "Switch to Light theme"}
+      data-analytics-id="theme_toggle"
+      data-analytics-area="theme"
       onClick={() => onChange(value === "dark" ? "light" : "dark")}
     >
       {value === "light" ? <SunIcon /> : <MoonIcon />}

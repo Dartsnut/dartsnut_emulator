@@ -55,7 +55,9 @@ test("starts run and injects account token plus run id into model requests", asy
     body: "{}"
   });
   await result.run.finish();
+  await result.run.finish();
 
+  // Stop and app-quit can race with the prompt finalizer; only one backend close is sent.
   assert.equal(calls.length, 3);
   assert.equal(calls[0].url, "https://api.dartsnut.com/agent/llm/runs/start");
   assert.equal(calls[2].url, "https://api.dartsnut.com/agent/llm/runs/finish");

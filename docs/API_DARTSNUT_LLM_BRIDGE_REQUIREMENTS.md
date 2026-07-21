@@ -11,7 +11,7 @@ Hard rules:
 - Stable account identity comes from validated community `token`; never trust client account/email.
 - Account must have at least one bound Dartsnut machine when starting a run.
 - Daily limit is `10,000,000` total input-plus-output tokens per account, reset at `00:00 UTC`.
-- Granted agent run may finish after crossing limit; next run is rejected.
+- The accepted completion that crosses the limit may finish; the run is then closed immediately and cannot issue another completion.
 - One active run per account.
 - Validation/accounting outages fail closed.
 - Usage data stays in api.dartsnut.com's existing MySQL database. Desktop receives no database or upstream LLM credentials.
@@ -68,7 +68,8 @@ Request body remains OpenAI Chat Completions-compatible. API must:
 
 - Revalidate token/account and run ownership.
 - Reject forged, expired, finished, or over-request-limit runs.
-- Allow an already-granted run to continue after daily usage crosses 10M.
+- Allow the already-accepted completion to finish, then atomically close the run when daily usage reaches 10M.
+- Reject every later completion for that quota-closed run with `DAILY_QUOTA_EXCEEDED`.
 - Ignore/override client model with server-configured upstream model.
 - Inject upstream URL and API key server-side.
 - Preserve messages, tools, tool choice, stream mode, reasoning/tool-call deltas, and supported generation fields.
@@ -113,7 +114,7 @@ Chat endpoint returns equivalent OpenAI-compatible error with stable `error.code
 | 403 | `NO_BOUND_MACHINE` | Account has no bound machine |
 | 409 | `RUN_ALREADY_ACTIVE` | Account already has active run |
 | 409 | `RUN_EXPIRED` | Run finished, expired, or account/run mismatch |
-| 429 | `DAILY_QUOTA_EXCEEDED` | Daily total already reached before run start |
+| 429 | `DAILY_QUOTA_EXCEEDED` | Daily total reached before run start or during the preceding completion |
 | 429 | `RUN_REQUEST_LIMIT_REACHED` | Granted run exceeded 128 completions |
 | 502 | `UPSTREAM_LLM_ERROR` | Upstream rejected or failed |
 | 503 | `VALIDATION_UNAVAILABLE` | Account/device validation unavailable |
@@ -212,7 +213,7 @@ Admin-only. Support account/day, run, or date-range scope plus dry-run mode. Aud
 - Binding: zero, one, multiple machines; validation outage.
 - Quota: below/equal/above 10M; UTC rollover.
 - Concurrency: only one active run; no duplicate completion increments.
-- Crossing: current granted run continues; next run rejected.
+- Crossing: accepted completion is accounted, current run is closed, another completion on it is rejected, and the next run is rejected.
 - Run limits: inactivity, absolute expiry, 128 requests, idempotent finish.
 - Proxy: streaming/non-streaming, reasoning deltas, tool calls, usage-only final SSE chunk, upstream errors, client disconnect.
 - Accounting: normalized counts, atomic ledger/run/daily updates, missing usage fail-closed, reconciliation repair.

@@ -12,6 +12,7 @@ import { buildAgentModelConfig } from "../src/agentProviderConfig";
 import { resetAgentsBootstrapForTests } from "../src/agentsBootstrap";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
 import type { StreamedRunResult } from "@openai/agents";
+import { EMPTY_MODEL_RESPONSE_MESSAGE } from "../src/reasoningContentFilter";
 
 function createMockStream(params: {
   events?: RunStreamEvent[];
@@ -258,6 +259,27 @@ describe("SessionEngine (@openai/agents)", () => {
         lastRun: { inputTokens: 7, outputTokens: 4, totalTokens: 11 }
       }
     });
+  });
+
+  it("reports an empty final response as an error instead of a successful placeholder", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-empty-"));
+    const engine = new SessionEngine({
+      runFn: async () => createMockStream({ finalOutput: "" }),
+      agentModelConfig: buildAgentModelConfig({
+        model: "gpt-4.1-mini",
+        apiKey: "test-key"
+      }),
+      workspacePolicy: new WorkspacePolicy(workspace),
+      skillPrompt: "system skill prompt"
+    });
+    const events: AgentEvent[] = [];
+
+    const result = await engine.runPrompt("x", (event) => events.push(event));
+
+    expect(result).toBe(EMPTY_MODEL_RESPONSE_MESSAGE);
+    expect(events).toContainEqual(expect.objectContaining({ type: "error", message: EMPTY_MODEL_RESPONSE_MESSAGE }));
+    expect(events.some((event) => event.type === "final")).toBe(false);
   });
 
   it("throws stop message when aborted", async () => {

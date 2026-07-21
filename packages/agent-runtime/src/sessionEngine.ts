@@ -29,7 +29,10 @@ import {
 import type { IntakeToolState } from "./creationIntakeHost";
 import { DartsnutAgentsSession } from "./dartsnutAgentsSession";
 import { mapAgentsStreamToAgentEvents } from "./agentsEventBridge";
-import { fixReasoningContentEcho } from "./reasoningContentFilter";
+import {
+  createSafeCallModelInputFilter,
+  EMPTY_MODEL_RESPONSE_MESSAGE
+} from "./reasoningContentFilter";
 import { addRunTokenUsage } from "./tokenUsage";
 
 export type HostIntakeToolHandler = (args: Record<string, unknown>) => Promise<string>;
@@ -275,7 +278,7 @@ export class SessionEngine {
         signal: abortSignal,
         maxTurns: SessionEngine.MAIN_AGENT_MAX_TURNS,
         context: runContext,
-        callModelInputFilter: fixReasoningContentEcho
+        callModelInputFilter: createSafeCallModelInputFilter()
       };
       // @openai/agents' process-global run() caches its first model provider.
       // A per-run Runner keeps provider switches and bridge fetch injection authoritative.
@@ -296,7 +299,10 @@ export class SessionEngine {
         onTokenUsage: (runUsage) => this.emitTokenUsage(tokenUsageBase, runUsage, onEvent)
       });
 
-      const final = (bridgeResult.finalText || "Dartsnut Agent run complete.").trim();
+      const final = bridgeResult.finalText.trim();
+      if (!final) {
+        throw new Error(EMPTY_MODEL_RESPONSE_MESSAGE);
+      }
       onEvent({ type: "final", at: Date.now(), content: final });
       onEvent({
         type: "status",

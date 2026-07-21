@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { fixReasoningContentEcho } from "../src/reasoningContentFilter";
+import {
+  createSafeCallModelInputFilter,
+  EMPTY_MODEL_RESPONSE_MESSAGE
+} from "../src/reasoningContentFilter";
 import { ProviderClient } from "../src/providerClient";
 import type { ChatMessage } from "../src/providerClient";
 
 describe("reasoningContentFilter", () => {
   it("preserves reasoning_content provider metadata for assistant replay", async () => {
-    const filtered = await fixReasoningContentEcho({
+    const filtered = await createSafeCallModelInputFilter()({
       modelData: {
         input: [
           {
@@ -49,5 +52,52 @@ describe("reasoningContentFilter", () => {
       reasoning_content?: string;
     };
     expect(assistantWire.reasoning_content).toBe("thoughts");
+  });
+
+  it("rejects an immediately repeated model input before another provider call", async () => {
+    const filter = createSafeCallModelInputFilter();
+    const args = {
+      modelData: {
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "build" }] }],
+        instructions: "test"
+      },
+      agent: {} as never,
+      context: undefined
+    } as Parameters<typeof filter>[0];
+
+    await expect(filter(args)).resolves.toMatchObject({ instructions: "test" });
+    await expect(filter(args)).rejects.toThrow(EMPTY_MODEL_RESPONSE_MESSAGE);
+  });
+
+  it("allows the next model call when conversation input has progressed", async () => {
+    const filter = createSafeCallModelInputFilter();
+    const base = {
+      modelData: {
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "build" }] }],
+        instructions: "test"
+      },
+      agent: {} as never,
+      context: undefined
+    } as Parameters<typeof filter>[0];
+
+    await filter(base);
+    await expect(
+      filter({
+        ...base,
+        modelData: {
+          ...base.modelData,
+          input: [
+            ...base.modelData.input,
+            {
+              type: "function_call_result",
+              name: "read_file",
+              callId: "call_1",
+              status: "completed",
+              output: { type: "text", text: "ok" }
+            }
+          ]
+        }
+      } as Parameters<typeof filter>[0])
+    ).resolves.toMatchObject({ instructions: "test" });
   });
 });

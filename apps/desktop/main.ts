@@ -7,6 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
 import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
+import { AgentRunCoordinator } from "./agentRunCoordinator";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
 import { buildIntakeProjectTypePromptEvent, buildIntakeWidgetSizePromptEvent } from "./intakePromptEvents";
 import { createPublishTarball } from "./publishPackage";
@@ -248,8 +249,8 @@ const widgetFontManifestRelativePath = "assets/fonts/widgets/font_manifest.json"
 
 let deployMachineSession: DeployMachineSession | null = null;
 
-/** Set while `sendPrompt` is running; used to abort the provider + tool loop from the renderer Stop control. */
-let sendPromptAbortController: AbortController | null = null;
+/** Serializes prompt replacement/cancellation through provider and backend run cleanup. */
+const sendPromptCoordinator = new AgentRunCoordinator();
 
 /** Set while desktop Google OAuth is waiting for the browser callback or login API. */
 let communityGoogleLoginAbortController: AbortController | null = null;
@@ -3933,9 +3934,8 @@ function createEmitAgentToRenderer(): AgentEventBatcher & { dispose: () => void 
 }
 
 ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest): Promise<SendPromptResponse> => {
-  sendPromptAbortController?.abort();
-  const runAbort = new AbortController();
-  sendPromptAbortController = runAbort;
+  const runLease = await sendPromptCoordinator.begin();
+  const runAbort = runLease.abortController;
   const emitAgentSink = createEmitAgentToRenderer();
   const emitAgent = (agentEvent: AgentEvent) => emitAgentSink.emit(agentEvent);
   let bridgeRun: DartsnutLlmBridgeRun | null = null;
@@ -4057,15 +4057,13 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     emitAgentSink.flush();
     cancelAllIntakeUserInputPending();
     agentEventEmitter = null;
-    if (sendPromptAbortController === runAbort) {
-      sendPromptAbortController = null;
-    }
+    runLease.settle();
   }
 });
 
-ipcMain.handle(IPCChannels.cancelAgent, () => {
+ipcMain.handle(IPCChannels.cancelAgent, async () => {
   cancelAllIntakeUserInputPending();
-  sendPromptAbortController?.abort();
+  await sendPromptCoordinator.cancelAndWait();
   return { ok: true };
 });
 

@@ -163,6 +163,54 @@ test("CommunityClient adds source header to Dartsnut API requests", async () => 
   assert.equal(calls[0].init.headers.source, "agent");
 });
 
+test("Google login reports when the account needs a password", async () => {
+  const client = new CommunityClient(
+    readCommunityConfig({}),
+    async () => ({
+      status: 200,
+      json: async () => ({
+        code: 1001,
+        data: {
+          token: "google-token",
+          needs_password_setup: true,
+          user_info: { id: 8, account: "person@example.com" }
+        }
+      })
+    })
+  );
+
+  const result = await client.loginWithGoogleIdToken("google-id-token");
+
+  assert.deepEqual(result, {
+    ok: true,
+    token: "google-token",
+    account: "person@example.com",
+    analyticsUserId: "8",
+    needsPasswordSetup: true
+  });
+});
+
+test("setPassword sends the community token and new password", async () => {
+  const calls = [];
+  const client = new CommunityClient(
+    readCommunityConfig({}),
+    async (url, init) => {
+      calls.push({ url, init });
+      return {
+        status: 200,
+        json: async () => ({ code: 1001, data: { user_info: { account: "person@example.com" } } })
+      };
+    }
+  );
+
+  const result = await client.setPassword("community-token", "new-password");
+
+  assert.deepEqual(result, { ok: true, account: "person@example.com" });
+  assert.equal(calls[0]?.url, "https://api.dartsnut.com/community/member/set-password");
+  assert.equal(calls[0]?.init.headers.token, "community-token");
+  assert.deepEqual(JSON.parse(calls[0]?.init.body), { password: "new-password" });
+});
+
 test("CommunityClient adds source header to Dartsnut Supabase requests", async () => {
   const calls = [];
   const client = new CommunityClient(

@@ -177,6 +177,8 @@ export function DeployAuthGate({
             type="button"
             className="inline-flex h-7 w-7 shrink-0 cursor-pointer appearance-none items-center justify-center rounded-full border-0 bg-transparent p-0 text-[var(--color-text-muted)] transition-colors hover:enabled:bg-[var(--color-emulator-toolbar-bg-hover)] hover:enabled:text-[var(--color-text)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
             disabled={busy === "google-cancelling"}
+            data-analytics-id="community_auth_close"
+            data-analytics-area="community_auth"
             onClick={() => void handleClose()}
             aria-label="Close sign-in"
             title="Close sign-in"
@@ -225,6 +227,8 @@ export function DeployAuthGate({
           type="button"
           className="ui-btn-primary"
           disabled={busy !== null}
+          data-analytics-id="community_login_password"
+          data-analytics-area="community_auth"
           onClick={() => void handlePasswordLogin()}
         >
           {busy === "password" ? "Signing in…" : "Sign in"}
@@ -235,6 +239,8 @@ export function DeployAuthGate({
             type="button"
             className={cn(toolbarBtn, "h-10 w-full justify-center")}
             disabled={busy === "google-cancelling"}
+            data-analytics-id="community_login_google_cancel"
+            data-analytics-area="community_auth"
             onClick={() => void handleCancelGoogleLogin()}
           >
             {busy === "google-cancelling" ? "Cancelling…" : "Cancel Google sign-in"}
@@ -244,6 +250,8 @@ export function DeployAuthGate({
             type="button"
             className="google-signin-brand-button"
             disabled={busy === "password" || !googleSignInAvailable}
+            data-analytics-id="community_login_google"
+            data-analytics-area="community_auth"
             onClick={() => void handleGoogleLogin()}
             aria-label="Sign in with Google"
           >
@@ -253,7 +261,7 @@ export function DeployAuthGate({
         )}
 
         {allowSkip ? (
-          <button type="button" className={cn(toolbarBtn, "w-full justify-center")} disabled={busy !== null} onClick={handleSkip}>
+          <button type="button" className={cn(toolbarBtn, "w-full justify-center")} disabled={busy !== null} data-analytics-id="community_auth_skip" data-analytics-area="community_auth" onClick={handleSkip}>
             Continue without account
           </button>
         ) : null}

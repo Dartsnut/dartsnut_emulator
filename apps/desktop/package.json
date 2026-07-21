@@ -17,7 +17,8 @@
     "start:packaged": "open release/mac-arm64/Dartsnut\\ Agent.app",
     "package:mac": "pnpm run build && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --publish never",
     "package:win": "pnpm run build && pnpm exec electron-builder --win --publish never",
-    "package:win:portable": "pnpm run build && pnpm exec electron-builder --win portable:x64 --publish never"
+    "package:win:portable": "pnpm run build && pnpm exec electron-builder --win portable:x64 --publish never",
+    "test:analytics": "vitest run renderer/analytics.test.ts"
   },
   "dependencies": {
     "@dartsnut/agent-runtime": "workspace:*",
@@ -26,6 +27,7 @@
     "clsx": "^2.1.1",
     "dotenv": "^16.5.0",
     "electron-updater": "^6.8.9",
+    "firebase": "^12.16.0",
     "highlight.js": "^11.11.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
@@ -48,6 +50,7 @@
     "nodemon": "^3.1.10",
     "tailwindcss": "^4.3.0",
     "vite": "^6.3.5",
+    "vitest": "^3.2.4",
     "wait-on": "^8.0.3",
     "xmlbuilder": "^15.1.1"
   },

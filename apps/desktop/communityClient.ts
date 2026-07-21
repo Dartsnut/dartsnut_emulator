@@ -180,6 +180,22 @@ export function readCommunityConfig(env: NodeJS.ProcessEnv = process.env): Commu
   };
 }
 
+export function normalizeAnalyticsUserId(userInfo: unknown, account: string): string | null {
+  if (!userInfo || typeof userInfo !== "object") {
+    return null;
+  }
+  const record = userInfo as Record<string, unknown>;
+  const accountKey = account.trim().toLowerCase();
+  for (const key of ["id", "member_id", "user_id", "uuid"]) {
+    const value = String(record[key] ?? "").trim();
+    if (!value || value.toLowerCase() === accountKey || value.includes("@") || /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) {
+      continue;
+    }
+    return value;
+  }
+  return null;
+}
+
 export function normalizeApiJson(raw: unknown): ApiEnvelope | null {
   if (typeof raw === "string") {
     try {
@@ -461,7 +477,7 @@ export class CommunityClient {
     account: string,
     password: string
   ): Promise<
-    | { ok: true; token: string; account: string }
+    | { ok: true; token: string; account: string; analyticsUserId: string | null }
     | CommunityApiError
   > {
     if (!this.config.baseApi) {
@@ -489,10 +505,11 @@ export class CommunityClient {
       const token = String(data?.token || "").trim();
       const userInfo = data?.user_info as Record<string, unknown> | undefined;
       const acct = String(userInfo?.account || account).trim();
+      const analyticsUserId = normalizeAnalyticsUserId(userInfo, acct);
       if (!token) {
         return { ok: false, code: "api_error", message: "Login response did not include a token." };
       }
-      return { ok: true, token, account: acct };
+      return { ok: true, token, account: acct, analyticsUserId };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, code: "network_error", message };
@@ -503,7 +520,7 @@ export class CommunityClient {
     idToken: string,
     signal?: AbortSignal
   ): Promise<
-    | { ok: true; token: string; account: string }
+    | { ok: true; token: string; account: string; analyticsUserId: string | null }
     | CommunityApiError
   > {
     if (!this.config.baseApi) {
@@ -535,7 +552,13 @@ export class CommunityClient {
       if (!token) {
         return { ok: false, code: "api_error", message: "Login response did not include a token." };
       }
-      return { ok: true, token, account: acct || "Google user" };
+      const resolvedAccount = acct || "Google user";
+      return {
+        ok: true,
+        token,
+        account: resolvedAccount,
+        analyticsUserId: normalizeAnalyticsUserId(userInfo, resolvedAccount)
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, code: "network_error", message };

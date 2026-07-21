@@ -2092,12 +2092,13 @@ export function App() {
     activeToolStatusEntryByKeyRef.current.clear();
     setWidgetSizePicker({ visible: false, sizes: [], locale: null });
     setProjectTypePicker({ visible: false, types: [], locale: null });
-    setSending(false);
     finishAgentRun("cancelled");
     try {
       await api.cancelAgent();
     } catch {
       // Bridge unavailable — nothing to abort.
+    } finally {
+      setSending(false);
     }
   }
 

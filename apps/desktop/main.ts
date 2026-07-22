@@ -61,6 +61,8 @@ import {
   type MachineMcpSubmitQuestionAnswerResponse,
   type CommunitySessionInfo,
   type CommunityCancelGoogleLoginResponse,
+  type CommunitySetPasswordRequest,
+  type CommunitySetPasswordResponse,
   type CommunityLoginRequest,
   type CommunityLoginResponse,
   type CommunityLogoutResponse,
@@ -3022,7 +3024,7 @@ ipcMain.handle(
         analyticsUserId: result.analyticsUserId,
         authMethod: "password"
       });
-      return { ok: true, account: result.account };
+      return { ok: true, account: result.account, needsPasswordSetup: false };
     }
     if (request.method === "googleOAuth") {
       const config = client.getConfig();
@@ -3052,7 +3054,7 @@ ipcMain.handle(
           analyticsUserId: result.analyticsUserId,
           authMethod: "google"
         });
-        return { ok: true, account: result.account };
+        return { ok: true, account: result.account, needsPasswordSetup: result.needsPasswordSetup };
       } finally {
         if (communityGoogleLoginAbortController === loginAbort) {
           communityGoogleLoginAbortController = null;
@@ -3073,7 +3075,26 @@ ipcMain.handle(
       analyticsUserId: result.analyticsUserId,
       authMethod: "google"
     });
-    return { ok: true, account: result.account };
+    return { ok: true, account: result.account, needsPasswordSetup: result.needsPasswordSetup };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communitySetPassword,
+  async (_event: unknown, request: CommunitySetPasswordRequest): Promise<CommunitySetPasswordResponse> => {
+    const password = String(request.password || "");
+    if (!password) {
+      return { ok: false, code: "invalid_credentials", message: "Please enter a password." };
+    }
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    const result = await getCommunityClient().setPassword(auth.token, password);
+    if (!result.ok) {
+      return { ok: false, code: result.code, message: result.message };
+    }
+    return { ok: true, account: result.account || auth.account };
   }
 );
 

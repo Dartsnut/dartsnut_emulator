@@ -59,6 +59,7 @@ export const IPCChannels = {
   deployLog: "deploy:log",
   communityGetSession: "community:get-session",
   communityLogin: "community:login",
+  communitySetPassword: "community:set-password",
   communityCancelGoogleLogin: "community:cancel-google-login",
   communityLogout: "community:logout",
   communityListDeployDevices: "community:list-deploy-devices",
@@ -610,6 +611,12 @@ export type CommunityLoginRequest =
   | { method: "googleOAuth" };
 
 export type CommunityLoginResponse =
+  | { ok: true; account: string; needsPasswordSetup: boolean }
+  | { ok: false; code: string; message: string };
+
+export type CommunitySetPasswordRequest = { password: string };
+
+export type CommunitySetPasswordResponse =
   | { ok: true; account: string }
   | { ok: false; code: string; message: string };
 

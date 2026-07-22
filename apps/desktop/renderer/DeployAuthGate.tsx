@@ -338,7 +338,7 @@ export function DeployAuthGate({
             <img className="google-signin-brand-button__logo" src={googleGLogo} alt="" draggable={false} />
             <span className="google-signin-brand-button__label">Sign in with Google</span>
           </button>
-        )}
+        ) : null}
 
         {allowSkip && !passwordSetupOpen ? (
           <button type="button" className={cn(toolbarBtn, "w-full justify-center")} disabled={busy !== null} data-analytics-id="community_auth_skip" data-analytics-area="community_auth" onClick={handleSkip}>

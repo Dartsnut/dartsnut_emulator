@@ -520,7 +520,7 @@ export class CommunityClient {
     idToken: string,
     signal?: AbortSignal
   ): Promise<
-    | { ok: true; token: string; account: string; analyticsUserId: string | null }
+    | { ok: true; token: string; account: string; analyticsUserId: string | null; needsPasswordSetup: boolean }
     | CommunityApiError
   > {
     if (!this.config.baseApi) {
@@ -557,8 +557,46 @@ export class CommunityClient {
         ok: true,
         token,
         account: resolvedAccount,
-        analyticsUserId: normalizeAnalyticsUserId(userInfo, resolvedAccount)
+        analyticsUserId: normalizeAnalyticsUserId(userInfo, resolvedAccount),
+        needsPasswordSetup: data?.needs_password_setup === true
       };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, code: "network_error", message };
+    }
+  }
+
+  async setPassword(
+    token: string,
+    password: string
+  ): Promise<{ ok: true; account: string } | CommunityApiError> {
+    if (!this.config.baseApi) {
+      return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
+    }
+    if (!token.trim()) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    try {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/member/set-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json", token: token.trim() },
+        body: JSON.stringify({ password })
+      });
+      const raw = await res.json().catch(() => null);
+      const parsed = normalizeApiJson(raw) || {};
+      const code = Number(parsed.code);
+      if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
+        return {
+          ok: false,
+          code: mapApiErrorCode(code),
+          message: serverMessage || "Unable to set password.",
+          serverMessage
+        };
+      }
+      const data = parsed.data as Record<string, unknown> | null | undefined;
+      const userInfo = data?.user_info as Record<string, unknown> | undefined;
+      return { ok: true, account: String(userInfo?.account || "").trim() };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, code: "network_error", message };

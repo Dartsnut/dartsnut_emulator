@@ -386,3 +386,42 @@ test("normalizeAnalyticsUserId only accepts opaque member identifiers", () => {
   assert.equal(normalizeAnalyticsUserId({ id: "person@example.com", uuid: "" }, "person@example.com"), null);
   assert.equal(normalizeAnalyticsUserId({ user_id: "192.168.1.4" }, "person@example.com"), null);
 });
+
+test("password login turns a nested fetch error into an actionable sign-in message", async () => {
+  const dnsError = Object.assign(new Error("getaddrinfo ENOTFOUND api.dartsnut.com"), {
+    code: "ENOTFOUND",
+    hostname: "api.dartsnut.com"
+  });
+  const fetchError = Object.assign(new TypeError("fetch failed"), { cause: dnsError });
+  const client = new CommunityClient(readCommunityConfig({}), async () => {
+    throw fetchError;
+  });
+
+  const result = await client.loginWithPassword("person@example.com", "password");
+
+  assert.deepEqual(result, {
+    ok: false,
+    code: "network_error",
+    message: "Couldn’t sign in to Dartsnut because api.dartsnut.com could not be found. Check your internet, DNS, or VPN settings, then try again."
+  });
+});
+
+
+test("createCommunityClient uses the injected cloud fetch", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return new Response(JSON.stringify({
+      code: 1001,
+      data: { token: "token", user_info: { account: "person@example.com" } }
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const { createCommunityClient } = require("./dist-electron/communityClient.js");
+  const client = createCommunityClient({}, fetchImpl);
+
+  const result = await client.loginWithPassword("person@example.com", "password");
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://api.dartsnut.com/community/member/login-in");
+});

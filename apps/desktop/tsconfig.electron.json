@@ -14,6 +14,8 @@
     "agentRunCoordinator.ts",
     "appUpdater.ts",
     "dartsnutLlmBridge.ts",
+    "desktopNetwork.ts",
+    "authNetworkError.ts",
     "packagedEnv.generated.ts",
     "preload.ts",
     "pythonRuntime.ts",

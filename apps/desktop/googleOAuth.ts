@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import http from "node:http";
+import { authNetworkErrorDetails, authNetworkErrorMessage } from "./authNetworkError";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -243,7 +244,17 @@ export async function signInWithGoogleOAuth(options: GoogleOAuthOptions): Promis
     if (isGoogleOAuthCancellation(error, options.signal)) {
       return { ok: false, code: "cancelled", message: "Google sign-in was cancelled." };
     }
-    return { ok: false, code: "network_error", message: error instanceof Error ? error.message : String(error) };
+    console.warn("[community] Google OAuth token exchange failed", {
+      error: authNetworkErrorDetails(error) || String(error)
+    });
+    return {
+      ok: false,
+      code: "network_error",
+      message: authNetworkErrorMessage(error, {
+        action: "Couldn’t complete Google sign-in",
+        endpoint: GOOGLE_TOKEN_URL
+      })
+    };
   } finally {
     removeAbortListener?.();
   }

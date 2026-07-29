@@ -2,6 +2,7 @@
  * Dartsnut community API + Supabase device state (mirrors dartsnut-community-pc server routes).
  */
 
+import { authNetworkErrorDetails, authNetworkErrorMessage } from "./authNetworkError";
 import { withDartsnutSourceHeader } from "./dartsnutSourceHeader";
 
 export const DEFAULT_BASE_API = "https://api.dartsnut.com";
@@ -511,8 +512,17 @@ export class CommunityClient {
       }
       return { ok: true, token, account: acct, analyticsUserId };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, code: "network_error", message };
+      console.warn("[community] password sign-in request failed", {
+        error: authNetworkErrorDetails(error) || String(error)
+      });
+      return {
+        ok: false,
+        code: "network_error",
+        message: authNetworkErrorMessage(error, {
+          action: "Couldn’t sign in to Dartsnut",
+          endpoint: this.config.baseApi
+        })
+      };
     }
   }
 
@@ -561,8 +571,17 @@ export class CommunityClient {
         needsPasswordSetup: data?.needs_password_setup === true
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, code: "network_error", message };
+      console.warn("[community] Google sign-in request failed", {
+        error: authNetworkErrorDetails(error) || String(error)
+      });
+      return {
+        ok: false,
+        code: "network_error",
+        message: authNetworkErrorMessage(error, {
+          action: "Couldn’t sign in to Dartsnut",
+          endpoint: this.config.baseApi
+        })
+      };
     }
   }
 
@@ -598,8 +617,17 @@ export class CommunityClient {
       const userInfo = data?.user_info as Record<string, unknown> | undefined;
       return { ok: true, account: String(userInfo?.account || "").trim() };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, code: "network_error", message };
+      console.warn("[community] password setup request failed", {
+        error: authNetworkErrorDetails(error) || String(error)
+      });
+      return {
+        ok: false,
+        code: "network_error",
+        message: authNetworkErrorMessage(error, {
+          action: "Couldn’t save your password",
+          endpoint: this.config.baseApi
+        })
+      };
     }
   }
 
@@ -1475,6 +1503,9 @@ export class CommunityClient {
   }
 }
 
-export function createCommunityClient(env: NodeJS.ProcessEnv = process.env): CommunityClient {
-  return new CommunityClient(readCommunityConfig(env));
+export function createCommunityClient(
+  env: NodeJS.ProcessEnv = process.env,
+  fetchImpl: FetchLike = fetch
+): CommunityClient {
+  return new CommunityClient(readCommunityConfig(env), fetchImpl);
 }

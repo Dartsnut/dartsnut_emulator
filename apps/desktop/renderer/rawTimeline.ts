@@ -105,6 +105,14 @@ export function describeTimelineError(input: string): TimelineErrorPresentation 
     };
   }
 
+  if (/fetch failed|connection error|network error|enotfound|eai_again|econn(?:refused|reset|timedout)|socket hang up/.test(normalized)) {
+    return {
+      title: "Couldn’t reach the model service",
+      message: "Check your internet connection, VPN, or firewall, then try again.",
+      technicalDetail: message
+    };
+  }
+
   const looksTechnical = message.length > 180 || /request id|\b[45]\d\d\b/i.test(message);
   return {
     title: "Agent run interrupted",

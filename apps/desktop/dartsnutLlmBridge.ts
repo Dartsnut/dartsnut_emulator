@@ -110,6 +110,61 @@ async function readFailureResponse(response: Response): Promise<DartsnutLlmBridg
   return mapDartsnutLlmBridgeFailure(response.status, parsed);
 }
 
+function fetchFailureDetails(error: unknown): string {
+  const seen = new Set<object>();
+
+  const visit = (value: unknown, depth: number): string => {
+    if (depth > 4 || value == null) {
+      return "";
+    }
+    if (typeof value !== "object") {
+      return typeof value === "string" ? value.trim() : "";
+    }
+    if (seen.has(value)) {
+      return "";
+    }
+    seen.add(value);
+
+    const record = value as {
+      name?: unknown;
+      message?: unknown;
+      code?: unknown;
+      syscall?: unknown;
+      hostname?: unknown;
+      cause?: unknown;
+    };
+    const summary = [record.name, record.code, record.syscall, record.hostname, record.message]
+      .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+      .map((part) => part.trim())
+      .join(" ");
+    const cause = visit(record.cause, depth + 1);
+    return [summary, cause].filter(Boolean).join("; caused by: ");
+  };
+
+  return visit(error, 0);
+}
+
+function fetchFailureMessage(error: unknown, baseApi: string): string {
+  const details = fetchFailureDetails(error).toLowerCase();
+  let host = "the Dartsnut LLM service";
+  try {
+    host = new URL(baseApi).host || host;
+  } catch {
+    // Keep the generic service name when a custom API URL is malformed.
+  }
+
+  if (/enotfound|eai_again|getaddrinfo|dns/.test(details)) {
+    return `Couldn’t reach Dartsnut LLM because ${host} could not be found. Check your internet, DNS, or VPN settings, then try again.`;
+  }
+  if (/timeout|timed out|aborterror/.test(details)) {
+    return "Dartsnut LLM took too long to respond. Check your connection and try again.";
+  }
+  if (/certificate|cert_|self signed|unable to verify/.test(details)) {
+    return "Dartsnut LLM could not establish a secure connection. Check your network or VPN certificate settings, then try again.";
+  }
+  return "Couldn’t reach Dartsnut LLM. Check your internet connection, VPN, or firewall, then try again.";
+}
+
 function buildBridgeHeaders(input: RequestInfo | URL, init: RequestInit | undefined, token: string, runId?: string): Headers {
   const headers = new Headers(input instanceof Request ? input.headers : undefined);
   new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
@@ -159,10 +214,14 @@ export async function startDartsnutLlmBridgeRun(options: {
   let startResponse: Response;
   try {
     startResponse = await postRunEndpoint(options.baseApi, "start", token, options.runId, fetchImpl);
-  } catch {
+  } catch (error) {
+    console.warn("[agent] Dartsnut LLM run start request failed", {
+      runId: options.runId,
+      error: fetchFailureDetails(error) || String(error)
+    });
     return {
       ok: false,
-      failure: { reason: "service_unavailable", message: DEFAULT_FAILURE_MESSAGES.service_unavailable }
+      failure: { reason: "service_unavailable", message: fetchFailureMessage(error, options.baseApi) }
     };
   }
   if (!startResponse.ok) {
@@ -192,10 +251,12 @@ export async function startDartsnutLlmBridgeRun(options: {
     } catch (error) {
       latestFailure = {
         reason: "service_unavailable",
-        message: error instanceof Error && error.message
-          ? error.message
-          : DEFAULT_FAILURE_MESSAGES.service_unavailable
+        message: fetchFailureMessage(error, options.baseApi)
       };
+      console.warn("[agent] Dartsnut LLM request failed", {
+        runId: options.runId,
+        error: fetchFailureDetails(error) || String(error)
+      });
       throw error;
     }
     if (!response.ok) {
@@ -236,7 +297,7 @@ export async function startDartsnutLlmBridgeRun(options: {
               // A failed finish cannot keep the desktop open forever, but must be visible in logs.
               console.warn("[agent] backend run finish request failed", {
                 runId: options.runId,
-                error: error instanceof Error ? error.message : String(error)
+                error: fetchFailureDetails(error) || String(error)
               });
             }
           })();

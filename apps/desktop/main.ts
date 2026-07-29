@@ -4,7 +4,7 @@ import os from "node:os";
 import { randomUUID } from "node:crypto";
 import dotenv from "dotenv";
 import { spawn, spawnSync } from "node:child_process";
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, session, shell } from "electron";
 import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { AgentRunCoordinator } from "./agentRunCoordinator";
@@ -156,6 +156,11 @@ import { createCommunityClient, type CommunityClient } from "./communityClient";
 import { clearCommunityAuth, readCommunityAuth, writeCommunityAuth } from "./communityAuth";
 import { signInWithGoogleOAuth } from "./googleOAuth";
 import {
+  configureSystemProxySession,
+  initializeDesktopNetwork,
+  type DesktopNetwork
+} from "./desktopNetwork";
+import {
   DEFAULT_WINDOW_HEIGHT,
   DEFAULT_WINDOW_WIDTH,
   MIN_WINDOW_HEIGHT,
@@ -201,6 +206,11 @@ let quitCleanupRequitScheduled = false;
 let agentRunStopOnQuitInFlight: Promise<boolean> | null = null;
 /** Current backend-backed LLM run, closed immediately when a user stops or quits the app. */
 let activeDartsnutLlmBridgeRun: DartsnutLlmBridgeRun | null = null;
+let desktopNetwork: DesktopNetwork | null = null;
+
+function cloudFetch(): typeof fetch {
+  return desktopNetwork?.fetch ?? fetch;
+}
 
 // Ensure consistent app name for getPath('userData') in both dev and packaged modes
 if (!app.isPackaged) {
@@ -210,8 +220,21 @@ if (!app.isPackaged) {
 // Bypass system proxy/VPN for localhost in development to prevent SSL interception
 // of the Vite dev server connection by tools like Surge Enhanced Mode
 if (!app.isPackaged && process.env.VITE_DEV_SERVER_URL) {
-  app.commandLine.appendSwitch('proxy-bypass-list', '127.0.0.1,localhost');
+  app.commandLine.appendSwitch("proxy-bypass-list", "<local>;127.0.0.1;localhost");
 }
+
+app.on("login", (event, _webContents, _details, authInfo, callback) => {
+  if (!authInfo.isProxy) {
+    return;
+  }
+  event.preventDefault();
+  console.warn("[network] authenticated system proxies are unsupported", {
+    scheme: authInfo.scheme,
+    host: authInfo.host,
+    port: authInfo.port
+  });
+  callback();
+});
 
 const repoRoot = app.isPackaged
   ? process.resourcesPath
@@ -1003,7 +1026,7 @@ function resolveProviderConfigForDesktop(providerSettings: ProviderSettings): Pr
   if (providerSettings.activeProvider === "dartsnut-llm") {
     return resolveDartsnutBridgeProviderConfig();
   }
-  return loadProviderConfig({ providerSettings });
+  return loadProviderConfig({ providerSettings, fetchImpl: cloudFetch() });
 }
 
 function resolveCachedProviderConfigForDesktop(providerSettings: ProviderSettings): ProviderConfig {
@@ -1015,7 +1038,8 @@ function buildAgentModelConfigFromProviderSettings(providerSettings: ProviderSet
   return buildAgentModelConfig({
     model: config.model,
     baseUrl: config.baseUrl,
-    apiKey: config.apiKey
+    apiKey: config.apiKey,
+    fetchImpl: config.fetchImpl
   });
 }
 
@@ -1065,7 +1089,8 @@ async function prepareAgentProvider(providerSettings: ProviderSettings): Promise
   const started = await startDartsnutLlmBridgeRun({
     baseApi: getCommunityClient().getConfig().baseApi,
     token: auth.token,
-    runId: randomUUID()
+    runId: randomUUID(),
+    fetchImpl: cloudFetch()
   });
   if (!started.ok) {
     if (started.failure.reason === "auth_required") {
@@ -2053,10 +2078,18 @@ function isWithinDirectory(rootPath: string, targetPath: string): boolean {
 }
 
 function sendToRenderer(channel: string, ...args: unknown[]) {
-  if (!win || win.isDestroyed()) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
     return;
   }
-  win.webContents.send(channel, ...(args as [unknown, ...unknown[]]));
+  try {
+    win.webContents.send(channel, ...(args as [unknown, ...unknown[]]));
+  } catch (error) {
+    // Window teardown can race with async startup/runtime events.
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
+      return;
+    }
+    throw error;
+  }
 }
 
 function mirrorMainProcessConsole(payload: MainProcessConsoleMirrorPayload): void {
@@ -2664,6 +2697,14 @@ async function createWindow() {
     }
     writeWindowState(captureWindowState(win));
   };
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (isMainFrame) {
+      console.error("[renderer] navigation failed", { errorCode, errorDescription, validatedURL });
+    }
+  });
+  win.webContents.on("render-process-gone", (_event, details) => {
+    console.error("[renderer] process gone", details);
+  });
   win.webContents.on("did-finish-load", () => {
     void syncShellUiThemeFromDomSnapshot().catch(() => {
       /* Theme sync uses executeJavaScript; failures are non-fatal. */
@@ -2730,6 +2771,23 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   try {
+    desktopNetwork = await initializeDesktopNetwork(session.defaultSession, {
+      onDiagnostic: (diagnostic) => {
+        console.info("[network] system proxy", diagnostic);
+      },
+      onError: (error) => {
+        console.warn("[network] system proxy initialization or resolution failed", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    });
+    try {
+      await configureSystemProxySession(session.fromPartition("electron-updater", { cache: false }));
+    } catch (error) {
+      console.warn("[network] updater system proxy initialization failed", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
     await createWindow();
     startAppUpdateCheck(sendToRenderer);
     setPythonRuntimeProgress({
@@ -2745,7 +2803,8 @@ app.whenReady().then(async () => {
       (progress) => {
         setPythonRuntimeProgressFromDownload(progress);
         devLog.info("[runtime] Progress", { stage: progress.stage, percent: progress.percent });
-      }
+      },
+      { fetchImpl: cloudFetch() }
     );
 
     pythonExec = runtime.pythonPath;
@@ -2766,6 +2825,7 @@ app.whenReady().then(async () => {
     emitBootstrapStateToRenderer();
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error("[startup] initialization failed", error);
     setPythonRuntimeStatus(errorMessage);
     setPythonRuntimeProgress({
       running: false,
@@ -2980,7 +3040,7 @@ let communityClientSingleton: CommunityClient | null = null;
 
 function getCommunityClient(): CommunityClient {
   if (!communityClientSingleton) {
-    communityClientSingleton = createCommunityClient();
+    communityClientSingleton = createCommunityClient(process.env, cloudFetch());
   }
   return communityClientSingleton;
 }
@@ -3036,6 +3096,7 @@ ipcMain.handle(
           clientId: config.googleDesktopClientId,
           clientSecret: config.googleDesktopClientSecret,
           openExternal: (url) => shell.openExternal(url),
+          fetchImpl: cloudFetch(),
           signal: loginAbort.signal
         });
         if (!oauthResult.ok) {

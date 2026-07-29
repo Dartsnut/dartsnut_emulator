@@ -80,6 +80,7 @@ export interface DownloadProgress {
 }
 
 export type ProgressCallback = (progress: DownloadProgress) => void;
+type FetchLike = typeof fetch;
 
 function detectPlatform(): Platform {
   if (process.platform === "darwin") {
@@ -127,8 +128,13 @@ function run(command: string, args: string[], options: { cwd?: string; env?: Nod
   }
 }
 
-async function downloadFile(url: string, destination: string, onProgress?: (downloaded: number, total: number) => void): Promise<Buffer> {
-  const response = await fetch(url);
+async function downloadFile(
+  url: string,
+  destination: string,
+  fetchImpl: FetchLike,
+  onProgress?: (downloaded: number, total: number) => void
+): Promise<Buffer> {
+  const response = await fetchImpl(url);
   if (!response.ok) {
     throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
   }
@@ -158,9 +164,9 @@ async function downloadFile(url: string, destination: string, onProgress?: (down
   return buffer;
 }
 
-async function verifySha256(archivePath: string, checksumUrl: string): Promise<void> {
+async function verifySha256(archivePath: string, checksumUrl: string, fetchImpl: FetchLike): Promise<void> {
   try {
-    const response = await fetch(checksumUrl);
+    const response = await fetchImpl(checksumUrl);
     if (!response.ok) {
       console.warn(`Skipping SHA256 verification (missing ${checksumUrl})`);
       return;
@@ -303,7 +309,8 @@ async function installDependencies(
 async function ensureUvBinary(
   runtimeDir: string,
   platform: Platform,
-  onProgress: ProgressCallback
+  onProgress: ProgressCallback,
+  fetchImpl: FetchLike
 ): Promise<string> {
   const uvConfig = UV_TARGETS[platform];
   const cacheDir = path.join(runtimeDir, ".cache", "uv", UV_VERSION);
@@ -315,13 +322,13 @@ async function ensureUvBinary(
     const archiveUrl = `${UV_BASE_URL}/${uvConfig.archive}`;
     onProgress({ stage: "download_uv", percent: 0, message: "Downloading uv..." });
 
-    await downloadFile(archiveUrl, archivePath, (downloaded, total) => {
+    await downloadFile(archiveUrl, archivePath, fetchImpl, (downloaded, total) => {
       const percent = Math.floor((downloaded / total) * 100);
       onProgress({ stage: "download_uv", percent, message: `Downloading uv... ${percent}%` });
     });
   }
 
-  await verifySha256(archivePath, `${UV_BASE_URL}/${uvConfig.archive}.sha256`);
+  await verifySha256(archivePath, `${UV_BASE_URL}/${uvConfig.archive}.sha256`, fetchImpl);
 
   if (fs.existsSync(uvOutputDir)) {
     fs.rmSync(uvOutputDir, { recursive: true, force: true });
@@ -358,8 +365,10 @@ async function ensureUvBinary(
 export async function ensureRuntime(
   runtimeDir: string,
   requirementsPath: string,
-  onProgress: ProgressCallback
+  onProgress: ProgressCallback,
+  options: { fetchImpl?: FetchLike } = {}
 ): Promise<{ pythonPath: string; uvPath: string }> {
+  const fetchImpl = options.fetchImpl ?? fetch;
   const platform = detectPlatform();
 
   onProgress({ stage: "check", percent: 0, message: "Checking runtime..." });
@@ -400,13 +409,13 @@ export async function ensureRuntime(
     const archiveUrl = `${PYTHON_BASE_URL}/${pythonConfig.archive}`;
     onProgress({ stage: "download_python", percent: 0, message: "Downloading Python..." });
 
-    await downloadFile(archiveUrl, archivePath, (downloaded, total) => {
+    await downloadFile(archiveUrl, archivePath, fetchImpl, (downloaded, total) => {
       const percent = Math.floor((downloaded / total) * 100);
       onProgress({ stage: "download_python", percent, message: `Downloading Python... ${percent}%` });
     });
   }
 
-  await verifySha256(archivePath, `${PYTHON_BASE_URL}/${pythonConfig.archive}.sha256`);
+  await verifySha256(archivePath, `${PYTHON_BASE_URL}/${pythonConfig.archive}.sha256`, fetchImpl);
 
   if (fs.existsSync(extractDir)) {
     fs.rmSync(extractDir, { recursive: true, force: true });
@@ -422,7 +431,7 @@ export async function ensureRuntime(
   onProgress({ stage: "extract_python", percent: 50, message: "Creating virtual environment..." });
 
   // Ensure uv is available
-  const uvBin = await ensureUvBinary(runtimeDir, platform, onProgress);
+  const uvBin = await ensureUvBinary(runtimeDir, platform, onProgress, fetchImpl);
 
   // Create venv
   run(uvBin, ["venv", "--python", standalonePython, pythonRuntimeDir]);

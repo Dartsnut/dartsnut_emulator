@@ -68,6 +68,29 @@ test("starts run and injects account token plus run id into model requests", asy
   assert.equal(modelHeaders.has("authorization"), false);
 });
 
+test("turns a run-start DNS failure into an actionable bridge message", async () => {
+  const dnsError = Object.assign(new Error("getaddrinfo ENOTFOUND api.dartsnut.com"), {
+    code: "ENOTFOUND",
+    hostname: "api.dartsnut.com"
+  });
+  const fetchError = Object.assign(new TypeError("fetch failed"), { cause: dnsError });
+
+  const result = await startDartsnutLlmBridgeRun({
+    baseApi: "https://api.dartsnut.com",
+    token: "token",
+    runId: "run-start-dns-error",
+    fetchImpl: async () => { throw fetchError; }
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    failure: {
+      reason: "service_unavailable",
+      message: "Couldn’t reach Dartsnut LLM because api.dartsnut.com could not be found. Check your internet, DNS, or VPN settings, then try again."
+    }
+  });
+});
+
 test("captures bridge rejection from a model request", async () => {
   let count = 0;
   const fetchImpl = async () => {
@@ -92,4 +115,38 @@ test("captures bridge rejection from a model request", async () => {
 
   await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/chat/completions", {});
   assert.deepEqual(result.run.readFailure(), { reason: "run_expired", message: "Run expired." });
+});
+
+test("turns a DNS fetch failure into an actionable bridge message", async () => {
+  let count = 0;
+  const dnsError = Object.assign(new Error("getaddrinfo ENOTFOUND api.dartsnut.com"), {
+    code: "ENOTFOUND",
+    hostname: "api.dartsnut.com"
+  });
+  const fetchError = Object.assign(new TypeError("fetch failed"), { cause: dnsError });
+  const fetchImpl = async () => {
+    count += 1;
+    if (count === 1) {
+      return new Response(JSON.stringify({ code: 1001 }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    throw fetchError;
+  };
+
+  const result = await startDartsnutLlmBridgeRun({
+    baseApi: "https://api.dartsnut.com",
+    token: "token",
+    runId: "run-dns-error",
+    fetchImpl
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  await assert.rejects(
+    result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/chat/completions", {}),
+    /fetch failed/
+  );
+  assert.deepEqual(result.run.readFailure(), {
+    reason: "service_unavailable",
+    message: "Couldn’t reach Dartsnut LLM because api.dartsnut.com could not be found. Check your internet, DNS, or VPN settings, then try again."
+  });
 });

@@ -2101,6 +2101,17 @@ kbd,
   box-shadow: 0 0 0 1px var(--color-input-focus-border);
 }
 
+.widget-param-input {
+  min-height: 32px;
+  padding: 5px 8px;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.widget-param-fields {
+  max-height: min(280px, 34vh);
+}
+
 .ui-toolbar-btn {
   box-sizing: border-box;
   display: inline-flex;

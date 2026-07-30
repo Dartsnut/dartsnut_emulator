@@ -39,6 +39,7 @@ import {
   type CommunitySetPasswordRequest,
   type CommunitySetPasswordResponse,
   type CommunityLogoutResponse,
+  type CommunityGetLlmQuotaResponse,
   type CommunityListDeployDevicesResponse,
   type CommunityListMyGamesResponse,
   type CommunityGetPublishOptionsResponse,
@@ -212,6 +213,8 @@ const api = {
     ipcRenderer.invoke(IPCChannels.communityCancelGoogleLogin) as Promise<CommunityCancelGoogleLoginResponse>,
   communityLogout: () =>
     ipcRenderer.invoke(IPCChannels.communityLogout) as Promise<CommunityLogoutResponse>,
+  communityGetLlmQuota: () =>
+    ipcRenderer.invoke(IPCChannels.communityGetLlmQuota) as Promise<CommunityGetLlmQuotaResponse>,
   communityListDeployDevices: () =>
     ipcRenderer.invoke(IPCChannels.communityListDeployDevices) as Promise<CommunityListDeployDevicesResponse>,
   communityListMyGames: () =>

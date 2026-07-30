@@ -15,6 +15,7 @@ const {
   normalizeCommunityGameControls,
   normalizeCommunityPreviewUrls,
   normalizeCommunityVersions,
+  normalizeLlmQuotaStatus,
   pickUploadMd5,
   pickUploadUrl,
   readCommunityConfig
@@ -209,6 +210,65 @@ test("setPassword sends the community token and new password", async () => {
   assert.equal(calls[0]?.url, "https://api.dartsnut.com/community/member/set-password");
   assert.equal(calls[0]?.init.headers.token, "community-token");
   assert.deepEqual(JSON.parse(calls[0]?.init.body), { password: "new-password" });
+});
+
+test("normalizeLlmQuotaStatus maps the member quota response", () => {
+  assert.deepEqual(normalizeLlmQuotaStatus({
+    account_id: 7,
+    usage_date: "2026-07-30",
+    input_tokens: "1200",
+    output_tokens: 300,
+    used_tokens: "1500",
+    custom_limit_tokens: null,
+    limit_tokens: "10000000",
+    default_limit_tokens: 10000000,
+    remaining_tokens: "9998500",
+    quota_exceeded: false,
+    accounting_health: "healthy"
+  }), {
+    accountId: 7,
+    usageDate: "2026-07-30",
+    inputTokens: 1200,
+    outputTokens: 300,
+    usedTokens: 1500,
+    customLimitTokens: null,
+    limitTokens: 10000000,
+    defaultLimitTokens: 10000000,
+    remainingTokens: 9998500,
+    quotaExceeded: false,
+    accountingHealth: "healthy"
+  });
+});
+
+test("getLlmQuota reads the authenticated member quota", async () => {
+  const calls = [];
+  const client = new CommunityClient(
+    readCommunityConfig({}),
+    async (url, init) => {
+      calls.push({ url, init });
+      return {
+        status: 200,
+        json: async () => ({
+          code: 1001,
+          data: {
+            account_id: 7,
+            usage_date: "2026-07-30",
+            used_tokens: 42,
+            limit_tokens: 100,
+            remaining_tokens: 58
+          }
+        })
+      };
+    }
+  );
+
+  const result = await client.getLlmQuota("community-token");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.quota.usedTokens, 42);
+  assert.equal(calls[0]?.url, "https://api.dartsnut.com/agent/llm/quota");
+  assert.equal(calls[0]?.init.headers.token, "community-token");
+  assert.equal(calls[0]?.init.headers.source, "agent");
 });
 
 test("CommunityClient adds source header to Dartsnut Supabase requests", async () => {

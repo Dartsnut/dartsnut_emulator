@@ -37,6 +37,7 @@ import type {
   CommunitySetPasswordRequest,
   CommunitySetPasswordResponse,
   CommunityLogoutResponse,
+  CommunityGetLlmQuotaResponse,
   CommunityListDeployDevicesResponse,
   CommunityListMyGamesResponse,
   CommunityGetPublishOptionsResponse,
@@ -122,6 +123,7 @@ declare global {
       communitySetPassword: (request: CommunitySetPasswordRequest) => Promise<CommunitySetPasswordResponse>;
       communityCancelGoogleLogin: () => Promise<CommunityCancelGoogleLoginResponse>;
       communityLogout: () => Promise<CommunityLogoutResponse>;
+      communityGetLlmQuota: () => Promise<CommunityGetLlmQuotaResponse>;
       communityListDeployDevices: () => Promise<CommunityListDeployDevicesResponse>;
       communityListMyGames: () => Promise<CommunityListMyGamesResponse>;
       communityGetPublishOptions: () => Promise<CommunityGetPublishOptionsResponse>;

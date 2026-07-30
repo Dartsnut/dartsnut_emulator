@@ -23,6 +23,7 @@
     "communityClient.ts",
     "communityVersionHistory.ts",
     "workspaceProjectMetadata.ts",
+    "widgetConfig.ts",
     "googleOAuth.ts",
     "communityAuth.ts",
     "emulatorAgentTools.ts",

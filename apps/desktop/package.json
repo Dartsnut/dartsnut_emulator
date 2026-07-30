@@ -18,7 +18,8 @@
     "package:mac": "pnpm run build && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --publish never",
     "package:win": "pnpm run build && pnpm exec electron-builder --win --publish never",
     "package:win:portable": "pnpm run build && pnpm exec electron-builder --win portable:x64 --publish never",
-    "test:analytics": "vitest run renderer/analytics.test.ts"
+    "test:analytics": "vitest run renderer/analytics.test.ts",
+    "test:renderer": "vitest run renderer/analytics.test.ts renderer/rawTimeline.test.ts renderer/widgetParams.test.ts"
   },
   "dependencies": {
     "@dartsnut/agent-runtime": "workspace:*",

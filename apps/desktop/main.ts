@@ -66,6 +66,7 @@ import {
   type CommunityLoginRequest,
   type CommunityLoginResponse,
   type CommunityLogoutResponse,
+  type CommunityGetLlmQuotaResponse,
   type CommunityListDeployDevicesResponse,
   type CommunityListMyGamesResponse,
   type CommunityGetPublishOptionsResponse,
@@ -3168,6 +3169,30 @@ ipcMain.handle(IPCChannels.communityLogout, (): CommunityLogoutResponse => {
   clearCommunityAuth(getCommunityUserDataPath());
   return { ok: true };
 });
+
+ipcMain.handle(
+  IPCChannels.communityGetLlmQuota,
+  async (): Promise<CommunityGetLlmQuotaResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const result = await getCommunityClient().getLlmQuota(auth.token);
+    if (!result.ok) {
+      if (result.code === "session_expired") {
+        clearCommunityAuth(getCommunityUserDataPath());
+      }
+      return {
+        ok: false,
+        code: result.code,
+        message: result.message,
+        serverMessage: result.serverMessage,
+        authRequired: result.code === "session_expired"
+      };
+    }
+    return { ok: true, quota: result.quota };
+  }
+);
 
 ipcMain.handle(
   IPCChannels.communityListDeployDevices,

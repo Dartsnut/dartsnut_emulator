@@ -10,7 +10,7 @@ const themeSelectChevronStyle: CSSProperties = {
   backgroundRepeat: "no-repeat"
 };
 
-const themeIconBtnClass = "ui-chrome-btn text-fg";
+const themeIconBtnClass = "workspace-menu__button";
 
 interface ThemeSwitcherProps {
   value: ThemeId;
@@ -39,6 +39,7 @@ export function ThemeSwitcher({ value, onChange, id, className }: ThemeSwitcherP
         data-analytics-id="theme_select"
         data-analytics-area="theme"
       >
+        <option value="system">System</option>
         <option value="dark">Dark</option>
         <option value="light">Light</option>
       </select>
@@ -52,22 +53,31 @@ interface ThemeSwitcherIconProps {
   id?: string;
 }
 
-/** Icon-only control for the window chrome band — cycles Dark ↔ Light. */
+/** Cycles System -> Light -> Dark in compact navigation. */
 export function ThemeSwitcherIcon({ value, onChange, id }: ThemeSwitcherIconProps) {
-  const label = value === "light" ? "Light theme (click for Dark)" : "Dark theme (click for Light)";
+  const next = value === "system" ? "light" : value === "light" ? "dark" : "system";
   return (
     <button
       type="button"
       id={id}
       className={themeIconBtnClass}
-      aria-label={label}
-      title={value === "light" ? "Switch to Dark theme" : "Switch to Light theme"}
+      aria-label={`${value} theme (click for ${next})`}
+      title={`Switch to ${next} theme`}
       data-analytics-id="theme_toggle"
       data-analytics-area="theme"
-      onClick={() => onChange(value === "dark" ? "light" : "dark")}
+      onClick={() => onChange(next)}
     >
-      {value === "light" ? <SunIcon /> : <MoonIcon />}
+      {value === "system" ? <SystemIcon /> : value === "light" ? <SunIcon /> : <MoonIcon />}
     </button>
+  );
+}
+
+function SystemIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect x="3" y="4" width="18" height="13" rx="2" stroke="currentColor" strokeWidth="1.75" />
+      <path d="M8 21h8M12 17v4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
   );
 }
 

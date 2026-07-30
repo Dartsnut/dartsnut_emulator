@@ -34,6 +34,7 @@ import {
   type MachineMcpQuestionMachine,
   type WidgetSize,
   type CommunitySessionInfo,
+  type CommunityLlmQuotaStatus,
   type CommunitySubmitProgress,
   type UserLocale,
   type ChatMediaAttachment,
@@ -119,6 +120,7 @@ type UpdatePromptState = AppUpdateStatus & {
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
 const DEPLOY_PANE_RESERVED_WIDTH_PX = 360;
+const WORKSPACE_MENU_WIDTH_PX = 54;
 /** Keep in sync with composer textarea `max-h-[200px]` */
 const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 /**
@@ -209,6 +211,62 @@ function formatTokenCount(value: number): string {
 
 function formatTokenUsageTitle(usage: AgentTokenUsage): string {
   return `Input ${usage.inputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · Total ${usage.totalTokens.toLocaleString()}`;
+}
+
+type DartsnutLlmUsageCardProps = {
+  quota: CommunityLlmQuotaStatus | null;
+  loading: boolean;
+  error: string | null;
+  loggedIn: boolean;
+  onRefresh: () => void;
+};
+
+function DartsnutLlmUsageCard({ quota, loading, error, loggedIn, onRefresh }: DartsnutLlmUsageCardProps) {
+  const usagePercent = quota
+    ? quota.limitTokens > 0
+      ? Math.min(100, (quota.usedTokens / quota.limitTokens) * 100)
+      : 100
+    : 0;
+  return (
+    <section className="llm-usage-card" aria-label="Today’s Dartsnut LLM usage">
+      <div className="llm-usage-card__header">
+        <div>
+          <p className="llm-usage-card__eyebrow">Today · UTC</p>
+          <h3 className="llm-usage-card__title">Token usage</h3>
+        </div>
+        {quota?.quotaExceeded ? <span className="llm-usage-card__badge">Limit reached</span> : null}
+      </div>
+      {!loggedIn ? (
+        <p className="llm-usage-card__state">Sign in to view today’s usage and remaining allowance.</p>
+      ) : loading && !quota ? (
+        <p className="llm-usage-card__state" role="status">Loading today’s usage…</p>
+      ) : error && !quota ? (
+        <div className="llm-usage-card__state llm-usage-card__state--error" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={onRefresh}>Retry</button>
+        </div>
+      ) : quota ? (
+        <>
+          <div
+            className="llm-usage-card__track"
+            role="progressbar"
+            aria-label="Daily token allowance used"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(usagePercent)}
+          >
+            <span style={{ width: `${usagePercent}%` }} />
+          </div>
+          {error ? (
+            <div className="llm-usage-card__refresh-error" role="status">
+              <span>{error}</span>
+              <button type="button" onClick={onRefresh}>Retry</button>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  );
 }
 
 function UpdateDownloadPill({ status }: { status: AppUpdateStatus | null }) {
@@ -439,12 +497,19 @@ type CommunityAuthStatusProps = {
   communitySession: CommunitySessionInfo;
   onAuthRequired: () => void;
   onSignOut: () => Promise<void>;
+  placement?: "header" | "rail";
 };
 
-function CommunityAuthStatus({ communitySession, onAuthRequired, onSignOut }: CommunityAuthStatusProps) {
+function CommunityAuthStatus({
+  communitySession,
+  onAuthRequired,
+  onSignOut,
+  placement = "header"
+}: CommunityAuthStatusProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const inRail = placement === "rail";
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -473,12 +538,17 @@ function CommunityAuthStatus({ communitySession, onAuthRequired, onSignOut }: Co
       <div className="relative" ref={menuRef}>
         <button
           type="button"
-          className="inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1.5 rounded border border-transparent bg-transparent px-2.5 py-0 text-xs font-medium text-[var(--color-app-btn-text)] transition-colors hover:bg-[var(--color-app-btn-bg-hover)] hover:text-[var(--color-app-btn-text-hover)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
+          className={cn(
+            inRail
+              ? "workspace-menu__button"
+              : "inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1.5 rounded border border-transparent bg-transparent px-2.5 py-0 text-xs font-medium text-[var(--color-app-btn-text)] transition-colors hover:bg-[var(--color-app-btn-bg-hover)] hover:text-[var(--color-app-btn-text-hover)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
+          )}
           onClick={() => setMenuOpen(!menuOpen)}
           aria-label="Account menu"
+          aria-expanded={menuOpen}
           title={communitySession.account || "Signed in"}
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden className="shrink-0">
+          <svg width={inRail ? 16 : 12} height={inRail ? 16 : 12} viewBox="0 0 24 24" aria-hidden className="shrink-0">
             <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
             <path
               d="M6 21c0-3.3 2.7-6 6-6s6 2.7 6 6"
@@ -488,11 +558,14 @@ function CommunityAuthStatus({ communitySession, onAuthRequired, onSignOut }: Co
               strokeLinecap="round"
             />
           </svg>
-          <span className="whitespace-nowrap">{communitySession.account || "Signed in"}</span>
+          {!inRail ? <span className="whitespace-nowrap">{communitySession.account || "Signed in"}</span> : null}
         </button>
         {menuOpen ? (
           <div
-            className="absolute right-0 top-full z-50 mt-1 min-w-[120px] rounded-md border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] py-1 shadow-sm"
+            className={cn(
+              "absolute z-50 min-w-[120px] rounded-md border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] py-1 shadow-sm",
+              inRail ? "bottom-0 left-full ml-2" : "right-0 top-full mt-1"
+            )}
             role="menu"
           >
             <button
@@ -513,12 +586,12 @@ function CommunityAuthStatus({ communitySession, onAuthRequired, onSignOut }: Co
   return (
     <button
       type="button"
-      className={chromeIconBtnClass}
+      className={inRail ? "workspace-menu__button" : chromeIconBtnClass}
       onClick={onAuthRequired}
       aria-label="Sign in"
       title="Sign in"
     >
-      <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+      <svg width={inRail ? 16 : 14} height={inRail ? 16 : 14} viewBox="0 0 24 24" aria-hidden>
         <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
         <path
           d="M6 21c0-3.3 2.7-6 6-6s6 2.7 6 6"
@@ -707,6 +780,9 @@ export function App() {
   const [communityAuthIntent, setCommunityAuthIntent] = useState<CommunityAuthIntent>("deploy-devices");
   const [communityAuthSkippedVersion, setCommunityAuthSkippedVersion] = useState(0);
   const [communitySessionVersion, setCommunitySessionVersion] = useState(0);
+  const [llmQuota, setLlmQuota] = useState<CommunityLlmQuotaStatus | null>(null);
+  const [llmQuotaLoading, setLlmQuotaLoading] = useState(false);
+  const [llmQuotaError, setLlmQuotaError] = useState<string | null>(null);
   const [submissionLock, setSubmissionLock] = useState<SubmissionLockState>({
     active: false,
     stage: "idle",
@@ -727,15 +803,15 @@ export function App() {
 
   const splitPaneViewportWidth = useCallback(() => {
     const rawWidth = typeof window === "undefined" ? 1320 : window.innerWidth;
-    return rawWidth - (deployEligible ? DEPLOY_PANE_RESERVED_WIDTH_PX : 0);
+    return rawWidth - WORKSPACE_MENU_WIDTH_PX - (deployEligible ? DEPLOY_PANE_RESERVED_WIDTH_PX : 0);
   }, [deployEligible]);
 
   const mainGridTemplateColumns = useMemo(() => {
     const leftColumn = `${chatPaneWidth}px`;
     const emulatorColumn = `minmax(${MIN_EMULATOR_PANE_WIDTH}px,1fr)`;
     return deployEligible
-      ? `${leftColumn} ${emulatorColumn} minmax(360px,420px)`
-      : `${leftColumn} ${emulatorColumn}`;
+      ? `${WORKSPACE_MENU_WIDTH_PX}px ${leftColumn} ${emulatorColumn} minmax(360px,420px)`
+      : `${WORKSPACE_MENU_WIDTH_PX}px ${leftColumn} ${emulatorColumn}`;
   }, [chatPaneWidth, deployEligible]);
 
   const mainGridStyle = useMemo(
@@ -889,9 +965,41 @@ export function App() {
     }
   }, [api]);
 
+  const refreshLlmQuota = useCallback(async () => {
+    if (!api?.communityGetLlmQuota || !communitySession.loggedIn) {
+      setLlmQuota(null);
+      setLlmQuotaError(null);
+      setLlmQuotaLoading(false);
+      return;
+    }
+    setLlmQuotaLoading(true);
+    setLlmQuotaError(null);
+    try {
+      const result = await api.communityGetLlmQuota();
+      if (!result.ok) {
+        if (result.authRequired) {
+          await refreshCommunitySession();
+        }
+        setLlmQuotaError(result.message);
+        return;
+      }
+      setLlmQuota(result.quota);
+    } catch (error: unknown) {
+      setLlmQuotaError(error instanceof Error ? error.message : "Failed to load today’s usage.");
+    } finally {
+      setLlmQuotaLoading(false);
+    }
+  }, [api, communitySession.loggedIn, refreshCommunitySession]);
+
   useEffect(() => {
     void refreshCommunitySession();
   }, [refreshCommunitySession]);
+
+  useEffect(() => {
+    if (screen === "settings" && providerSettings.activeProvider === "dartsnut-llm") {
+      void refreshLlmQuota();
+    }
+  }, [communitySessionVersion, providerSettings.activeProvider, refreshLlmQuota, screen]);
 
   useEffect(() => {
     if (communitySession.loggedIn) {
@@ -960,6 +1068,16 @@ export function App() {
 
   useLayoutEffect(() => {
     applyTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (theme !== "system" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const colorScheme = window.matchMedia("(prefers-color-scheme: light)");
+    const handleColorSchemeChange = () => applyTheme("system");
+    colorScheme.addEventListener("change", handleColorSchemeChange);
+    return () => colorScheme.removeEventListener("change", handleColorSchemeChange);
   }, [theme]);
 
   function handleThemeChange(next: ThemeId) {
@@ -1853,11 +1971,15 @@ export function App() {
     }
   }
 
+  function handleOpenSettings() {
+    setScreen((current) => current === "settings" ? "main" : "settings");
+  }
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (isSettingsShortcut(event)) {
         event.preventDefault();
-        setScreen("settings");
+        handleOpenSettings();
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -2109,7 +2231,7 @@ export function App() {
         "grid-cols-[var(--app-main-grid-cols)]",
         "grid-rows-[auto_minmax(0,1fr)]",
         "pr-[var(--window-control-inset-right)] pb-[var(--window-control-inset-bottom)] pl-[var(--window-control-inset-left)]",
-        "max-[1100px]:grid-cols-1 max-[1100px]:grid-rows-[auto_minmax(0,1fr)]",
+        "max-[1100px]:grid-cols-[54px_minmax(0,1fr)] max-[1100px]:grid-rows-[auto_minmax(0,1fr)]",
         chatPaneResizing && "app-shell--chat-resizing"
       )}
       style={mainGridStyle}
@@ -2142,88 +2264,6 @@ export function App() {
                     : "Dartsnut Agent"}
                 </span>
               </h1>
-              <button
-                type="button"
-                className={chromeIconBtnClass}
-                onClick={() => void handleStartNewProject()}
-                data-analytics-id="project_new"
-                data-analytics-area="project"
-                disabled={sending}
-                aria-label="Start new project"
-                title="Start new project"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"
-                  />
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M14 2v6h6M12 11v6M9 14h6"
-                  />
-                </svg>
-              </button>
-              {bootstrap?.isTemporaryWorkspace ? (
-                <button
-                  type="button"
-                  className={chromeIconBtnClass}
-                  onClick={() => void handleSaveTempWorkspace()}
-                  data-analytics-id="project_save"
-                  data-analytics-area="project"
-                  disabled={sending}
-                  aria-label="Save project to a folder"
-                  title="Save project to a folder"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                    <path
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"
-                    />
-                    <path
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M17 21v-8H7v8M7 3v5h8"
-                    />
-                  </svg>
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className={chromeIconBtnClass}
-                onClick={() => void handlePickWorkspace()}
-                data-analytics-id="project_open"
-                data-analytics-area="project"
-                disabled={sending}
-                aria-label="Open an existing project"
-                title="Open an existing project"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
-                  />
-                  <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
-                </svg>
-              </button>
             </div>
             <div
               className="min-h-0 min-w-0 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
@@ -2231,22 +2271,6 @@ export function App() {
             />
             <div className="inline-flex shrink-0 items-center justify-end gap-3 overflow-visible">
               <UpdateDownloadPill status={appUpdate} />
-              <CommunityAuthStatus
-                communitySession={communitySession}
-                onAuthRequired={() => requestCommunityAuth("deploy-devices", true)}
-                onSignOut={async () => {
-                  if (!api?.communityLogout) {
-                    return;
-                  }
-                  try {
-                    await api.communityLogout();
-                    await refreshCommunitySession();
-                  } catch {
-                    // ignore
-                  }
-                }}
-              />
-              <ThemeSwitcherIcon id="main-theme-icon" value={theme} onChange={handleThemeChange} />
             </div>
           </>
         ) : (
@@ -2284,17 +2308,141 @@ export function App() {
               className="min-h-0 min-w-6 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
               aria-hidden
             />
-            <div className="inline-flex shrink-0 items-center gap-2">
-              <ThemeSwitcherIcon id="settings-theme-icon" value={theme} onChange={handleThemeChange} />
-            </div>
           </>
         )}
       </header>
+      <aside className="workspace-menu col-start-1 row-start-2" aria-label="Workspace menu">
+        <div className="workspace-menu__actions">
+          <button
+            type="button"
+            className="workspace-menu__button"
+            onClick={() => void handleStartNewProject()}
+            data-analytics-id="project_new"
+            data-analytics-area="project"
+            disabled={sending}
+            aria-label="Start new project"
+            title="Start new project"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+              <path
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"
+              />
+              <path
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M14 2v6h6M12 11v6M9 14h6"
+              />
+            </svg>
+          </button>
+          {bootstrap?.isTemporaryWorkspace ? (
+            <button
+              type="button"
+              className="workspace-menu__button"
+              onClick={() => void handleSaveTempWorkspace()}
+              data-analytics-id="project_save"
+              data-analytics-area="project"
+              disabled={sending}
+              aria-label="Save project to a folder"
+              title="Save project to a folder"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"
+                />
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M17 21v-8H7v8M7 3v5h8"
+                />
+              </svg>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="workspace-menu__button"
+            onClick={() => void handlePickWorkspace()}
+            data-analytics-id="project_open"
+            data-analytics-area="project"
+            disabled={sending}
+            aria-label="Open an existing project"
+            title="Open an existing project"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+              <path
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
+              />
+              <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
+            </svg>
+          </button>
+        </div>
+        <div className="workspace-menu__utilities">
+          <CommunityAuthStatus
+            placement="rail"
+            communitySession={communitySession}
+            onAuthRequired={() => requestCommunityAuth("deploy-devices", true)}
+            onSignOut={async () => {
+              if (!api?.communityLogout) {
+                return;
+              }
+              try {
+                await api.communityLogout();
+                await refreshCommunitySession();
+              } catch {
+                // ignore
+              }
+            }}
+          />
+          <ThemeSwitcherIcon id="rail-theme-switcher" value={theme} onChange={handleThemeChange} />
+          <button
+            type="button"
+            className={cn("workspace-menu__button", screen === "settings" && "workspace-menu__button--active")}
+            onClick={handleOpenSettings}
+            data-analytics-id="settings_open"
+            data-analytics-area="navigation"
+            aria-label="Settings"
+            aria-current={screen === "settings" ? "page" : undefined}
+            title="Settings"
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden>
+              <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
+              <path
+                d="M19.4 15a1.7 1.7 0 00.34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 00-1.88-.34 1.7 1.7 0 00-1.03 1.56V21h-4v-.08A1.7 1.7 0 009 19.36a1.7 1.7 0 00-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 004.63 15a1.7 1.7 0 00-1.56-1.03H3v-4h.08A1.7 1.7 0 004.64 9a1.7 1.7 0 00-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 009 4.63a1.7 1.7 0 001.03-1.56V3h4v.08A1.7 1.7 0 0015 4.64a1.7 1.7 0 001.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0019.37 9a1.7 1.7 0 001.56 1.03H21v4h-.08A1.7 1.7 0 0019.4 15z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+      </aside>
       {screen === "main" && showRuntimeSetup ? (
         <section
           className={cn(
-            "runtime-config-main col-start-1 row-start-2 min-h-0 h-full overflow-auto bg-[var(--gradient-rail)] max-[1100px]:col-end-2",
-            deployEligible ? "col-end-4" : "col-end-3"
+            "runtime-config-main col-start-2 row-start-2 min-h-0 h-full overflow-auto bg-[var(--gradient-rail)] max-[1100px]:col-end-3",
+            deployEligible ? "col-end-5" : "col-end-4"
           )}
           aria-live="polite"
         >
@@ -2325,8 +2473,8 @@ export function App() {
       ) : screen === "main" ? (
         <section
           className={cn(
-            "left-rail left-rail--chat col-start-1 row-start-2 relative min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
-            "max-[1100px]:col-start-1 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]"
+            "left-rail left-rail--chat col-start-2 row-start-2 relative min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
+            "max-[1100px]:col-start-2 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]"
           )}
         >
           <section
@@ -2601,9 +2749,9 @@ export function App() {
       ) : (
         <section
           className={cn(
-            "left-rail col-start-1 row-start-2 grid min-h-0 h-full overflow-visible border-r border-edge bg-[var(--gradient-rail)] pt-[14px] pb-[18px] px-[18px]",
+            "left-rail col-start-2 row-start-2 grid min-h-0 h-full overflow-visible border-r border-edge bg-[var(--gradient-rail)] pt-[14px] pb-[18px] px-[18px]",
             "grid-rows-[auto_minmax(0,1fr)] gap-4",
-            "max-[1100px]:col-start-1 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]",
+            "max-[1100px]:col-start-2 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]",
             "max-[760px]:gap-2.5 max-[760px]:p-3"
           )}
         >
@@ -2670,14 +2818,23 @@ export function App() {
                 </select>
               </label>
               {providerSettings.activeProvider === "dartsnut-llm" ? (
-                <div className="rounded-[var(--radius-md)] border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
-                  <p className="m-0 font-medium">This service is free for a limited time only.</p>
-                  <p className="m-0 mt-1 text-fg-muted">
-                    Please use Dartsnut LLM only for creating and updating Dartsnut games,
-                    widgets, and related project assets. Avoid sending unrelated, sensitive,
-                    or personal content.
-                  </p>
-                </div>
+                <>
+                  <DartsnutLlmUsageCard
+                    quota={llmQuota}
+                    loading={llmQuotaLoading}
+                    error={llmQuotaError}
+                    loggedIn={communitySession.loggedIn}
+                    onRefresh={() => void refreshLlmQuota()}
+                  />
+                  <div className="rounded-[var(--radius-md)] border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
+                    <p className="m-0 font-medium">This service is free for a limited time only.</p>
+                    <p className="m-0 mt-1 text-fg-muted">
+                      Please use Dartsnut LLM only for creating and updating Dartsnut games,
+                      widgets, and related project assets. Avoid sending unrelated, sensitive,
+                      or personal content.
+                    </p>
+                  </div>
+                </>
               ) : null}
               {providerSettings.activeProvider === "custom" ? (
                 <>
@@ -2747,7 +2904,7 @@ export function App() {
       )}
       <aside
         className={cn(
-          "right-pane col-start-2 row-start-2 flex min-h-0 h-full min-w-[360px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+          "right-pane col-start-3 row-start-2 flex min-h-0 h-full min-w-[360px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
           showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
         )}
       >
@@ -2818,7 +2975,7 @@ export function App() {
       {deployEligible ? (
         <aside
           className={cn(
-            "right-pane col-start-3 row-start-2 flex min-h-0 h-full min-w-[360px] flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+            "right-pane col-start-4 row-start-2 flex min-h-0 h-full min-w-[360px] flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
             showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
           )}
         >

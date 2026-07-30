@@ -159,6 +159,20 @@ export type CommunityApiError = {
   serverMessage?: string;
 };
 
+export type LlmQuotaStatus = {
+  accountId: number;
+  usageDate: string;
+  inputTokens: number;
+  outputTokens: number;
+  usedTokens: number;
+  customLimitTokens: number | null;
+  limitTokens: number;
+  defaultLimitTokens: number;
+  remainingTokens: number;
+  quotaExceeded: boolean;
+  accountingHealth: string;
+};
+
 export function readCommunityConfig(env: NodeJS.ProcessEnv = process.env): CommunityConfig {
   const baseApi = String(env.DARTSNUT_BASE_API || DEFAULT_BASE_API).trim().replace(/\/$/, "");
   const supabaseUrl = String(env.DARTSNUT_SUPABASE_URL || DEFAULT_SUPABASE_URL).trim().replace(/\/$/, "");
@@ -229,6 +243,29 @@ export function mapApiErrorCode(code: number): CommunityAuthErrorCode {
 export function apiServerMessage(parsed: ApiEnvelope): string | undefined {
   const value = parsed.desc || parsed.msg;
   return value ? String(value) : undefined;
+}
+
+function nonNegativeNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+export function normalizeLlmQuotaStatus(raw: unknown): LlmQuotaStatus {
+  const row = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const customLimit = row.custom_limit_tokens;
+  return {
+    accountId: nonNegativeNumber(row.account_id),
+    usageDate: String(row.usage_date || ""),
+    inputTokens: nonNegativeNumber(row.input_tokens),
+    outputTokens: nonNegativeNumber(row.output_tokens),
+    usedTokens: nonNegativeNumber(row.used_tokens),
+    customLimitTokens: customLimit === null || customLimit === undefined ? null : nonNegativeNumber(customLimit),
+    limitTokens: nonNegativeNumber(row.limit_tokens),
+    defaultLimitTokens: nonNegativeNumber(row.default_limit_tokens),
+    remainingTokens: nonNegativeNumber(row.remaining_tokens),
+    quotaExceeded: row.quota_exceeded === true,
+    accountingHealth: String(row.accounting_health || "healthy")
+  };
 }
 
 export function buildInFilter(deviceIds: string[]): string {
@@ -628,6 +665,39 @@ export class CommunityClient {
           endpoint: this.config.baseApi
         })
       };
+    }
+  }
+
+  async getLlmQuota(
+    token: string
+  ): Promise<{ ok: true; quota: LlmQuotaStatus } | CommunityApiError> {
+    if (!this.config.baseApi) {
+      return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
+    }
+    if (!token.trim()) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    try {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/agent/llm/quota`, {
+        method: "GET",
+        headers: { token: token.trim(), Accept: "application/json" }
+      });
+      const raw = await res.json().catch(() => null);
+      const parsed = normalizeApiJson(raw) || {};
+      const code = Number(parsed.code);
+      if (res.status === 403 || !isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
+        return {
+          ok: false,
+          code: res.status === 403 ? "session_expired" : mapApiErrorCode(code),
+          message: serverMessage || "Failed to load today’s Dartsnut LLM usage.",
+          serverMessage
+        };
+      }
+      return { ok: true, quota: normalizeLlmQuotaStatus(parsed.data) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, code: "network_error", message };
     }
   }
 

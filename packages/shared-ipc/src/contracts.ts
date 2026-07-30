@@ -62,6 +62,7 @@ export const IPCChannels = {
   communitySetPassword: "community:set-password",
   communityCancelGoogleLogin: "community:cancel-google-login",
   communityLogout: "community:logout",
+  communityGetLlmQuota: "community:get-llm-quota",
   communityListDeployDevices: "community:list-deploy-devices",
   communityListMyGames: "community:list-my-games",
   communityGetPublishOptions: "community:get-publish-options",
@@ -623,6 +624,24 @@ export type CommunitySetPasswordResponse =
 export type CommunityCancelGoogleLoginResponse = { ok: true };
 
 export type CommunityLogoutResponse = { ok: true };
+
+export type CommunityLlmQuotaStatus = {
+  accountId: number;
+  usageDate: string;
+  inputTokens: number;
+  outputTokens: number;
+  usedTokens: number;
+  customLimitTokens: number | null;
+  limitTokens: number;
+  defaultLimitTokens: number;
+  remainingTokens: number;
+  quotaExceeded: boolean;
+  accountingHealth: string;
+};
+
+export type CommunityGetLlmQuotaResponse =
+  | { ok: true; quota: CommunityLlmQuotaStatus }
+  | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
 export type CommunityDeployDevice = {
   deviceId: string;

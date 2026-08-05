@@ -20,7 +20,7 @@ setTracingDisabled(true);
 setTraceProcessors([]);
 
 /**
- * Process-wide OpenAI Agents SDK bootstrap for Chat Completions on OpenAI-compatible gateways.
+ * Process-wide OpenAI Agents SDK bootstrap for Responses-compatible gateways.
  *
  * Rebinds both the default OpenAI client and the default model provider when base URL or API
  * key changes. The SDK's global OpenAIProvider caches its first client; updating the client
@@ -45,10 +45,12 @@ export function configureAgentsSdk(config: AgentModelConfig, options?: { force?:
   });
   const provider = new OpenAIProvider({
     openAIClient: client,
+    useResponses: true,
+    useResponsesWebSocket: false,
     cacheResponsesWebSocketModels: false
   });
   setDefaultOpenAIClient(client);
-  setOpenAIAPI("chat_completions");
+  setOpenAIAPI("responses");
   setDefaultModelProvider(provider);
   configuredKey = cacheKey;
   lastConfiguredClient = client;

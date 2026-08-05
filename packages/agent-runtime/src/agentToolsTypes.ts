@@ -1,4 +1,4 @@
-import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
+import type { FunctionTool } from "openai/resources/responses/responses";
 import type { ChatMediaAttachment } from "@dartsnut/shared-ipc";
 import type { WorkspacePolicy } from "./workspacePolicy";
 import type { AgentSkillLibrary } from "./sessionEngine";
@@ -28,7 +28,7 @@ export type AgentToolsOptions = {
     chatAttachments?: ChatMediaAttachment[];
   };
   profile?: AgentToolProfile;
-  completionTools?: ChatCompletionTool[];
+  toolSchemas?: FunctionTool[];
   /** Live run-context accessor — gates file mutations until intake is recorded. */
   getRunContext?: () => DartsnutRunContext;
   hostIntakeToolHandler?: HostIntakeToolHandler;

@@ -1,10 +1,10 @@
 import type { AgentEvent, AgentTokenUsage } from "@dartsnut/shared-ipc";
 import type { StreamedRunResult } from "@openai/agents";
 import {
-  isOpenAIChatCompletionsRawModelStreamEvent,
+  isOpenAIResponsesRawModelStreamEvent,
   type RunStreamEvent
 } from "@openai/agents";
-import type { ChatCompletionChunk } from "openai/resources/chat/completions";
+import type { ResponseStreamEvent } from "openai/resources/responses/responses";
 import { isFileMutationToolName } from "./creatorTurnGuard";
 import {
   computeReplaceDiff,
@@ -16,7 +16,6 @@ import {
   toRelPath,
   type ToolStatusContext
 } from "./toolStatusHelpers";
-import { mergeToolCallDeltas, type StreamingToolCallAccumulator } from "./toolCallDeltaMerge";
 import { addTokenUsage, normalizeTokenUsage } from "./tokenUsage";
 
 export type AgentsStreamBridgeHooks = {
@@ -39,25 +38,11 @@ export type AgentsStreamBridgeResult = {
   tokenUsage?: AgentTokenUsage;
 };
 
-function readReasoningDelta(delta: unknown): string {
-  if (!delta || typeof delta !== "object") {
-    return "";
-  }
-  const d = delta as Record<string, unknown>;
-  const rc = d.reasoning_content;
-  if (typeof rc === "string" && rc.length > 0) {
-    return rc;
-  }
-  const r = d.reasoning;
-  if (typeof r === "string" && r.length > 0) {
-    return r;
-  }
-  return "";
-}
-
-function resolveStreamingToolCallId(acc: StreamingToolCallAccumulator, index: number): string {
-  return acc.id.length > 0 ? acc.id : `call_${index}`;
-}
+type ResponsesFunctionCallState = {
+  callId: string;
+  name: string;
+  argumentsJson: string;
+};
 
 const WRITE_FILE_PREVIEW_MIN_LINES = 24;
 const WRITE_FILE_PREVIEW_MAX_INTERMEDIATE_EVENTS = 5;
@@ -151,15 +136,15 @@ async function emitFileToolCallDelta(
   }
 }
 
-async function handleChatCompletionsChunk(
-  chunk: ChatCompletionChunk,
+async function handleResponsesEvent(
+  event: ResponseStreamEvent,
   state: {
     reasoningId: string;
     sawReasoning: boolean;
     stepReasoning: string;
     stepText: string;
-    toolCallAccumulators: Map<number, StreamingToolCallAccumulator>;
-    activeModelResponseId: string;
+    functionCalls: Map<string, ResponsesFunctionCallState>;
+    accountedResponseIds: Set<string>;
     streamedFileToolCallIds: Set<string>;
     filePreviewLineCounts: Map<string, number>;
     filePreviewPacingMs: number;
@@ -168,29 +153,16 @@ async function handleChatCompletionsChunk(
   },
   emit: (event: AgentEvent) => void
 ): Promise<void> {
-  const chunkUsage = normalizeTokenUsage((chunk as { usage?: unknown }).usage);
-  if (chunkUsage) {
-    state.tokenUsage = state.tokenUsage ? addTokenUsage(state.tokenUsage, chunkUsage) : chunkUsage;
-    state.onTokenUsage?.(state.tokenUsage);
-  }
-  const delta = chunk.choices?.[0]?.delta;
-  if (!delta) {
+  if (event.type === "response.output_text.delta") {
+    if (event.delta) {
+      state.stepText += event.delta;
+      emit({ type: "stream", at: Date.now(), delta: event.delta });
+    }
     return;
   }
-  const chunkId = typeof chunk.id === "string" && chunk.id.length > 0 ? chunk.id : "";
-  if (chunkId && state.activeModelResponseId && state.activeModelResponseId !== chunkId) {
-    state.toolCallAccumulators.clear();
-  }
-  if (chunkId) {
-    state.activeModelResponseId = chunkId;
-  }
-  const contentDelta = delta.content ?? "";
-  if (contentDelta) {
-    state.stepText += contentDelta;
-    emit({ type: "stream", at: Date.now(), delta: contentDelta });
-  }
-  const reasoningDelta = readReasoningDelta(delta);
-  if (reasoningDelta) {
+
+  if (event.type === "response.reasoning_text.delta" || event.type === "response.reasoning_summary_text.delta") {
+    const reasoningDelta = event.delta;
     state.sawReasoning = true;
     state.stepReasoning += reasoningDelta;
     emit({
@@ -199,20 +171,65 @@ async function handleChatCompletionsChunk(
       reasoningId: state.reasoningId,
       delta: reasoningDelta
     });
-  }
-  if (!Array.isArray(delta.tool_calls)) {
     return;
   }
-  const changedIndices = mergeToolCallDeltas(state.toolCallAccumulators, delta.tool_calls);
-  for (const index of changedIndices) {
-    const acc = state.toolCallAccumulators.get(index);
-    if (!acc) {
-      continue;
+
+  if (event.type === "response.output_item.added" && event.item.type === "function_call") {
+    state.functionCalls.set(event.item.id ?? event.item.call_id, {
+      callId: event.item.call_id,
+      name: event.item.name,
+      argumentsJson: event.item.arguments ?? ""
+    });
+    return;
+  }
+
+  if (event.type === "response.function_call_arguments.delta") {
+    const call = state.functionCalls.get(event.item_id);
+    if (!call) {
+      return;
     }
-    if (!isFileMutationToolName(acc.name)) {
-      continue;
+    call.argumentsJson += event.delta;
+    if (isFileMutationToolName(call.name)) {
+      await emitFileToolCallDelta(call.callId, call.name, call.argumentsJson, emit, state);
     }
-    await emitFileToolCallDelta(resolveStreamingToolCallId(acc, index), acc.name, acc.argumentsJson, emit, state);
+    return;
+  }
+
+  if (event.type === "response.function_call_arguments.done") {
+    const call = state.functionCalls.get(event.item_id);
+    if (!call) {
+      return;
+    }
+    call.name = event.name || call.name;
+    call.argumentsJson = event.arguments;
+    if (isFileMutationToolName(call.name)) {
+      await emitFileToolCallDelta(call.callId, call.name, call.argumentsJson, emit, state);
+    }
+    return;
+  }
+
+  if (event.type === "response.completed" || event.type === "response.failed" || event.type === "response.incomplete") {
+    accountResponseUsage(state, event.response.id, event.response.usage);
+  }
+}
+
+function accountResponseUsage(
+  state: {
+    accountedResponseIds: Set<string>;
+    tokenUsage: AgentTokenUsage | null;
+    onTokenUsage?: (runUsage: AgentTokenUsage) => void;
+  },
+  responseId: string,
+  rawUsage: unknown
+): void {
+  if (state.accountedResponseIds.has(responseId)) {
+    return;
+  }
+  state.accountedResponseIds.add(responseId);
+  const usage = normalizeTokenUsage(rawUsage);
+  if (usage) {
+    state.tokenUsage = state.tokenUsage ? addTokenUsage(state.tokenUsage, usage) : usage;
+    state.onTokenUsage?.(state.tokenUsage);
   }
 }
 
@@ -277,8 +294,8 @@ export async function mapAgentsStreamToAgentEvents(
     sawReasoning: false,
     stepReasoning: "",
     stepText: "",
-    toolCallAccumulators: new Map<number, StreamingToolCallAccumulator>(),
-    activeModelResponseId: "",
+    functionCalls: new Map<string, ResponsesFunctionCallState>(),
+    accountedResponseIds: new Set<string>(),
     streamedFileToolCallIds: new Set<string>(),
     filePreviewLineCounts: new Map<string, number>(),
     filePreviewPacingMs: hooks.filePreviewPacingMs ?? DEFAULT_FILE_PREVIEW_PACING_MS,
@@ -293,8 +310,12 @@ export async function mapAgentsStreamToAgentEvents(
   let lastToolContext: ToolStatusContext | undefined;
 
   for await (const event of stream as AsyncIterable<RunStreamEvent>) {
-    if (event.type === "raw_model_stream_event" && isOpenAIChatCompletionsRawModelStreamEvent(event)) {
-      await handleChatCompletionsChunk(event.data.event, state, emit);
+    if (event.type === "raw_model_stream_event" && isOpenAIResponsesRawModelStreamEvent(event)) {
+      await handleResponsesEvent(event.data.event, state, emit);
+      continue;
+    }
+    if (event.type === "raw_model_stream_event" && event.data.type === "response_done") {
+      accountResponseUsage(state, event.data.response.id, event.data.response.usage);
       continue;
     }
     if (event.type === "agent_updated_stream_event") {

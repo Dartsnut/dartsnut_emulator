@@ -115,7 +115,7 @@ import {
   precheckAskQuestion,
   isIntakeStateReady,
   type IntakeToolState,
-  type ChatMessage,
+  type AgentInputItem,
   type AgentModelConfig,
   type ProviderConfig
 } from "@dartsnut/agent-runtime";
@@ -2572,7 +2572,7 @@ async function buildSession(
   templateMode: PromptRequest["templateMode"] | undefined,
   extras?: {
     workspacePath?: string;
-    completionTools?: typeof AGENT_TOOL_SCHEMAS;
+    toolSchemas?: typeof AGENT_TOOL_SCHEMAS;
     chatMediaAttachments?: PromptRequest["chatMediaAttachments"];
     hostIntakeToolHandler?: (args: Record<string, unknown>) => Promise<string>;
     hostAskQuestionHandler?: (args: Record<string, unknown>) => Promise<string>;
@@ -2580,7 +2580,7 @@ async function buildSession(
     skipInitialWorkspaceResolve?: boolean;
     skillBundleMode?: PromptRequest["templateMode"] | "creation-intake" | null;
     sessionPersistence?: AgentSessionPersistence;
-    initialConversation?: ChatMessage[];
+    initialItems?: AgentInputItem[];
     preferredUserLocale?: UserLocale | null;
     latestUserTextForLocale?: string;
     intakeState?: IntakeToolState;
@@ -2614,7 +2614,7 @@ async function buildSession(
       widgetFonts: path.join(repoRoot, "assets", "fonts", "widgets"),
       chatAttachments: extras?.chatMediaAttachments
     },
-    completionTools: extras?.completionTools,
+    toolSchemas: extras?.toolSchemas,
     hostIntakeToolHandler: extras?.hostIntakeToolHandler,
     hostAskQuestionHandler: extras?.hostAskQuestionHandler,
     hostIntakeReadyToFinish: extras?.hostIntakeReadyToFinish,
@@ -2627,7 +2627,7 @@ async function buildSession(
     hostRunEmulatorScenarioHandler: (args) => executeHostRunEmulatorScenarioForAgent(args),
     skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve,
     sessionPersistence: extras?.sessionPersistence,
-    initialConversation: extras?.initialConversation,
+    initialItems: extras?.initialItems,
     sessionTemplateMode: templateMode ?? null,
     sessionSection: skillBundleMode === null ? null : String(skillBundleMode),
     runContextSeed: {
@@ -3010,6 +3010,7 @@ ipcMain.handle(IPCChannels.getWorkspaceSessionSummary, (): AgentSessionWorkspace
     };
   }
   const persistence = new AgentSessionPersistence(ws);
+  persistence.readConversationItems();
   const manifest = persistence.readManifest();
   return {
     hasPersistedSession: persistence.hasPersistedSession(),
@@ -4116,8 +4117,8 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     if (intent === "fresh" && persistence) {
       persistence.archiveOrResetSession("renderer-fresh");
     }
-    const initialConversation =
-      persistence && intent !== "fresh" ? persistence.readConversation() : [];
+    const initialItems =
+      persistence && intent !== "fresh" ? persistence.readConversationItems() : [];
     const hintedRouting =
       effectiveWorkspacePath && fs.existsSync(effectiveWorkspacePath)
         ? readWorkspaceCreatorHints(effectiveWorkspacePath)
@@ -4137,13 +4138,13 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     const routedWidgetSize = request.widgetSize ?? hintedRouting?.widgetSize;
     const preferredUserLocale = resolvePreferredUserLocaleForSession(request.prompt, persistence);
     const session = await buildSession(request.templateMode, {
-      completionTools: AGENT_TOOL_SCHEMAS,
+      toolSchemas: AGENT_TOOL_SCHEMAS,
       chatMediaAttachments: request.chatMediaAttachments,
       hostIntakeToolHandler: sharedIntakeHandler,
       hostAskQuestionHandler: (args) => askQuestionHostExecute(args, hostState, preferredUserLocale),
       hostIntakeReadyToFinish: () => isIntakeStateReady(hostState),
       sessionPersistence: persistence,
-      initialConversation,
+      initialItems,
       preferredUserLocale,
       latestUserTextForLocale: request.prompt,
       intakeState: hostState,

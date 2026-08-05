@@ -2,16 +2,6 @@ import { describe, expect, it } from "vitest";
 import { normalizeTokenUsage } from "../src/tokenUsage";
 
 describe("normalizeTokenUsage", () => {
-  it("normalizes OpenAI chat completion usage fields", () => {
-    expect(
-      normalizeTokenUsage({
-        prompt_tokens: 12,
-        completion_tokens: 8,
-        total_tokens: 20
-      })
-    ).toEqual({ inputTokens: 12, outputTokens: 8, totalTokens: 20 });
-  });
-
   it("normalizes OpenAI response usage fields", () => {
     expect(
       normalizeTokenUsage({
@@ -34,6 +24,7 @@ describe("normalizeTokenUsage", () => {
   it("ignores malformed and all-zero usage objects", () => {
     expect(normalizeTokenUsage({ input_tokens: -1, output_tokens: 2 })).toBeNull();
     expect(normalizeTokenUsage({ input_tokens: "5", output_tokens: 2 })).toBeNull();
+    expect(normalizeTokenUsage({ prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 })).toBeNull();
     expect(normalizeTokenUsage({ input_tokens: 0, output_tokens: 0, total_tokens: 0 })).toBeNull();
     expect(normalizeTokenUsage(null)).toBeNull();
   });

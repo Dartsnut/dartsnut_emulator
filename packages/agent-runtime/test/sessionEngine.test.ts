@@ -5,14 +5,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
 import type { RunStreamEvent } from "@openai/agents";
-import type { ChatCompletionChunk } from "openai/resources/chat/completions";
+import type { ResponseStreamEvent } from "openai/resources/responses/responses";
 import { SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
 import { buildAgentModelConfig } from "../src/agentProviderConfig";
 import { resetAgentsBootstrapForTests } from "../src/agentsBootstrap";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
 import type { StreamedRunResult } from "@openai/agents";
-import { EMPTY_MODEL_RESPONSE_MESSAGE } from "../src/reasoningContentFilter";
+import { EMPTY_MODEL_RESPONSE_MESSAGE } from "../src/modelInputGuard";
 
 function createMockStream(params: {
   events?: RunStreamEvent[];
@@ -32,16 +32,24 @@ function createMockStream(params: {
   return stream as StreamedRunResult<any, any>;
 }
 
-function chatChunk(partial: Partial<ChatCompletionChunk>): RunStreamEvent {
+function responseEvent(event: Record<string, unknown>): RunStreamEvent {
   return {
     type: "raw_model_stream_event",
-    source: "openai-chat-completions",
+    source: "openai-responses",
     data: {
       type: "model",
-      event: partial as ChatCompletionChunk,
-      providerData: { rawModelEventSource: "openai-chat-completions" }
+      event: event as ResponseStreamEvent,
+      providerData: { rawModelEventSource: "openai-responses" }
     }
   } as RunStreamEvent;
+}
+
+function textDelta(delta: string): RunStreamEvent {
+  return responseEvent({ type: "response.output_text.delta", delta, item_id: "message_1", output_index: 0, content_index: 0, logprobs: [], sequence_number: 1 });
+}
+
+function terminalUsage(id: string, usage: Record<string, number>): RunStreamEvent {
+  return responseEvent({ type: "response.completed", response: { id, usage }, sequence_number: 2 });
 }
 
 function toolCalled(name: string, callId: string, args: Record<string, unknown>): RunStreamEvent {
@@ -90,22 +98,8 @@ describe("SessionEngine (@openai/agents)", () => {
         return createMockStream({
           finalOutput: "Writing file now.",
           events: [
-            chatChunk({
-              choices: [
-                {
-                  index: 0,
-                  delta: {
-                    tool_calls: [
-                      {
-                        index: 0,
-                        id: "call_1",
-                        function: { name: "write_file", arguments: "{\"path\":\"hello.txt\",\"content\":\"hello" }
-                      }
-                    ]
-                  }
-                }
-              ]
-            }),
+            responseEvent({ type: "response.output_item.added", output_index: 0, sequence_number: 1, item: { id: "item_1", type: "function_call", call_id: "call_1", name: "write_file", arguments: "", status: "in_progress" } }),
+            responseEvent({ type: "response.function_call_arguments.delta", item_id: "item_1", output_index: 0, sequence_number: 2, delta: "{\"path\":\"hello.txt\",\"content\":\"hello" }),
             toolCalled("write_file", "call_1", { path: "hello.txt", content: "hello from test" }),
             toolOutput("write_file", "call_1")
           ]
@@ -113,7 +107,7 @@ describe("SessionEngine (@openai/agents)", () => {
       }
       return createMockStream({
         finalOutput: "Done after tool loop.",
-        events: [chatChunk({ choices: [{ index: 0, delta: { content: "Done after tool loop." } }] })]
+        events: [textDelta("Done after tool loop.")]
       });
     };
 
@@ -172,7 +166,7 @@ describe("SessionEngine (@openai/agents)", () => {
             replace: "new"
           }),
           toolOutput("replace_in_file", "call_2"),
-          chatChunk({ choices: [{ index: 0, delta: { content: "Aligned labels." } }] })
+          textDelta("Aligned labels.")
         ]
       });
     };
@@ -206,14 +200,8 @@ describe("SessionEngine (@openai/agents)", () => {
       createMockStream({
         finalOutput: "Done.",
         events: [
-          chatChunk({
-            choices: [{ index: 0, delta: { content: "Done." } }],
-            usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 }
-          }),
-          chatChunk({
-            choices: [],
-            usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 }
-          })
+          textDelta("Done."),
+          terminalUsage("resp_1", { input_tokens: 7, output_tokens: 4, total_tokens: 11 })
         ]
       });
 
@@ -238,18 +226,8 @@ describe("SessionEngine (@openai/agents)", () => {
       totalTokens: 25,
       lastRun: { inputTokens: 7, outputTokens: 4, totalTokens: 11 }
     });
-    expect(usageEvents).toHaveLength(2);
+    expect(usageEvents).toHaveLength(1);
     expect(usageEvents[0]).toMatchObject({
-      type: "token_usage",
-      runUsage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
-      sessionUsage: {
-        inputTokens: 15,
-        outputTokens: 7,
-        totalTokens: 22,
-        lastRun: { inputTokens: 5, outputTokens: 3, totalTokens: 8 }
-      }
-    });
-    expect(usageEvents[1]).toMatchObject({
       type: "token_usage",
       runUsage: { inputTokens: 7, outputTokens: 4, totalTokens: 11 },
       sessionUsage: {

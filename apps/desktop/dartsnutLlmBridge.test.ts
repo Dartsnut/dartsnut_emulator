@@ -49,7 +49,7 @@ test("starts run and injects account token plus run id into model requests", asy
   assert.equal(JSON.stringify(result.run.modelConfig).includes("must-not-reach-desktop"), false);
   assert.equal(JSON.stringify(result.run.modelConfig).includes("community-secret"), false);
 
-  await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/chat/completions", {
+  await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/responses", {
     method: "POST",
     headers: { Authorization: "Bearer placeholder", "Content-Type": "application/json" },
     body: "{}"
@@ -113,7 +113,7 @@ test("captures bridge rejection from a model request", async () => {
   assert.equal(result.ok, true);
   if (!result.ok) return;
 
-  await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/chat/completions", {});
+  await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/responses", {});
   assert.deepEqual(result.run.readFailure(), { reason: "run_expired", message: "Run expired." });
 });
 
@@ -142,7 +142,7 @@ test("turns a DNS fetch failure into an actionable bridge message", async () => 
   if (!result.ok) return;
 
   await assert.rejects(
-    result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/chat/completions", {}),
+    result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/responses", {}),
     /fetch failed/
   );
   assert.deepEqual(result.run.readFailure(), {

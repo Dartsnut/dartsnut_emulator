@@ -1,12 +1,14 @@
 import "./agentsBootstrap";
 
+export type { AgentInputItem } from "@openai/agents";
+
+export * from "./agentErrors";
 export * from "./agentSessionPersistence";
 export * from "./agentsBootstrap";
 export * from "./agentsEventBridge";
 export * from "./agentTools";
-export * from "./conversationProtocol";
 export * from "./dartsnutAgentsSession";
-export * from "./reasoningContentFilter";
+export * from "./modelInputGuard";
 export * from "./toolStatusHelpers";
 export * from "./tokenUsage";
 export * from "./agentProviderConfig";
@@ -17,7 +19,6 @@ export * from "./agents/buildDartsnutAgents";
 export * from "./modificationWorkflow";
 export * from "./projectArtifacts";
 export * from "./providerConfig";
-export * from "./providerClient";
 export * from "./sessionEngine";
 export * from "./skillBundle";
 export * from "./toolSchemas";

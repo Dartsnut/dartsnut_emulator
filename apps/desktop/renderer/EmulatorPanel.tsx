@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type Dispatch, type MouseEvent, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import type { WidgetConfigSnapshot, WidgetFieldValues } from "@dartsnut/shared-ipc";
 import {
   createHiddenVenvPrepDisplay,
   nextVenvPrepDisplay,
@@ -12,7 +13,7 @@ import {
   type VenvPrepDisplay,
 } from "@dartsnut/emulator-protocol";
 import { cn } from "./cn";
-import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
+import { applyWidgetParamsAndReload, type WidgetValueStore } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
 type DartCoord = { x: number; y: number } | null;
@@ -65,17 +66,15 @@ function isEmulatorStoppedWithError(state: EmulatorStateSnapshot): boolean {
 }
 
 export type EmulatorPanelProps = {
-  widgetParamsText: string;
-  setWidgetParamsText: Dispatch<SetStateAction<string>>;
-  widgetParamsError: string | null;
-  setWidgetParamsError: Dispatch<SetStateAction<string | null>>;
+  widgetConfig: WidgetConfigSnapshot;
+  widgetValuesByConfig: WidgetValueStore;
+  onWidgetValuesChange: (configKey: string, values: WidgetFieldValues) => void;
 };
 
 export function EmulatorPanel({
-  widgetParamsText,
-  setWidgetParamsText,
-  widgetParamsError,
-  setWidgetParamsError,
+  widgetConfig,
+  widgetValuesByConfig,
+  onWidgetValuesChange,
 }: EmulatorPanelProps) {
   const CANVAS_BASE_WIDTH = 588;
   const CANVAS_BASE_HEIGHT = 800;
@@ -117,7 +116,7 @@ export function EmulatorPanel({
   const stateRef = useRef<EmulatorStateSnapshot>(defaultState);
   const normalizedWidgetType = state.widgetType?.toLowerCase() ?? null;
   const hasResolvedWorkspaceType = Boolean(state.widgetPath && normalizedWidgetType);
-  const showParamsPanel = hasResolvedWorkspaceType && normalizedWidgetType === "widget";
+  const showParamsPanel = normalizedWidgetType === "widget" || widgetConfig.status === "ready";
   const showDartLegend = hasResolvedWorkspaceType && normalizedWidgetType === "game";
   const projectKindLabel =
     normalizedWidgetType === "widget" ? "Widget" : normalizedWidgetType === "game" ? "Game" : "Unknown";
@@ -560,15 +559,10 @@ export function EmulatorPanel({
     setDartCoords(Array.from({ length: 12 }, () => null));
   }
 
-  function formatParamsJsonInEditor() {
-    formatWidgetParamsJson(widgetParamsText, setWidgetParamsText, setWidgetParamsError);
-  }
-
   async function applyParamsAndReload() {
     await applyWidgetParamsAndReload({
-      widgetParamsText,
-      setWidgetParamsText,
-      setWidgetParamsError,
+      config: widgetConfig,
+      store: widgetValuesByConfig,
       onAfterApply: () => {
         setEmulatorLogs([]);
         setDartCoords(Array.from({ length: 12 }, () => null));
@@ -851,11 +845,9 @@ export function EmulatorPanel({
           <div className="mx-3.5 mb-3.5 mt-0">
             <WidgetParamsEditor
               bridgeReady={bridgeReady}
-              widgetParamsText={widgetParamsText}
-              setWidgetParamsText={setWidgetParamsText}
-              widgetParamsError={widgetParamsError}
-              setWidgetParamsError={setWidgetParamsError}
-              onFormat={formatParamsJsonInEditor}
+              config={widgetConfig}
+              store={widgetValuesByConfig}
+              onValuesChange={onWidgetValuesChange}
               onApplyReload={applyParamsAndReload}
             />
           </div>

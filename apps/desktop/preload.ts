@@ -58,7 +58,9 @@ import {
   type CommunityWithdrawAppVersionResponse,
   type WindowChromeInsets,
   type ShellUiTheme,
-  type AgentSessionWorkspaceSummary
+  type AgentSessionWorkspaceSummary,
+  type WidgetConfigScope,
+  type WidgetConfigSnapshot
 } from "@dartsnut/shared-ipc";
 import {
   EMULATOR_IPC_CHANNELS,
@@ -175,6 +177,13 @@ const api = {
     const handler = () => listener();
     ipcRenderer.on(EMULATOR_IPC_CHANNELS.emulatorLogsClear, handler);
     return () => ipcRenderer.removeListener(EMULATOR_IPC_CHANNELS.emulatorLogsClear, handler);
+  },
+  getWidgetConfig: (scope: WidgetConfigScope) =>
+    ipcRenderer.invoke(IPCChannels.widgetConfigGet, scope) as Promise<WidgetConfigSnapshot>,
+  onWidgetConfig: (listener: (snapshot: WidgetConfigSnapshot) => void) => {
+    const handler = (_: unknown, snapshot: WidgetConfigSnapshot) => listener(snapshot);
+    ipcRenderer.on(IPCChannels.widgetConfigChanged, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.widgetConfigChanged, handler);
   },
   deployGetEligibility: () =>
     ipcRenderer.invoke(IPCChannels.deployGetEligibility) as Promise<DeployEligibility>,

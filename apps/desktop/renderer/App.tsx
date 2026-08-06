@@ -38,9 +38,15 @@ import {
   type CommunitySubmitProgress,
   type UserLocale,
   type ChatMediaAttachment,
+  type WidgetConfigScope,
+  type WidgetConfigSnapshot,
+  type WidgetFieldDefinition,
+  type WidgetFieldValues,
+  createDefaultWidgetFieldValues,
   getIntakeCopy,
   inferChatMediaAttachmentKind,
-  mergeChatMediaAttachments
+  mergeChatMediaAttachments,
+  reconcileWidgetFieldValues
 } from "@dartsnut/shared-ipc";
 import {
   getAnalyticsCollectionEnabled,
@@ -105,6 +111,25 @@ function machineOptionLabel(machine: MachineMcpQuestionMachine): string {
 type RightPaneTab = "emulator" | "assets";
 type DeployPaneTab = "deploy" | "games";
 type CommunityAuthIntent = "deploy-devices" | "my-games" | "llm-use";
+
+const EMPTY_WIDGET_CONFIGS: Record<WidgetConfigScope, WidgetConfigSnapshot> = {
+  workspace: {
+    scope: "workspace",
+    status: "unavailable",
+    configKey: null,
+    confPath: null,
+    message: "No workspace is selected."
+  },
+  emulator: {
+    scope: "emulator",
+    status: "unavailable",
+    configKey: null,
+    confPath: null,
+    message: "No widget is selected in the emulator."
+  }
+};
+
+type WidgetValueState = { fields: WidgetFieldDefinition[]; values: WidgetFieldValues };
 
 type AppScreen = "main" | "settings";
 type SubmissionLockState = {
@@ -763,8 +788,8 @@ export function App() {
     reason: "no_workspace"
   });
   const deployEligible = deployEligibility.ok;
-  const [widgetParamsText, setWidgetParamsText] = useState("{}");
-  const [widgetParamsError, setWidgetParamsError] = useState<string | null>(null);
+  const [widgetConfigs, setWidgetConfigs] = useState<Record<WidgetConfigScope, WidgetConfigSnapshot>>(EMPTY_WIDGET_CONFIGS);
+  const [widgetValuesByConfig, setWidgetValuesByConfig] = useState<Record<string, WidgetValueState>>({});
   const [theme, setTheme] = useState<ThemeId>(() => resolveThemeFromEnvironment());
   const [communitySession, setCommunitySession] = useState<CommunitySessionInfo>({
     loggedIn: false,
@@ -1674,6 +1699,51 @@ export function App() {
       unsubscribe();
     };
   }, [api, bootstrap?.workspaceRoot]);
+
+  const acceptWidgetConfig = useCallback((snapshot: WidgetConfigSnapshot) => {
+    setWidgetConfigs((previous) => ({ ...previous, [snapshot.scope]: snapshot }));
+    if (snapshot.status !== "ready") {
+      return;
+    }
+    setWidgetValuesByConfig((previous) => {
+      const current = previous[snapshot.configKey];
+      return {
+        ...previous,
+        [snapshot.configKey]: {
+          fields: snapshot.fields,
+          values: current
+            ? reconcileWidgetFieldValues(current.fields, current.values, snapshot.fields)
+            : createDefaultWidgetFieldValues(snapshot.fields)
+        }
+      };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!api?.getWidgetConfig || !api.onWidgetConfig) {
+      return;
+    }
+    let cancelled = false;
+    for (const scope of ["workspace", "emulator"] as const) {
+      void api.getWidgetConfig(scope).then((snapshot) => {
+        if (!cancelled) acceptWidgetConfig(snapshot);
+      });
+    }
+    const unsubscribe = api.onWidgetConfig((snapshot) => {
+      if (!cancelled) acceptWidgetConfig(snapshot);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [acceptWidgetConfig, api, bootstrap?.workspaceRoot]);
+
+  const updateWidgetValues = useCallback((configKey: string, values: WidgetFieldValues) => {
+    setWidgetValuesByConfig((previous) => {
+      const current = previous[configKey];
+      return current ? { ...previous, [configKey]: { ...current, values } } : previous;
+    });
+  }, []);
 
   const deployPanelShowsWidgetParams = deployEligible && deployEligibility.projectType === "widget";
   const communityWorkspaceRefreshKey = [
@@ -2956,10 +3026,9 @@ export function App() {
               )}
             >
               <EmulatorPanel
-                widgetParamsText={widgetParamsText}
-                setWidgetParamsText={setWidgetParamsText}
-                widgetParamsError={widgetParamsError}
-                setWidgetParamsError={setWidgetParamsError}
+                widgetConfig={widgetConfigs.emulator}
+                widgetValuesByConfig={widgetValuesByConfig}
+                onWidgetValuesChange={updateWidgetValues}
               />
             </div>
           {assetManifest && bootstrap?.workspaceRoot ? (
@@ -3019,10 +3088,9 @@ export function App() {
               <DeployPanel
                 active={deployPaneTab === "deploy"}
                 showWidgetParams={deployPanelShowsWidgetParams}
-                widgetParamsText={widgetParamsText}
-                setWidgetParamsText={setWidgetParamsText}
-                widgetParamsError={widgetParamsError}
-                setWidgetParamsError={setWidgetParamsError}
+                widgetConfig={widgetConfigs.workspace}
+                widgetValuesByConfig={widgetValuesByConfig}
+                onWidgetValuesChange={updateWidgetValues}
                 communitySession={communitySession}
                 communitySessionVersion={communitySessionVersion + communityAuthSkippedVersion}
                 onCommunitySessionChange={refreshCommunitySession}

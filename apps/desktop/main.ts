@@ -92,7 +92,9 @@ import {
   type UserLocale,
   buildCreationIntakeUserPrompt,
   parseWidgetFontCatalogFromManifest,
-  type WidgetFontCatalogEntry
+  type WidgetFontCatalogEntry,
+  type WidgetConfigScope,
+  type WidgetConfigSnapshot
 } from "@dartsnut/shared-ipc";
 import {
   loadProviderConfig,
@@ -155,6 +157,7 @@ import { AssetManager } from "./assetManager";
 import { DeployMachineSession } from "./deployMachine";
 import { createCommunityClient, type CommunityClient } from "./communityClient";
 import { clearCommunityAuth, readCommunityAuth, writeCommunityAuth } from "./communityAuth";
+import { readWidgetConfigSnapshot, watchWidgetConfigFile, widgetConfigPathForScope } from "./widgetConfig";
 import { signInWithGoogleOAuth } from "./googleOAuth";
 import {
   configureSystemProxySession,
@@ -288,17 +291,51 @@ let communityGoogleLoginAbortController: AbortController | null = null;
 /** Poll `conf.json` like `AssetManager` does for the manifest — survives atomic writes; works before the file exists. */
 const DEPLOY_CONF_POLL_MS = 600;
 let deployConfWatch: { watchedPath: string; workspacePath: string } | null = null;
+const widgetConfigWatches = new Map<WidgetConfigScope, () => void>();
+
+function currentWidgetConfigSnapshot(scope: WidgetConfigScope): WidgetConfigSnapshot {
+  return readWidgetConfigSnapshot(scope, workspaceRoot, lastWidgetDir);
+}
+
+function emitWidgetConfigSnapshot(scope: WidgetConfigScope): void {
+  sendToRenderer(IPCChannels.widgetConfigChanged, currentWidgetConfigSnapshot(scope));
+}
+
+function stopWidgetConfigWatchers(): void {
+  for (const stopWatching of widgetConfigWatches.values()) {
+    try {
+      stopWatching();
+    } catch {
+      // ignore
+    }
+  }
+  widgetConfigWatches.clear();
+}
+
+function startWidgetConfigWatchers(): void {
+  stopWidgetConfigWatchers();
+  for (const scope of ["workspace", "emulator"] as const) {
+    const watchedPath = widgetConfigPathForScope(scope, workspaceRoot, lastWidgetDir);
+    if (watchedPath) {
+      widgetConfigWatches.set(
+        scope,
+        watchWidgetConfigFile(watchedPath, () => emitWidgetConfigSnapshot(scope), DEPLOY_CONF_POLL_MS),
+      );
+    }
+    emitWidgetConfigSnapshot(scope);
+  }
+}
 
 function stopDeployConfWatcher(): void {
-  if (!deployConfWatch) {
-    return;
+  if (deployConfWatch) {
+    try {
+      fs.unwatchFile(deployConfWatch.watchedPath);
+    } catch {
+      // ignore
+    }
+    deployConfWatch = null;
   }
-  try {
-    fs.unwatchFile(deployConfWatch.watchedPath);
-  } catch {
-    // ignore
-  }
-  deployConfWatch = null;
+  stopWidgetConfigWatchers();
 }
 
 function syncWorkspaceMetadataFromConf(workspacePath: string): void {
@@ -328,6 +365,7 @@ function startDeployConfWatcher(workspacePath: string): void {
   deployConfWatch = { watchedPath, workspacePath };
   syncWorkspaceMetadataFromConf(workspacePath);
   sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
+  startWidgetConfigWatchers();
 }
 
 function emitDeployLog(line: string): void {
@@ -3583,6 +3621,18 @@ ipcMain.handle(
 );
 
 ipcMain.handle(IPCChannels.deployGetEligibility, (): DeployEligibility => readDeployEligibilityFromWorkspace());
+ipcMain.handle(IPCChannels.widgetConfigGet, (_event, scope: WidgetConfigScope): WidgetConfigSnapshot => {
+  if (scope !== "workspace" && scope !== "emulator") {
+    return {
+      scope: "workspace",
+      status: "unavailable",
+      configKey: null,
+      confPath: null,
+      message: "Unknown widget configuration scope.",
+    };
+  }
+  return currentWidgetConfigSnapshot(scope);
+});
 
 ipcMain.handle(IPCChannels.deployOpenLocalNetworkSettings, async (): Promise<DeployActionResponse> => {
   if (process.platform !== "darwin") {
@@ -4235,6 +4285,7 @@ ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorCommand, async (_event, command: Em
       commandToSend = { type: "set_path", path: selectedPath };
       lastWidgetDir = selectedPath;
       writeEmulatorState();
+      startWidgetConfigWatchers();
       if (emulatorState.widgetPath !== selectedPath) {
         pendingEmulatorPathForReload = selectedPath;
       }
@@ -4265,6 +4316,7 @@ ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorPickPath, async () => {
   const selected = result.filePaths[0];
   lastWidgetDir = selected;
   writeEmulatorState();
+  startWidgetConfigWatchers();
   return { path: toRelativeFromEmulatorWorkspaceRoot(selected) };
 });
 

@@ -47,6 +47,8 @@ export const IPCChannels = {
   /** Renderer → main: install an already-downloaded desktop app update and relaunch. */
   appUpdateInstallNow: "app:update-install-now",
   deployGetEligibility: "deploy:get-eligibility",
+  widgetConfigGet: "widget-config:get",
+  widgetConfigChanged: "widget-config:changed",
   /** Main → renderer: workspace `conf.json` created/changed; payload is {@link DeployEligibility}. */
   deployEligibilityChanged: "deploy:eligibility-changed",
   deployConnect: "deploy:connect",

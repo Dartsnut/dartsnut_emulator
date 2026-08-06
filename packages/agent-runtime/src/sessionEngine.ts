@@ -12,7 +12,7 @@ import {
 import type { DeferredSkillId } from "./skillBundle";
 import type { AgentSessionPersistence } from "./agentSessionPersistence";
 import type { FunctionTool } from "openai/resources/responses/responses";
-import type { AgentModelConfig } from "./agentProviderConfig";
+import { agentModelChainKey, type AgentModelConfig } from "./agentProviderConfig";
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import { WorkspacePolicy } from "./workspacePolicy";
 import { AGENT_STOPPED_MESSAGE } from "./agentErrors";
@@ -237,6 +237,8 @@ export class SessionEngine {
 
     const cfg = this.resolveModelConfig();
     const modelProvider = configureAgentsSdk(cfg);
+    const modelChainKey = agentModelChainKey(cfg);
+    const previousResponseId = this.options.sessionPersistence?.readModelChainResponseId(modelChainKey) ?? undefined;
 
     const runContext = this.buildRunContext(runOptions?.userPrompt ?? prompt);
     refreshDartsnutRunContext(
@@ -277,6 +279,7 @@ export class SessionEngine {
         signal: abortSignal,
         maxTurns: SessionEngine.MAIN_AGENT_MAX_TURNS,
         context: runContext,
+        previousResponseId,
         callModelInputFilter: createSafeCallModelInputFilter()
       };
       // @openai/agents' process-global run() caches its first model provider.
@@ -302,6 +305,15 @@ export class SessionEngine {
       if (!final) {
         throw new Error(EMPTY_MODEL_RESPONSE_MESSAGE);
       }
+      if (modelChainKey && bridgeResult.chainableResponseId) {
+        await this.options.sessionPersistence?.flushWrites();
+        this.options.sessionPersistence?.writeModelChainResponseIdAtomic(
+          modelChainKey,
+          bridgeResult.chainableResponseId
+        );
+      } else if (modelChainKey && previousResponseId) {
+        this.options.sessionPersistence?.clearModelChain();
+      }
       onEvent({ type: "final", at: Date.now(), content: final });
       onEvent({
         type: "status",
@@ -314,6 +326,7 @@ export class SessionEngine {
       if (abortSignal?.aborted) {
         throw new Error(AGENT_STOPPED_MESSAGE);
       }
+      if (previousResponseId) this.options.sessionPersistence?.clearModelChain();
       const message = error instanceof Error ? error.message : String(error);
       onEvent({ type: "error", at: Date.now(), message });
       this.persistTranscript("assistant", message);

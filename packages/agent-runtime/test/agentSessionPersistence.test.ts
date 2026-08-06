@@ -82,6 +82,16 @@ describe("AgentSessionPersistence", () => {
     expect(back).toEqual(items);
   });
 
+  it("persists model chain IDs only for matching provider scope", () => {
+    const root = path.join(mkTmp(), "ws");
+    fs.mkdirSync(root, { recursive: true });
+    const p = new AgentSessionPersistence(root);
+    p.writeModelChainResponseIdAtomic("provider-a", "resp_1");
+    expect(p.readModelChainResponseId("provider-a")).toBe("resp_1");
+    expect(p.readModelChainResponseId("provider-b")).toBeNull();
+    expect(p.readModelChainResponseId("provider-a")).toBeNull();
+  });
+
   it("deletes incompatible active session files but preserves workspace and archives", () => {
     const root = path.join(mkTmp(), "ws");
     fs.mkdirSync(root, { recursive: true });

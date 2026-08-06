@@ -36,6 +36,7 @@ export type AgentsStreamBridgeResult = {
   filesWrittenThisTurn: number;
   toolCallCount: number;
   tokenUsage?: AgentTokenUsage;
+  chainableResponseId?: string;
 };
 
 type ResponsesFunctionCallState = {
@@ -149,6 +150,7 @@ async function handleResponsesEvent(
     filePreviewLineCounts: Map<string, number>;
     filePreviewPacingMs: number;
     tokenUsage: AgentTokenUsage | null;
+    chainableResponseId: string;
     onTokenUsage?: (runUsage: AgentTokenUsage) => void;
   },
   emit: (event: AgentEvent) => void
@@ -210,6 +212,7 @@ async function handleResponsesEvent(
 
   if (event.type === "response.completed" || event.type === "response.failed" || event.type === "response.incomplete") {
     accountResponseUsage(state, event.response.id, event.response.usage);
+    if (event.type === "response.completed") state.chainableResponseId = event.response.id;
   }
 }
 
@@ -300,6 +303,7 @@ export async function mapAgentsStreamToAgentEvents(
     filePreviewLineCounts: new Map<string, number>(),
     filePreviewPacingMs: hooks.filePreviewPacingMs ?? DEFAULT_FILE_PREVIEW_PACING_MS,
     tokenUsage: null as AgentTokenUsage | null,
+    chainableResponseId: "",
     onTokenUsage: hooks.onTokenUsage
   };
   const toolNames: string[] = [];
@@ -404,6 +408,7 @@ export async function mapAgentsStreamToAgentEvents(
     toolNames,
     filesWrittenThisTurn,
     toolCallCount,
-    ...(state.tokenUsage ? { tokenUsage: state.tokenUsage } : {})
+    ...(state.tokenUsage ? { tokenUsage: state.tokenUsage } : {}),
+    ...(state.chainableResponseId ? { chainableResponseId: state.chainableResponseId } : {})
   };
 }

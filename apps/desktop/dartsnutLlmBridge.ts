@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DartsnutLlmFailureReason } from "@dartsnut/shared-ipc";
 import type { AgentModelConfig } from "@dartsnut/agent-runtime";
 import { withDartsnutSourceHeader } from "./dartsnutSourceHeader";
@@ -199,6 +200,7 @@ async function postRunEndpoint(
 export async function startDartsnutLlmBridgeRun(options: {
   baseApi: string;
   token: string;
+  accountScope?: string;
   runId: string;
   fetchImpl?: FetchLike;
 }): Promise<{ ok: true; run: DartsnutLlmBridgeRun } | { ok: false; failure: DartsnutLlmBridgeFailure }> {
@@ -274,6 +276,9 @@ export async function startDartsnutLlmBridgeRun(options: {
         apiKey: `${DARTSNUT_LLM_BRIDGE_API_KEY_PLACEHOLDER}-${options.runId}`,
         model: DARTSNUT_LLM_MODEL_ALIAS,
         endpointKind: "openai-compatible",
+        chainScope: createHash("sha256")
+          .update(`${trimBaseApi(options.baseApi)}\0${options.accountScope?.trim() || token}`)
+          .digest("hex"),
         fetchImpl: bridgeFetch
       },
       readFailure: () => latestFailure,

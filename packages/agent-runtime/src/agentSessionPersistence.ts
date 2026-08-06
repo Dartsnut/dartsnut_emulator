@@ -12,6 +12,7 @@ const ACTIVE_SESSION_FILES = [
   "transcript.jsonl",
   "transactions.jsonl",
   "conversation.json",
+  "model-chain.json",
   "usage.json"
 ] as const;
 
@@ -49,6 +50,12 @@ export type ConversationFileV2 = {
 export type TokenUsageFileV1 = {
   schemaVersion: number;
   usage: AgentSessionTokenUsage;
+};
+
+export type ModelChainFileV1 = {
+  schemaVersion: 1;
+  chainKey: string;
+  responseId: string;
 };
 
 export function isAgentSessionPersistenceDisabledByEnv(): boolean {
@@ -211,6 +218,39 @@ export class AgentSessionPersistence {
       await fsp.writeFile(tmp, body, "utf-8");
       await fsp.rename(tmp, target);
     });
+  }
+
+  readModelChainResponseId(chainKey: string): string | null {
+    const target = path.join(this.dir, "model-chain.json");
+    if (!fs.existsSync(target)) return null;
+    try {
+      const data = JSON.parse(fs.readFileSync(target, "utf-8")) as ModelChainFileV1;
+      if (
+        data?.schemaVersion !== 1 ||
+        data.chainKey !== chainKey ||
+        typeof data.responseId !== "string" ||
+        data.responseId.length === 0
+      ) {
+        this.clearModelChain();
+        return null;
+      }
+      return data.responseId;
+    } catch {
+      return null;
+    }
+  }
+
+  writeModelChainResponseIdAtomic(chainKey: string, responseId: string): void {
+    this.ensureDir();
+    const target = path.join(this.dir, "model-chain.json");
+    const tmp = path.join(this.dir, `.model-chain.${process.pid}.${Date.now()}.tmp`);
+    const payload: ModelChainFileV1 = { schemaVersion: 1, chainKey, responseId };
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
+    fs.renameSync(tmp, target);
+  }
+
+  clearModelChain(): void {
+    fs.rmSync(path.join(this.dir, "model-chain.json"), { force: true });
   }
 
   /** Remove incompatible active session state without touching workspace files or archives. */

@@ -1090,6 +1090,7 @@ async function prepareAgentProvider(providerSettings: ProviderSettings): Promise
   const started = await startDartsnutLlmBridgeRun({
     baseApi: getCommunityClient().getConfig().baseApi,
     token: auth.token,
+    accountScope: auth.account,
     runId: randomUUID(),
     fetchImpl: cloudFetch()
   });

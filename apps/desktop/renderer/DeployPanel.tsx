@@ -1,8 +1,10 @@
-import { memo, useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type {
   CommunityDeployDevice,
   CommunitySessionInfo,
-  DeployConnectResponse
+  DeployConnectResponse,
+  WidgetConfigSnapshot,
+  WidgetFieldValues
 } from "@dartsnut/shared-ipc";
 import { isCommunityAuthSkippedForSession } from "./DeployAuthGate";
 import {
@@ -10,7 +12,7 @@ import {
   isCommunityAuthFailure,
   shouldShowCommunityErrorSnackbar
 } from "./CommunityErrorSnackbar";
-import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
+import { applyWidgetParamsAndReload, resolveWidgetParams, type WidgetValueStore } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
 const toolbarBtn = "ui-toolbar-btn";
@@ -24,10 +26,9 @@ type ApiErrorSnackbarState = {
 export type DeployPanelProps = {
   active: boolean;
   showWidgetParams: boolean;
-  widgetParamsText: string;
-  setWidgetParamsText: Dispatch<SetStateAction<string>>;
-  widgetParamsError: string | null;
-  setWidgetParamsError: Dispatch<SetStateAction<string | null>>;
+  widgetConfig: WidgetConfigSnapshot;
+  widgetValuesByConfig: WidgetValueStore;
+  onWidgetValuesChange: (configKey: string, values: WidgetFieldValues) => void;
   communitySession: CommunitySessionInfo;
   communitySessionVersion: number;
   onCommunitySessionChange: () => Promise<void>;
@@ -50,10 +51,9 @@ function formatDeviceOptionLabel(device: CommunityDeployDevice): string {
 export const DeployPanel = memo(function DeployPanel({
   active,
   showWidgetParams,
-  widgetParamsText,
-  setWidgetParamsText,
-  widgetParamsError,
-  setWidgetParamsError,
+  widgetConfig,
+  widgetValuesByConfig,
+  onWidgetValuesChange,
   communitySession,
   communitySessionVersion,
   onCommunitySessionChange,
@@ -79,6 +79,8 @@ export const DeployPanel = memo(function DeployPanel({
   const selectedDeviceKeyRef = useRef("");
 
   const bridgeReady = Boolean(api?.sendEmulatorCommand);
+  const widgetParamsResolved = showWidgetParams ? resolveWidgetParams(widgetConfig, widgetValuesByConfig) : null;
+  const widgetParamActionsBlocked = Boolean(widgetParamsResolved && !widgetParamsResolved.ok);
   const loggedIn = communitySession.loggedIn;
   const manualIpMode =
     !loggedIn || selectedDeviceKey === MANUAL_DEVICE_VALUE || selectedDeviceKey === "";
@@ -247,7 +249,14 @@ export const DeployPanel = memo(function DeployPanel({
     setLastError(null);
     setBusyAction(action);
     try {
-      const launch = showWidgetParams ? { widgetParamsJson: widgetParamsText } : undefined;
+      const resolvedParams = action !== "stop" && showWidgetParams
+        ? resolveWidgetParams(widgetConfig, widgetValuesByConfig)
+        : null;
+      if (resolvedParams && !resolvedParams.ok) {
+        setLastError(resolvedParams.message);
+        return;
+      }
+      const launch = resolvedParams?.ok ? { widgetParamsJson: resolvedParams.json } : undefined;
       const result =
         action === "run"
           ? await api.deployRun(launch)
@@ -264,15 +273,10 @@ export const DeployPanel = memo(function DeployPanel({
     }
   }
 
-  function handleFormatWidgetParams() {
-    formatWidgetParamsJson(widgetParamsText, setWidgetParamsText, setWidgetParamsError);
-  }
-
   async function handleApplyWidgetParams() {
     const normalized = await applyWidgetParamsAndReload({
-      widgetParamsText,
-      setWidgetParamsText,
-      setWidgetParamsError
+      config: widgetConfig,
+      store: widgetValuesByConfig
     });
     if (normalized === undefined) {
       return;
@@ -455,14 +459,14 @@ export const DeployPanel = memo(function DeployPanel({
         <button
           type="button"
           className="ui-btn-primary"
-          disabled={busyAction !== null || !connected}
+          disabled={busyAction !== null || !connected || widgetParamActionsBlocked}
           data-analytics-id="deploy_run"
           data-analytics-area="deploy"
           onClick={() => void run("run")}
         >
           {busyAction === "run" ? "Running…" : "Run"}
         </button>
-        <button type="button" className={toolbarBtn} disabled={busyAction !== null || !connected} data-analytics-id="deploy_reload" data-analytics-area="deploy" onClick={() => void run("reload")}>
+        <button type="button" className={toolbarBtn} disabled={busyAction !== null || !connected || widgetParamActionsBlocked} data-analytics-id="deploy_reload" data-analytics-area="deploy" onClick={() => void run("reload")}>
           {busyAction === "reload" ? "Reloading…" : "Reload"}
         </button>
         <button type="button" className={toolbarBtn} disabled={busyAction !== null || !connected} data-analytics-id="deploy_stop" data-analytics-area="deploy" onClick={() => void run("stop")}>
@@ -479,11 +483,9 @@ export const DeployPanel = memo(function DeployPanel({
       {showWidgetParams ? (
         <WidgetParamsEditor
           bridgeReady={bridgeReady}
-          widgetParamsText={widgetParamsText}
-          setWidgetParamsText={setWidgetParamsText}
-          widgetParamsError={widgetParamsError}
-          setWidgetParamsError={setWidgetParamsError}
-          onFormat={handleFormatWidgetParams}
+          config={widgetConfig}
+          store={widgetValuesByConfig}
+          onValuesChange={onWidgetValuesChange}
           onApplyReload={handleApplyWidgetParams}
         />
       ) : null}

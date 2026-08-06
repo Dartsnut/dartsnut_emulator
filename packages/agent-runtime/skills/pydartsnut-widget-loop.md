@@ -24,7 +24,16 @@ A solid-color loop with no user-visible behavior is only appropriate when the us
 
 ## Params
 
-Handle missing or ambiguous params with safe defaults. Keep setup, render/update, and `main()` clear.
+Handle missing or ambiguous params with safe defaults matching `conf.json.fields[].default`. Keep setup, render/update, and `main()` clear.
+
+When user intent changes configurable behavior, edit the field definition and its runtime consumer together:
+
+- add a field: add canonical schema in `conf.json` and read `dartsnut.widget_params` by the same id;
+- rename an id: update every runtime lookup and helper using the old id;
+- remove a field or option: remove obsolete reads/branches and keep the remaining default valid;
+- change a type: update coercion/validation expectations in `main.py` to the new runtime value shape.
+
+Preserve unrelated config and code. Do not merely expose a control that the widget ignores, or change runtime behavior without declaring the matching field when the user asked for configurability.
 
 ## Verify
 

@@ -281,6 +281,22 @@ describe("deferred skill router", () => {
     expect(body).toContain("conf.json contract");
     expect(body).toContain("reload_emulator");
     expect(body).toContain("get_emulator_logs");
+    for (const type of ["text", "number", "slider", "toggle", "dropdown", "checkbox", "color", "location", "image"]) {
+      expect(body).toContain(`\`${type}\``);
+    }
+    expect(body).toContain("cropbox");
+    expect(body).toContain("dartsnut.widget_params");
+    expect(body).toContain("update both `conf.json.fields`");
+    expect(body).toContain("observe_emulator");
+  });
+
+  it("widget loop requires field schema and runtime consumers to stay synchronized", () => {
+    const body = readDeferredSkillMarkdown(SKILLS_DIR, "pydartsnut-widget-loop");
+    expect(body).toContain("matching `conf.json.fields[].default`");
+    expect(body).toContain("edit the field definition and its runtime consumer together");
+    expect(body).toContain("rename an id");
+    expect(body).toContain("remove a field or option");
+    expect(body).toContain("change a type");
   });
 });
 

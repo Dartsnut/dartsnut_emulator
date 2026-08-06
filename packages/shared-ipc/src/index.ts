@@ -10,3 +10,4 @@ export * from "./tempWorkspace";
 export * from "./workspaceIntake";
 export * from "./widgetFonts";
 export * from "./communitySubmission";
+export * from "./widgetFields";

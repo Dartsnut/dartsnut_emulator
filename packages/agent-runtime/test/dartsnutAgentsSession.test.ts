@@ -2,43 +2,34 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { AgentInputItem } from "@openai/agents";
 import { DartsnutAgentsSession } from "../src/dartsnutAgentsSession";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
-import { chatMessagesToAgentInputItems, agentInputItemsToChatMessages } from "../src/conversationProtocol";
-import type { ChatMessage } from "../src/providerClient";
 import { resolveSessionUserLocale } from "@dartsnut/shared-ipc";
 
 describe("DartsnutAgentsSession", () => {
-  it("round-trips conversation through AgentInputItem protocol", async () => {
+  it("round-trips native AgentInputItem conversation", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-session-"));
     const persistence = new AgentSessionPersistence(workspace);
-    const seed: ChatMessage[] = [
-      { role: "user", content: "hello" },
+    const seed: AgentInputItem[] = [
+      { type: "message", role: "user", content: "hello" },
       {
-        role: "assistant",
-        content: "thinking aloud",
-        reasoningContent: "internal reasoning",
-        tool_calls: [
-          {
-            id: "call_1",
-            type: "function",
-            function: { name: "read_file", arguments: "{\"path\":\"main.py\"}" }
-          }
-        ]
+        type: "function_call",
+        callId: "call_1",
+        name: "read_file",
+        arguments: "{\"path\":\"main.py\"}",
+        status: "completed"
       },
-      { role: "tool", tool_call_id: "call_1", content: "{\"ok\":true}" }
+      { type: "function_call_result", name: "read_file", callId: "call_1", status: "completed", output: "{\"ok\":true}" }
     ];
     const session = new DartsnutAgentsSession({
       sessionId: "sess-1",
-      initialConversation: seed,
+      initialItems: seed,
       sessionPersistence: persistence
     });
     const items = await session.getItems();
-    expect(items.length).toBeGreaterThan(0);
-    const roundTrip = agentInputItemsToChatMessages(items);
-    expect(roundTrip.some((m) => m.role === "user" && m.content === "hello")).toBe(true);
-    expect(roundTrip.some((m) => m.role === "tool")).toBe(true);
-    await session.addItems(chatMessagesToAgentInputItems([{ role: "user", content: "next turn" }]));
+    expect(items).toEqual(seed);
+    await session.addItems([{ type: "message", role: "user", content: "next turn" }]);
     await persistence.flushWrites();
     const reloaded = new DartsnutAgentsSession({
       sessionId: "sess-1",
@@ -64,7 +55,7 @@ describe("DartsnutAgentsSession", () => {
       preferredUserLocale: firstLocale
     });
 
-    await session.addItems(chatMessagesToAgentInputItems([{ role: "user", content: "我想要一个时钟小组件" }]));
+    await session.addItems([{ type: "message", role: "user", content: "我想要一个时钟小组件" }]);
     await persistence.flushWrites();
 
     expect(persistence.readManifest()?.preferredUserLocale).toBe("zh-Hans");

@@ -11,9 +11,9 @@ import {
   getAgentToolDefinition
 } from "./toolSchemas";
 import type { AgentToolProfile, AgentToolsOptions } from "./agentToolsTypes";
-import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
+import type { FunctionTool } from "openai/resources/responses/responses";
 
-function schemasForProfile(profile: AgentToolProfile | undefined): ChatCompletionTool[] {
+function schemasForProfile(profile: AgentToolProfile | undefined): FunctionTool[] {
   switch (profile) {
     case "asset-applier":
       return AGENT_ASSET_APPLIER_TOOL_SCHEMAS;
@@ -107,8 +107,7 @@ function defineJsonSchemaTool(
   if (!def) {
     throw new Error(`Missing tool schema: ${name}`);
   }
-  // Chat Completions schemas keep optional fields out of `required` and may use
-  // additionalProperties: false even when strict mode is off — cast for SDK typing.
+  // Tool registry schemas may keep optional fields out of `required`; cast for SDK typing.
   return tool({
     name,
     description: def.description,
@@ -511,8 +510,8 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
   };
 
   const requested = new Set(
-    (options.completionTools ?? schemasForProfile(options.profile))
-      .map((entry) => (entry.type === "function" ? entry.function?.name : undefined))
+    (options.toolSchemas ?? schemasForProfile(options.profile))
+      .map((entry) => entry.name)
       .filter((name): name is string => Boolean(name))
   );
   if (requested.size === 0) {

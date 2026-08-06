@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ChatMessage } from "../src/providerClient";
+import type { AgentInputItem } from "@openai/agents";
 import {
   AgentSessionPersistence,
   readJsonlRecords,
@@ -67,19 +67,49 @@ describe("AgentSessionPersistence", () => {
     expect(rows).toEqual([{ ok: true }]);
   });
 
-  it("saveConversationAtomic round-trips ChatMessage array", async () => {
+  it("saveConversationItemsAtomic round-trips native AgentInputItem array", async () => {
     const root = path.join(mkTmp(), "ws");
     fs.mkdirSync(root, { recursive: true });
     const p = new AgentSessionPersistence(root);
     p.ensureDir();
-    const messages: ChatMessage[] = [
-      { role: "user", content: "hi" },
-      { role: "assistant", content: "hello" }
+    const items: AgentInputItem[] = [
+      { type: "message", role: "user", content: "hi" },
+      { type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "hello" }] }
     ];
-    p.saveConversationAtomic(messages);
+    p.saveConversationItemsAtomic(items);
     await p.flushWrites();
-    const back = p.readConversation();
-    expect(back).toEqual(messages);
+    const back = p.readConversationItems();
+    expect(back).toEqual(items);
+  });
+
+  it("persists model chain IDs only for matching provider scope", () => {
+    const root = path.join(mkTmp(), "ws");
+    fs.mkdirSync(root, { recursive: true });
+    const p = new AgentSessionPersistence(root);
+    p.writeModelChainResponseIdAtomic("provider-a", "resp_1");
+    expect(p.readModelChainResponseId("provider-a")).toBe("resp_1");
+    expect(p.readModelChainResponseId("provider-b")).toBeNull();
+    expect(p.readModelChainResponseId("provider-a")).toBeNull();
+  });
+
+  it("deletes incompatible active session files but preserves workspace and archives", () => {
+    const root = path.join(mkTmp(), "ws");
+    fs.mkdirSync(root, { recursive: true });
+    const p = new AgentSessionPersistence(root);
+    p.ensureDir();
+    const sessionDir = resolveAgentSessionDir(root);
+    const archiveDir = path.join(sessionDir, "archives", "old");
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(root, "main.py"), "print('keep')\n", "utf-8");
+    fs.writeFileSync(path.join(archiveDir, "manifest.json"), "{}", "utf-8");
+    fs.writeFileSync(path.join(sessionDir, "manifest.json"), "{}", "utf-8");
+    fs.writeFileSync(path.join(sessionDir, "conversation.json"), JSON.stringify({ schemaVersion: 1, messages: [] }), "utf-8");
+
+    expect(p.readConversationItems()).toEqual([]);
+    expect(fs.existsSync(path.join(sessionDir, "manifest.json"))).toBe(false);
+    expect(fs.existsSync(path.join(sessionDir, "conversation.json"))).toBe(false);
+    expect(fs.readFileSync(path.join(root, "main.py"), "utf-8")).toBe("print('keep')\n");
+    expect(fs.existsSync(path.join(archiveDir, "manifest.json"))).toBe(true);
   });
 
   it("readTranscriptTail returns only the last lines without reading from line 0", () => {

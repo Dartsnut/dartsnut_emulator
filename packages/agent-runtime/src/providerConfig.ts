@@ -16,8 +16,8 @@ export interface LoadProviderConfigInput {
 }
 
 /**
- * Ensure base URL joins SDK paths like `/chat/completions` as `.../v1/chat/completions`.
- * A bare origin (`https://host`) would otherwise hit `https://host/chat/completions` and often 404.
+ * Ensure base URL joins SDK paths like `/responses` as `.../v1/responses`.
+ * A bare origin (`https://host`) would otherwise hit `https://host/responses` and often 404.
  */
 export function normalizeProviderBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");

@@ -80,6 +80,7 @@ export function buildDartsnutAgent(options: BuildDartsnutAgentsOptions): Agent<D
     name: DARTSNUT_MAIN_AGENT_NAME,
     instructions,
     model,
+    modelSettings: { store: true },
     tools: buildAgentTools({
       ...toolsBase,
       getRunContext,

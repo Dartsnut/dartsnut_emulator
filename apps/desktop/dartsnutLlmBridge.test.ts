@@ -49,7 +49,7 @@ test("starts run and injects account token plus run id into model requests", asy
   assert.equal(JSON.stringify(result.run.modelConfig).includes("must-not-reach-desktop"), false);
   assert.equal(JSON.stringify(result.run.modelConfig).includes("community-secret"), false);
 
-  await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/chat/completions", {
+  await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/responses", {
     method: "POST",
     headers: { Authorization: "Bearer placeholder", "Content-Type": "application/json" },
     body: "{}"
@@ -66,6 +66,45 @@ test("starts run and injects account token plus run id into model requests", asy
   assert.equal(modelHeaders.get("x-dartsnut-agent-run-id"), "run-1");
   assert.equal(modelHeaders.get("source"), "agent");
   assert.equal(modelHeaders.has("authorization"), false);
+});
+
+test("always keeps Responses alias regardless of run-start model metadata", async () => {
+  for (const data of [{}, { model: "gpt-compatible" }, { model: "ignored-model" }]) {
+    const result = await startDartsnutLlmBridgeRun({
+      baseApi: "https://api.dartsnut.com",
+      token: "token",
+      runId: `run-${Object.keys(data).length}`,
+      fetchImpl: async () => new Response(JSON.stringify({ code: 1001, data }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    assert.equal(result.run.modelConfig.model, "dartsnut-llm");
+    assert.equal(result.run.modelConfig.endpointKind, "openai-compatible");
+  }
+});
+
+test("keeps response-chain scope stable across rotating bridge run ids", async () => {
+  const start = async (runId: string) => startDartsnutLlmBridgeRun({
+    baseApi: "https://api.example.com",
+    token: "member-token",
+    accountScope: "member@example.com",
+    runId,
+    fetchImpl: async (input) => new Response(JSON.stringify(
+      String(input).endsWith("/runs/start")
+        ? { code: 1001, data: {} }
+        : { code: 1001 }
+    ), { status: 200, headers: { "Content-Type": "application/json" } })
+  });
+  const first = await start("run-1");
+  const second = await start("run-2");
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (!first.ok || !second.ok) return;
+  assert.equal(first.run.modelConfig.chainScope, second.run.modelConfig.chainScope);
+  assert.notEqual(first.run.modelConfig.apiKey, second.run.modelConfig.apiKey);
 });
 
 test("turns a run-start DNS failure into an actionable bridge message", async () => {
@@ -113,7 +152,7 @@ test("captures bridge rejection from a model request", async () => {
   assert.equal(result.ok, true);
   if (!result.ok) return;
 
-  await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/chat/completions", {});
+  await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/responses", {});
   assert.deepEqual(result.run.readFailure(), { reason: "run_expired", message: "Run expired." });
 });
 
@@ -142,7 +181,7 @@ test("turns a DNS fetch failure into an actionable bridge message", async () => 
   if (!result.ok) return;
 
   await assert.rejects(
-    result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/chat/completions", {}),
+    result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/responses", {}),
     /fetch failed/
   );
   assert.deepEqual(result.run.readFailure(), {

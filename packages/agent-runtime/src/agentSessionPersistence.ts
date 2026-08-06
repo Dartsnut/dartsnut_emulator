@@ -1,11 +1,20 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import type { AgentInputItem } from "@openai/agents";
 import type { AgentSessionTokenUsage } from "@dartsnut/shared-ipc";
-import type { ChatMessage } from "./providerClient";
 import { normalizeTokenUsage } from "./tokenUsage";
 
 export const AGENT_SESSION_SCHEMA_VERSION = 1;
+export const AGENT_CONVERSATION_SCHEMA_VERSION = 2;
+const ACTIVE_SESSION_FILES = [
+  "manifest.json",
+  "transcript.jsonl",
+  "transactions.jsonl",
+  "conversation.json",
+  "model-chain.json",
+  "usage.json"
+] as const;
 
 /** Max bytes read from the end of transcript.jsonl when tailing (avoids loading huge files). */
 export const TRANSCRIPT_TAIL_READ_BYTES = 256 * 1024;
@@ -33,14 +42,20 @@ export type TranscriptRecord = {
   toolName?: string;
 };
 
-export type ConversationFileV1 = {
+export type ConversationFileV2 = {
   schemaVersion: number;
-  messages: ChatMessage[];
+  items: AgentInputItem[];
 };
 
 export type TokenUsageFileV1 = {
   schemaVersion: number;
   usage: AgentSessionTokenUsage;
+};
+
+export type ModelChainFileV1 = {
+  schemaVersion: 1;
+  chainKey: string;
+  responseId: string;
 };
 
 export function isAgentSessionPersistenceDisabledByEnv(): boolean {
@@ -175,24 +190,26 @@ export class AgentSessionPersistence {
     }
   }
 
-  readConversation(): ChatMessage[] {
+  readConversationItems(): AgentInputItem[] {
     const target = path.join(this.dir, "conversation.json");
     if (!fs.existsSync(target)) {
       return [];
     }
     try {
-      const data = JSON.parse(fs.readFileSync(target, "utf-8")) as ConversationFileV1;
-      if (!data || data.schemaVersion !== AGENT_SESSION_SCHEMA_VERSION || !Array.isArray(data.messages)) {
+      const data = JSON.parse(fs.readFileSync(target, "utf-8")) as ConversationFileV2;
+      if (!data || data.schemaVersion !== AGENT_CONVERSATION_SCHEMA_VERSION || !Array.isArray(data.items)) {
+        this.deleteActiveSession();
         return [];
       }
-      return data.messages;
+      return data.items;
     } catch {
+      this.deleteActiveSession();
       return [];
     }
   }
 
-  saveConversationAtomic(messages: ChatMessage[]): void {
-    const payload: ConversationFileV1 = { schemaVersion: AGENT_SESSION_SCHEMA_VERSION, messages };
+  saveConversationItemsAtomic(items: AgentInputItem[]): void {
+    const payload: ConversationFileV2 = { schemaVersion: AGENT_CONVERSATION_SCHEMA_VERSION, items };
     const target = path.join(this.dir, "conversation.json");
     const tmp = path.join(this.dir, `.conversation.${process.pid}.${Date.now()}.tmp`);
     const body = JSON.stringify(payload);
@@ -201,6 +218,49 @@ export class AgentSessionPersistence {
       await fsp.writeFile(tmp, body, "utf-8");
       await fsp.rename(tmp, target);
     });
+  }
+
+  readModelChainResponseId(chainKey: string): string | null {
+    const target = path.join(this.dir, "model-chain.json");
+    if (!fs.existsSync(target)) return null;
+    try {
+      const data = JSON.parse(fs.readFileSync(target, "utf-8")) as ModelChainFileV1;
+      if (
+        data?.schemaVersion !== 1 ||
+        data.chainKey !== chainKey ||
+        typeof data.responseId !== "string" ||
+        data.responseId.length === 0
+      ) {
+        this.clearModelChain();
+        return null;
+      }
+      return data.responseId;
+    } catch {
+      return null;
+    }
+  }
+
+  writeModelChainResponseIdAtomic(chainKey: string, responseId: string): void {
+    this.ensureDir();
+    const target = path.join(this.dir, "model-chain.json");
+    const tmp = path.join(this.dir, `.model-chain.${process.pid}.${Date.now()}.tmp`);
+    const payload: ModelChainFileV1 = { schemaVersion: 1, chainKey, responseId };
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
+    fs.renameSync(tmp, target);
+  }
+
+  clearModelChain(): void {
+    fs.rmSync(path.join(this.dir, "model-chain.json"), { force: true });
+  }
+
+  /** Remove incompatible active session state without touching workspace files or archives. */
+  deleteActiveSession(): void {
+    for (const file of ACTIVE_SESSION_FILES) {
+      const target = path.join(this.dir, file);
+      if (fs.existsSync(target)) {
+        fs.rmSync(target, { force: true });
+      }
+    }
   }
 
   readTokenUsage(): AgentSessionTokenUsage | null {
@@ -243,8 +303,7 @@ export class AgentSessionPersistence {
     if (!fs.existsSync(this.dir)) {
       return;
     }
-    const files = ["manifest.json", "transcript.jsonl", "transactions.jsonl", "conversation.json", "usage.json"];
-    const existing = files.filter((f) => fs.existsSync(path.join(this.dir, f)));
+    const existing = ACTIVE_SESSION_FILES.filter((file) => fs.existsSync(path.join(this.dir, file)));
     if (existing.length === 0) {
       return;
     }

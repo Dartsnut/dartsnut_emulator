@@ -28,7 +28,7 @@ pnpm run e2e:down
    - Another completion on that run and the next run are rejected.
 2. Agent bridge E2E:
    - Desktop bridge starts run.
-   - Sends authenticated streaming request.
+   - Sends authenticated Responses streaming request with `input`.
    - Receives mocked response and usage.
    - Finishes run.
 
@@ -37,6 +37,7 @@ pnpm run e2e:down
 ```text
 e2e@example.com / test-password
 agent-e2e@example.com / test-password
+responses-e2e@example.com / test-password
 unbound@example.com / test-password
 ```
 

@@ -1,14 +1,21 @@
 /**
- * OpenAI Chat Completions function definitions for the agent runtime's tools.
+ * OpenAI Responses function definitions for the agent runtime's tools.
  *
  * File tools mirror `SessionEngine.normalizeAction` / `executeAction`.
  * `dartsnut_project_intake` and `dartsnut_ask_question` are executed by the host (Electron main) when configured.
  */
 
-import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
+import type { FunctionTool } from "openai/resources/responses/responses";
 import { DEFERRED_SKILL_IDS } from "./skillBundle";
 
-const GET_DARTSNUT_SKILL_TOOL: ChatCompletionTool = {
+type ToolDefinition = Omit<FunctionTool, "type">;
+type WrappedToolDefinition = { type: "function"; function: ToolDefinition };
+
+function responseTool(definition: WrappedToolDefinition): FunctionTool {
+  return { type: "function", ...definition.function };
+}
+
+const GET_DARTSNUT_SKILL_TOOL = responseTool({
   type: "function",
   function: {
     name: "get_dartsnut_skill",
@@ -32,15 +39,15 @@ const GET_DARTSNUT_SKILL_TOOL: ChatCompletionTool = {
     },
     strict: true
   }
-};
+});
 
-const DARTSNUT_ASK_QUESTION_TOOL: ChatCompletionTool = {
+const DARTSNUT_ASK_QUESTION_TOOL = responseTool({
   type: "function",
   function: {
     name: "dartsnut_ask_question",
     description: [
       "Dartsnut Agent **creation intake** only (host-executed). Presents a **blocking** question in the desktop UI — the call does not return until the user answers.",
-      "Use native `tool_calls` only. Prefer this whenever the user must choose in the UI rather than inferring from their message.",
+      "Use native function calls only. Prefer this whenever the user must choose in the UI rather than inferring from their message.",
       "**question_id** `project_type` — Game vs Widget chips; on success updates the same intake state as `set_project_type`.",
       "**question_id** `widget_display_size` — only when intake is already `widget`; shows WxH chips; on success same as `set_widget_size`.",
       "Policy: if project type or widget size is uncertain, ask first; do not guess or default."
@@ -59,14 +66,14 @@ const DARTSNUT_ASK_QUESTION_TOOL: ChatCompletionTool = {
     },
     strict: true
   }
-};
+});
 
-const DARTSNUT_PROJECT_INTAKE_TOOL: ChatCompletionTool = {
+const DARTSNUT_PROJECT_INTAKE_TOOL = responseTool({
   type: "function",
   function: {
     name: "dartsnut_project_intake",
     description: [
-      "Dartsnut Agent **new-project / workspace** setup (host-executed). Use standard `tool_calls` only.",
+      "Dartsnut Agent **new-project / workspace** setup (host-executed). Use standard function calls only.",
       "Actions:",
       "- **set_project_type** — record whether the user is building a `game` or `widget` (required before scaffolding). Use when the user already stated it clearly in text; otherwise call **`dartsnut_ask_question`** with `question_id` `project_type` first.",
       "- **set_widget_size** — for widgets only; one of the supported WxH tokens. Use when the user already named a supported size; otherwise call **`dartsnut_ask_question`** with `widget_display_size` first.",
@@ -97,9 +104,9 @@ const DARTSNUT_PROJECT_INTAKE_TOOL: ChatCompletionTool = {
     },
     strict: false
   }
-};
+});
 
-const DARTSNUT_MACHINE_MCP_TOOL: ChatCompletionTool = {
+const DARTSNUT_MACHINE_MCP_TOOL = responseTool({
   type: "function",
   function: {
     name: "dartsnut_machine_mcp",
@@ -131,10 +138,10 @@ const DARTSNUT_MACHINE_MCP_TOOL: ChatCompletionTool = {
     },
     strict: false
   }
-};
+});
 
 /** File + asset tools only (no host intake). */
-export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
+const AGENT_FILE_TOOL_DEFINITIONS: WrappedToolDefinition[] = [
   {
     type: "function",
     function: {
@@ -359,7 +366,9 @@ export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
   }
 ];
 
-const RELOAD_EMULATOR_TOOL: ChatCompletionTool = {
+export const AGENT_FILE_TOOL_SCHEMAS: FunctionTool[] = AGENT_FILE_TOOL_DEFINITIONS.map(responseTool);
+
+const RELOAD_EMULATOR_TOOL = responseTool({
   type: "function",
   function: {
     name: "reload_emulator",
@@ -385,9 +394,9 @@ const RELOAD_EMULATOR_TOOL: ChatCompletionTool = {
     },
     strict: false
   }
-};
+});
 
-const OBSERVE_EMULATOR_TOOL: ChatCompletionTool = {
+const OBSERVE_EMULATOR_TOOL = responseTool({
   type: "function",
   function: {
     name: "observe_emulator",
@@ -417,9 +426,9 @@ const OBSERVE_EMULATOR_TOOL: ChatCompletionTool = {
     },
     strict: false
   }
-};
+});
 
-const CONTROL_EMULATOR_INPUT_TOOL: ChatCompletionTool = {
+const CONTROL_EMULATOR_INPUT_TOOL = responseTool({
   type: "function",
   function: {
     name: "control_emulator_input",
@@ -439,9 +448,9 @@ const CONTROL_EMULATOR_INPUT_TOOL: ChatCompletionTool = {
     },
     strict: false
   }
-};
+});
 
-const RUN_EMULATOR_SCENARIO_TOOL: ChatCompletionTool = {
+const RUN_EMULATOR_SCENARIO_TOOL = responseTool({
   type: "function",
   function: {
     name: "run_emulator_scenario",
@@ -465,9 +474,9 @@ const RUN_EMULATOR_SCENARIO_TOOL: ChatCompletionTool = {
     },
     strict: false
   }
-};
+});
 
-const GET_EMULATOR_LOGS_TOOL: ChatCompletionTool = {
+const GET_EMULATOR_LOGS_TOOL = responseTool({
   type: "function",
   function: {
     name: "get_emulator_logs",
@@ -485,9 +494,9 @@ const GET_EMULATOR_LOGS_TOOL: ChatCompletionTool = {
     },
     strict: true
   }
-};
+});
 
-const CHECK_PYTHON_TOOL: ChatCompletionTool = {
+const CHECK_PYTHON_TOOL = responseTool({
   type: "function",
   function: {
     name: "check_python",
@@ -506,16 +515,16 @@ const CHECK_PYTHON_TOOL: ChatCompletionTool = {
     },
     strict: false
   }
-};
+});
 
 const SEARCH_TOOL_NAMES = ["grep_files", "glob_files"] as const;
 
-function fileTool(name: string): ChatCompletionTool {
-  return AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === name)!;
+function fileTool(name: string): FunctionTool {
+  return AGENT_FILE_TOOL_SCHEMAS.find((tool) => tool.name === name)!;
 }
 
 /** Default / full tool surface: file + search tools, deferred skills, emulator verify, check_python, project intake. */
-export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
+export const AGENT_TOOL_SCHEMAS: FunctionTool[] = [
   ...AGENT_FILE_TOOL_SCHEMAS,
   GET_DARTSNUT_SKILL_TOOL,
   RELOAD_EMULATOR_TOOL,
@@ -535,7 +544,7 @@ export type AgentToolSchemaDefinition = {
 };
 
 /** Asset applier: bind art to existing slots (no copy_asset_file, no intake). */
-export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: ChatCompletionTool[] = [
+export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: FunctionTool[] = [
   fileTool("list_files"),
   ...SEARCH_TOOL_NAMES.map(fileTool),
   fileTool("read_file"),
@@ -550,7 +559,7 @@ export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: ChatCompletionTool[] = [
   CHECK_PYTHON_TOOL
 ];
 
-const ALL_TOOL_SCHEMAS: ChatCompletionTool[] = [
+const ALL_TOOL_SCHEMAS: FunctionTool[] = [
   ...AGENT_TOOL_SCHEMAS,
   ...AGENT_ASSET_APPLIER_TOOL_SCHEMAS
 ];
@@ -559,19 +568,19 @@ const ALL_TOOL_SCHEMAS: ChatCompletionTool[] = [
 export function getAgentToolDefinition(name: string): AgentToolSchemaDefinition | undefined {
   const seen = new Set<string>();
   for (const entry of ALL_TOOL_SCHEMAS) {
-    if (entry.type !== "function" || entry.function?.name !== name) {
+    if (entry.name !== name) {
       continue;
     }
     if (seen.has(name)) {
       continue;
     }
     seen.add(name);
-    const parameters = entry.function.parameters;
+    const parameters = entry.parameters;
     if (!parameters || typeof parameters !== "object") {
       return undefined;
     }
     return {
-      description: entry.function.description ?? name,
+      description: entry.description ?? name,
       parameters: parameters as Record<string, unknown>
     };
   }

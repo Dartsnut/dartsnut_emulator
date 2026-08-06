@@ -19,12 +19,10 @@ export function normalizeTokenUsage(value: unknown): AgentTokenUsage | null {
   const record = value as Record<string, unknown>;
   const inputTokens =
     readTokenCount(record, "inputTokens") ??
-    readTokenCount(record, "input_tokens") ??
-    readTokenCount(record, "prompt_tokens");
+    readTokenCount(record, "input_tokens");
   const outputTokens =
     readTokenCount(record, "outputTokens") ??
-    readTokenCount(record, "output_tokens") ??
-    readTokenCount(record, "completion_tokens");
+    readTokenCount(record, "output_tokens");
   const totalTokens = readTokenCount(record, "totalTokens") ?? readTokenCount(record, "total_tokens");
   if (inputTokens === null || outputTokens === null) {
     return null;

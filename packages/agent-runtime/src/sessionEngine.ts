@@ -2,21 +2,20 @@ import "./agentsBootstrap";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { Runner, run, type StreamedRunResult } from "@openai/agents";
+import { Runner, run, type AgentInputItem, type StreamedRunResult } from "@openai/agents";
 import {
   type AgentEvent,
   type AgentTokenUsage,
   type ChatMediaAttachment,
   type UserLocale
 } from "@dartsnut/shared-ipc";
-import type { ChatMessage } from "./providerClient";
 import type { DeferredSkillId } from "./skillBundle";
 import type { AgentSessionPersistence } from "./agentSessionPersistence";
-import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
-import type { AgentModelConfig } from "./agentProviderConfig";
+import type { FunctionTool } from "openai/resources/responses/responses";
+import { agentModelChainKey, type AgentModelConfig } from "./agentProviderConfig";
 import { AGENT_TOOL_SCHEMAS } from "./toolSchemas";
 import { WorkspacePolicy } from "./workspacePolicy";
-import { AGENT_STOPPED_MESSAGE } from "./providerClient";
+import { AGENT_STOPPED_MESSAGE } from "./agentErrors";
 import { configureAgentsSdk } from "./agentsBootstrap";
 import { buildDartsnutAgent } from "./agents/buildDartsnutAgents";
 import {
@@ -32,7 +31,7 @@ import { mapAgentsStreamToAgentEvents } from "./agentsEventBridge";
 import {
   createSafeCallModelInputFilter,
   EMPTY_MODEL_RESPONSE_MESSAGE
-} from "./reasoningContentFilter";
+} from "./modelInputGuard";
 import { addRunTokenUsage } from "./tokenUsage";
 
 export type HostIntakeToolHandler = (args: Record<string, unknown>) => Promise<string>;
@@ -63,7 +62,7 @@ export interface SessionEngineOptions {
     widgetFonts?: string;
     chatAttachments?: ChatMediaAttachment[];
   };
-  completionTools?: ChatCompletionTool[];
+  toolSchemas?: FunctionTool[];
   hostIntakeToolHandler?: HostIntakeToolHandler;
   hostAskQuestionHandler?: HostAskQuestionHandler;
   hostReloadEmulatorHandler?: HostReloadEmulatorHandler;
@@ -77,7 +76,7 @@ export interface SessionEngineOptions {
   sessionPersistence?: AgentSessionPersistence;
   sessionTemplateMode?: string | null;
   sessionSection?: string | null;
-  initialConversation?: ChatMessage[];
+  initialItems?: AgentInputItem[];
   hostIntakeReadyToFinish?: () => boolean;
   getIntakeState?: () => IntakeToolState;
   preferredUserLocale?: UserLocale | null;
@@ -100,10 +99,10 @@ export class SessionEngine {
 
   private sessionId: string = randomUUID();
   private stoppedOnCleanEmulator = false;
-  private readonly completionTools: ChatCompletionTool[];
+  private readonly toolSchemas: FunctionTool[];
 
   constructor(private readonly options: SessionEngineOptions) {
-    this.completionTools = options.completionTools ?? AGENT_TOOL_SCHEMAS;
+    this.toolSchemas = options.toolSchemas ?? AGENT_TOOL_SCHEMAS;
     const existingSessionId = options.sessionPersistence?.readManifest()?.sessionId;
     if (typeof existingSessionId === "string" && existingSessionId.length > 0) {
       this.sessionId = existingSessionId;
@@ -158,7 +157,7 @@ export class SessionEngine {
       workspacePolicy: this.options.workspacePolicy,
       skillLibrary: this.options.skillLibrary,
       assetRoots: this.options.assetRoots,
-      completionTools: this.completionTools,
+      toolSchemas: this.toolSchemas,
       hostIntakeToolHandler: this.options.hostIntakeToolHandler
         ? async (args: Record<string, unknown>) => {
             const result = await this.options.hostIntakeToolHandler!(args);
@@ -238,6 +237,8 @@ export class SessionEngine {
 
     const cfg = this.resolveModelConfig();
     const modelProvider = configureAgentsSdk(cfg);
+    const modelChainKey = agentModelChainKey(cfg);
+    const previousResponseId = this.options.sessionPersistence?.readModelChainResponseId(modelChainKey) ?? undefined;
 
     const runContext = this.buildRunContext(runOptions?.userPrompt ?? prompt);
     refreshDartsnutRunContext(
@@ -257,7 +258,7 @@ export class SessionEngine {
 
     const session = new DartsnutAgentsSession({
       sessionId: this.sessionId,
-      initialConversation: this.options.initialConversation,
+      initialItems: this.options.initialItems,
       sessionPersistence: this.options.sessionPersistence,
       sessionTemplateMode: this.options.sessionTemplateMode,
       sessionSection: this.options.sessionSection,
@@ -278,6 +279,7 @@ export class SessionEngine {
         signal: abortSignal,
         maxTurns: SessionEngine.MAIN_AGENT_MAX_TURNS,
         context: runContext,
+        previousResponseId,
         callModelInputFilter: createSafeCallModelInputFilter()
       };
       // @openai/agents' process-global run() caches its first model provider.
@@ -303,11 +305,20 @@ export class SessionEngine {
       if (!final) {
         throw new Error(EMPTY_MODEL_RESPONSE_MESSAGE);
       }
+      if (modelChainKey && bridgeResult.chainableResponseId) {
+        await this.options.sessionPersistence?.flushWrites();
+        this.options.sessionPersistence?.writeModelChainResponseIdAtomic(
+          modelChainKey,
+          bridgeResult.chainableResponseId
+        );
+      } else if (modelChainKey && previousResponseId) {
+        this.options.sessionPersistence?.clearModelChain();
+      }
       onEvent({ type: "final", at: Date.now(), content: final });
       onEvent({
         type: "status",
         at: Date.now(),
-        message: `[agent_eval] reasoning=${bridgeResult.sawReasoning} tool_calls=${bridgeResult.sawToolCall} output_chars=${final.length}`
+        message: `[agent_eval] reasoning=${bridgeResult.sawReasoning} function_calls=${bridgeResult.sawToolCall} output_chars=${final.length}`
       });
       this.persistTranscript("assistant", final);
       return final;
@@ -315,6 +326,7 @@ export class SessionEngine {
       if (abortSignal?.aborted) {
         throw new Error(AGENT_STOPPED_MESSAGE);
       }
+      if (previousResponseId) this.options.sessionPersistence?.clearModelChain();
       const message = error instanceof Error ? error.message : String(error);
       onEvent({ type: "error", at: Date.now(), message });
       this.persistTranscript("assistant", message);

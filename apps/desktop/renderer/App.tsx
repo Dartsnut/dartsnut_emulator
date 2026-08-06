@@ -2838,8 +2838,12 @@ export function App() {
               ) : null}
               {providerSettings.activeProvider === "custom" ? (
                 <>
+                  <div className="rounded-[var(--radius-md)] border border-[var(--color-notice-warning-border)] bg-[var(--color-notice-warning-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
+                    Custom providers must expose an OpenAI Responses API-compatible endpoint.
+                    Chat Completions and Gemini APIs are not supported.
+                  </div>
                   <label className="flex flex-col gap-1.5">
-                    <span className="text-[var(--color-text-subtle)]">API endpoint</span>
+                    <span className="text-[var(--color-text-subtle)]">API base URL</span>
                     <input
                       type="url"
                       className="ui-input"

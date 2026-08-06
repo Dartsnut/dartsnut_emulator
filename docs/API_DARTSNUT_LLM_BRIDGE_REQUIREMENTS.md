@@ -3,7 +3,8 @@
 ## Objective
 
 `api.dartsnut.com` is the only bridge between Dartsnut Agent and upstream LLM service.
-Desktop sends existing OpenAI Chat Completions bodies plus community authentication and run ID.
+Desktop sends OpenAI Responses bodies plus community authentication and run ID. API keeps both
+Responses and Chat Completions endpoints for existing consumers.
 API validates account eligibility, injects upstream credentials/model, proxies response, records usage, and enforces quota.
 
 Hard rules:
@@ -80,6 +81,27 @@ Request body remains OpenAI Chat Completions-compatible. API must:
 - Count accepted upstream usage even if desktop disconnects before receiving full response.
 - Never expose upstream credentials, provider configuration, or raw database errors.
 
+### Proxy Responses
+
+```http
+POST /agent/llm/v1/responses
+token: <community-session-token>
+x-dartsnut-agent-run-id: <uuid>
+Content-Type: application/json
+```
+
+Request body remains OpenAI Responses-compatible. API applies same ownership, machine, quota,
+request-limit, timeout, disconnect, model override, and accounting rules as Chat Completions.
+Responses adapter preserves `input`, function calls, reasoning, text, and SSE event records. It
+reads response ID and usage from `response.completed`, `response.failed`, or
+`response.incomplete`, treats `response.error` as upstream failure, and withholds terminal records
+until accounting finishes. Desktop uses this endpoint exclusively.
+
+Both model endpoints stay behind global `jwtAuth` and `apiTokenVerifyRouter`. Only
+`PARAMS_MOBILE` and `PARAMS_DARTS_MOBILE` tokens may access `/agent/llm/*`; account identity comes
+only from `req.user_info.id`. Neither endpoint belongs in login or permission whitelists, and no
+platform permission record is added.
+
 ### Finish run
 
 ```http
@@ -106,7 +128,7 @@ Run endpoints use Dartsnut envelope:
 }
 ```
 
-Chat endpoint returns equivalent OpenAI-compatible error with stable `error.code`.
+Both model endpoints return equivalent OpenAI-compatible errors with stable `error.code`.
 
 | HTTP | Error code | Meaning |
 |---|---|---|
@@ -214,7 +236,7 @@ Admin-only. Support account/day, run, or date-range scope plus dry-run mode. Aud
 - Concurrency: only one active run; no duplicate completion increments.
 - Crossing: accepted completion is accounted, current run is closed, another completion on it is rejected, and the next run is rejected.
 - Run limits: inactivity, absolute expiry, 128 requests, idempotent finish.
-- Proxy: streaming/non-streaming, reasoning deltas, tool calls, usage-only final SSE chunk, upstream errors, client disconnect.
+- Proxy: both protocols, streaming/non-streaming, reasoning deltas, function/tool calls, split SSE records, terminal usage, upstream errors, client disconnect.
 - Accounting: normalized counts, atomic ledger/run/daily updates, missing usage fail-closed, reconciliation repair.
 - Security: no upstream key or internal details in responses/logs; no prompt/generated-content retention.
 - Admin: authorization, filtering, pagination, redaction, reconciliation audit.

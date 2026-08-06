@@ -29,14 +29,14 @@ test('desktop bridge starts, proxies, streams, and finishes one API agent run', 
   if (!started.ok) return;
 
   const response = await started.run.modelConfig.fetchImpl(
-    `${API_BASE}/agent/llm/v1/chat/completions`,
+    `${API_BASE}/agent/llm/v1/responses`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         model: 'client-model-is-overridden',
         stream: true,
-        messages: [{ role: 'user', content: 'e2e ping' }]
+        input: [{ role: 'user', content: 'e2e ping' }]
       })
     }
   );

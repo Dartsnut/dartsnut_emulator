@@ -147,6 +147,7 @@ describe("agentsEventBridge Responses events", () => {
       () => {}
     );
     expect(result.tokenUsage).toBeUndefined();
+    expect(result.chainableResponseId).toBe("resp_no_usage");
   });
 
   it("keeps run-item tool status behavior", async () => {

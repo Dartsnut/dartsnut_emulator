@@ -31,7 +31,7 @@ export function configureAgentsSdk(config: AgentModelConfig, options?: { force?:
     throw new Error("Provider config missing: model and apiKey are required.");
   }
   const baseUrl = normalizeProviderBaseUrl(config.baseUrl ?? "");
-  const cacheKey = `${baseUrl}\0${config.apiKey}`;
+  const cacheKey = `${config.endpointKind}\0${baseUrl}\0${config.apiKey}`;
   if (!options?.force && configuredKey === cacheKey && lastConfiguredProvider) {
     return lastConfiguredProvider;
   }

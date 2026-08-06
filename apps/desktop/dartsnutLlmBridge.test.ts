@@ -68,6 +68,45 @@ test("starts run and injects account token plus run id into model requests", asy
   assert.equal(modelHeaders.has("authorization"), false);
 });
 
+test("always keeps Responses alias regardless of run-start model metadata", async () => {
+  for (const data of [{}, { model: "gpt-compatible" }, { model: "ignored-model" }]) {
+    const result = await startDartsnutLlmBridgeRun({
+      baseApi: "https://api.dartsnut.com",
+      token: "token",
+      runId: `run-${Object.keys(data).length}`,
+      fetchImpl: async () => new Response(JSON.stringify({ code: 1001, data }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    assert.equal(result.run.modelConfig.model, "dartsnut-llm");
+    assert.equal(result.run.modelConfig.endpointKind, "openai-compatible");
+  }
+});
+
+test("keeps response-chain scope stable across rotating bridge run ids", async () => {
+  const start = async (runId: string) => startDartsnutLlmBridgeRun({
+    baseApi: "https://api.example.com",
+    token: "member-token",
+    accountScope: "member@example.com",
+    runId,
+    fetchImpl: async (input) => new Response(JSON.stringify(
+      String(input).endsWith("/runs/start")
+        ? { code: 1001, data: {} }
+        : { code: 1001 }
+    ), { status: 200, headers: { "Content-Type": "application/json" } })
+  });
+  const first = await start("run-1");
+  const second = await start("run-2");
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (!first.ok || !second.ok) return;
+  assert.equal(first.run.modelConfig.chainScope, second.run.modelConfig.chainScope);
+  assert.notEqual(first.run.modelConfig.apiKey, second.run.modelConfig.apiKey);
+});
+
 test("turns a run-start DNS failure into an actionable bridge message", async () => {
   const dnsError = Object.assign(new Error("getaddrinfo ENOTFOUND api.dartsnut.com"), {
     code: "ENOTFOUND",

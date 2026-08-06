@@ -239,6 +239,61 @@ describe("SessionEngine (@openai/agents)", () => {
     });
   });
 
+  it("persists completed response ID and chains next prompt", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-chain-"));
+    const persistence = new AgentSessionPersistence(workspace);
+    const seenPreviousIds: Array<string | undefined> = [];
+    const runFn: typeof import("@openai/agents").run = async (_agent, _input, options) => {
+      seenPreviousIds.push(options?.previousResponseId);
+      const id = seenPreviousIds.length === 1 ? "resp_first" : "resp_second";
+      return createMockStream({
+        finalOutput: "Done.",
+        events: [textDelta("Done."), terminalUsage(id, { input_tokens: 1, output_tokens: 1, total_tokens: 2 })]
+      });
+    };
+    const modelConfig = buildAgentModelConfig({ model: "gpt-4.1-mini", apiKey: "test-key" });
+    const makeEngine = () => new SessionEngine({
+      runFn,
+      agentModelConfig: modelConfig,
+      workspacePolicy: new WorkspacePolicy(workspace),
+      skillPrompt: "system skill prompt",
+      sessionPersistence: persistence
+    });
+
+    await makeEngine().runPrompt("first", () => {});
+    await makeEngine().runPrompt("second", () => {});
+
+    expect(seenPreviousIds).toEqual([undefined, "resp_first"]);
+  });
+
+  it("invalidates a persisted Responses chain when model settings change", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-chain-switch-"));
+    const persistence = new AgentSessionPersistence(workspace);
+    const seenPreviousIds: Array<string | undefined> = [];
+    const runFn: typeof import("@openai/agents").run = async (_agent, _input, options) => {
+      seenPreviousIds.push(options?.previousResponseId);
+      const id = seenPreviousIds.length === 1 ? "resp_first" : "resp_second";
+      return createMockStream({
+        finalOutput: "Done.",
+        events: [textDelta("Done."), terminalUsage(id, { input_tokens: 1, output_tokens: 1, total_tokens: 2 })]
+      });
+    };
+    const makeEngine = (model: string) => new SessionEngine({
+      runFn,
+      agentModelConfig: buildAgentModelConfig({ model, apiKey: "test-key" }),
+      workspacePolicy: new WorkspacePolicy(workspace),
+      skillPrompt: "system skill prompt",
+      sessionPersistence: persistence
+    });
+
+    await makeEngine("gpt-4.1-mini").runPrompt("first", () => {});
+    await makeEngine("gpt-4.1").runPrompt("second", () => {});
+
+    expect(seenPreviousIds).toEqual([undefined, undefined]);
+  });
+
   it("reports an empty final response as an error instead of a successful placeholder", async () => {
     resetAgentsBootstrapForTests();
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-empty-"));

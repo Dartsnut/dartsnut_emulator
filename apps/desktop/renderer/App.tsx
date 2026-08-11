@@ -590,7 +590,7 @@ function CommunityAuthStatus({
 
   if (communitySession.loggedIn) {
     return (
-      <div className="relative" ref={menuRef}>
+      <div className={cn("relative", inRail && "w-full")} ref={menuRef}>
         <button
           type="button"
           className={cn(
@@ -613,7 +613,7 @@ function CommunityAuthStatus({
               strokeLinecap="round"
             />
           </svg>
-          {inRail ? <span className="workspace-menu__button-label">Account</span> : null}
+          {inRail ? <span className="workspace-menu__button-label">{communitySession.account || "Account"}</span> : null}
           {!inRail ? <span className="whitespace-nowrap">{communitySession.account || "Signed in"}</span> : null}
         </button>
         {menuOpen ? (

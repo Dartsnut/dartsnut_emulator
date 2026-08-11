@@ -2612,7 +2612,7 @@ export function App() {
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"
+                d="M5 3.5h9l4 4V20a1 1 0 01-1 1H5a1 1 0 01-1-1V4.5a1 1 0 011-1z"
               />
               <path
                 fill="none"
@@ -2620,7 +2620,7 @@ export function App() {
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                d="M14 2v6h6M12 11v6M9 14h6"
+                d="M14 3.5v4h4M9 17l1-3 5.5-5.5 2 2L12 16z"
               />
             </svg>
             <span className="workspace-menu__button-label">New chat</span>

@@ -2640,7 +2640,11 @@ export function App() {
             const open = expandedProjects[project.id] ?? true;
             return <div key={project.id} className="workspace-menu__project-group">
               <button type="button" className="workspace-menu__project" onClick={() => { setExpandedProjects((p) => ({ ...p, [project.id]: !open })); void handleSelectProject(project.id); }}>
-                <span>{open ? "▾" : "▸"}</span><span className="truncate">{project.name}</span>
+                <svg className="workspace-menu__project-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                  <path d="M3.5 8a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+                  <path d="M4 10h16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+                </svg>
+                <span className="truncate">{project.name}</span>
               </button>
               {open ? projectTree.chats.filter((chat) => chat.projectId === project.id).map((chat) => <button key={chat.id} type="button" className={cn("workspace-menu__chat", bootstrap?.activeChatId === chat.id && "workspace-menu__chat--active")} onClick={() => void handleSelectChat(chat.id)}>{chat.title}</button>) : null}
             </div>;

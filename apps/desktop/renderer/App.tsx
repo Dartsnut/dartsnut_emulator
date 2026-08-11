@@ -2639,7 +2639,7 @@ export function App() {
           {(expandedProjects.__all ?? true) ? projectTree.projects.map((project) => {
             const open = expandedProjects[project.id] ?? true;
             return <div key={project.id} className="workspace-menu__project-group">
-              <button type="button" className={cn("workspace-menu__project", bootstrap?.activeProjectId === project.id && "workspace-menu__project--active")} onClick={() => { setExpandedProjects((p) => ({ ...p, [project.id]: !open })); void handleSelectProject(project.id); }}>
+              <button type="button" className="workspace-menu__project" onClick={() => { setExpandedProjects((p) => ({ ...p, [project.id]: !open })); void handleSelectProject(project.id); }}>
                 <span>{open ? "▾" : "▸"}</span><span className="truncate">{project.name}</span>
               </button>
               {open ? projectTree.chats.filter((chat) => chat.projectId === project.id).map((chat) => <button key={chat.id} type="button" className={cn("workspace-menu__chat", bootstrap?.activeChatId === chat.id && "workspace-menu__chat--active")} onClick={() => void handleSelectChat(chat.id)}>{chat.title}</button>) : null}

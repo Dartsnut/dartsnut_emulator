@@ -253,7 +253,7 @@ body {
     border-color var(--duration-fast) var(--ease-out),
     color var(--duration-fast) var(--ease-out);
 }
-.workspace-menu__button-label { font-size: 12px; font-weight: 600; }
+.workspace-menu__button-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
 
 .workspace-menu__button:hover:enabled {
   border-color: var(--color-emulator-toolbar-border);

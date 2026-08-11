@@ -140,6 +140,7 @@ body {
 .workspace-menu__section, .workspace-menu__project, .workspace-menu__chat { width: 100%; border: 0; background: transparent; color: var(--color-app-btn-text); text-align: left; cursor: pointer; padding: 7px 8px; border-radius: var(--radius-md); }
 .workspace-menu__section { display: flex; align-items: center; gap: 6px; font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: .08em; }
 .workspace-menu__project { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.workspace-menu__project-icon { flex: 0 0 auto; color: var(--color-text-subtle); }
 .workspace-menu__project:hover, .workspace-menu__chat:hover, .workspace-menu__section:hover { background: var(--color-app-btn-bg-hover); }
 .workspace-menu__project--active, .workspace-menu__chat--active { color: var(--color-neon-mint); background: var(--color-app-btn-bg-hover); }
 .workspace-menu__section:active, .workspace-menu__section:focus, .workspace-menu__section:focus-visible { background: transparent; color: var(--color-app-btn-text); outline: none; box-shadow: none; }

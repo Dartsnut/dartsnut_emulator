@@ -25,6 +25,7 @@ import {
   type AppUpdateStatus,
   type AppUpdateInstallResponse,
   type AppUpdateDownloadResponse,
+  type AppUpdateCheckResponse,
   type SaveTempWorkspaceResponse,
   isTemporaryWorkspaceForBootstrap,
   normalizeFsPathComparable,
@@ -184,6 +185,7 @@ import {
   getAutoUpdateEnabled,
   setAutoUpdateEnabled,
   downloadAvailableAppUpdate,
+  checkForAppUpdate,
   installDownloadedAppUpdate,
   isDownloadedAppUpdateReady,
   startAppUpdateCheck
@@ -3031,6 +3033,9 @@ ipcMain.handle(IPCChannels.appUpdateSetAutoDownload, (_event: unknown, enabled: 
 );
 ipcMain.handle(IPCChannels.appUpdateDownload, (): Promise<AppUpdateDownloadResponse> =>
   downloadAvailableAppUpdate()
+);
+ipcMain.handle(IPCChannels.appUpdateCheck, (): Promise<AppUpdateCheckResponse> =>
+  checkForAppUpdate()
 );
 ipcMain.handle(IPCChannels.appUpdateInstallNow, async (): Promise<AppUpdateInstallResponse> => {
   if (!isDownloadedAppUpdateReady()) {

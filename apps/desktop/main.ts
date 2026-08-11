@@ -24,6 +24,7 @@ import {
   type BootstrapState,
   type AppUpdateStatus,
   type AppUpdateInstallResponse,
+  type AppUpdateDownloadResponse,
   type SaveTempWorkspaceResponse,
   isTemporaryWorkspaceForBootstrap,
   normalizeFsPathComparable,
@@ -180,6 +181,9 @@ import {
 } from "./quitFlow";
 import {
   getAppUpdateStatus,
+  getAutoUpdateEnabled,
+  setAutoUpdateEnabled,
+  downloadAvailableAppUpdate,
   installDownloadedAppUpdate,
   isDownloadedAppUpdateReady,
   startAppUpdateCheck
@@ -3021,6 +3025,13 @@ ipcMain.handle(IPCChannels.shellUiTheme, (_event: unknown, theme: unknown): void
 });
 
 ipcMain.handle(IPCChannels.appUpdateStatus, (): AppUpdateStatus => getAppUpdateStatus());
+ipcMain.handle(IPCChannels.appUpdateAutoDownload, (): boolean => getAutoUpdateEnabled());
+ipcMain.handle(IPCChannels.appUpdateSetAutoDownload, (_event: unknown, enabled: unknown): boolean =>
+  setAutoUpdateEnabled(enabled === true)
+);
+ipcMain.handle(IPCChannels.appUpdateDownload, (): Promise<AppUpdateDownloadResponse> =>
+  downloadAvailableAppUpdate()
+);
 ipcMain.handle(IPCChannels.appUpdateInstallNow, async (): Promise<AppUpdateInstallResponse> => {
   if (!isDownloadedAppUpdateReady()) {
     return { ok: false, reason: "not_ready" };

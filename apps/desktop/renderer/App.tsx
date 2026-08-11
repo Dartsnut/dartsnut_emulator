@@ -2860,7 +2860,7 @@ export function App() {
               onDragLeave={handleComposerDragLeave}
               onDrop={handleComposerDrop}
             >
-              <div className="ui-composer__project-row">
+              {!bootstrap?.activeProjectId ? <div className="ui-composer__project-row">
                 <button type="button" className={cn("project-chat-trigger", projectMenuOpen && "project-chat-trigger--active")} onClick={() => setProjectMenuOpen((open) => !open)} disabled={projectSwitchProgress.active || sending} aria-haspopup="menu" aria-expanded={projectMenuOpen}>
                   <svg className="ui-composer__project-glyph" width="16" height="16" viewBox="0 0 24 24" aria-hidden>
                     <path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
@@ -2872,7 +2872,7 @@ export function App() {
                   {projectTree.projects.length > 0 ? <div className="project-picker-menu__divider" /> : null}
                   <button type="button" role="menuitem" className="project-picker-menu__item" onClick={handleCreateProject}><span className="project-picker-menu__plus" aria-hidden>＋</span><span>Add project</span></button>
                 </div> : null}
-              </div>
+              </div> : null}
               {chatMediaAttachments.length > 0 ? (
                 <div className="ui-composer-attachments" aria-label="Attached media files">
                   {chatMediaAttachments.map((attachment) => (

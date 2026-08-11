@@ -1574,6 +1574,13 @@ async function switchToProject(projectId: string, chatId?: string): Promise<bool
     const chat = store.getChat(chatId);
     if (!chat || chat.projectId !== project.id) return false;
   }
+  if (activeProjectId === project.id) {
+    activeChatId = chatId ?? null;
+    if (activeChatId) store.markChatOpened(activeChatId);
+    store.touchProject(project.id);
+    emitBootstrapStateToRenderer();
+    return true;
+  }
   if (projectSwitchInFlight) return projectSwitchInFlight;
   projectSwitchInFlight = (async () => {
     const runtimeActive = Boolean(emulatorState.running || deployMachineSession?.connected);

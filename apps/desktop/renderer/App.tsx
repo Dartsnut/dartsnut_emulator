@@ -1014,6 +1014,20 @@ export function App() {
     });
   }, [api]);
 
+  const handleCheckAppUpdate = useCallback(() => {
+    if (!api?.checkAppUpdate) {
+      return;
+    }
+    void api.checkAppUpdate().then((result) => {
+      if (!result.ok && result.reason !== "already_checking" && result.reason !== "already_ready") {
+        setAppUpdate((current) => current ? { ...current, error: result.message ?? "Could not check for updates." } : current);
+      }
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Could not check for updates.";
+      setAppUpdate((current) => current ? { ...current, error: message } : current);
+    });
+  }, [api]);
+
   const handleUpdateNextLaunch = useCallback(() => {
     setAppUpdate((current) =>
       current
@@ -2986,6 +3000,24 @@ export function App() {
                       </span>
                     </span>
                   </label>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      className="ui-btn-secondary min-h-8 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-55"
+                      disabled={appUpdate?.kind === "checking" || appUpdate?.kind === "downloading" || appUpdate?.kind === "ready"}
+                      onClick={handleCheckAppUpdate}
+                      data-analytics-id="settings_check_update"
+                      data-analytics-area="settings"
+                    >
+                      {appUpdate?.kind === "checking" ? "Checking..." : "Check for updates"}
+                    </button>
+                    {appUpdate?.kind === "not_available" ? (
+                      <span className="text-xs text-fg-muted" role="status">{appUpdate.message ?? "Dartsnut Agent is up to date."}</span>
+                    ) : null}
+                    {appUpdate?.kind === "error" ? (
+                      <span className="text-xs text-[var(--color-error-text)]" role="alert">{appUpdate.message ?? "Update check failed."}</span>
+                    ) : null}
+                  </div>
                 </>
               ) : null}
               {settingsSection === "provider" ? <label className="flex flex-col gap-1.5">

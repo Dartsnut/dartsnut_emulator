@@ -79,6 +79,15 @@ describe("app updater", () => {
     expect(updater.getAppUpdateStatus().kind).toBe("downloading");
   });
 
+  it("allows a manual update check after the startup check completes", async () => {
+    const updater = await loadUpdater();
+    updater.startAppUpdateCheck(() => undefined);
+    await vi.waitFor(() => expect(mocks.updater.checkForUpdates).toHaveBeenCalledTimes(1));
+    mocks.handlers.get("update-not-available")?.();
+    expect((await updater.checkForAppUpdate()).ok).toBe(true);
+    expect(mocks.updater.checkForUpdates).toHaveBeenCalledTimes(2);
+  });
+
   it("supports an available development preview without touching the real updater", async () => {
     const previousPreview = process.env.DARTSNUT_DEV_UPDATE_PREVIEW;
     process.env.DARTSNUT_DEV_UPDATE_PREVIEW = "available";

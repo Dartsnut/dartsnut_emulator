@@ -1,7 +1,12 @@
 import path from "node:path";
 import { app } from "electron";
 import { autoUpdater } from "electron-updater";
-import { IPCChannels, type AppUpdateDownloadResponse, type AppUpdateStatus } from "@dartsnut/shared-ipc";
+import {
+  IPCChannels,
+  type AppUpdateCheckResponse,
+  type AppUpdateDownloadResponse,
+  type AppUpdateStatus
+} from "@dartsnut/shared-ipc";
 import { devLog } from "./devOnlyLog";
 import { readAutoUpdatePreference, writeAutoUpdatePreference } from "./appUpdatePreferences";
 
@@ -17,6 +22,7 @@ let latestStatus: AppUpdateStatus = {
 let updateReady = false;
 let started = false;
 let downloadInProgress = false;
+let checkInProgress = false;
 let rendererSender: SendToRenderer | null = null;
 
 const AUTO_UPDATE_PREFERENCES_FILE = "app-update-preferences.json";
@@ -135,6 +141,54 @@ export async function downloadAvailableAppUpdate(): Promise<AppUpdateDownloadRes
   }
 }
 
+export async function checkForAppUpdate(): Promise<AppUpdateCheckResponse> {
+  const previewMode = devUpdatePreviewMode();
+  if (previewMode) {
+    updateReady = previewMode === "ready";
+    if (rendererSender) {
+      updateStatus(rendererSender, {
+        kind: updateReady ? "ready" : "available",
+        availableVersion: devPreviewVersion(),
+        percent: updateReady ? 100 : 0,
+        message: updateReady ? "Update ready to install." : "Update available (development preview)."
+      });
+    }
+    return { ok: true };
+  }
+  if (!started || !app.isPackaged || !rendererSender) {
+    return { ok: false, reason: "disabled", message: "Updates are disabled in development." };
+  }
+  if (updateReady || latestStatus.kind === "ready") {
+    return { ok: false, reason: "already_ready", message: "Downloaded update is ready to install." };
+  }
+  if (checkInProgress || latestStatus.kind === "checking") {
+    return { ok: false, reason: "already_checking" };
+  }
+
+  checkInProgress = true;
+  updateStatus(rendererSender, {
+    kind: "checking",
+    availableVersion: null,
+    percent: null,
+    message: "Checking for updates..."
+  });
+  try {
+    await autoUpdater.checkForUpdates();
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    devLog.warn("[updater] Update check failed", message);
+    updateStatus(rendererSender, {
+      kind: "error",
+      percent: null,
+      message
+    });
+    return { ok: false, reason: "failed", message };
+  } finally {
+    checkInProgress = false;
+  }
+}
+
 export function startAppUpdateCheck(sendToRenderer: SendToRenderer): void {
   rendererSender = sendToRenderer;
   if (started) {
@@ -232,20 +286,5 @@ export function startAppUpdateCheck(sendToRenderer: SendToRenderer): void {
     });
   });
 
-  updateStatus(sendToRenderer, {
-    kind: "checking",
-    availableVersion: null,
-    percent: null,
-    message: "Checking for updates..."
-  });
-
-  autoUpdater.checkForUpdates().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    devLog.warn("[updater] Update check failed", message);
-    updateStatus(sendToRenderer, {
-      kind: "error",
-      percent: null,
-      message
-    });
-  });
+  void checkForAppUpdate();
 }

@@ -52,6 +52,8 @@ export const IPCChannels = {
   appUpdateSetAutoDownload: "app:update-set-auto-download",
   /** Renderer → main: download an available desktop app update on demand. */
   appUpdateDownload: "app:update-download",
+  /** Renderer → main: manually check for a desktop app update. */
+  appUpdateCheck: "app:update-check",
   deployGetEligibility: "deploy:get-eligibility",
   widgetConfigGet: "widget-config:get",
   widgetConfigChanged: "widget-config:changed",
@@ -136,6 +138,10 @@ export type AppUpdateInstallResponse =
 export type AppUpdateDownloadResponse =
   | { ok: true }
   | { ok: false; reason: "not_available" | "already_downloading" | "failed"; message?: string };
+
+export type AppUpdateCheckResponse =
+  | { ok: true }
+  | { ok: false; reason: "disabled" | "already_checking" | "already_ready" | "failed"; message?: string };
 
 export type ProviderStatus = "ready" | "missing_config" | "invalid";
 

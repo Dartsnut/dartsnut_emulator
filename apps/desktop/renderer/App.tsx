@@ -84,11 +84,12 @@ import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
 import {
   clampChatPaneWidth,
-  DEFAULT_CHAT_PANE_WIDTH,
+  getStoredChatPaneWidth,
   maxChatPaneWidthForViewport,
   MIN_CHAT_PANE_WIDTH,
   MIN_EMULATOR_PANE_WIDTH,
-  nextChatPaneWidthFromDrag
+  nextChatPaneWidthFromDrag,
+  setStoredChatPaneWidth
 } from "./splitPaneSizing";
 
 /** Same order as `WIDGET_DISPLAY_SIZES` in `@dartsnut/shared-ipc` — defined here because Vite/Rollup does not resolve that value through the package’s compiled CJS `export *` shim. */
@@ -814,7 +815,7 @@ export function App() {
     message: "Preparing submission..."
   });
   const [appUpdate, setAppUpdate] = useState<UpdatePromptState | null>(null);
-  const [chatPaneWidth, setChatPaneWidth] = useState(DEFAULT_CHAT_PANE_WIDTH);
+  const [chatPaneWidth, setChatPaneWidth] = useState(getStoredChatPaneWidth);
   const [chatPaneResizing, setChatPaneResizing] = useState(false);
   const chatPaneResizeDragRef = useRef<{
     pointerId: number;
@@ -1309,6 +1310,10 @@ export function App() {
       window.removeEventListener("resize", onResize);
     };
   }, [splitPaneViewportWidth]);
+
+  useEffect(() => {
+    setStoredChatPaneWidth(chatPaneWidth);
+  }, [chatPaneWidth]);
 
   useEffect(() => {
     scrollTimelineToBottom();

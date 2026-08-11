@@ -13,6 +13,7 @@ import {
   type VenvPrepDisplay,
 } from "@dartsnut/emulator-protocol";
 import { cn } from "./cn";
+import { DART_LEGEND_INDEXES, resolveDartShortcut } from "./emulatorDarts";
 import { applyWidgetParamsAndReload, type WidgetValueStore } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
@@ -507,12 +508,11 @@ export function EmulatorPanel({
           pressed: true,
         });
       }
-      if (/^f([1-9]|1[0-2])$/i.test(event.key)) {
-        const idx = Number(event.key.slice(1)) - 1;
-        if (idx >= 0 && idx < 12) {
-          currentDartIndexRef.current = idx;
-          setSelectedDartIndex(idx);
-        }
+      const dartIndex = resolveDartShortcut(event.key, stateRef.current.widgetType);
+      if (dartIndex !== null) {
+        event.preventDefault();
+        currentDartIndexRef.current = dartIndex;
+        setSelectedDartIndex(dartIndex);
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
@@ -857,7 +857,8 @@ export function EmulatorPanel({
             className="mb-3.5 box-border grid w-full shrink-0 grid-cols-6 justify-items-center gap-2 px-2 pb-2"
             aria-label="Dart indexes"
           >
-            {DART_COLORS.map((color, idx) => {
+            {DART_LEGEND_INDEXES.map((idx, legendIndex) => {
+              const color = DART_COLORS[idx];
               const isSelected = idx === selectedDartIndex;
               const isPlaced = dartCoords[idx] !== null;
               const useLightText = idx % 4 === 0 || idx % 4 === 1;
@@ -872,7 +873,7 @@ export function EmulatorPanel({
                     isSelected && "outline outline-2 outline-offset-2 outline-[var(--color-text-strong)]"
                   )}
                   style={{ backgroundColor: color }}
-                  title={`F${idx + 1}${isPlaced ? " • placed" : " • not placed"}${isSelected ? " • selected" : ""}`}
+                  title={`F${legendIndex + 1}${isPlaced ? " • placed" : " • not placed"}${isSelected ? " • selected" : ""}`}
                   onClick={() => {
                     currentDartIndexRef.current = idx;
                     setSelectedDartIndex(idx);

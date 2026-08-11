@@ -2,10 +2,13 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  CHAT_PANE_WIDTH_STORAGE_KEY,
   DEFAULT_CHAT_PANE_WIDTH,
   MIN_CHAT_PANE_WIDTH,
   clampChatPaneWidth,
-  nextChatPaneWidthFromDrag
+  getStoredChatPaneWidth,
+  nextChatPaneWidthFromDrag,
+  setStoredChatPaneWidth
 } = require("./splitPaneSizing.ts");
 
 test("clampChatPaneWidth keeps the chat pane inside desktop layout bounds", () => {
@@ -25,4 +28,35 @@ test("nextChatPaneWidthFromDrag applies pointer delta from the drag start", () =
     startWidth: DEFAULT_CHAT_PANE_WIDTH,
     viewportWidth: 1280
   }), DEFAULT_CHAT_PANE_WIDTH + 70);
+});
+
+test("chat pane width round-trips through local storage", () => {
+  const values = new Map();
+  global.window = {
+    localStorage: {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value)
+    }
+  };
+
+  setStoredChatPaneWidth(731.6);
+
+  assert.equal(values.get(CHAT_PANE_WIDTH_STORAGE_KEY), "732");
+  assert.equal(getStoredChatPaneWidth(), 732);
+  delete global.window;
+});
+
+test("invalid or unavailable stored widths use the default", () => {
+  global.window = {
+    localStorage: {
+      getItem: () => "not-a-width",
+      setItem: () => {
+        throw new Error("storage unavailable");
+      }
+    }
+  };
+
+  assert.equal(getStoredChatPaneWidth(), DEFAULT_CHAT_PANE_WIDTH);
+  assert.doesNotThrow(() => setStoredChatPaneWidth(720));
+  delete global.window;
 });

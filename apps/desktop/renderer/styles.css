@@ -138,7 +138,7 @@ body {
 
 .workspace-menu__projects { min-height: 0; flex: 1; overflow-y: auto; margin: 12px -2px; }
 .workspace-menu__section, .workspace-menu__project, .workspace-menu__chat { width: 100%; border: 0; background: transparent; color: var(--color-app-btn-text); text-align: left; cursor: pointer; padding: 7px 8px; border-radius: var(--radius-md); }
-.workspace-menu__section { display: flex; align-items: center; gap: 6px; font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: .08em; }
+.workspace-menu__section { display: flex; align-items: center; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .06em; color: var(--color-text-subtle); }
 .workspace-menu__project { display: flex; gap: 6px; align-items: center; font-size: 13px; }
 .workspace-menu__project-icon { flex: 0 0 auto; color: var(--color-text-subtle); }
 .workspace-menu__project:hover, .workspace-menu__chat:hover, .workspace-menu__section:hover { background: var(--color-app-btn-bg-hover); }

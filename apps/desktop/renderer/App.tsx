@@ -2633,7 +2633,6 @@ export function App() {
             aria-expanded={expandedProjects.__all ?? true}
             onClick={() => setExpandedProjects((p) => ({ ...p, __all: !(p.__all ?? true) }))}
           >
-            <span aria-hidden>{(expandedProjects.__all ?? true) ? "▾" : "▸"}</span>
             <span>Projects</span>
           </button>
           {(expandedProjects.__all ?? true) ? projectTree.projects.map((project) => {

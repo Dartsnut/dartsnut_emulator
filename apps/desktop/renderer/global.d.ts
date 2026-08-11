@@ -2,6 +2,8 @@ import type {
   AgentEvent,
   AgentSessionWorkspaceSummary,
   AppUpdateInstallResponse,
+  AppUpdateDownloadResponse,
+  AppUpdateCheckResponse,
   AppUpdateStatus,
   ApplyAssetsRequest,
   ApplyAssetsResponse,
@@ -78,6 +80,10 @@ declare global {
       getWindowChromeInsets: () => Promise<WindowChromeInsets>;
       getAppUpdateStatus: () => Promise<AppUpdateStatus>;
       installAppUpdateNow: () => Promise<AppUpdateInstallResponse>;
+      getAppUpdateAutoDownload: () => Promise<boolean>;
+      setAppUpdateAutoDownload: (enabled: boolean) => Promise<boolean>;
+      downloadAppUpdate: () => Promise<AppUpdateDownloadResponse>;
+      checkAppUpdate: () => Promise<AppUpdateCheckResponse>;
       setShellUiTheme: (theme: ShellUiTheme) => Promise<void>;
       startNewProject: () => Promise<BootstrapState>;
       saveTempWorkspace: () => Promise<SaveTempWorkspaceResponse>;

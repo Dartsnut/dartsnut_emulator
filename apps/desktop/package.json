@@ -19,7 +19,8 @@
     "package:win": "pnpm run build && pnpm exec electron-builder --win --publish never",
     "package:win:portable": "pnpm run build && pnpm exec electron-builder --win portable:x64 --publish never",
     "test:analytics": "vitest run renderer/analytics.test.ts",
-    "test:renderer": "vitest run renderer/analytics.test.ts renderer/emulatorDarts.test.ts renderer/rawTimeline.test.ts renderer/widgetParams.test.ts"
+    "test:renderer": "vitest run renderer/analytics.test.ts renderer/emulatorDarts.test.ts renderer/rawTimeline.test.ts renderer/widgetParams.test.ts renderer/AppUpdateOverlay.test.tsx",
+    "test:updater": "vitest run appUpdater.test.ts appUpdatePreferences.test.ts"
   },
   "dependencies": {
     "@dartsnut/agent-runtime": "workspace:*",

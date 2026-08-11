@@ -48,19 +48,36 @@ class CaptureScreenshotTests(unittest.TestCase):
                     path.unlink(missing_ok=True)
         self.temp_dir.cleanup()
 
-    def test_game_capture_writes_mockup_only(self):
+    def test_game_capture_writes_mockup_and_surface(self):
         self.core.state.widgetType = "game"
+        self.core._last_frame_w = 128
+        self.core._last_frame_h = 160
+        self.core._last_frame_bytes = _solid_frame_bytes(128, 160)
 
         filepaths = self.core._capture_screenshot_png()
 
-        self.assertEqual(len(filepaths), 1)
-        with Image.open(filepaths[0]) as mockup:
+        self.assertEqual(len(filepaths), 2)
+        mockup_path, surface_path = filepaths
+        self.assertIn("_surface_", surface_path)
+        self.assertNotIn("_surface_", mockup_path)
+        self.assertEqual(
+            Path(mockup_path).stem.removeprefix("TestApp_"),
+            Path(surface_path).stem.removeprefix("TestApp_surface_"),
+        )
+
+        with Image.open(mockup_path) as mockup:
             self.assertEqual(mockup.size, (588, 800))
+        with Image.open(surface_path) as surface:
+            self.assertEqual(surface.size, (512, 640))
 
-        self.assertTrue(Path(filepaths[0]).exists())
+        self.assertTrue(Path(mockup_path).exists())
+        self.assertTrue(Path(surface_path).exists())
 
-    def test_widget_capture_writes_mockup_and_surface(self):
+    def test_128x160_widget_capture_writes_mockup_and_surface(self):
         self.core.state.widgetType = "widget"
+        self.core._last_frame_w = 128
+        self.core._last_frame_h = 160
+        self.core._last_frame_bytes = _solid_frame_bytes(128, 160)
 
         filepaths = self.core._capture_screenshot_png()
 
@@ -72,7 +89,7 @@ class CaptureScreenshotTests(unittest.TestCase):
         with Image.open(mockup_path) as mockup:
             self.assertEqual(mockup.size, (588, 800))
         with Image.open(surface_path) as surface:
-            self.assertEqual(surface.size, (256, 128))
+            self.assertEqual(surface.size, (512, 640))
 
         self.assertTrue(Path(mockup_path).exists())
         self.assertTrue(Path(surface_path).exists())

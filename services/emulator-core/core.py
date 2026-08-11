@@ -618,7 +618,7 @@ class EmulatorCore:
         filepaths: list[str] = []
         canvas = self._build_capture_canvas(frame_img, frame_w, frame_h)
         filepaths.append(self._write_capture_png(canvas, timestamp=timestamp))
-        if (self.state.widgetType or "").lower() == "widget":
+        if (self.state.widgetType or "").lower() in ("game", "widget"):
             surface_scale = 4
             surface_img = frame_img.resize(
                 (frame_w * surface_scale, frame_h * surface_scale),

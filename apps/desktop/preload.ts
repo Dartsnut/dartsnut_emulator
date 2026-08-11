@@ -3,6 +3,8 @@ import {
   IPCChannels,
   type AgentEvent,
   type AppUpdateInstallResponse,
+  type AppUpdateDownloadResponse,
+  type AppUpdateCheckResponse,
   type AppUpdateStatus,
   type MainProcessConsoleMirrorPayload,
   type ApplyAssetsRequest,
@@ -84,6 +86,14 @@ const api = {
     ipcRenderer.invoke(IPCChannels.appUpdateStatus) as Promise<AppUpdateStatus>,
   installAppUpdateNow: () =>
     ipcRenderer.invoke(IPCChannels.appUpdateInstallNow) as Promise<AppUpdateInstallResponse>,
+  getAppUpdateAutoDownload: () =>
+    ipcRenderer.invoke(IPCChannels.appUpdateAutoDownload) as Promise<boolean>,
+  setAppUpdateAutoDownload: (enabled: boolean) =>
+    ipcRenderer.invoke(IPCChannels.appUpdateSetAutoDownload, enabled) as Promise<boolean>,
+  downloadAppUpdate: () =>
+    ipcRenderer.invoke(IPCChannels.appUpdateDownload) as Promise<AppUpdateDownloadResponse>,
+  checkAppUpdate: () =>
+    ipcRenderer.invoke(IPCChannels.appUpdateCheck) as Promise<AppUpdateCheckResponse>,
   setShellUiTheme: (theme: ShellUiTheme) =>
     ipcRenderer.invoke(IPCChannels.shellUiTheme, theme) as Promise<void>,
   startNewProject: () => ipcRenderer.invoke(IPCChannels.startNewProject) as Promise<BootstrapState>,

@@ -13,6 +13,7 @@
     "main.ts",
     "agentRunCoordinator.ts",
     "appUpdater.ts",
+    "appUpdatePreferences.ts",
     "dartsnutLlmBridge.ts",
     "desktopNetwork.ts",
     "authNetworkError.ts",

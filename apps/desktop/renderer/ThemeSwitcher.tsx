@@ -68,6 +68,7 @@ export function ThemeSwitcherIcon({ value, onChange, id }: ThemeSwitcherIconProp
       onClick={() => onChange(next)}
     >
       {value === "system" ? <SystemIcon /> : value === "light" ? <SunIcon /> : <MoonIcon />}
+      <span className="workspace-menu__button-label">Theme</span>
     </button>
   );
 }

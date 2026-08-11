@@ -22,6 +22,12 @@ export const IPCChannels = {
   subscribeEvents: "agent:subscribe-events",
   getWorkspaceSessionSummary: "agent:get-workspace-session-summary",
   resetWorkspaceSession: "agent:reset-workspace-session",
+  projectsList: "agent:projects-list",
+  projectCreate: "agent:project-create",
+  projectSelect: "agent:project-select",
+  chatCreate: "agent:chat-create",
+  chatSelect: "agent:chat-select",
+  projectSwitchProgress: "agent:project-switch-progress",
   getProviderSettings: "agent:get-provider-settings",
   saveProviderSettings: "agent:save-provider-settings",
   getPythonRuntimeStatus: "agent:get-python-runtime-status",
@@ -155,13 +161,22 @@ export interface PythonRuntimeProgress {
 
 export interface BootstrapState {
   workspaceRoot: string | null;
+  activeProjectId: string | null;
+  activeChatId: string | null;
   providerStatus: ProviderStatus;
   firstRunComplete: boolean;
-  /** True when `workspaceRoot` is the persisted unsaved temp project directory. */
+  /** @deprecated retained for renderer compatibility; always false after project-store migration. */
   isTemporaryWorkspace: boolean;
   /** True when the active workspace has no `conf.json` yet (run creation intake before creator tools). */
   needsCreationIntake: boolean;
 }
+
+export interface ProjectRecord { id: string; name: string; folderPath: string; createdAt: string; updatedAt: string; lastOpenedAt: string; migrationComplete?: boolean; }
+export interface ChatRecord { id: string; projectId: string; title: string; createdAt: string; updatedAt: string; }
+export interface ProjectTree { projects: ProjectRecord[]; chats: ChatRecord[]; }
+export interface ProjectCreateRequest { folderPath: string; name?: string; }
+export interface ProjectSelectRequest { projectId: string | null; chatId?: string; }
+export type ProjectSwitchProgress = { active: boolean; stage: "confirming" | "stopping-deployment" | "stopping-emulator" | "switching" | "reloading" | "ready" | "error"; message?: string };
 
 /** IPC return from `saveTempWorkspace`. */
 export type SaveTempWorkspaceResponse =
@@ -186,6 +201,8 @@ export interface PromptRequest {
   projectType?: ProjectType;
   widgetSize?: WidgetSize;
   workspacePath?: string;
+  projectId?: string;
+  chatId?: string;
   templateMode?: "game-creator" | "widget-creator" | "asset-applier";
   /**
    * Controls loading vs resetting on-disk workspace agent session (see `AgentSessionWorkspaceSummary`).

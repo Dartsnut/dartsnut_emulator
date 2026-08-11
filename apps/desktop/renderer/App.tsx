@@ -20,6 +20,8 @@ import {
   type AppUpdateStatus,
   type AssetManifest,
   type BootstrapState,
+  type ProjectTree,
+  type ProjectSwitchProgress,
   type DeployEligibility,
   type ManifestSnapshot,
   type ProviderId,
@@ -146,7 +148,6 @@ type UpdatePromptState = AppUpdateStatus & {
 };
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
-const DEPLOY_PANE_RESERVED_WIDTH_PX = 360;
 const WORKSPACE_MENU_WIDTH_PX = 54;
 /** Keep in sync with composer textarea `max-h-[200px]` */
 const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
@@ -612,6 +613,7 @@ function CommunityAuthStatus({
               strokeLinecap="round"
             />
           </svg>
+          {inRail ? <span className="workspace-menu__button-label">Account</span> : null}
           {!inRail ? <span className="whitespace-nowrap">{communitySession.account || "Signed in"}</span> : null}
         </button>
         {menuOpen ? (
@@ -655,6 +657,7 @@ function CommunityAuthStatus({
           strokeLinecap="round"
         />
       </svg>
+      {inRail ? <span className="workspace-menu__button-label">Sign in</span> : null}
     </button>
   );
 }
@@ -735,6 +738,15 @@ export function App() {
   }, []);
 
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
+  const [projectTree, setProjectTree] = useState<ProjectTree>({ projects: [], chats: [] });
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
+  const [projectSwitchProgress, setProjectSwitchProgress] = useState<ProjectSwitchProgress>({ active: false, stage: "ready" });
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [createProjectName, setCreateProjectName] = useState("");
+  const [createProjectFolder, setCreateProjectFolder] = useState<string | null>(null);
+  const [createProjectError, setCreateProjectError] = useState<string | null>(null);
+  const [createProjectPicking, setCreateProjectPicking] = useState(false);
   const [entries, setEntries] = useState<TimelineEntry[]>([
     { id: "greeting-initial", role: "agent", text: GREETING_TEXT }
   ]);
@@ -813,11 +825,23 @@ export function App() {
   const [pendingChangeSlotIds, setPendingChangeSlotIds] = useState<string[]>([]);
   const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>("emulator");
   const [deployPaneTab, setDeployPaneTab] = useState<DeployPaneTab>("deploy");
+  const [deployDrawerOpen, setDeployDrawerOpen] = useState(false);
   const [deployEligibility, setDeployEligibility] = useState<DeployEligibility>({
     ok: false,
     reason: "no_workspace"
   });
   const deployEligible = deployEligibility.ok;
+  const activeProject = projectTree.projects.find((project) => project.id === bootstrap?.activeProjectId) ?? null;
+  const validProject = Boolean(
+    activeProject &&
+    bootstrap?.workspaceRoot &&
+    deployEligibility.ok &&
+    (deployEligibility.projectType === "game" || deployEligibility.projectType === "widget")
+  );
+  const showEmulator = validProject;
+  const showRuntimeSetup = pythonRuntimeProgress.running || Boolean(pythonRuntimeProgress.error);
+  const showEmulatorPane = showEmulator && !showRuntimeSetup;
+  const showDeployDrawer = screen === "main" && validProject && !showRuntimeSetup;
   const [widgetConfigs, setWidgetConfigs] = useState<Record<WidgetConfigScope, WidgetConfigSnapshot>>(EMPTY_WIDGET_CONFIGS);
   const [widgetValuesByConfig, setWidgetValuesByConfig] = useState<Record<string, WidgetValueState>>({});
   const [theme, setTheme] = useState<ThemeId>(() => resolveThemeFromEnvironment());
@@ -857,18 +881,35 @@ export function App() {
 
   const api = window.dartsnutApi;
 
+  useEffect(() => {
+    if (!api) return;
+    void api.listProjects().then(setProjectTree).catch(() => undefined);
+    return api.onProjectSwitchProgress(setProjectSwitchProgress);
+  }, [api]);
+
+  useEffect(() => {
+    if (!projectMenuOpen) return;
+    const dismiss = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest(".ui-composer__project-row")) setProjectMenuOpen(false);
+    };
+    document.addEventListener("mousedown", dismiss);
+    return () => document.removeEventListener("mousedown", dismiss);
+  }, [projectMenuOpen]);
+
   const splitPaneViewportWidth = useCallback(() => {
     const rawWidth = typeof window === "undefined" ? 1320 : window.innerWidth;
-    return rawWidth - WORKSPACE_MENU_WIDTH_PX - (deployEligible ? DEPLOY_PANE_RESERVED_WIDTH_PX : 0);
-  }, [deployEligible]);
+    return rawWidth - WORKSPACE_MENU_WIDTH_PX - (showEmulatorPane ? MIN_EMULATOR_PANE_WIDTH : 0);
+  }, [showEmulatorPane]);
 
   const mainGridTemplateColumns = useMemo(() => {
     const leftColumn = `${chatPaneWidth}px`;
     const emulatorColumn = `minmax(${MIN_EMULATOR_PANE_WIDTH}px,1fr)`;
-    return deployEligible
-      ? `${WORKSPACE_MENU_WIDTH_PX}px ${leftColumn} ${emulatorColumn} minmax(360px,420px)`
-      : `${WORKSPACE_MENU_WIDTH_PX}px ${leftColumn} ${emulatorColumn}`;
-  }, [chatPaneWidth, deployEligible]);
+    if (!showEmulatorPane) {
+      return "minmax(190px,280px) minmax(0,1fr)";
+    }
+    return `minmax(190px,280px) ${leftColumn} ${emulatorColumn}`;
+  }, [chatPaneWidth, showEmulatorPane]);
 
   const mainGridStyle = useMemo(
     () => ({
@@ -1852,6 +1893,10 @@ export function App() {
   }, [assetManifest, deployEligible, rightPaneTab]);
 
   useEffect(() => {
+    setDeployDrawerOpen(false);
+  }, [bootstrap?.activeProjectId]);
+
+  useEffect(() => {
     if (!deployEligible || (gamesTabDisabled && deployPaneTab === "games")) {
       setDeployPaneTab("deploy");
     }
@@ -1859,11 +1904,12 @@ export function App() {
 
   useEffect(() => {
     const ws = bootstrap?.workspaceRoot;
-    if (!api || !ws) {
+    if (!api || !ws || !bootstrap?.activeChatId) {
       lastAgentSessionHydrateKeyRef.current = "";
       return;
     }
-    if (lastAgentSessionHydrateKeyRef.current === ws) {
+    const hydrateKey = `${bootstrap.activeProjectId ?? ""}:${bootstrap.activeChatId}`;
+    if (lastAgentSessionHydrateKeyRef.current === hydrateKey) {
       return;
     }
     let cancelled = false;
@@ -1872,7 +1918,7 @@ export function App() {
       if (cancelled) {
         return;
       }
-      lastAgentSessionHydrateKeyRef.current = ws;
+      lastAgentSessionHydrateKeyRef.current = hydrateKey;
       setTokenUsage(summary.tokenUsage ?? null);
       if (!summary.hasPersistedSession || summary.transcriptTail.length === 0) {
         setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT }]);
@@ -1937,7 +1983,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [api, bootstrap?.workspaceRoot]);
+  }, [api, bootstrap?.workspaceRoot, bootstrap?.activeProjectId, bootstrap?.activeChatId]);
 
   const chatDisabled = useMemo(() => {
     if (!bootstrap) {
@@ -1945,7 +1991,6 @@ export function App() {
     }
     return sending;
   }, [bootstrap, sending]);
-  const showRuntimeSetup = pythonRuntimeProgress.running || Boolean(pythonRuntimeProgress.error);
   const runtimeProgressPercent = Math.min(100, Math.max(0, Math.round(pythonRuntimeProgress.percent)));
 
   useEffect(() => {
@@ -2125,6 +2170,69 @@ export function App() {
       const message = error instanceof Error ? error.message : "Could not start a new project.";
       setRuntimeError(message);
     }
+  }
+
+  async function handleNewChat() {
+    if (!api || sending) return;
+    const project = bootstrap?.activeProjectId ?? projectTree.projects[0]?.id;
+    if (!project) { await handleCreateProject(); return; }
+    const result = await api.createChat(project); setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi();
+  }
+
+  function handleCreateProject() {
+    if (sending) return;
+    setProjectMenuOpen(false);
+    setCreateProjectName("");
+    setCreateProjectFolder(null);
+    setCreateProjectError(null);
+    setCreateProjectOpen(true);
+  }
+
+  async function handlePickProjectFolder() {
+    if (!api || sending || createProjectPicking) return;
+    setCreateProjectPicking(true);
+    setCreateProjectError(null);
+    try {
+      const picked = await api.pickWorkspace();
+      if (picked.accepted && picked.selectedPath) {
+        setCreateProjectFolder(picked.selectedPath);
+        setCreateProjectName((current) => current.trim() || workspaceFolderBasename(picked.selectedPath!));
+      }
+    } catch (error: unknown) {
+      setCreateProjectError(error instanceof Error ? error.message : "Could not choose source folder.");
+    } finally {
+      setCreateProjectPicking(false);
+    }
+  }
+
+  async function handleSubmitCreateProject() {
+    if (!api || sending || !createProjectFolder) return;
+    setCreateProjectError(null);
+    try {
+      const result = await api.createProject({ folderPath: createProjectFolder, name: createProjectName });
+      setCreateProjectOpen(false);
+      setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi();
+    } catch (error: unknown) {
+      setCreateProjectError(error instanceof Error ? error.message : "Could not create project.");
+    }
+  }
+
+  async function handleSelectProject(projectId: string) {
+    if (!api || sending) return;
+    const result = await api.selectProject({ projectId });
+    if (result.accepted) { setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi(); }
+    setProjectMenuOpen(false);
+  }
+
+  async function handleNoProject() {
+    if (!api || sending) return;
+    const result = await api.selectProject({ projectId: null });
+    setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi(); setProjectMenuOpen(false);
+  }
+
+  async function handleSelectChat(chatId: string) {
+    if (!api || sending) return;
+    const result = await api.selectChat(chatId); setBootstrap(result.state); setProjectTree(result.tree);
   }
 
   function handleOpenSettings() {
@@ -2356,6 +2464,8 @@ export function App() {
       prompt: visiblePrompt,
       chatMediaAttachments: attachments,
       workspacePath: bootstrap?.workspaceRoot ?? undefined,
+      projectId: bootstrap?.activeProjectId ?? undefined,
+      chatId: bootstrap?.activeChatId ?? undefined,
       templateMode: bootstrap?.needsCreationIntake ? undefined : sessionTemplateMode ?? undefined,
       widgetSize: bootstrap?.needsCreationIntake ? undefined : sessionWidgetSize ?? undefined,
       projectType: bootstrap?.needsCreationIntake ? undefined : sessionProjectType ?? undefined
@@ -2383,7 +2493,7 @@ export function App() {
   return (
     <main
       className={cn(
-        "app-shell grid h-full w-full items-stretch overflow-visible pt-0",
+        "app-shell grid h-full w-full items-stretch pt-0",
         "grid-cols-[var(--app-main-grid-cols)]",
         "grid-rows-[auto_minmax(0,1fr)]",
         "pr-[var(--window-control-inset-right)] pb-[var(--window-control-inset-bottom)] pl-[var(--window-control-inset-left)]",
@@ -2394,7 +2504,7 @@ export function App() {
       aria-busy={submissionLock.active}
     >
       <header
-        className="app-header col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),40px)] items-center gap-2 border-b border-edge bg-[var(--gradient-app-bar)] shadow-[var(--shadow-app-bar-divider)] [app-region:no-drag] [-webkit-app-region:no-drag]"
+        className="app-header col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),40px)] items-center gap-2 [app-region:no-drag] [-webkit-app-region:no-drag]"
         style={{
           paddingLeft: "calc(6px + var(--chrome-margin-inline-start))",
           paddingRight: "calc(6px + var(--chrome-margin-inline-end))",
@@ -2427,6 +2537,22 @@ export function App() {
             />
             <div className="inline-flex shrink-0 items-center justify-end gap-3 overflow-visible">
               <UpdateDownloadPill status={appUpdate} />
+              {showDeployDrawer ? (
+                <button
+                  type="button"
+                  className="header-deploy-toggle max-[1100px]:hidden"
+                  aria-label={deployDrawerOpen ? "Collapse Deploy and Community panel" : "Open Deploy and Community panel"}
+                  aria-expanded={deployDrawerOpen}
+                  title={deployDrawerOpen ? "Collapse right panel" : "Open right panel"}
+                  onClick={() => setDeployDrawerOpen((open) => !open)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden>
+                    <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                    <path d="M15 4v16" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                    <path d={deployDrawerOpen ? "M11 9l3 3-3 3" : "M14 9l-3 3 3 3"} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              ) : null}
             </div>
           </>
         ) : (
@@ -2472,12 +2598,12 @@ export function App() {
           <button
             type="button"
             className="workspace-menu__button"
-            onClick={() => void handleStartNewProject()}
+            onClick={() => void handleNewChat()}
             data-analytics-id="project_new"
             data-analytics-area="project"
             disabled={sending}
-            aria-label="Start new project"
-            title="Start new project"
+            aria-label="New chat"
+            title="New chat"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
               <path
@@ -2497,60 +2623,20 @@ export function App() {
                 d="M14 2v6h6M12 11v6M9 14h6"
               />
             </svg>
+            <span className="workspace-menu__button-label">New chat</span>
           </button>
-          {bootstrap?.isTemporaryWorkspace ? (
-            <button
-              type="button"
-              className="workspace-menu__button"
-              onClick={() => void handleSaveTempWorkspace()}
-              data-analytics-id="project_save"
-              data-analytics-area="project"
-              disabled={sending}
-              aria-label="Save project to a folder"
-              title="Save project to a folder"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"
-                />
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M17 21v-8H7v8M7 3v5h8"
-                />
-              </svg>
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="workspace-menu__button"
-            onClick={() => void handlePickWorkspace()}
-            data-analytics-id="project_open"
-            data-analytics-area="project"
-            disabled={sending}
-            aria-label="Open an existing project"
-            title="Open an existing project"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-              <path
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
-              />
-              <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
-            </svg>
-          </button>
+        </div>
+        <div className="workspace-menu__projects">
+          <button type="button" className="workspace-menu__section" onClick={() => setExpandedProjects((p) => ({ ...p, __all: !p.__all }))}>Projects</button>
+          {projectTree.projects.map((project) => {
+            const open = expandedProjects[project.id] ?? true;
+            return <div key={project.id} className="workspace-menu__project-group">
+              <button type="button" className={cn("workspace-menu__project", bootstrap?.activeProjectId === project.id && "workspace-menu__project--active")} onClick={() => { setExpandedProjects((p) => ({ ...p, [project.id]: !open })); void handleSelectProject(project.id); }}>
+                <span>{open ? "▾" : "▸"}</span><span className="truncate">{project.name}</span>
+              </button>
+              {open ? projectTree.chats.filter((chat) => chat.projectId === project.id).map((chat) => <button key={chat.id} type="button" className={cn("workspace-menu__chat", bootstrap?.activeChatId === chat.id && "workspace-menu__chat--active")} onClick={() => void handleSelectChat(chat.id)}>{chat.title}</button>) : null}
+            </div>;
+          })}
         </div>
         <div className="workspace-menu__utilities">
           <CommunityAuthStatus
@@ -2591,6 +2677,7 @@ export function App() {
                 strokeLinejoin="round"
               />
             </svg>
+            <span className="workspace-menu__button-label">Settings</span>
           </button>
         </div>
       </aside>
@@ -2598,7 +2685,7 @@ export function App() {
         <section
           className={cn(
             "runtime-config-main col-start-2 row-start-2 min-h-0 h-full overflow-auto bg-[var(--gradient-rail)] max-[1100px]:col-end-3",
-            deployEligible ? "col-end-5" : "col-end-4"
+            showEmulatorPane ? "col-end-4" : "col-end-3"
           )}
           aria-live="polite"
         >
@@ -2629,7 +2716,7 @@ export function App() {
       ) : screen === "main" ? (
         <section
           className={cn(
-            "left-rail left-rail--chat col-start-2 row-start-2 relative min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
+            "left-rail left-rail--chat col-start-2 row-start-2 relative min-w-0 min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
             "max-[1100px]:col-start-2 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]"
           )}
         >
@@ -2765,7 +2852,6 @@ export function App() {
             <div
               className={cn(
                 "ui-composer",
-                composerExpandedSticky && "flex-col items-stretch gap-2",
                 chatMediaAttachments.length > 0 && "ui-composer--has-attachments",
                 composerDragActive && "ui-composer--drag-active"
               )}
@@ -2774,6 +2860,19 @@ export function App() {
               onDragLeave={handleComposerDragLeave}
               onDrop={handleComposerDrop}
             >
+              <div className="ui-composer__project-row">
+                <button type="button" className={cn("project-chat-trigger", projectMenuOpen && "project-chat-trigger--active")} onClick={() => setProjectMenuOpen((open) => !open)} disabled={projectSwitchProgress.active || sending} aria-haspopup="menu" aria-expanded={projectMenuOpen}>
+                  <svg className="ui-composer__project-glyph" width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                    <path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  </svg>
+                  <span className="project-chat-trigger__label">{projectTree.projects.find((project) => project.id === bootstrap?.activeProjectId)?.name ?? "Select project"}</span>
+                </button>
+                {projectMenuOpen ? <div className="project-picker-menu" role="menu">
+                  {projectTree.projects.map((project) => <button key={project.id} type="button" role="menuitem" className={cn("project-picker-menu__item", bootstrap?.activeProjectId === project.id && "project-picker-menu__item--active")} onClick={() => void handleSelectProject(project.id)}><span className="project-picker-menu__folder" aria-hidden>□</span><span>{project.name}</span>{bootstrap?.activeProjectId === project.id ? <span className="project-picker-menu__check" aria-hidden>✓</span> : null}</button>)}
+                  {projectTree.projects.length > 0 ? <div className="project-picker-menu__divider" /> : null}
+                  <button type="button" role="menuitem" className="project-picker-menu__item" onClick={handleCreateProject}><span className="project-picker-menu__plus" aria-hidden>＋</span><span>Add project</span></button>
+                </div> : null}
+              </div>
               {chatMediaAttachments.length > 0 ? (
                 <div className="ui-composer-attachments" aria-label="Attached media files">
                   {chatMediaAttachments.map((attachment) => (
@@ -2797,11 +2896,12 @@ export function App() {
                   ))}
                 </div>
               ) : null}
+              <div className="ui-composer__input-row">
               <textarea
                 ref={promptInputRef}
                 className={cn(
                   "m-0 max-h-[200px] min-h-[26px] min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-0.5 text-[13px] leading-snug text-[var(--color-composer-input)] shadow-none outline-none [font:inherit] placeholder:text-[var(--color-composer-placeholder)] focus:border-0 focus:shadow-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-45",
-                  composerExpandedSticky ? "w-full flex-none" : "flex-1"
+                  "flex-1"
                 )}
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
@@ -2876,6 +2976,7 @@ export function App() {
                   )}
                 </button>
               </div>
+              </div>
             </div>
             {chatAttachmentError ? (
               <p className="ui-composer-attachment-error" role="status">
@@ -2885,27 +2986,29 @@ export function App() {
           </section>
             </div>
           </div>
-          <div
-            className={cn("chat-emulator-splitter", chatPaneResizing && "chat-emulator-splitter--active")}
-            role="separator"
-            tabIndex={0}
-            aria-label="Resize chat and emulator panels"
-            aria-orientation="vertical"
-            aria-valuemin={MIN_CHAT_PANE_WIDTH}
-            aria-valuemax={chatPaneResizeMax}
-            aria-valuenow={chatPaneWidth}
-            title="Drag to resize chat and emulator panels"
-            onPointerDown={handleChatPaneResizePointerDown}
-            onPointerMove={handleChatPaneResizePointerMove}
-            onPointerUp={handleChatPaneResizePointerUp}
-            onPointerCancel={handleChatPaneResizePointerUp}
-            onKeyDown={handleChatPaneResizeKeyDown}
-          />
+          {showEmulatorPane ? (
+            <div
+              className={cn("chat-emulator-splitter", chatPaneResizing && "chat-emulator-splitter--active")}
+              role="separator"
+              tabIndex={0}
+              aria-label="Resize chat and emulator panels"
+              aria-orientation="vertical"
+              aria-valuemin={MIN_CHAT_PANE_WIDTH}
+              aria-valuemax={chatPaneResizeMax}
+              aria-valuenow={chatPaneWidth}
+              title="Drag to resize chat and emulator panels"
+              onPointerDown={handleChatPaneResizePointerDown}
+              onPointerMove={handleChatPaneResizePointerMove}
+              onPointerUp={handleChatPaneResizePointerUp}
+              onPointerCancel={handleChatPaneResizePointerUp}
+              onKeyDown={handleChatPaneResizeKeyDown}
+            />
+          ) : null}
         </section>
       ) : (
         <section
           className={cn(
-            "left-rail col-start-2 row-start-2 grid min-h-0 h-full overflow-visible border-r border-edge bg-[var(--gradient-rail)] pt-[14px] pb-[18px] px-[18px]",
+            "left-rail col-start-2 row-start-2 grid min-w-0 min-h-0 h-full overflow-visible border-r border-edge bg-[var(--gradient-rail)] pt-[14px] pb-[18px] px-[18px]",
             "grid-rows-[auto_minmax(0,1fr)] gap-4",
             "max-[1100px]:col-start-2 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]",
             "max-[760px]:gap-2.5 max-[760px]:p-3"
@@ -3124,7 +3227,7 @@ export function App() {
           </section>
         </section>
       )}
-      <aside
+      {showEmulatorPane ? <aside
         className={cn(
           "right-pane col-start-3 row-start-2 flex min-h-0 h-full min-w-[360px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
           showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
@@ -3192,13 +3295,21 @@ export function App() {
               </div>
             ) : null}
         </div>
-      </aside>
-      {deployEligible ? (
+      </aside> : null}
+      {showDeployDrawer ? (
+        <div
+          className={cn(
+            "deploy-drawer-viewport max-[1100px]:hidden",
+            deployDrawerOpen ? "deploy-drawer-viewport--open" : "deploy-drawer-viewport--closed"
+          )}
+        >
         <aside
           className={cn(
-            "right-pane col-start-4 row-start-2 flex min-h-0 h-full min-w-[360px] flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
-            showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
+            "right-pane deploy-drawer flex min-h-0 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+            deployDrawerOpen ? "deploy-drawer--open" : "deploy-drawer--closed"
           )}
+          aria-hidden={!deployDrawerOpen}
+          inert={deployDrawerOpen ? undefined : true}
         >
           <div className="flex gap-0.5 border-b border-edge px-3 pb-0 pt-2" role="tablist" aria-label="Deploy view">
             <button
@@ -3234,7 +3345,7 @@ export function App() {
           <div className="flex min-h-0 flex-1 flex-col">
             <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "deploy" && "hidden")}>
               <DeployPanel
-                active={deployPaneTab === "deploy"}
+                active={deployDrawerOpen && deployPaneTab === "deploy"}
                 showWidgetParams={deployPanelShowsWidgetParams}
                 widgetConfig={widgetConfigs.workspace}
                 widgetValuesByConfig={widgetValuesByConfig}
@@ -3247,7 +3358,7 @@ export function App() {
             </div>
             <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "games" && "hidden")}>
               <MyGamesPanel
-                active={deployPaneTab === "games"}
+                active={deployDrawerOpen && deployPaneTab === "games"}
                 communitySession={communitySession}
                 communitySessionVersion={communitySessionVersion + communityAuthSkippedVersion}
                 communityWorkspaceRefreshKey={communityWorkspaceRefreshKey}
@@ -3258,6 +3369,47 @@ export function App() {
             </div>
           </div>
         </aside>
+        </div>
+      ) : null}
+      {projectSwitchProgress.active ? <div className="project-switch-overlay" role="status" aria-live="polite"><div><h2>Switching project</h2><p>{projectSwitchProgress.message ?? "Preparing…"}</p></div></div> : null}
+      {createProjectOpen ? (
+        <div
+          className="create-project-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="create-project-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCreateProjectOpen(false);
+          }}
+        >
+          <div className="create-project-popover">
+            <div className="create-project-popover__header">
+              <h2 id="create-project-title">Create project</h2>
+              <button type="button" className="create-project-popover__close" aria-label="Close" onClick={() => setCreateProjectOpen(false)}>×</button>
+            </div>
+            <label className="create-project-name-field">
+              <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden>
+                <path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+              </svg>
+              <input value={createProjectName} onChange={(event) => setCreateProjectName(event.target.value)} placeholder="Project name" autoFocus />
+            </label>
+            <p className="create-project-popover__section-label">Source folder</p>
+            <button type="button" className={cn("create-project-folder-picker", createProjectFolder && "create-project-folder-picker--selected")} onClick={() => void handlePickProjectFolder()} disabled={createProjectPicking}>
+              <svg width="32" height="32" viewBox="0 0 24 24" aria-hidden>
+                <path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+                <path d="M12 12v6M9 15h6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+              <span>{createProjectFolder ? workspaceFolderBasename(createProjectFolder) : "Add folder Dartsnut Agent can read and edit"}</span>
+              {createProjectFolder ? <small>{createProjectFolder}</small> : null}
+            </button>
+            <p className="create-project-popover__hint">Each project uses one source folder.</p>
+            {createProjectError ? <p className="create-project-popover__error" role="alert">{createProjectError}</p> : null}
+            <div className="create-project-popover__actions">
+              <button type="button" className="create-project-popover__cancel" onClick={() => setCreateProjectOpen(false)}>Cancel</button>
+              <button type="button" className="create-project-popover__submit" disabled={!createProjectFolder || createProjectPicking || sending} onClick={() => void handleSubmitCreateProject()}>Create project</button>
+            </div>
+          </div>
+        </div>
       ) : null}
       <DeployAuthGate
         open={deployAuthGateOpen}

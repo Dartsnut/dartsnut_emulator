@@ -12,6 +12,10 @@ import {
   type BindSlotRequest,
   type BindSlotResponse,
   type BootstrapState,
+  type ProjectTree,
+  type ProjectCreateRequest,
+  type ProjectSelectRequest,
+  type ProjectSwitchProgress,
   type SaveTempWorkspaceResponse,
   type ManifestSnapshot,
   type PickWorkspaceRequest,
@@ -80,6 +84,16 @@ const api = {
     ipcRenderer.invoke(IPCChannels.resetWorkspaceSession) as Promise<
       { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" }
     >,
+  listProjects: () => ipcRenderer.invoke(IPCChannels.projectsList) as Promise<ProjectTree>,
+  createProject: (request: ProjectCreateRequest) => ipcRenderer.invoke(IPCChannels.projectCreate, request) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
+  selectProject: (request: ProjectSelectRequest) => ipcRenderer.invoke(IPCChannels.projectSelect, request) as Promise<{ state: BootstrapState; tree: ProjectTree; accepted: boolean }>,
+  createChat: (projectId: string) => ipcRenderer.invoke(IPCChannels.chatCreate, projectId) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
+  selectChat: (chatId: string) => ipcRenderer.invoke(IPCChannels.chatSelect, chatId) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
+  onProjectSwitchProgress: (listener: (progress: ProjectSwitchProgress) => void) => {
+    const handler = (_: unknown, progress: ProjectSwitchProgress) => listener(progress);
+    ipcRenderer.on(IPCChannels.projectSwitchProgress, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.projectSwitchProgress, handler);
+  },
   getWindowChromeInsets: () =>
     ipcRenderer.invoke(IPCChannels.windowChromeInsets) as Promise<WindowChromeInsets>,
   getAppUpdateStatus: () =>

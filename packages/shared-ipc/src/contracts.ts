@@ -46,6 +46,12 @@ export const IPCChannels = {
   appUpdateStatus: "app:update-status",
   /** Renderer → main: install an already-downloaded desktop app update and relaunch. */
   appUpdateInstallNow: "app:update-install-now",
+  /** Renderer invokes to read whether automatic update downloads are enabled. */
+  appUpdateAutoDownload: "app:update-auto-download",
+  /** Renderer invokes to persist automatic update download preference. */
+  appUpdateSetAutoDownload: "app:update-set-auto-download",
+  /** Renderer → main: download an available desktop app update on demand. */
+  appUpdateDownload: "app:update-download",
   deployGetEligibility: "deploy:get-eligibility",
   widgetConfigGet: "widget-config:get",
   widgetConfigChanged: "widget-config:changed",
@@ -109,6 +115,7 @@ export type ShellUiTheme = "dark" | "light";
 export type AppUpdateStatusKind =
   | "idle"
   | "checking"
+  | "available"
   | "downloading"
   | "ready"
   | "not_available"
@@ -125,6 +132,10 @@ export interface AppUpdateStatus {
 export type AppUpdateInstallResponse =
   | { ok: true }
   | { ok: false; reason: "not_ready" | "cancelled" };
+
+export type AppUpdateDownloadResponse =
+  | { ok: true }
+  | { ok: false; reason: "not_available" | "already_downloading" | "failed"; message?: string };
 
 export type ProviderStatus = "ready" | "missing_config" | "invalid";
 

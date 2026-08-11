@@ -133,6 +133,7 @@ const EMPTY_WIDGET_CONFIGS: Record<WidgetConfigScope, WidgetConfigSnapshot> = {
 type WidgetValueState = { fields: WidgetFieldDefinition[]; values: WidgetFieldValues };
 
 type AppScreen = "main" | "settings";
+type SettingsSection = "provider" | "privacy-updates";
 type SubmissionLockState = {
   active: boolean;
   stage: CommunitySubmitProgress["stage"] | "idle";
@@ -311,16 +312,29 @@ function UpdateDownloadPill({ status }: { status: AppUpdateStatus | null }) {
 
 type UpdateReadyOverlayProps = {
   status: AppUpdateStatus | null;
+  autoUpdateEnabled: boolean;
   installing: boolean;
   error: string | null;
+  onDownload: () => void;
+  onAutoUpdateChange: (enabled: boolean) => void;
   onInstallNow: () => void;
   onLater: () => void;
 };
 
-function UpdateReadyOverlay({ status, installing, error, onInstallNow, onLater }: UpdateReadyOverlayProps) {
-  if (!status || status.kind !== "ready") {
+export function UpdateReadyOverlay({
+  status,
+  autoUpdateEnabled,
+  installing,
+  error,
+  onDownload,
+  onAutoUpdateChange,
+  onInstallNow,
+  onLater
+}: UpdateReadyOverlayProps) {
+  if (!status || (status.kind !== "available" && status.kind !== "ready")) {
     return null;
   }
+  const isAvailable = status.kind === "available";
   return (
     <div className="app-update-overlay" role="dialog" aria-modal="true" aria-labelledby="app-update-title">
       <div className="app-update-panel">
@@ -331,14 +345,28 @@ function UpdateReadyOverlay({ status, installing, error, onInstallNow, onLater }
         </div>
         <div className="app-update-panel__copy">
           <p className="app-update-panel__eyebrow">Desktop update</p>
-          <h2 id="app-update-title" className="app-update-panel__title">Update ready</h2>
+          <h2 id="app-update-title" className="app-update-panel__title">{isAvailable ? "Update available" : "Update ready"}</h2>
           <p className="app-update-panel__version">
             Dartsnut Agent {status.currentVersion}
             {status.availableVersion ? ` -> ${status.availableVersion}` : ""}
           </p>
           <p className="app-update-panel__message">
-            The new version has finished downloading. Install it now to relaunch, or keep working and update the next time you open Dartsnut Agent.
+            {isAvailable
+              ? "A new version is available. Download it now, or skip it and check again next time."
+              : "The new version has finished downloading. Install it now to relaunch, or keep working and update the next time you open Dartsnut Agent."}
           </p>
+          {isAvailable ? (
+            <label className="app-update-panel__option">
+              <input
+                type="checkbox"
+                checked={autoUpdateEnabled}
+                data-analytics-id="app_update_auto_download"
+                data-analytics-area="update"
+                onChange={(event) => onAutoUpdateChange(event.target.checked)}
+              />
+              <span>Automatically download updates</span>
+            </label>
+          ) : null}
           {error ? (
             <p className="app-update-panel__error" role="alert">{error}</p>
           ) : null}
@@ -348,14 +376,14 @@ function UpdateReadyOverlay({ status, installing, error, onInstallNow, onLater }
             type="button"
             className="ui-btn-primary app-update-panel__primary"
             disabled={installing}
-            data-analytics-id="app_update_install"
+            data-analytics-id={isAvailable ? "app_update_download" : "app_update_install"}
             data-analytics-area="update"
-            onClick={onInstallNow}
+            onClick={isAvailable ? onDownload : onInstallNow}
           >
-            {installing ? "Preparing..." : "Update now"}
+            {isAvailable ? "Download update" : installing ? "Preparing..." : "Update now"}
           </button>
           <button type="button" className="app-update-panel__secondary" disabled={installing} data-analytics-id="app_update_later" data-analytics-area="update" onClick={onLater}>
-            Next launch
+            {isAvailable ? "Skip" : "Next launch"}
           </button>
         </div>
       </div>
@@ -724,6 +752,7 @@ export function App() {
     message: null
   });
   const [screen, setScreen] = useState<AppScreen>("main");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("provider");
   /** Preserves widget/game creator routing for follow-up prompts after the first send. */
   const [sessionTemplateMode, setSessionTemplateMode] = useState<
     "game-creator" | "widget-creator" | null
@@ -815,6 +844,7 @@ export function App() {
     message: "Preparing submission..."
   });
   const [appUpdate, setAppUpdate] = useState<UpdatePromptState | null>(null);
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
   const [chatPaneWidth, setChatPaneWidth] = useState(getStoredChatPaneWidth);
   const [chatPaneResizing, setChatPaneResizing] = useState(false);
   const chatPaneResizeDragRef = useRef<{
@@ -948,6 +978,39 @@ export function App() {
     }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Could not start the update.";
       setAppUpdate((current) => current ? { ...current, installing: false, error: message } : current);
+    });
+  }, [api]);
+
+  const handleDownloadAppUpdate = useCallback(() => {
+    if (!api?.downloadAppUpdate) {
+      return;
+    }
+    setAppUpdate((current) => current ? { ...current, error: null } : current);
+    void api.downloadAppUpdate().then((result) => {
+      if (!result.ok && result.reason !== "already_downloading") {
+        setAppUpdate((current) =>
+          current
+            ? {
+                ...current,
+                error: result.message ?? "Could not download the update. Try again next launch."
+              }
+            : current
+        );
+      }
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Could not download the update.";
+      setAppUpdate((current) => current ? { ...current, error: message } : current);
+    });
+  }, [api]);
+
+  const handleAutoUpdateChange = useCallback((enabled: boolean) => {
+    const persistAutoUpdate = api?.setAppUpdateAutoDownload;
+    setAutoUpdateEnabled(enabled);
+    if (!persistAutoUpdate) {
+      return;
+    }
+    void persistAutoUpdate(enabled).then(setAutoUpdateEnabled).catch(() => {
+      setAutoUpdateEnabled(!enabled);
     });
   }, [api]);
 
@@ -1358,6 +1421,9 @@ export function App() {
     }).catch(() => {
       // Update checks are best effort.
     });
+    api.getAppUpdateAutoDownload?.().then(setAutoUpdateEnabled).catch(() => {
+      setAutoUpdateEnabled(false);
+    });
     const unsubscribe = api.onAgentEvent((event) => {
       if (discardAgentEventsRef.current) {
         return;
@@ -1759,7 +1825,8 @@ export function App() {
   const communityAuthSkipped = communityAuthSkippedVersion >= 0 && isCommunityAuthSkippedForSession();
   const gamesTabDisabled = !communitySession.loggedIn && communityAuthSkipped;
   const visibleAppUpdate =
-    appUpdate?.kind === "ready" && appUpdate.dismissedVersion !== appUpdate.availableVersion
+    (appUpdate?.kind === "available" || appUpdate?.kind === "ready") &&
+    appUpdate.dismissedVersion !== appUpdate.availableVersion
       ? appUpdate
       : null;
 
@@ -2851,33 +2918,77 @@ export function App() {
             <nav className="flex flex-col gap-2 border-r border-[var(--color-settings-layout-border)] p-3" aria-label="Settings menu">
               <button
                 type="button"
-                className="w-full rounded-[var(--radius-md)] border-0 bg-[var(--color-settings-menu-active)] px-3 py-2 text-left text-[13px] font-medium text-fg [app-region:no-drag] [-webkit-app-region:no-drag]"
+                className={cn(
+                  "w-full rounded-[var(--radius-md)] border-0 bg-transparent px-3 py-2 text-left text-[13px] font-medium text-fg transition-colors focus:outline-none [app-region:no-drag] [-webkit-app-region:no-drag]",
+                  settingsSection === "provider" && "bg-[var(--color-settings-menu-active)]"
+                )}
+                onClick={() => setSettingsSection("provider")}
+                aria-current={settingsSection === "provider" ? "page" : undefined}
               >
                 Provider configuration
               </button>
+              <button
+                type="button"
+                className={cn(
+                  "w-full rounded-[var(--radius-md)] border-0 bg-transparent px-3 py-2 text-left text-[13px] font-medium text-fg transition-colors focus:outline-none [app-region:no-drag] [-webkit-app-region:no-drag]",
+                  settingsSection === "privacy-updates" && "bg-[var(--color-settings-menu-active)]"
+                )}
+                onClick={() => setSettingsSection("privacy-updates")}
+                aria-current={settingsSection === "privacy-updates" ? "page" : undefined}
+                data-analytics-id="settings_privacy_updates"
+                data-analytics-area="settings"
+              >
+                Privacy & updates
+              </button>
             </nav>
             <div className="flex min-h-0 flex-col gap-3 overflow-auto p-4 text-[13px]">
-              <label className="flex items-start gap-2 rounded-[var(--radius-md)] border border-edge bg-[var(--color-settings-layout-bg)] p-3">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={analyticsEnabled}
-                  data-analytics-id="analytics_toggle"
-                  data-analytics-area="settings"
-                  onChange={(event) => {
-                    const enabled = event.target.checked;
-                    setAnalyticsEnabled(enabled);
-                    setAnalyticsCollectionEnabledPreference(enabled);
-                  }}
-                />
-                <span className="flex min-w-0 flex-col gap-1">
-                  <span className="font-medium text-fg-strong">Share anonymous usage analytics</span>
-                  <span className="text-xs leading-relaxed text-fg-muted">
-                    Helps improve Dartsnut Agent. Chat text, model responses, file paths, IP addresses, device IDs, credentials, account names, and email addresses are never sent.
-                  </span>
-                </span>
-              </label>
-              <label className="flex flex-col gap-1.5">
+              {settingsSection === "privacy-updates" ? (
+                <>
+                  <div>
+                    <h2 className="m-0 text-base font-semibold text-fg-strong">Privacy & updates</h2>
+                    <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+                      Control anonymous diagnostics and desktop update downloads.
+                    </p>
+                  </div>
+                  <label className="flex items-start gap-2 rounded-[var(--radius-md)] border border-edge bg-[var(--color-settings-layout-bg)] p-3">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={analyticsEnabled}
+                      data-analytics-id="analytics_toggle"
+                      data-analytics-area="settings"
+                      onChange={(event) => {
+                        const enabled = event.target.checked;
+                        setAnalyticsEnabled(enabled);
+                        setAnalyticsCollectionEnabledPreference(enabled);
+                      }}
+                    />
+                    <span className="flex min-w-0 flex-col gap-1">
+                      <span className="font-medium text-fg-strong">Share anonymous usage analytics</span>
+                      <span className="text-xs leading-relaxed text-fg-muted">
+                        Helps improve Dartsnut Agent. Chat text, model responses, file paths, IP addresses, device IDs, credentials, account names, and email addresses are never sent.
+                      </span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 rounded-[var(--radius-md)] border border-edge bg-[var(--color-settings-layout-bg)] p-3">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={autoUpdateEnabled}
+                      data-analytics-id="settings_auto_update_toggle"
+                      data-analytics-area="settings"
+                      onChange={(event) => handleAutoUpdateChange(event.target.checked)}
+                    />
+                    <span className="flex min-w-0 flex-col gap-1">
+                      <span className="font-medium text-fg-strong">Automatically download updates</span>
+                      <span className="text-xs leading-relaxed text-fg-muted">
+                        Check for new versions on launch and download them automatically. Installation still requires your confirmation.
+                      </span>
+                    </span>
+                  </label>
+                </>
+              ) : null}
+              {settingsSection === "provider" ? <label className="flex flex-col gap-1.5">
                 <span className="text-[var(--color-text-subtle)]">Provider</span>
                 <select
                   className="ui-input"
@@ -2891,8 +3002,8 @@ export function App() {
                   <option value="dartsnut-llm">Dartsnut LLM</option>
                   <option value="custom">Custom</option>
                 </select>
-              </label>
-              {providerSettings.activeProvider === "dartsnut-llm" ? (
+              </label> : null}
+              {settingsSection === "provider" && providerSettings.activeProvider === "dartsnut-llm" ? (
                 <>
                   <DartsnutLlmUsageCard
                     quota={llmQuota}
@@ -2911,7 +3022,7 @@ export function App() {
                   </div>
                 </>
               ) : null}
-              {providerSettings.activeProvider === "custom" ? (
+              {settingsSection === "provider" && providerSettings.activeProvider === "custom" ? (
                 <>
                   <div className="rounded-[var(--radius-md)] border border-[var(--color-notice-warning-border)] bg-[var(--color-notice-warning-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
                     Custom providers must expose an OpenAI Responses API-compatible endpoint.
@@ -2965,7 +3076,7 @@ export function App() {
                   </label>
                 </>
               ) : null}
-              <div className="flex justify-start">
+              {settingsSection === "provider" ? <div className="flex justify-start">
                 <button
                   type="button"
                   className="ui-btn-primary mt-0 disabled:cursor-not-allowed disabled:opacity-55"
@@ -2976,7 +3087,7 @@ export function App() {
                 >
                   {savingProviderSettings ? "Saving..." : "Save"}
                 </button>
-              </div>
+              </div> : null}
             </div>
           </section>
         </section>
@@ -3156,8 +3267,11 @@ export function App() {
       />
       <UpdateReadyOverlay
         status={visibleAppUpdate}
+        autoUpdateEnabled={autoUpdateEnabled}
         installing={appUpdate?.installing ?? false}
         error={appUpdate?.error ?? null}
+        onDownload={handleDownloadAppUpdate}
+        onAutoUpdateChange={handleAutoUpdateChange}
         onInstallNow={handleInstallAppUpdateNow}
         onLater={handleUpdateNextLaunch}
       />

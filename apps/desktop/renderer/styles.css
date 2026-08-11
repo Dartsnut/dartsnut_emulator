@@ -552,6 +552,24 @@ body {
   line-height: 1.35;
 }
 
+.app-update-panel__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.app-update-panel__option input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--color-neon-mint);
+}
+
 .app-update-panel__actions {
   grid-column: 2;
   display: flex;

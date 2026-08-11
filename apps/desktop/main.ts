@@ -2263,18 +2263,18 @@ function logAgentEventToConsole(event: AgentEvent, mirrorToDevtools: boolean): v
 /** Logical px; must match `titleBarOverlay.height` on Windows when overlay is enabled. */
 const WINDOWS_TITLE_BAR_OVERLAY_HEIGHT = 32;
 
-/** Match renderer `themes.css` `--color-bg-page` and caption contrast per theme. */
+/** Keep Windows caption controls readable over the renderer's transparent floating header. */
 const WINDOWS_SHELL_UI: Record<
   ShellUiTheme,
   { titleBarColor: string; symbolColor: string; windowBackground: string }
 > = {
   dark: {
-    titleBarColor: "#121212",
+    titleBarColor: "#00000000",
     symbolColor: "#e0e0e0",
     windowBackground: "#121212"
   },
   light: {
-    titleBarColor: "#eef1f8",
+    titleBarColor: "#00000000",
     symbolColor: "#1a2332",
     windowBackground: "#eef1f8"
   }

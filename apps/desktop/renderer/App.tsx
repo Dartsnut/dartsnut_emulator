@@ -26,6 +26,8 @@ import {
   FolderOpen,
   FolderPlus,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -107,12 +109,20 @@ import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
 import {
   clampChatPaneWidth,
+  clampWorkspaceMenuWidth,
   getStoredChatPaneWidth,
+  getStoredWorkspaceMenuWidth,
+  getStoredWorkspaceMenuCollapsed,
+  MAX_WORKSPACE_MENU_WIDTH,
   maxChatPaneWidthForViewport,
   MIN_CHAT_PANE_WIDTH,
   MIN_EMULATOR_PANE_WIDTH,
+  MIN_WORKSPACE_MENU_WIDTH,
   nextChatPaneWidthFromDrag,
-  setStoredChatPaneWidth
+  nextWorkspaceMenuWidthFromDrag,
+  setStoredChatPaneWidth,
+  setStoredWorkspaceMenuWidth,
+  setStoredWorkspaceMenuCollapsed
 } from "./splitPaneSizing";
 
 /** Same order as `WIDGET_DISPLAY_SIZES` in `@dartsnut/shared-ipc` — defined here because Vite/Rollup does not resolve that value through the package’s compiled CJS `export *` shim. */
@@ -169,7 +179,6 @@ type UpdatePromptState = AppUpdateStatus & {
 };
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
-const WORKSPACE_MENU_WIDTH_PX = 54;
 /** Keep in sync with composer textarea `max-h-[200px]` */
 const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 /**
@@ -941,7 +950,15 @@ export function App() {
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
   const [chatPaneWidth, setChatPaneWidth] = useState(getStoredChatPaneWidth);
   const [chatPaneResizing, setChatPaneResizing] = useState(false);
+  const [workspaceMenuWidth, setWorkspaceMenuWidth] = useState(getStoredWorkspaceMenuWidth);
+  const [workspaceMenuCollapsed, setWorkspaceMenuCollapsed] = useState(getStoredWorkspaceMenuCollapsed);
+  const [workspaceMenuResizing, setWorkspaceMenuResizing] = useState(false);
   const chatPaneResizeDragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startWidth: number;
+  } | null>(null);
+  const workspaceMenuResizeDragRef = useRef<{
     pointerId: number;
     startClientX: number;
     startWidth: number;
@@ -974,17 +991,19 @@ export function App() {
 
   const splitPaneViewportWidth = useCallback(() => {
     const rawWidth = typeof window === "undefined" ? 1320 : window.innerWidth;
-    return rawWidth - WORKSPACE_MENU_WIDTH_PX - (showEmulatorPane ? MIN_EMULATOR_PANE_WIDTH : 0);
-  }, [showEmulatorPane]);
+    const menuWidth = workspaceMenuCollapsed ? 0 : workspaceMenuWidth;
+    return rawWidth - menuWidth - (showEmulatorPane ? MIN_EMULATOR_PANE_WIDTH : 0);
+  }, [showEmulatorPane, workspaceMenuCollapsed, workspaceMenuWidth]);
 
   const mainGridTemplateColumns = useMemo(() => {
     const leftColumn = `${chatPaneWidth}px`;
+    const menuColumn = `${workspaceMenuCollapsed ? 0 : workspaceMenuWidth}px`;
     const emulatorColumn = `minmax(${MIN_EMULATOR_PANE_WIDTH}px,1fr)`;
     if (!showEmulatorPane) {
-      return "minmax(190px,280px) minmax(0,1fr)";
+      return `${menuColumn} minmax(0,1fr)`;
     }
-    return `minmax(190px,280px) ${leftColumn} ${emulatorColumn}`;
-  }, [chatPaneWidth, showEmulatorPane]);
+    return `${menuColumn} ${leftColumn} ${emulatorColumn}`;
+  }, [chatPaneWidth, showEmulatorPane, workspaceMenuCollapsed, workspaceMenuWidth]);
 
   const mainGridStyle = useMemo(
     () => ({
@@ -1058,6 +1077,60 @@ export function App() {
       setChatPaneWidth(maxChatPaneWidthForViewport(splitPaneViewportWidth()));
     }
   }, [splitPaneViewportWidth]);
+
+  const finishWorkspaceMenuResize = useCallback((target?: Element) => {
+    const activeDrag = workspaceMenuResizeDragRef.current;
+    if (activeDrag && target instanceof HTMLElement && target.hasPointerCapture(activeDrag.pointerId)) {
+      target.releasePointerCapture(activeDrag.pointerId);
+    }
+    workspaceMenuResizeDragRef.current = null;
+    setWorkspaceMenuResizing(false);
+  }, []);
+
+  const handleWorkspaceMenuResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    workspaceMenuResizeDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startWidth: workspaceMenuWidth
+    };
+    setWorkspaceMenuResizing(true);
+    event.preventDefault();
+  }, [workspaceMenuWidth]);
+
+  const handleWorkspaceMenuResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const activeDrag = workspaceMenuResizeDragRef.current;
+    if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
+    setWorkspaceMenuWidth(nextWorkspaceMenuWidthFromDrag({
+      startClientX: activeDrag.startClientX,
+      currentClientX: event.clientX,
+      startWidth: activeDrag.startWidth
+    }));
+  }, []);
+
+  const handleWorkspaceMenuResizePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (workspaceMenuResizeDragRef.current?.pointerId === event.pointerId) {
+      finishWorkspaceMenuResize(event.currentTarget);
+    }
+  }, [finishWorkspaceMenuResize]);
+
+  const handleWorkspaceMenuResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 40 : 16;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setWorkspaceMenuWidth((current) => clampWorkspaceMenuWidth(current - step));
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setWorkspaceMenuWidth((current) => clampWorkspaceMenuWidth(current + step));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setWorkspaceMenuWidth(MIN_WORKSPACE_MENU_WIDTH);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setWorkspaceMenuWidth(MAX_WORKSPACE_MENU_WIDTH);
+    }
+  }, []);
 
   const handleCommunitySubmitProgress = useCallback((progress: CommunitySubmitProgress | null) => {
     if (!progress) {
@@ -1519,6 +1592,14 @@ export function App() {
   useEffect(() => {
     setStoredChatPaneWidth(chatPaneWidth);
   }, [chatPaneWidth]);
+
+  useEffect(() => {
+    setStoredWorkspaceMenuWidth(workspaceMenuWidth);
+  }, [workspaceMenuWidth]);
+
+  useEffect(() => {
+    setStoredWorkspaceMenuCollapsed(workspaceMenuCollapsed);
+  }, [workspaceMenuCollapsed]);
 
   useEffect(() => {
     scrollTimelineToBottom();
@@ -2607,7 +2688,7 @@ export function App() {
         "grid-rows-[auto_minmax(0,1fr)]",
         "pr-[var(--window-control-inset-right)] pb-[var(--window-control-inset-bottom)] pl-[var(--window-control-inset-left)]",
         "max-[1100px]:grid-cols-[54px_minmax(0,1fr)] max-[1100px]:grid-rows-[auto_minmax(0,1fr)]",
-        chatPaneResizing && "app-shell--chat-resizing"
+        (chatPaneResizing || workspaceMenuResizing) && "app-shell--column-resizing"
       )}
       style={mainGridStyle}
       aria-busy={submissionLock.active}
@@ -2622,6 +2703,17 @@ export function App() {
         }}
         role="banner"
       >
+        <button
+          type="button"
+          className="header-menu-toggle max-[1100px]:hidden"
+          aria-label={workspaceMenuCollapsed ? "Show side menu" : "Hide side menu"}
+          aria-expanded={!workspaceMenuCollapsed}
+          title={workspaceMenuCollapsed ? "Show side menu" : "Hide side menu"}
+          onClick={() => setWorkspaceMenuCollapsed((collapsed) => !collapsed)}
+        >
+          {workspaceMenuCollapsed ? <PanelLeftOpen size={18} aria-hidden /> : <PanelLeftClose size={18} aria-hidden />}
+        </button>
+        {workspaceMenuCollapsed ? <span className="header-menu-toggle-divider" aria-hidden /> : null}
         <div className="min-h-0 min-w-0 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]" aria-hidden />
         {screen === "main" ? (
             <div className="inline-flex shrink-0 items-center justify-end gap-3 overflow-visible">
@@ -2641,7 +2733,7 @@ export function App() {
             </div>
         ) : null}
       </header>
-      <aside className={cn("workspace-menu col-start-1 row-start-2", screen === "settings" && "workspace-menu--settings")} aria-label={screen === "settings" ? "Settings menu" : "Workspace menu"}>
+      <aside className={cn("workspace-menu col-start-1 row-start-2", workspaceMenuCollapsed && "workspace-menu--hidden", screen === "settings" && "workspace-menu--settings")} aria-label={screen === "settings" ? "Settings menu" : "Workspace menu"}>
         {screen === "settings" ? <>
           <div className="workspace-menu__actions">
             <button type="button" className="workspace-menu__button" onClick={() => { setScreen("main"); setProviderSettingsError(null); setProviderSettingsNotice(null); }} aria-label="Back to app" title="Back to app">
@@ -2749,6 +2841,22 @@ export function App() {
             }}
           />
         </div>
+        <div
+          className={cn("workspace-menu-splitter", workspaceMenuResizing && "workspace-menu-splitter--active")}
+          role="separator"
+          tabIndex={0}
+          aria-label="Resize side menu"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_WORKSPACE_MENU_WIDTH}
+          aria-valuemax={MAX_WORKSPACE_MENU_WIDTH}
+          aria-valuenow={workspaceMenuWidth}
+          title="Drag to resize side menu"
+          onPointerDown={handleWorkspaceMenuResizePointerDown}
+          onPointerMove={handleWorkspaceMenuResizePointerMove}
+          onPointerUp={handleWorkspaceMenuResizePointerUp}
+          onPointerCancel={handleWorkspaceMenuResizePointerUp}
+          onKeyDown={handleWorkspaceMenuResizeKeyDown}
+        />
       </aside>
       {screen === "main" && showRuntimeSetup ? (
         <section

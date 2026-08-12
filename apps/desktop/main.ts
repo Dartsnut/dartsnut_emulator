@@ -128,6 +128,7 @@ import {
   type ProviderConfig
 } from "@dartsnut/agent-runtime";
 import { formatAgentEventForConsole } from "./agentEventConsole";
+import { fallbackChatTitle, generateChatTitle } from "./chatTitle";
 import { PACKAGED_ENV } from "./packagedEnv.generated";
 import {
   DARTSNUT_LLM_BRIDGE_API_KEY_PLACEHOLDER,
@@ -299,6 +300,8 @@ let deployMachineSession: DeployMachineSession | null = null;
 
 /** Serializes prompt replacement/cancellation through provider and backend run cleanup. */
 const sendPromptCoordinator = new AgentRunCoordinator();
+/** Background title runs yield immediately when a real agent prompt starts. */
+const chatTitleCoordinator = new AgentRunCoordinator();
 
 /** Set while desktop Google OAuth is waiting for the browser callback or login API. */
 let communityGoogleLoginAbortController: AbortController | null = null;
@@ -1565,6 +1568,18 @@ function emitProjectSwitchProgress(progress: ProjectSwitchProgress): void {
   sendToRenderer(IPCChannels.projectSwitchProgress, progress);
 }
 
+async function stopRuntimeForProjectTransition(): Promise<"ready" | "stopped" | "cancelled"> {
+  const runtimeActive = Boolean(emulatorState.running || deployMachineSession?.connected);
+  if (!runtimeActive) return "ready";
+  const { response } = await showAppMessageBox({ type: "question", buttons: ["Switch project", "Cancel"], defaultId: 1, cancelId: 1, title: "Switch project", message: "Emulator or remote deployment is active. Stop it and switch project?" });
+  if (response !== 0) return "cancelled";
+  emitProjectSwitchProgress({ active: true, stage: "stopping-deployment", message: "Stopping remote deployment…" });
+  if (deployMachineSession?.connected) await disconnectDeployMachine();
+  emitProjectSwitchProgress({ active: true, stage: "stopping-emulator", message: "Stopping emulator…" });
+  if (emulatorState.running) await gracefulStopEmulatorBridge();
+  return "stopped";
+}
+
 async function switchToProject(projectId: string, chatId?: string): Promise<boolean> {
   const store = getProjectStore();
   const project = store.getProject(projectId);
@@ -1583,15 +1598,7 @@ async function switchToProject(projectId: string, chatId?: string): Promise<bool
   }
   if (projectSwitchInFlight) return projectSwitchInFlight;
   projectSwitchInFlight = (async () => {
-    const runtimeActive = Boolean(emulatorState.running || deployMachineSession?.connected);
-    if (runtimeActive) {
-      const { response } = await showAppMessageBox({ type: "question", buttons: ["Switch project", "Cancel"], defaultId: 1, cancelId: 1, title: "Switch project", message: "Emulator or remote deployment is active. Stop it and switch project?" });
-      if (response !== 0) return false;
-    }
-    emitProjectSwitchProgress({ active: true, stage: "stopping-deployment", message: "Stopping remote deployment…" });
-    if (deployMachineSession?.connected) await disconnectDeployMachine();
-    emitProjectSwitchProgress({ active: true, stage: "stopping-emulator", message: "Stopping emulator…" });
-    if (emulatorState.running) await gracefulStopEmulatorBridge();
+    if (await stopRuntimeForProjectTransition() === "cancelled") return false;
     emitProjectSwitchProgress({ active: true, stage: "switching", message: "Switching project…" });
     performSessionCleanup({ clearWorkspace: false });
     activeProjectId = project.id;
@@ -1608,12 +1615,29 @@ async function switchToProject(projectId: string, chatId?: string): Promise<bool
   return projectSwitchInFlight;
 }
 
-function clearActiveProject(): void {
-  performSessionCleanup({ clearWorkspace: true });
-  activeProjectId = null;
-  activeChatId = null;
-  workspaceRoot = null;
-  emitBootstrapStateToRenderer();
+async function clearActiveProject(): Promise<boolean> {
+  if (!activeProjectId) {
+    activeChatId = null;
+    return true;
+  }
+  if (projectSwitchInFlight) return projectSwitchInFlight;
+  projectSwitchInFlight = (async () => {
+    const runtimeTransition = await stopRuntimeForProjectTransition();
+    if (runtimeTransition === "cancelled") return false;
+    if (runtimeTransition === "stopped") {
+      emitProjectSwitchProgress({ active: true, stage: "switching", message: "Starting a new chat…" });
+    }
+    performSessionCleanup({ clearWorkspace: true });
+    activeProjectId = null;
+    activeChatId = null;
+    workspaceRoot = null;
+    emitBootstrapStateToRenderer();
+    if (runtimeTransition === "stopped") {
+      emitProjectSwitchProgress({ active: false, stage: "ready" });
+    }
+    return true;
+  })().catch((error) => { emitProjectSwitchProgress({ active: false, stage: "error", message: error instanceof Error ? error.message : String(error) }); return false; }).finally(() => { projectSwitchInFlight = null; });
+  return projectSwitchInFlight;
 }
 
 function emitBootstrapStateToRenderer(): void {
@@ -2672,12 +2696,10 @@ function shouldAttachAgentSessionPersistence(workspaceForSession: string | null 
 function buildWorkspaceSessionPersistence(
   workspaceForSession: string | null | undefined
 ): AgentSessionPersistence | undefined {
-  if (!shouldAttachAgentSessionPersistence(workspaceForSession)) {
+  if (!shouldAttachAgentSessionPersistence(workspaceForSession) || !activeChatId) {
     return undefined;
   }
-  const store = getProjectStore();
-  if (activeChatId) return store.sessionPersistence(activeChatId);
-  return new AgentSessionPersistence(workspaceForSession!);
+  return getProjectStore().sessionPersistence(activeChatId);
 }
 
 function resolvePreferredUserLocaleForSession(
@@ -2759,7 +2781,8 @@ async function buildSession(
       intakeState: extras?.intakeState,
       originalUserPrompt: extras?.latestUserTextForLocale
     },
-    getIntakeState: extras?.getIntakeState
+    getIntakeState: extras?.getIntakeState,
+    onDiagnostic: (message, meta) => terminalAgentLifecycleLog(`[agent] ${message}`, meta)
   });
   return new AgentSessionRuntime({
     workspacePath,
@@ -3134,26 +3157,62 @@ ipcMain.handle(IPCChannels.projectsList, () => projectTree());
 ipcMain.handle(IPCChannels.projectCreate, async (_event: unknown, request: ProjectCreateRequest) => {
   const store = getProjectStore();
   const project = store.ensureProject(request.folderPath, request.name);
-  const chat = store.chatsForProject(project.id)[0] ?? store.createChat(project.id);
-  await switchToProject(project.id, chat.id);
+  await switchToProject(project.id);
   return { state: getBootstrapState(), tree: projectTree() };
 });
 ipcMain.handle(IPCChannels.projectSelect, async (_event: unknown, request: ProjectSelectRequest) => {
   if (request.projectId === null) {
-    clearActiveProject();
-    return { state: getBootstrapState(), tree: projectTree(), accepted: true };
+    const accepted = await clearActiveProject();
+    return { state: getBootstrapState(), tree: projectTree(), accepted };
   }
   const accepted = await switchToProject(request.projectId, request.chatId);
   return { state: getBootstrapState(), tree: projectTree(), accepted };
 });
-ipcMain.handle(IPCChannels.chatCreate, async (_event: unknown, projectId: string) => {
-  const store = getProjectStore(); const chat = store.createChat(projectId);
-  await switchToProject(projectId, chat.id);
+ipcMain.handle("agent:chat-archive", (_event: unknown, chatId: string) => {
+  const store = getProjectStore();
+  const chat = store.archiveChat(chatId);
+  if (!chat) throw new Error("Chat does not exist.");
+  if (activeChatId === chat.id) {
+    activeChatId = null;
+    emitBootstrapStateToRenderer();
+  }
   return { state: getBootstrapState(), tree: projectTree() };
+});
+ipcMain.handle("agent:chat-generate-title", async (_event: unknown, request: { chatId: string; firstUserMessage: string }) => {
+  const store = getProjectStore();
+  const chat = store.getChat(request.chatId);
+  if (!chat || chat.archivedAt || chat.title !== "New chat") {
+    return { tree: projectTree(), updated: false };
+  }
+  const titleLease = await chatTitleCoordinator.begin();
+  let title = fallbackChatTitle(request.firstUserMessage);
+  let bridgeRun: DartsnutLlmBridgeRun | null = null;
+  try {
+    const prepared = await prepareAgentProvider(readProviderSettings());
+    if (prepared.ok) {
+      bridgeRun = prepared.bridgeRun;
+      try {
+        title = await generateChatTitle(prepared.modelConfig, request.firstUserMessage, titleLease.abortController.signal);
+      } catch {
+        // Deterministic fallback already selected.
+      }
+    }
+  } catch {
+    // Title generation must not affect the completed agent request.
+  } finally {
+    try {
+      await bridgeRun?.finish();
+    } catch {
+      // Keep deterministic fallback available even when bridge cleanup fails.
+    }
+    titleLease.settle();
+  }
+  const updated = store.updateDefaultChatTitle(request.chatId, title);
+  return { tree: projectTree(), updated: Boolean(updated) };
 });
 ipcMain.handle(IPCChannels.chatSelect, async (_event: unknown, chatId: string) => {
   const store = getProjectStore(); const chat = store.getChat(chatId);
-  if (!chat) throw new Error("Chat does not exist.");
+  if (!chat || chat.archivedAt) throw new Error("Chat does not exist.");
   await switchToProject(chat.projectId, chat.id);
   return { state: getBootstrapState(), tree: projectTree() };
 });
@@ -4244,14 +4303,15 @@ function createEmitAgentToRenderer(): AgentEventBatcher & { dispose: () => void 
 }
 
 ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest): Promise<SendPromptResponse> => {
+  await chatTitleCoordinator.cancelAndWait();
   const runLease = await sendPromptCoordinator.begin();
   const runAbort = runLease.abortController;
   const emitAgentSink = createEmitAgentToRenderer();
   const emitAgent = (agentEvent: AgentEvent) => emitAgentSink.emit(agentEvent);
   let bridgeRun: DartsnutLlmBridgeRun | null = null;
   try {
-    if (!activeProjectId || !activeChatId || !workspaceRoot) {
-      return { ok: false, message: "Select a project and chat before sending." };
+    if (!activeProjectId || !workspaceRoot) {
+      return { ok: false, message: "Select a project before sending." };
     }
     agentEventEmitter = emitAgent;
     const prepared = await prepareAgentProvider(readProviderSettings());
@@ -4265,12 +4325,21 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     }
     bridgeRun = prepared.bridgeRun;
     activeDartsnutLlmBridgeRun = bridgeRun;
+    if (!activeChatId) {
+      const store = getProjectStore();
+      const chat = store.createChat(activeProjectId);
+      activeChatId = chat.id;
+      store.markChatOpened(chat.id);
+      store.touchProject(activeProjectId);
+      emitBootstrapStateToRenderer();
+    }
     let sessionRouting: SendPromptResponse["sessionRouting"];
     const hostState: IntakeToolState = {};
     const effectiveWorkspacePath =
       typeof req.workspacePath === "string" && req.workspacePath.length > 0 ? req.workspacePath : workspaceRoot;
     const request: PromptRequest = {
       ...req,
+      chatId: activeChatId,
       prompt: buildPromptWithChatMediaAttachments(req.prompt, req.chatMediaAttachments ?? [])
     };
     const lastIntakeUserPrompt = request.prompt;

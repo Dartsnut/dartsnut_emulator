@@ -87,7 +87,8 @@ const api = {
   listProjects: () => ipcRenderer.invoke(IPCChannels.projectsList) as Promise<ProjectTree>,
   createProject: (request: ProjectCreateRequest) => ipcRenderer.invoke(IPCChannels.projectCreate, request) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
   selectProject: (request: ProjectSelectRequest) => ipcRenderer.invoke(IPCChannels.projectSelect, request) as Promise<{ state: BootstrapState; tree: ProjectTree; accepted: boolean }>,
-  createChat: (projectId: string) => ipcRenderer.invoke(IPCChannels.chatCreate, projectId) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
+  archiveChat: (chatId: string) => ipcRenderer.invoke("agent:chat-archive", chatId) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
+  generateChatTitle: (request: { chatId: string; firstUserMessage: string }) => ipcRenderer.invoke("agent:chat-generate-title", request) as Promise<{ tree: ProjectTree; updated: boolean }>,
   selectChat: (chatId: string) => ipcRenderer.invoke(IPCChannels.chatSelect, chatId) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
   onProjectSwitchProgress: (listener: (progress: ProjectSwitchProgress) => void) => {
     const handler = (_: unknown, progress: ProjectSwitchProgress) => listener(progress);

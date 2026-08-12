@@ -23,6 +23,7 @@ export type AgentsStreamBridgeHooks = {
   persistTranscript?: (kind: "user" | "assistant" | "tool_status" | "thinking", text: string) => void;
   onActiveAgentChange?: (agentName: string) => void;
   onTokenUsage?: (runUsage: AgentTokenUsage) => void;
+  onDiagnostic?: (message: string, meta: Record<string, unknown>) => void;
   filePreviewPacingMs?: number;
 };
 
@@ -37,6 +38,24 @@ export type AgentsStreamBridgeResult = {
   toolCallCount: number;
   tokenUsage?: AgentTokenUsage;
   chainableResponseId?: string;
+  diagnostics: AgentsStreamBridgeDiagnostics;
+};
+
+export type AgentsStreamBridgeDiagnostics = {
+  runEventTypes: Record<string, number>;
+  rawDataTypes: Record<string, number>;
+  rawModelSources: Record<string, number>;
+  responseEventTypes: Record<string, number>;
+  terminalResponseStatuses: string[];
+  terminalFailureReasons: string[];
+  terminalOutputItemTypes: string[];
+  terminalContentItemTypes: string[];
+  finalOutput:
+    | { kind: "string"; chars: number }
+    | { kind: "array"; length: number; itemTypes: string[] }
+    | { kind: "object"; keys: string[] }
+    | { kind: "not_read" }
+    | { kind: "null" | "undefined" | "number" | "boolean" | "bigint" | "symbol" | "function" };
 };
 
 type ResponsesFunctionCallState = {
@@ -48,6 +67,96 @@ type ResponsesFunctionCallState = {
 const WRITE_FILE_PREVIEW_MIN_LINES = 24;
 const WRITE_FILE_PREVIEW_MAX_INTERMEDIATE_EVENTS = 5;
 const DEFAULT_FILE_PREVIEW_PACING_MS = 18;
+
+function incrementCount(counts: Record<string, number>, key: string): void {
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+function typeLabel(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  if (typeof value === "object") {
+    const type = (value as { type?: unknown }).type;
+    return typeof type === "string" && type ? type : "object";
+  }
+  return typeof value;
+}
+
+function recordTerminalResponse(
+  response: unknown,
+  diagnostics: {
+    terminalResponseStatuses: Set<string>;
+    terminalFailureReasons: Set<string>;
+    terminalOutputItemTypes: Set<string>;
+    terminalContentItemTypes: Set<string>;
+  }
+): void {
+  if (!response || typeof response !== "object") return;
+  const record = response as {
+    status?: unknown;
+    output?: unknown;
+    error?: unknown;
+    incomplete_details?: unknown;
+    providerData?: unknown;
+  };
+  if (typeof record.status === "string" && record.status) {
+    diagnostics.terminalResponseStatuses.add(record.status);
+  }
+  const recordFailureReason = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    const failure = value as { reason?: unknown; code?: unknown; type?: unknown };
+    for (const candidate of [failure.reason, failure.code, failure.type]) {
+      if (typeof candidate === "string" && candidate) diagnostics.terminalFailureReasons.add(candidate);
+    }
+  };
+  recordFailureReason(record.error);
+  recordFailureReason(record.incomplete_details);
+  if (record.providerData && typeof record.providerData === "object") {
+    const providerData = record.providerData as {
+      status?: unknown;
+      error?: unknown;
+      incomplete_details?: unknown;
+    };
+    const status = providerData.status;
+    if (typeof status === "string" && status) diagnostics.terminalResponseStatuses.add(status);
+    recordFailureReason(providerData.error);
+    recordFailureReason(providerData.incomplete_details);
+  }
+  if (!Array.isArray(record.output)) return;
+  for (const item of record.output) {
+    diagnostics.terminalOutputItemTypes.add(typeLabel(item));
+    if (!item || typeof item !== "object") continue;
+    const content = (item as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const contentItem of content) {
+      diagnostics.terminalContentItemTypes.add(typeLabel(contentItem));
+    }
+  }
+}
+
+function summarizeFinalOutput(value: unknown): AgentsStreamBridgeDiagnostics["finalOutput"] {
+  if (typeof value === "string") return { kind: "string", chars: value.length };
+  if (Array.isArray(value)) {
+    return {
+      kind: "array",
+      length: value.length,
+      itemTypes: [...new Set(value.map(typeLabel))].slice(0, 12)
+    };
+  }
+  if (value && typeof value === "object") {
+    return { kind: "object", keys: Object.keys(value).slice(0, 12) };
+  }
+  if (value === null) return { kind: "null" };
+  switch (typeof value) {
+    case "undefined": return { kind: "undefined" };
+    case "number": return { kind: "number" };
+    case "boolean": return { kind: "boolean" };
+    case "bigint": return { kind: "bigint" };
+    case "symbol": return { kind: "symbol" };
+    case "function": return { kind: "function" };
+    default: return { kind: "undefined" };
+  }
+}
 
 function sleep(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
@@ -312,8 +421,56 @@ export async function mapAgentsStreamToAgentEvents(
   let lastToolName = "";
   let lastCallId = "";
   let lastToolContext: ToolStatusContext | undefined;
+  const runEventTypes: Record<string, number> = {};
+  const rawDataTypes: Record<string, number> = {};
+  const rawModelSources: Record<string, number> = {};
+  const responseEventTypes: Record<string, number> = {};
+  const terminalResponseStatuses = new Set<string>();
+  const terminalFailureReasons = new Set<string>();
+  const terminalOutputItemTypes = new Set<string>();
+  const terminalContentItemTypes = new Set<string>();
+  const snapshotDiagnostics = (readFinalOutput = true): AgentsStreamBridgeDiagnostics => ({
+    runEventTypes,
+    rawDataTypes,
+    rawModelSources,
+    responseEventTypes,
+    terminalResponseStatuses: [...terminalResponseStatuses],
+    terminalFailureReasons: [...terminalFailureReasons],
+    terminalOutputItemTypes: [...terminalOutputItemTypes],
+    terminalContentItemTypes: [...terminalContentItemTypes],
+    finalOutput: readFinalOutput ? summarizeFinalOutput(stream.finalOutput) : { kind: "not_read" }
+  });
 
-  for await (const event of stream as AsyncIterable<RunStreamEvent>) {
+  try {
+    for await (const event of stream as AsyncIterable<RunStreamEvent>) {
+    incrementCount(runEventTypes, event.type);
+    if (event.type === "raw_model_stream_event") {
+      const rawEvent = event as unknown as {
+        source?: unknown;
+        data?: { type?: unknown; event?: { type?: unknown; response?: unknown }; response?: unknown };
+      };
+      const rawDataType = typeof rawEvent.data?.type === "string" ? rawEvent.data.type : "unknown";
+      const source = typeof rawEvent.source === "string" ? rawEvent.source : "missing";
+      incrementCount(rawDataTypes, rawDataType);
+      incrementCount(rawModelSources, source);
+      if (rawDataType === "model") {
+        const responseEventType = rawEvent.data?.event?.type;
+        incrementCount(responseEventTypes, typeof responseEventType === "string" ? responseEventType : "unknown");
+        recordTerminalResponse(rawEvent.data?.event?.response, {
+          terminalResponseStatuses,
+          terminalFailureReasons,
+          terminalOutputItemTypes,
+          terminalContentItemTypes
+        });
+      } else if (rawDataType === "response_done") {
+        recordTerminalResponse(rawEvent.data?.response, {
+          terminalResponseStatuses,
+          terminalFailureReasons,
+          terminalOutputItemTypes,
+          terminalContentItemTypes
+        });
+      }
+    }
     if (event.type === "raw_model_stream_event" && isOpenAIResponsesRawModelStreamEvent(event)) {
       await handleResponsesEvent(event.data.event, state, emit);
       continue;
@@ -386,6 +543,14 @@ export async function mapAgentsStreamToAgentEvents(
         }
       }
     }
+    }
+  } catch (error) {
+    hooks.onDiagnostic?.("agent stream iteration failed", {
+      failure: "stream_iteration_error",
+      errorName: error instanceof Error ? error.name : typeof error,
+      ...snapshotDiagnostics(false)
+    });
+    throw error;
   }
 
   await stream.completed;
@@ -408,6 +573,7 @@ export async function mapAgentsStreamToAgentEvents(
     toolNames,
     filesWrittenThisTurn,
     toolCallCount,
+    diagnostics: snapshotDiagnostics(),
     ...(state.tokenUsage ? { tokenUsage: state.tokenUsage } : {}),
     ...(state.chainableResponseId ? { chainableResponseId: state.chainableResponseId } : {})
   };

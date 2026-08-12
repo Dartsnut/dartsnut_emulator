@@ -87,6 +87,8 @@ export interface SessionEngineOptions {
   };
   /** Test injection — bypasses @openai/agents run(). */
   runFn?: typeof run;
+  /** Privacy-safe structural diagnostics; caller decides whether logging is enabled. */
+  onDiagnostic?: (message: string, meta: Record<string, unknown>) => void;
 }
 
 export interface RunPromptOptions {
@@ -280,7 +282,13 @@ export class SessionEngine {
         maxTurns: SessionEngine.MAIN_AGENT_MAX_TURNS,
         context: runContext,
         previousResponseId,
-        callModelInputFilter: createSafeCallModelInputFilter()
+        callModelInputFilter: createSafeCallModelInputFilter((diagnostic) => {
+          this.options.onDiagnostic?.("agent model repeated identical input", {
+            failure: "repeated_model_input",
+            ...diagnostic,
+            hadPreviousResponseId: Boolean(previousResponseId)
+          });
+        })
       };
       // @openai/agents' process-global run() caches its first model provider.
       // A per-run Runner keeps provider switches and bridge fetch injection authoritative.
@@ -298,11 +306,24 @@ export class SessionEngine {
         onActiveAgentChange: (name) => {
           runContext.activeAgentName = name;
         },
-        onTokenUsage: (runUsage) => this.emitTokenUsage(tokenUsageBase, runUsage, onEvent)
+        onTokenUsage: (runUsage) => this.emitTokenUsage(tokenUsageBase, runUsage, onEvent),
+        onDiagnostic: (message, meta) => this.options.onDiagnostic?.(message, {
+          ...meta,
+          hadPreviousResponseId: Boolean(previousResponseId)
+        })
       });
 
       const final = bridgeResult.finalText.trim();
       if (!final) {
+        this.options.onDiagnostic?.("agent stream completed without assistant text", {
+          failure: "empty_mapped_output",
+          hadPreviousResponseId: Boolean(previousResponseId),
+          sawReasoning: bridgeResult.sawReasoning,
+          sawToolCall: bridgeResult.sawToolCall,
+          stepTextChars: bridgeResult.stepText.length,
+          stepReasoningChars: bridgeResult.stepReasoning.length,
+          ...bridgeResult.diagnostics
+        });
         throw new Error(EMPTY_MODEL_RESPONSE_MESSAGE);
       }
       if (modelChainKey && bridgeResult.chainableResponseId) {

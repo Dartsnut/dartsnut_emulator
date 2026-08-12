@@ -25,7 +25,8 @@ export const IPCChannels = {
   projectsList: "agent:projects-list",
   projectCreate: "agent:project-create",
   projectSelect: "agent:project-select",
-  chatCreate: "agent:chat-create",
+  chatArchive: "agent:chat-archive",
+  chatGenerateTitle: "agent:chat-generate-title",
   chatSelect: "agent:chat-select",
   projectSwitchProgress: "agent:project-switch-progress",
   getProviderSettings: "agent:get-provider-settings",
@@ -172,10 +173,11 @@ export interface BootstrapState {
 }
 
 export interface ProjectRecord { id: string; name: string; folderPath: string; createdAt: string; updatedAt: string; lastOpenedAt: string; migrationComplete?: boolean; }
-export interface ChatRecord { id: string; projectId: string; title: string; createdAt: string; updatedAt: string; }
+export interface ChatRecord { id: string; projectId: string; title: string; createdAt: string; updatedAt: string; archivedAt?: string; }
 export interface ProjectTree { projects: ProjectRecord[]; chats: ChatRecord[]; }
 export interface ProjectCreateRequest { folderPath: string; name?: string; }
 export interface ProjectSelectRequest { projectId: string | null; chatId?: string; }
+export interface ChatGenerateTitleRequest { chatId: string; firstUserMessage: string; }
 export type ProjectSwitchProgress = { active: boolean; stage: "confirming" | "stopping-deployment" | "stopping-emulator" | "switching" | "reloading" | "ready" | "error"; message?: string };
 
 /** IPC return from `saveTempWorkspace`. */

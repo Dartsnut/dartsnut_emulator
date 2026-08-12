@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { X } from "lucide-react";
 import { cn } from "./cn";
 import googleGLogo from "./assets/google-g-logo.png";
 
@@ -226,9 +227,7 @@ export function DeployAuthGate({
             aria-label="Close sign-in"
             title="Close sign-in"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-              <path d="M5.5 5.5l13 13M18.5 5.5l-13 13" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" />
-            </svg>
+            <X size={16} strokeWidth={2.25} aria-hidden />
           </button>
         </div>
 

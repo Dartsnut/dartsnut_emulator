@@ -81,7 +81,8 @@ declare global {
       listProjects: () => Promise<ProjectTree>;
       createProject: (request: ProjectCreateRequest) => Promise<{ state: BootstrapState; tree: ProjectTree }>;
       selectProject: (request: ProjectSelectRequest) => Promise<{ state: BootstrapState; tree: ProjectTree; accepted: boolean }>;
-      createChat: (projectId: string) => Promise<{ state: BootstrapState; tree: ProjectTree }>;
+      archiveChat: (chatId: string) => Promise<{ state: BootstrapState; tree: ProjectTree }>;
+      generateChatTitle: (request: { chatId: string; firstUserMessage: string }) => Promise<{ tree: ProjectTree; updated: boolean }>;
       selectChat: (chatId: string) => Promise<{ state: BootstrapState; tree: ProjectTree }>;
       onProjectSwitchProgress: (listener: (progress: ProjectSwitchProgress) => void) => () => void;
       resetWorkspaceSession: () => Promise<

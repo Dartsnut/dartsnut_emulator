@@ -22,6 +22,10 @@ import {
   type BindSlotRequest,
   type BindSlotResponse,
   type BootstrapState,
+  type ProjectTree,
+  type ProjectCreateRequest,
+  type ProjectSelectRequest,
+  type ProjectSwitchProgress,
   type AppUpdateStatus,
   type AppUpdateInstallResponse,
   type AppUpdateDownloadResponse,
@@ -124,6 +128,7 @@ import {
   type ProviderConfig
 } from "@dartsnut/agent-runtime";
 import { formatAgentEventForConsole } from "./agentEventConsole";
+import { fallbackChatTitle, generateChatTitle } from "./chatTitle";
 import { PACKAGED_ENV } from "./packagedEnv.generated";
 import {
   DARTSNUT_LLM_BRIDGE_API_KEY_PLACEHOLDER,
@@ -156,6 +161,7 @@ import {
 } from "./emulatorAgentTools";
 import { copyEmulatorStateSnapshot } from "./emulatorState";
 import { AssetManager } from "./assetManager";
+import { ProjectStore } from "./projectStore";
 import { DeployMachineSession } from "./deployMachine";
 import { createCommunityClient, type CommunityClient } from "./communityClient";
 import { clearCommunityAuth, readCommunityAuth, writeCommunityAuth } from "./communityAuth";
@@ -193,6 +199,10 @@ import {
 
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
+let activeProjectId: string | null = null;
+let activeChatId: string | null = null;
+let projectStore: ProjectStore | null = null;
+let projectSwitchInFlight: Promise<boolean> | null = null;
 /** Persisted unsaved temp workspace directory (under OS temp), or null. */
 let trackedTempWorkspacePath: string | null = null;
 /** When true, the next window close can continue without showing the temp-workspace prompt again. */
@@ -255,7 +265,7 @@ const repoEnvPath = path.join(repoRoot, ".env");
 if (app.isPackaged) {
   for (const [key, value] of Object.entries(PACKAGED_ENV)) {
     if (!process.env[key]) {
-      process.env[key] = value;
+      process.env[key] = String(value);
     }
   }
 } else if (fs.existsSync(repoEnvPath)) {
@@ -290,6 +300,8 @@ let deployMachineSession: DeployMachineSession | null = null;
 
 /** Serializes prompt replacement/cancellation through provider and backend run cleanup. */
 const sendPromptCoordinator = new AgentRunCoordinator();
+/** Background title runs yield immediately when a real agent prompt starts. */
+const chatTitleCoordinator = new AgentRunCoordinator();
 
 /** Set while desktop Google OAuth is waiting for the browser callback or login API. */
 let communityGoogleLoginAbortController: AbortController | null = null;
@@ -1536,11 +1548,96 @@ function providerStatus(): BootstrapState["providerStatus"] {
 function getBootstrapState(): BootstrapState {
   return {
     workspaceRoot,
+    activeProjectId,
+    activeChatId,
     providerStatus: providerStatus(),
     firstRunComplete,
-    isTemporaryWorkspace: isTemporaryWorkspaceActiveNow(),
+    isTemporaryWorkspace: false,
     needsCreationIntake: computeNeedsCreationIntake()
   };
+}
+
+function getProjectStore(): ProjectStore {
+  if (!projectStore) projectStore = new ProjectStore(app.getPath("userData"));
+  return projectStore;
+}
+
+function projectTree(): ProjectTree { return getProjectStore().list(); }
+
+function emitProjectSwitchProgress(progress: ProjectSwitchProgress): void {
+  sendToRenderer(IPCChannels.projectSwitchProgress, progress);
+}
+
+async function stopRuntimeForProjectTransition(): Promise<"ready" | "stopped" | "cancelled"> {
+  const runtimeActive = Boolean(emulatorState.running || deployMachineSession?.connected);
+  if (!runtimeActive) return "ready";
+  const { response } = await showAppMessageBox({ type: "question", buttons: ["Switch project", "Cancel"], defaultId: 1, cancelId: 1, title: "Switch project", message: "Emulator or remote deployment is active. Stop it and switch project?" });
+  if (response !== 0) return "cancelled";
+  emitProjectSwitchProgress({ active: true, stage: "stopping-deployment", message: "Stopping remote deployment…" });
+  if (deployMachineSession?.connected) await disconnectDeployMachine();
+  emitProjectSwitchProgress({ active: true, stage: "stopping-emulator", message: "Stopping emulator…" });
+  if (emulatorState.running) await gracefulStopEmulatorBridge();
+  return "stopped";
+}
+
+async function switchToProject(projectId: string, chatId?: string): Promise<boolean> {
+  const store = getProjectStore();
+  const project = store.getProject(projectId);
+  if (!project) return false;
+  store.migrateLegacy(project);
+  if (chatId) {
+    const chat = store.getChat(chatId);
+    if (!chat || chat.projectId !== project.id) return false;
+  }
+  if (activeProjectId === project.id) {
+    activeChatId = chatId ?? null;
+    if (activeChatId) store.markChatOpened(activeChatId);
+    store.touchProject(project.id);
+    emitBootstrapStateToRenderer();
+    return true;
+  }
+  if (projectSwitchInFlight) return projectSwitchInFlight;
+  projectSwitchInFlight = (async () => {
+    if (await stopRuntimeForProjectTransition() === "cancelled") return false;
+    emitProjectSwitchProgress({ active: true, stage: "switching", message: "Switching project…" });
+    performSessionCleanup({ clearWorkspace: false });
+    activeProjectId = project.id;
+    activeChatId = chatId ?? null;
+    if (activeChatId) store.markChatOpened(activeChatId);
+    store.touchProject(project.id);
+    applyWorkspaceRoot(project.folderPath);
+    emitProjectSwitchProgress({ active: true, stage: "reloading", message: "Reloading emulator…" });
+    if (bridgeProcess?.stdin && !bridgeProcess.stdin.destroyed) bridgeProcess.stdin.write(`${JSON.stringify({ command: { type: "set_path", path: project.folderPath } })}\n${JSON.stringify({ command: { type: "reload_widget" } })}\n`);
+    emitBootstrapStateToRenderer();
+    emitProjectSwitchProgress({ active: false, stage: "ready" });
+    return true;
+  })().catch((error) => { emitProjectSwitchProgress({ active: false, stage: "error", message: error instanceof Error ? error.message : String(error) }); return false; }).finally(() => { projectSwitchInFlight = null; });
+  return projectSwitchInFlight;
+}
+
+async function clearActiveProject(): Promise<boolean> {
+  if (!activeProjectId) {
+    activeChatId = null;
+    return true;
+  }
+  if (projectSwitchInFlight) return projectSwitchInFlight;
+  projectSwitchInFlight = (async () => {
+    const runtimeTransition = await stopRuntimeForProjectTransition();
+    if (runtimeTransition === "cancelled") return false;
+    if (runtimeTransition === "stopped") {
+      emitProjectSwitchProgress({ active: true, stage: "switching", message: "Starting a new chat…" });
+    }
+    performSessionCleanup({ clearWorkspace: true });
+    activeProjectId = null;
+    activeChatId = null;
+    workspaceRoot = null;
+    emitBootstrapStateToRenderer();
+    if (runtimeTransition === "stopped") {
+      emitProjectSwitchProgress({ active: false, stage: "ready" });
+    }
+    return true;
+  })().catch((error) => { emitProjectSwitchProgress({ active: false, stage: "error", message: error instanceof Error ? error.message : String(error) }); return false; }).finally(() => { projectSwitchInFlight = null; });
+  return projectSwitchInFlight;
 }
 
 function emitBootstrapStateToRenderer(): void {
@@ -2197,18 +2294,18 @@ function logAgentEventToConsole(event: AgentEvent, mirrorToDevtools: boolean): v
 /** Logical px; must match `titleBarOverlay.height` on Windows when overlay is enabled. */
 const WINDOWS_TITLE_BAR_OVERLAY_HEIGHT = 32;
 
-/** Match renderer `themes.css` `--color-bg-page` and caption contrast per theme. */
+/** Keep Windows caption controls readable over the renderer's transparent floating header. */
 const WINDOWS_SHELL_UI: Record<
   ShellUiTheme,
   { titleBarColor: string; symbolColor: string; windowBackground: string }
 > = {
   dark: {
-    titleBarColor: "#121212",
+    titleBarColor: "#00000000",
     symbolColor: "#e0e0e0",
     windowBackground: "#121212"
   },
   light: {
-    titleBarColor: "#eef1f8",
+    titleBarColor: "#00000000",
     symbolColor: "#1a2332",
     windowBackground: "#eef1f8"
   }
@@ -2599,10 +2696,10 @@ function shouldAttachAgentSessionPersistence(workspaceForSession: string | null 
 function buildWorkspaceSessionPersistence(
   workspaceForSession: string | null | undefined
 ): AgentSessionPersistence | undefined {
-  if (!shouldAttachAgentSessionPersistence(workspaceForSession)) {
+  if (!shouldAttachAgentSessionPersistence(workspaceForSession) || !activeChatId) {
     return undefined;
   }
-  return new AgentSessionPersistence(workspaceForSession!);
+  return getProjectStore().sessionPersistence(activeChatId);
 }
 
 function resolvePreferredUserLocaleForSession(
@@ -2684,7 +2781,8 @@ async function buildSession(
       intakeState: extras?.intakeState,
       originalUserPrompt: extras?.latestUserTextForLocale
     },
-    getIntakeState: extras?.getIntakeState
+    getIntakeState: extras?.getIntakeState,
+    onDiagnostic: (message, meta) => terminalAgentLifecycleLog(`[agent] ${message}`, meta)
   });
   return new AgentSessionRuntime({
     workspacePath,
@@ -2864,10 +2962,13 @@ app.whenReady().then(async () => {
       message: "Runtime ready"
     });
 
-    // Workspace recovery dialogs now have the main window as a proper parent.
-    await maybeRecoverTrackedTempWorkspaceAtLaunch();
-    ensureTemporaryWorkspaceRootAllocated();
-    startPythonBridge();
+    projectStore = new ProjectStore(app.getPath("userData"));
+    const previousChat = projectStore.lastOpenedChat();
+    const previousProject = previousChat ? projectStore.getProject(previousChat.projectId) : null;
+    if (previousProject) {
+      await switchToProject(previousProject.id);
+    }
+    if (workspaceRoot) startPythonBridge();
     emitBootstrapStateToRenderer();
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -3052,9 +3153,73 @@ ipcMain.handle(IPCChannels.appUpdateInstallNow, async (): Promise<AppUpdateInsta
 
 ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());
 
+ipcMain.handle(IPCChannels.projectsList, () => projectTree());
+ipcMain.handle(IPCChannels.projectCreate, async (_event: unknown, request: ProjectCreateRequest) => {
+  const store = getProjectStore();
+  const project = store.ensureProject(request.folderPath, request.name);
+  await switchToProject(project.id);
+  return { state: getBootstrapState(), tree: projectTree() };
+});
+ipcMain.handle(IPCChannels.projectSelect, async (_event: unknown, request: ProjectSelectRequest) => {
+  if (request.projectId === null) {
+    const accepted = await clearActiveProject();
+    return { state: getBootstrapState(), tree: projectTree(), accepted };
+  }
+  const accepted = await switchToProject(request.projectId, request.chatId);
+  return { state: getBootstrapState(), tree: projectTree(), accepted };
+});
+ipcMain.handle("agent:chat-archive", (_event: unknown, chatId: string) => {
+  const store = getProjectStore();
+  const chat = store.archiveChat(chatId);
+  if (!chat) throw new Error("Chat does not exist.");
+  if (activeChatId === chat.id) {
+    activeChatId = null;
+    emitBootstrapStateToRenderer();
+  }
+  return { state: getBootstrapState(), tree: projectTree() };
+});
+ipcMain.handle("agent:chat-generate-title", async (_event: unknown, request: { chatId: string; firstUserMessage: string }) => {
+  const store = getProjectStore();
+  const chat = store.getChat(request.chatId);
+  if (!chat || chat.archivedAt || chat.title !== "New chat") {
+    return { tree: projectTree(), updated: false };
+  }
+  const titleLease = await chatTitleCoordinator.begin();
+  let title = fallbackChatTitle(request.firstUserMessage);
+  let bridgeRun: DartsnutLlmBridgeRun | null = null;
+  try {
+    const prepared = await prepareAgentProvider(readProviderSettings());
+    if (prepared.ok) {
+      bridgeRun = prepared.bridgeRun;
+      try {
+        title = await generateChatTitle(prepared.modelConfig, request.firstUserMessage, titleLease.abortController.signal);
+      } catch {
+        // Deterministic fallback already selected.
+      }
+    }
+  } catch {
+    // Title generation must not affect the completed agent request.
+  } finally {
+    try {
+      await bridgeRun?.finish();
+    } catch {
+      // Keep deterministic fallback available even when bridge cleanup fails.
+    }
+    titleLease.settle();
+  }
+  const updated = store.updateDefaultChatTitle(request.chatId, title);
+  return { tree: projectTree(), updated: Boolean(updated) };
+});
+ipcMain.handle(IPCChannels.chatSelect, async (_event: unknown, chatId: string) => {
+  const store = getProjectStore(); const chat = store.getChat(chatId);
+  if (!chat || chat.archivedAt) throw new Error("Chat does not exist.");
+  await switchToProject(chat.projectId, chat.id);
+  return { state: getBootstrapState(), tree: projectTree() };
+});
+
 ipcMain.handle(IPCChannels.getWorkspaceSessionSummary, (): AgentSessionWorkspaceSummary => {
   const ws = workspaceRoot;
-  if (!ws || !shouldAttachAgentSessionPersistence(ws)) {
+  if (!ws || !shouldAttachAgentSessionPersistence(ws) || !activeChatId) {
     return {
       hasPersistedSession: false,
       sessionId: null,
@@ -3064,7 +3229,7 @@ ipcMain.handle(IPCChannels.getWorkspaceSessionSummary, (): AgentSessionWorkspace
       tokenUsage: null
     };
   }
-  const persistence = new AgentSessionPersistence(ws);
+  const persistence = getProjectStore().sessionPersistence(activeChatId);
   persistence.readConversationItems();
   const manifest = persistence.readManifest();
   return {
@@ -3084,7 +3249,7 @@ ipcMain.handle(
     if (!ws) {
       return { ok: false, reason: "no_workspace" };
     }
-    const persistence = buildWorkspaceSessionPersistence(ws);
+    const persistence = activeChatId ? getProjectStore().sessionPersistence(activeChatId) : buildWorkspaceSessionPersistence(ws);
     if (!persistence) {
       return { ok: false, reason: "persistence_disabled" };
     }
@@ -3869,15 +4034,6 @@ ipcMain.handle(IPCChannels.startNewProject, async () => {
 });
 
 ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: PickWorkspaceRequest) => {
-  const proceed = await ensureTemporaryWorkspaceResolvedForGuard("open_workspace");
-  if (!proceed) {
-    return {
-      state: getBootstrapState(),
-      selectedPath: null,
-      accepted: false,
-      reason: "cancelled"
-    } satisfies PickWorkspaceResponse;
-  }
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory", "createDirectory"]
   });
@@ -3898,7 +4054,6 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
       reason: "non_empty"
     } satisfies PickWorkspaceResponse;
   }
-  applyWorkspaceRoot(selectedPath);
   return {
     state: getBootstrapState(),
     selectedPath,
@@ -4148,13 +4303,16 @@ function createEmitAgentToRenderer(): AgentEventBatcher & { dispose: () => void 
 }
 
 ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest): Promise<SendPromptResponse> => {
+  await chatTitleCoordinator.cancelAndWait();
   const runLease = await sendPromptCoordinator.begin();
   const runAbort = runLease.abortController;
   const emitAgentSink = createEmitAgentToRenderer();
   const emitAgent = (agentEvent: AgentEvent) => emitAgentSink.emit(agentEvent);
   let bridgeRun: DartsnutLlmBridgeRun | null = null;
   try {
-    ensureTemporaryWorkspaceRootAllocated();
+    if (!activeProjectId || !workspaceRoot) {
+      return { ok: false, message: "Select a project before sending." };
+    }
     agentEventEmitter = emitAgent;
     const prepared = await prepareAgentProvider(readProviderSettings());
     if (!prepared.ok) {
@@ -4167,12 +4325,21 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     }
     bridgeRun = prepared.bridgeRun;
     activeDartsnutLlmBridgeRun = bridgeRun;
+    if (!activeChatId) {
+      const store = getProjectStore();
+      const chat = store.createChat(activeProjectId);
+      activeChatId = chat.id;
+      store.markChatOpened(chat.id);
+      store.touchProject(activeProjectId);
+      emitBootstrapStateToRenderer();
+    }
     let sessionRouting: SendPromptResponse["sessionRouting"];
     const hostState: IntakeToolState = {};
     const effectiveWorkspacePath =
       typeof req.workspacePath === "string" && req.workspacePath.length > 0 ? req.workspacePath : workspaceRoot;
     const request: PromptRequest = {
       ...req,
+      chatId: activeChatId,
       prompt: buildPromptWithChatMediaAttachments(req.prompt, req.chatMediaAttachments ?? [])
     };
     const lastIntakeUserPrompt = request.prompt;

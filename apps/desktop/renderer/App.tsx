@@ -6,6 +6,7 @@ import {
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -19,6 +20,7 @@ import {
   ArrowLeft,
   ArrowUp,
   Check,
+  ChevronDown,
   CircleAlert,
   Folder,
   FolderOpen,
@@ -100,7 +102,6 @@ import {
   transcriptLineToTimelineEntry,
   type TimelineEntry
 } from "./rawTimeline";
-import { ThemeSwitcherIcon } from "./ThemeSwitcher";
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
 import {
@@ -154,7 +155,7 @@ const EMPTY_WIDGET_CONFIGS: Record<WidgetConfigScope, WidgetConfigSnapshot> = {
 type WidgetValueState = { fields: WidgetFieldDefinition[]; values: WidgetFieldValues };
 
 type AppScreen = "main" | "settings";
-type SettingsSection = "provider" | "privacy-updates";
+type SettingsSection = "general" | "provider";
 type SubmissionLockState = {
   active: boolean;
   stage: CommunitySubmitProgress["stage"] | "idle";
@@ -314,6 +315,66 @@ function DartsnutLlmUsageCard({ quota, loading, error, loggedIn, onRefresh }: Da
       ) : null}
     </section>
   );
+}
+
+function SettingsGroup({ children }: { children: ReactNode }) {
+  return <section className="settings-group">{children}</section>;
+}
+
+function SettingsRow({ title, description, control, children }: {
+  title?: string;
+  description?: string;
+  control?: ReactNode;
+  children?: ReactNode;
+}) {
+  return <div className={cn("settings-row", children && "settings-row--stacked")}>
+    {title ? <div className="settings-row__copy">
+      <span className="settings-row__title">{title}</span>
+      {description ? <span className="settings-row__description">{description}</span> : null}
+    </div> : null}
+    {control ? <div className="settings-row__control">{control}</div> : null}
+    {children ? <div className="settings-row__content">{children}</div> : null}
+  </div>;
+}
+
+function SettingsSelect<T extends string>({ value, options, onChange, label }: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+  label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selected = options.find((option) => option.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", dismiss);
+    return () => document.removeEventListener("mousedown", dismiss);
+  }, [open]);
+
+  return <div className="settings-select" ref={rootRef}>
+    <button type="button" className={cn("settings-select__trigger", open && "settings-select__trigger--open")} onClick={() => setOpen((current) => !current)} aria-label={label} aria-haspopup="menu" aria-expanded={open}>
+      <span>{selected?.label}</span><ChevronDown size={15} aria-hidden />
+    </button>
+    {open ? <div className="settings-select__menu" role="menu">
+      {options.map((option) => <button key={option.value} type="button" className={cn("settings-select__option", option.value === value && "settings-select__option--selected")} onClick={() => { onChange(option.value); setOpen(false); }} role="menuitemradio" aria-checked={option.value === value}>
+        <span>{option.label}</span>{option.value === value ? <Check size={15} aria-hidden /> : null}
+      </button>)}
+    </div> : null}
+  </div>;
+}
+
+function SettingsSwitch({ checked, onChange, label, analyticsId }: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  analyticsId?: string;
+}) {
+  return <button type="button" className={cn("settings-switch", checked && "settings-switch--checked")} onClick={() => onChange(!checked)} role="switch" aria-checked={checked} aria-label={label} data-analytics-id={analyticsId} data-analytics-area="settings"><span /></button>;
 }
 
 function UpdateDownloadPill({ status }: { status: AppUpdateStatus | null }) {
@@ -547,14 +608,6 @@ function workspaceFolderBasename(workspaceRoot: string): string {
   return segments.length > 0 ? segments[segments.length - 1]! : workspaceRoot;
 }
 
-function isLikelyTempWorkspace(workspaceRoot: string | null | undefined): boolean {
-  if (!workspaceRoot) {
-    return false;
-  }
-  const basename = workspaceFolderBasename(workspaceRoot);
-  return basename.startsWith("dartsnut-chat-");
-}
-
 function AgentMarkdownBody({ source, className }: { source: string; className?: string }) {
   const fallbackClass = className ?? "entry-text";
   return (
@@ -568,6 +621,7 @@ type CommunityAuthStatusProps = {
   communitySession: CommunitySessionInfo;
   onAuthRequired: () => void;
   onSignOut: () => Promise<void>;
+  onOpenSettings: () => void;
   placement?: "header" | "rail";
 };
 
@@ -575,6 +629,7 @@ function CommunityAuthStatus({
   communitySession,
   onAuthRequired,
   onSignOut,
+  onOpenSettings,
   placement = "header"
 }: CommunityAuthStatusProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -627,10 +682,19 @@ function CommunityAuthStatus({
           <div
             className={cn(
               "absolute z-50 min-w-[120px] rounded-md border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] py-1 shadow-sm",
-              inRail ? "bottom-0 left-full ml-2" : "right-0 top-full mt-1"
+              inRail ? "bottom-full left-0" : "right-0 top-full mt-1"
             )}
             role="menu"
           >
+            <button
+              type="button"
+              className="w-full border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none"
+              onClick={() => { onOpenSettings(); setMenuOpen(false); }}
+              role="menuitem"
+            >
+              <Settings size={14} className="mr-2 inline-block" aria-hidden />
+              Settings
+            </button>
             <button
               type="button"
               className="w-full border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
@@ -762,7 +826,7 @@ export function App() {
     message: null
   });
   const [screen, setScreen] = useState<AppScreen>("main");
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>("provider");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   /** Preserves widget/game creator routing for follow-up prompts after the first send. */
   const [sessionTemplateMode, setSessionTemplateMode] = useState<
     "game-creator" | "widget-creator" | null
@@ -830,6 +894,7 @@ export function App() {
   });
   const deployEligible = deployEligibility.ok;
   const activeProject = projectTree.projects.find((project) => project.id === bootstrap?.activeProjectId) ?? null;
+  const activeChat = projectTree.chats.find((chat) => chat.id === bootstrap?.activeChatId) ?? null;
   const validProject = Boolean(
     activeProject &&
     bootstrap?.workspaceRoot &&
@@ -838,7 +903,7 @@ export function App() {
   );
   const showEmulator = validProject;
   const showRuntimeSetup = pythonRuntimeProgress.running || Boolean(pythonRuntimeProgress.error);
-  const showEmulatorPane = showEmulator && !showRuntimeSetup;
+  const showEmulatorPane = screen === "main" && showEmulator && !showRuntimeSetup;
   const showDeployDrawer = screen === "main" && validProject && !showRuntimeSetup;
   const [widgetConfigs, setWidgetConfigs] = useState<Record<WidgetConfigScope, WidgetConfigSnapshot>>(EMPTY_WIDGET_CONFIGS);
   const [widgetValuesByConfig, setWidgetValuesByConfig] = useState<Record<string, WidgetValueState>>({});
@@ -1147,6 +1212,18 @@ export function App() {
       void refreshLlmQuota();
     }
   }, [communitySessionVersion, providerSettings.activeProvider, refreshLlmQuota, screen]);
+
+  useEffect(() => {
+    if (!providerSettingsNotice) return;
+    const timeout = window.setTimeout(() => setProviderSettingsNotice(null), 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [providerSettingsNotice]);
+
+  useEffect(() => {
+    if (!providerSettingsError) return;
+    const timeout = window.setTimeout(() => setProviderSettingsError(null), 7_000);
+    return () => window.clearTimeout(timeout);
+  }, [providerSettingsError]);
 
   useEffect(() => {
     if (communitySession.loggedIn) {
@@ -1995,6 +2072,9 @@ export function App() {
     }
     return sending;
   }, [bootstrap, sending]);
+  const greetingOnlyTimeline = entries.length > 0 && entries.every(
+    (entry) => entry.role === "agent" && (entry.id === "greeting-initial" || entry.id.startsWith("greeting-"))
+  );
   const runtimeProgressPercent = Math.min(100, Math.max(0, Math.round(pythonRuntimeProgress.percent)));
 
   useEffect(() => {
@@ -2535,28 +2615,8 @@ export function App() {
         }}
         role="banner"
       >
+        <div className="min-h-0 min-w-0 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]" aria-hidden />
         {screen === "main" ? (
-          <>
-            <div className="flex min-w-0 shrink items-center gap-1.5">
-              <h1
-                className="m-0 min-w-0 p-0 font-[family-name:var(--font-display)] text-[13px] font-semibold leading-snug tracking-tight text-fg-strong"
-                title={
-                  bootstrap?.workspaceRoot && !bootstrap.isTemporaryWorkspace && !isLikelyTempWorkspace(bootstrap.workspaceRoot)
-                    ? bootstrap.workspaceRoot
-                    : "Embedded assistant for pygame + pydartsnut"
-                }
-              >
-                <span className="block truncate">
-                  {bootstrap?.workspaceRoot && !bootstrap.isTemporaryWorkspace && !isLikelyTempWorkspace(bootstrap.workspaceRoot)
-                    ? workspaceFolderBasename(bootstrap.workspaceRoot)
-                    : "Dartsnut Agent"}
-                </span>
-              </h1>
-            </div>
-            <div
-              className="min-h-0 min-w-0 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
-              aria-hidden
-            />
             <div className="inline-flex shrink-0 items-center justify-end gap-3 overflow-visible">
               <UpdateDownloadPill status={appUpdate} />
               {showDeployDrawer ? (
@@ -2572,37 +2632,26 @@ export function App() {
                 </button>
               ) : null}
             </div>
-          </>
-        ) : (
-          <>
-            <div className="flex min-w-0 shrink-0 items-center gap-1.5">
-              <button
-                type="button"
-                className={chromeIconBtnClass}
-                onClick={() => {
-                  setScreen("main");
-                  setProviderSettingsError(null);
-                  setProviderSettingsNotice(null);
-                }}
-                aria-label="Back to main view"
-                title="Back to main view"
-                data-analytics-id="settings_back"
-                data-analytics-area="navigation"
-              >
-                <ArrowLeft size={14} aria-hidden />
-              </button>
-              <h1 className="m-0 min-w-0 flex-[0_1_auto] p-0 font-[family-name:var(--font-display)] text-[13px] font-semibold leading-snug tracking-tight text-fg-strong">
-                <span className="block truncate">Settings</span>
-              </h1>
-            </div>
-            <div
-              className="min-h-0 min-w-6 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
-              aria-hidden
-            />
-          </>
-        )}
+        ) : null}
       </header>
-      <aside className="workspace-menu col-start-1 row-start-2" aria-label="Workspace menu">
+      <aside className={cn("workspace-menu col-start-1 row-start-2", screen === "settings" && "workspace-menu--settings")} aria-label={screen === "settings" ? "Settings menu" : "Workspace menu"}>
+        {screen === "settings" ? <>
+          <div className="workspace-menu__actions">
+            <button type="button" className="workspace-menu__button" onClick={() => { setScreen("main"); setProviderSettingsError(null); setProviderSettingsNotice(null); }} aria-label="Back to app" title="Back to app">
+              <ArrowLeft size={16} aria-hidden />
+              <span className="workspace-menu__button-label">Back to app</span>
+            </button>
+          </div>
+          <nav className="workspace-menu__settings-nav" aria-label="Settings sections">
+            <p className="workspace-menu__section-label">Settings</p>
+            <button type="button" className={cn("workspace-menu__button", settingsSection === "general" && "workspace-menu__button--active")} onClick={() => setSettingsSection("general")} aria-current={settingsSection === "general" ? "page" : undefined} data-analytics-id="settings_general" data-analytics-area="settings">
+              <Settings size={16} aria-hidden /><span className="workspace-menu__button-label">General</span>
+            </button>
+            <button type="button" className={cn("workspace-menu__button", settingsSection === "provider" && "workspace-menu__button--active")} onClick={() => setSettingsSection("provider")} aria-current={settingsSection === "provider" ? "page" : undefined}>
+              <CircleAlert size={16} aria-hidden /><span className="workspace-menu__button-label">Provider configuration</span>
+            </button>
+          </nav>
+        </> : <>
         <div className="workspace-menu__actions">
           <button
             type="button"
@@ -2673,10 +2722,12 @@ export function App() {
             </div>;
           }) : null}
         </div>
+        </>}
         <div className="workspace-menu__utilities">
           <CommunityAuthStatus
             placement="rail"
             communitySession={communitySession}
+            onOpenSettings={handleOpenSettings}
             onAuthRequired={() => requestCommunityAuth("deploy-devices", true)}
             onSignOut={async () => {
               if (!api?.communityLogout) {
@@ -2690,20 +2741,6 @@ export function App() {
               }
             }}
           />
-          <ThemeSwitcherIcon id="rail-theme-switcher" value={theme} onChange={handleThemeChange} />
-          <button
-            type="button"
-            className={cn("workspace-menu__button", screen === "settings" && "workspace-menu__button--active")}
-            onClick={handleOpenSettings}
-            data-analytics-id="settings_open"
-            data-analytics-area="navigation"
-            aria-label="Settings"
-            aria-current={screen === "settings" ? "page" : undefined}
-            title="Settings"
-          >
-            <Settings size={17} aria-hidden />
-            <span className="workspace-menu__button-label">Settings</span>
-          </button>
         </div>
       </aside>
       {screen === "main" && showRuntimeSetup ? (
@@ -2774,6 +2811,11 @@ export function App() {
             ))}
             </div>
           </section>
+
+          {activeChat ? <div className="chat-panel-chat-header" title={activeChat.title}>
+            <FolderOpen size={15} aria-hidden />
+            <span>{activeChat.title}</span>
+          </div> : null}
 
           {runtimeError || pythonRuntimeStatus ? (
             <div className="chat-rail-overlay chat-rail-overlay--top pointer-events-none absolute inset-x-0 top-0 z-10">
@@ -2885,7 +2927,7 @@ export function App() {
               onDragLeave={handleComposerDragLeave}
               onDrop={handleComposerDrop}
             >
-              {!bootstrap?.activeProjectId ? <div className="ui-composer__project-row">
+              {greetingOnlyTimeline ? <div className="ui-composer__project-row">
                 <button type="button" className={cn("project-chat-trigger", projectMenuOpen && "project-chat-trigger--active")} onClick={() => setProjectMenuOpen((open) => !open)} disabled={projectSwitchProgress.active || sending} aria-haspopup="menu" aria-expanded={projectMenuOpen}>
                   <Folder className="ui-composer__project-glyph" size={16} aria-hidden />
                   <span className="project-chat-trigger__label">{projectTree.projects.find((project) => project.id === bootstrap?.activeProjectId)?.name ?? "Choose Project"}</span>
@@ -3009,105 +3051,35 @@ export function App() {
           ) : null}
         </section>
       ) : (
-        <section
-          className={cn(
-            "left-rail col-start-2 row-start-2 grid min-w-0 min-h-0 h-full overflow-visible border-r border-edge bg-[var(--gradient-rail)] pt-[14px] pb-[18px] px-[18px]",
-            "grid-rows-[auto_minmax(0,1fr)] gap-4",
-            "max-[1100px]:col-start-2 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]",
-            "max-[760px]:gap-2.5 max-[760px]:p-3"
-          )}
-        >
-          <div className="flex min-w-0 flex-col gap-2.5">
-            <div className="flex min-w-0 flex-col gap-2">
-              {providerSettingsError ? (
-                <div
-                  className="m-0 rounded-lg border border-[var(--color-runtime-error-border)] bg-[var(--color-runtime-error-bg)] p-2 text-xs"
-                  role="alert"
-                >
-                  {providerSettingsError}
+        <section className="settings-page col-start-2 col-end-4 row-start-2 min-h-0 overflow-auto">
+          <div className="settings-page__content">
+          <div className="settings-page__body">
+              {settingsSection === "provider" ? (
+                <div>
+                  <h1 className="m-0 text-2xl font-semibold text-fg-strong">Provider configuration</h1>
+                  <p className="mt-1 text-sm leading-relaxed text-fg-muted">Choose and configure the model provider used by Dartsnut Agent.</p>
                 </div>
               ) : null}
-              {providerSettingsNotice ? (
-                <div className="m-0 rounded-lg border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] p-2 text-xs">
-                  {providerSettingsNotice}
-                </div>
-              ) : null}
-            </div>
-          </div>
-          <section className="grid min-h-0 grid-cols-[220px_1fr] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-settings-layout-border)] bg-[var(--color-settings-layout-bg)] shadow-[var(--shadow-sm)]">
-            <nav className="flex flex-col gap-2 border-r border-[var(--color-settings-layout-border)] p-3" aria-label="Settings menu">
-              <button
-                type="button"
-                className={cn(
-                  "w-full rounded-[var(--radius-md)] border-0 bg-transparent px-3 py-2 text-left text-[13px] font-medium text-fg transition-colors focus:outline-none [app-region:no-drag] [-webkit-app-region:no-drag]",
-                  settingsSection === "provider" && "bg-[var(--color-settings-menu-active)]"
-                )}
-                onClick={() => setSettingsSection("provider")}
-                aria-current={settingsSection === "provider" ? "page" : undefined}
-              >
-                Provider configuration
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "w-full rounded-[var(--radius-md)] border-0 bg-transparent px-3 py-2 text-left text-[13px] font-medium text-fg transition-colors focus:outline-none [app-region:no-drag] [-webkit-app-region:no-drag]",
-                  settingsSection === "privacy-updates" && "bg-[var(--color-settings-menu-active)]"
-                )}
-                onClick={() => setSettingsSection("privacy-updates")}
-                aria-current={settingsSection === "privacy-updates" ? "page" : undefined}
-                data-analytics-id="settings_privacy_updates"
-                data-analytics-area="settings"
-              >
-                Privacy & updates
-              </button>
-            </nav>
-            <div className="flex min-h-0 flex-col gap-3 overflow-auto p-4 text-[13px]">
-              {settingsSection === "privacy-updates" ? (
+              {settingsSection === "general" ? (
                 <>
                   <div>
-                    <h2 className="m-0 text-base font-semibold text-fg-strong">Privacy & updates</h2>
-                    <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-                      Control anonymous diagnostics and desktop update downloads.
+                    <h1 className="m-0 text-2xl font-semibold text-fg-strong">General</h1>
+                    <p className="mt-1 text-sm leading-relaxed text-fg-muted">
+                      Control app appearance, updates, and privacy.
                     </p>
                   </div>
-                  <label className="flex items-start gap-2 rounded-[var(--radius-md)] border border-edge bg-[var(--color-settings-layout-bg)] p-3">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5"
-                      checked={analyticsEnabled}
-                      data-analytics-id="analytics_toggle"
-                      data-analytics-area="settings"
-                      onChange={(event) => {
-                        const enabled = event.target.checked;
-                        setAnalyticsEnabled(enabled);
-                        setAnalyticsCollectionEnabledPreference(enabled);
-                      }}
-                    />
-                    <span className="flex min-w-0 flex-col gap-1">
-                      <span className="font-medium text-fg-strong">Share anonymous usage analytics</span>
-                      <span className="text-xs leading-relaxed text-fg-muted">
-                        Helps improve Dartsnut Agent. Chat text, model responses, file paths, IP addresses, device IDs, credentials, account names, and email addresses are never sent.
-                      </span>
-                    </span>
-                  </label>
-                  <label className="flex items-start gap-2 rounded-[var(--radius-md)] border border-edge bg-[var(--color-settings-layout-bg)] p-3">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5"
-                      checked={autoUpdateEnabled}
-                      data-analytics-id="settings_auto_update_toggle"
-                      data-analytics-area="settings"
-                      onChange={(event) => handleAutoUpdateChange(event.target.checked)}
-                    />
-                    <span className="flex min-w-0 flex-col gap-1">
-                      <span className="font-medium text-fg-strong">Automatically download updates</span>
-                      <span className="text-xs leading-relaxed text-fg-muted">
-                        Check for new versions on launch and download them automatically. Installation still requires your confirmation.
-                      </span>
-                    </span>
-                  </label>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <button
+                  <h2 className="settings-group-heading">General</h2>
+                  <SettingsGroup>
+                    <SettingsRow title="Theme" description="Choose how Dartsnut Agent looks." control={
+                      <SettingsSelect value={theme} label="Theme" options={[{ value: "system", label: "System" }, { value: "light", label: "Light" }, { value: "dark", label: "Dark" }]} onChange={handleThemeChange} />
+                    } />
+                  </SettingsGroup>
+                  <h2 className="settings-group-heading">Update</h2>
+                  <SettingsGroup>
+                    <SettingsRow title="Automatically download updates" description="Check for new versions on launch and download them automatically. Installation still requires your confirmation." control={
+                      <SettingsSwitch checked={autoUpdateEnabled} label="Automatically download updates" analyticsId="settings_auto_update_toggle" onChange={handleAutoUpdateChange} />
+                    } />
+                    <SettingsRow title="App updates" description={appUpdate?.kind === "not_available" ? appUpdate.message ?? "Dartsnut Agent is up to date." : appUpdate?.kind === "error" ? appUpdate.message ?? "Update check failed." : "Check for a newer desktop version."} control={<button
                       type="button"
                       className="ui-btn-secondary min-h-8 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-55"
                       disabled={appUpdate?.kind === "checking" || appUpdate?.kind === "downloading" || appUpdate?.kind === "ready"}
@@ -3116,61 +3088,55 @@ export function App() {
                       data-analytics-area="settings"
                     >
                       {appUpdate?.kind === "checking" ? "Checking..." : "Check for updates"}
-                    </button>
-                    {appUpdate?.kind === "not_available" ? (
-                      <span className="text-xs text-fg-muted" role="status">{appUpdate.message ?? "Dartsnut Agent is up to date."}</span>
-                    ) : null}
-                    {appUpdate?.kind === "error" ? (
-                      <span className="text-xs text-[var(--color-error-text)]" role="alert">{appUpdate.message ?? "Update check failed."}</span>
-                    ) : null}
-                  </div>
+                    </button>} />
+                  </SettingsGroup>
+                  <h2 className="settings-group-heading">Privacy</h2>
+                  <SettingsGroup>
+                    <SettingsRow title="Share anonymous usage analytics" description="Helps improve Dartsnut Agent. Chat text, model responses, file paths, credentials, account names, and email addresses are never sent." control={
+                      <SettingsSwitch checked={analyticsEnabled} label="Share anonymous usage analytics" analyticsId="analytics_toggle" onChange={(enabled) => {
+                        setAnalyticsEnabled(enabled);
+                        setAnalyticsCollectionEnabledPreference(enabled);
+                      }} />
+                    } />
+                  </SettingsGroup>
                 </>
               ) : null}
-              {settingsSection === "provider" ? <label className="flex flex-col gap-1.5">
-                <span className="text-[var(--color-text-subtle)]">Provider</span>
-                <select
-                  className="ui-input"
-                  value={providerSettings.activeProvider}
-                  onChange={(event) =>
+              {settingsSection === "provider" ? (<SettingsGroup>
+                <SettingsRow title="Provider" description="Model service used for agent requests." control={
+                  <SettingsSelect value={providerSettings.activeProvider} label="Provider" options={[{ value: "dartsnut-llm", label: "Dartsnut LLM" }, { value: "custom", label: "Custom" }]} onChange={(value) =>
                     setProviderSettings((prev) =>
-                      withProviderId(prev, event.target.value === "custom" ? "custom" : "dartsnut-llm")
+                      withProviderId(prev, value)
                     )
-                  }
-                >
-                  <option value="dartsnut-llm">Dartsnut LLM</option>
-                  <option value="custom">Custom</option>
-                </select>
-              </label> : null}
+                  } />
+                } />
               {settingsSection === "provider" && providerSettings.activeProvider === "dartsnut-llm" ? (
-                <>
-                  <DartsnutLlmUsageCard
+                <SettingsRow title="Daily usage" description="Today's Dartsnut LLM token allowance."><DartsnutLlmUsageCard
                     quota={llmQuota}
                     loading={llmQuotaLoading}
                     error={llmQuotaError}
                     loggedIn={communitySession.loggedIn}
                     onRefresh={() => void refreshLlmQuota()}
-                  />
-                  <div className="rounded-[var(--radius-md)] border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
+                  /></SettingsRow>
+              ) : null}
+              {settingsSection === "provider" && providerSettings.activeProvider === "dartsnut-llm" ? (
+                  <SettingsRow><div className="rounded-[var(--radius-md)] border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
                     <p className="m-0 font-medium">This service is free for a limited time only.</p>
                     <p className="m-0 mt-1 text-fg-muted">
                       Please use Dartsnut LLM only for creating and updating Dartsnut games,
                       widgets, and related project assets. Avoid sending unrelated, sensitive,
                       or personal content.
                     </p>
-                  </div>
-                </>
+                  </div></SettingsRow>
               ) : null}
               {settingsSection === "provider" && providerSettings.activeProvider === "custom" ? (
                 <>
-                  <div className="rounded-[var(--radius-md)] border border-[var(--color-notice-warning-border)] bg-[var(--color-notice-warning-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
+                  <SettingsRow><div className="rounded-[var(--radius-md)] border border-[var(--color-notice-warning-border)] bg-[var(--color-notice-warning-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
                     Custom providers must expose an OpenAI Responses API-compatible endpoint.
                     Chat Completions and Gemini APIs are not supported.
-                  </div>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="text-[var(--color-text-subtle)]">API base URL</span>
-                    <input
+                  </div></SettingsRow>
+                  <SettingsRow title="API base URL" description="Responses API-compatible endpoint." control={<input
                       type="url"
-                      className="ui-input"
+                      className="ui-input settings-row__input"
                       value={providerCustom(providerSettings).baseUrl}
                       onChange={(event) =>
                         setProviderSettings((prev) =>
@@ -3178,13 +3144,10 @@ export function App() {
                         )
                       }
                       placeholder="https://provider.example.com/v1"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="text-[var(--color-text-subtle)]">API key</span>
-                    <input
+                    />} />
+                  <SettingsRow title="API key" description={`Stored key: ${maskApiKey(providerCustom(providerSettings).apiKey) || "(empty)"}`} control={<input
                       type="password"
-                      className="ui-input"
+                      className="ui-input settings-row__input"
                       value={providerCustom(providerSettings).apiKey}
                       onChange={(event) =>
                         setProviderSettings((prev) =>
@@ -3192,17 +3155,10 @@ export function App() {
                         )
                       }
                       placeholder="provider-key"
-                    />
-                  </label>
-                  <div className="text-xs text-fg-muted">
-                    Stored key preview:{" "}
-                    {maskApiKey(providerCustom(providerSettings).apiKey) || "(empty)"}
-                  </div>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="text-[var(--color-text-subtle)]">Model</span>
-                    <input
+                    />} />
+                  <SettingsRow title="Model" description="Model identifier sent to the provider." control={<input
                       type="text"
-                      className="ui-input"
+                      className="ui-input settings-row__input"
                       value={providerCustom(providerSettings).model}
                       onChange={(event) =>
                         setProviderSettings((prev) =>
@@ -3210,11 +3166,10 @@ export function App() {
                         )
                       }
                       placeholder="model-name"
-                    />
-                  </label>
+                    />} />
                 </>
               ) : null}
-              {settingsSection === "provider" ? <div className="flex justify-start">
+              {settingsSection === "provider" ? <SettingsRow title="Save configuration" description="Apply provider changes to future requests." control={
                 <button
                   type="button"
                   className="ui-btn-primary mt-0 disabled:cursor-not-allowed disabled:opacity-55"
@@ -3225,9 +3180,10 @@ export function App() {
                 >
                   {savingProviderSettings ? "Saving..." : "Save"}
                 </button>
-              </div> : null}
-            </div>
-          </section>
+              } /> : null}
+              </SettingsGroup>) : null}
+          </div>
+          </div>
         </section>
       )}
       {showEmulatorPane ? <aside
@@ -3372,6 +3328,12 @@ export function App() {
             </div>
           </div>
         </aside>
+        </div>
+      ) : null}
+      {providerSettingsError || providerSettingsNotice ? (
+        <div className="global-toast-stack" aria-live="polite">
+          {providerSettingsError ? <div className="global-toast global-toast--error" role="alert">{providerSettingsError}</div> : null}
+          {providerSettingsNotice ? <div className="global-toast global-toast--success" role="status">{providerSettingsNotice}</div> : null}
         </div>
       ) : null}
       {projectSwitchProgress.active ? <div className="project-switch-overlay" role="status" aria-live="polite"><div><h2>Switching project</h2><p>{projectSwitchProgress.message ?? "Preparing…"}</p></div></div> : null}

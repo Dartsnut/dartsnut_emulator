@@ -25,6 +25,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  LogOut,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -210,6 +211,10 @@ function isSettingsShortcut(event: KeyboardEvent): boolean {
     return false;
   }
   return hasPrimaryShortcutModifier(event);
+}
+
+function settingsShortcutLabel(): string {
+  return navigator.platform.toLowerCase().includes("mac") ? "⌘," : "Ctrl+,";
 }
 
 function isComposerSendShortcut(event: { key: string; metaKey: boolean; ctrlKey: boolean }): boolean {
@@ -681,28 +686,30 @@ function CommunityAuthStatus({
         {menuOpen ? (
           <div
             className={cn(
-              "absolute z-50 min-w-[120px] rounded-md border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] py-1 shadow-sm",
+              "absolute z-50 min-w-[190px] rounded-md border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] py-1 shadow-sm",
               inRail ? "bottom-full left-0" : "right-0 top-full mt-1"
             )}
             role="menu"
           >
             <button
               type="button"
-              className="w-full border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none"
+              className="flex w-full items-center gap-2 border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none"
               onClick={() => { onOpenSettings(); setMenuOpen(false); }}
               role="menuitem"
             >
-              <Settings size={14} className="mr-2 inline-block" aria-hidden />
-              Settings
+              <Settings size={14} className="shrink-0" aria-hidden />
+              <span>Settings</span>
+              <kbd className="ml-auto whitespace-nowrap text-[11px] font-normal text-[var(--color-text-subtle)]">{settingsShortcutLabel()}</kbd>
             </button>
             <button
               type="button"
-              className="w-full border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+              className="flex w-full items-center gap-2 border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() => void handleSignOut()}
               disabled={signingOut}
               role="menuitem"
             >
-              {signingOut ? "Signing out..." : "Sign out"}
+              <LogOut size={14} className="shrink-0" aria-hidden />
+              {signingOut ? "Logging out..." : "Log out"}
             </button>
           </div>
         ) : null}

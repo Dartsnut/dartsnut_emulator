@@ -14,6 +14,25 @@ import {
   useState
 } from "react";
 import {
+  Archive,
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  Check,
+  CircleAlert,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  Settings,
+  Square,
+  SquarePen,
+  UserRound,
+  X
+} from "lucide-react";
+import {
   type AgentEvent,
   type AgentSessionTokenUsage,
   type AgentTokenUsage,
@@ -402,10 +421,7 @@ function TimelineErrorCard({ text }: { text: string }) {
   return (
     <div className="timeline-error-card" role="alert">
       <div className="timeline-error-card__signal" aria-hidden>
-        <svg width="14" height="14" viewBox="0 0 16 16">
-          <path d="M8 2.25v6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          <circle cx="8" cy="11.75" r="1" fill="currentColor" />
-        </svg>
+        <CircleAlert size={14} strokeWidth={1.8} />
       </div>
       <div className="timeline-error-card__content">
         <span className="timeline-error-card__eyebrow">Run interrupted</span>
@@ -603,16 +619,7 @@ function CommunityAuthStatus({
           aria-expanded={menuOpen}
           title={communitySession.account || "Signed in"}
         >
-          <svg width={inRail ? 16 : 12} height={inRail ? 16 : 12} viewBox="0 0 24 24" aria-hidden className="shrink-0">
-            <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
-            <path
-              d="M6 21c0-3.3 2.7-6 6-6s6 2.7 6 6"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          </svg>
+          <UserRound size={inRail ? 16 : 12} className="shrink-0" aria-hidden />
           {inRail ? <span className="workspace-menu__button-label">{communitySession.account || "Account"}</span> : null}
           {!inRail ? <span className="whitespace-nowrap">{communitySession.account || "Signed in"}</span> : null}
         </button>
@@ -647,16 +654,7 @@ function CommunityAuthStatus({
       aria-label="Sign in"
       title="Sign in"
     >
-      <svg width={inRail ? 16 : 14} height={inRail ? 16 : 14} viewBox="0 0 24 24" aria-hidden>
-        <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
-        <path
-          d="M6 21c0-3.3 2.7-6 6-6s6 2.7 6 6"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-      </svg>
+      <UserRound size={inRail ? 16 : 14} aria-hidden />
       {inRail ? <span className="workspace-menu__button-label">Sign in</span> : null}
     </button>
   );
@@ -886,6 +884,11 @@ export function App() {
     void api.listProjects().then(setProjectTree).catch(() => undefined);
     return api.onProjectSwitchProgress(setProjectSwitchProgress);
   }, [api]);
+
+  useEffect(() => {
+    if (!api || !bootstrap?.activeChatId) return;
+    void api.listProjects().then(setProjectTree).catch(() => undefined);
+  }, [api, bootstrap?.activeChatId]);
 
   useEffect(() => {
     if (!projectMenuOpen) return;
@@ -1908,6 +1911,7 @@ export function App() {
       lastAgentSessionHydrateKeyRef.current = "";
       return;
     }
+    if (sending) return;
     const hydrateKey = `${bootstrap.activeProjectId ?? ""}:${bootstrap.activeChatId}`;
     if (lastAgentSessionHydrateKeyRef.current === hydrateKey) {
       return;
@@ -1983,7 +1987,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [api, bootstrap?.workspaceRoot, bootstrap?.activeProjectId, bootstrap?.activeChatId]);
+  }, [api, bootstrap?.workspaceRoot, bootstrap?.activeProjectId, bootstrap?.activeChatId, sending]);
 
   const chatDisabled = useMemo(() => {
     if (!bootstrap) {
@@ -2072,7 +2076,7 @@ export function App() {
     activeAgentRunRef.current = null;
   }
 
-  async function submitPrompt(request: PromptRequest) {
+  async function submitPrompt(request: PromptRequest, firstUserMessageForTitle?: string) {
     setWidgetSizePicker({ visible: false, sizes: [], locale: null });
     setProjectTypePicker({ visible: false, types: [], locale: null });
     discardAgentEventsRef.current = false;
@@ -2083,6 +2087,7 @@ export function App() {
     }
     seenAgentToolAnalyticsRef.current.clear();
     activeAgentRunRef.current = { startedAt: Date.now(), finished: false };
+    const shouldGenerateTitle = !request.chatId && Boolean(firstUserMessageForTitle?.trim());
     trackAgentEvent("agent_run_started", {
       provider: providerSettings.activeProvider,
       template_mode: request.templateMode ?? (request.creationIntake ? "creation_intake" : "follow_up"),
@@ -2097,6 +2102,12 @@ export function App() {
       const result: SendPromptResponse = await api.sendPrompt(request);
       const refreshed = await api.getBootstrapState();
       setBootstrap(refreshed);
+      if (shouldGenerateTitle && refreshed.activeChatId && firstUserMessageForTitle) {
+        void api.generateChatTitle({
+          chatId: refreshed.activeChatId,
+          firstUserMessage: firstUserMessageForTitle
+        }).then(({ tree }) => setProjectTree(tree)).catch(() => undefined);
+      }
       if (!result.ok) {
         finishAgentRun("rejected", result.failureReason);
         if (result.failureReason === "auth_required") {
@@ -2173,10 +2184,8 @@ export function App() {
   }
 
   async function handleNewChat() {
-    if (!api || sending) return;
-    const project = bootstrap?.activeProjectId ?? projectTree.projects[0]?.id;
-    if (!project) { await handleCreateProject(); return; }
-    const result = await api.createChat(project); setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi();
+    if (!api || sending || projectSwitchProgress.active) return;
+    await handleNoProject();
   }
 
   function handleCreateProject() {
@@ -2218,21 +2227,34 @@ export function App() {
   }
 
   async function handleSelectProject(projectId: string) {
-    if (!api || sending) return;
+    if (!api || sending || projectSwitchProgress.active) return;
     const result = await api.selectProject({ projectId });
     if (result.accepted) { setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi(); }
     setProjectMenuOpen(false);
   }
 
   async function handleNoProject() {
-    if (!api || sending) return;
+    if (!api || sending || projectSwitchProgress.active) return;
     const result = await api.selectProject({ projectId: null });
-    setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi(); setProjectMenuOpen(false);
+    if (result.accepted) { setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi(); }
+    setProjectMenuOpen(false);
+  }
+
+  async function handleNewChatForProject(projectId: string) {
+    await handleSelectProject(projectId);
   }
 
   async function handleSelectChat(chatId: string) {
     if (!api || sending) return;
     const result = await api.selectChat(chatId); setBootstrap(result.state); setProjectTree(result.tree);
+  }
+
+  async function handleArchiveChat(chatId: string) {
+    if (!api || sending || projectSwitchProgress.active) return;
+    const wasActive = bootstrap?.activeChatId === chatId;
+    const result = await api.archiveChat(chatId);
+    setBootstrap(result.state); setProjectTree(result.tree);
+    if (wasActive) resetChatSessionUi();
   }
 
   function handleOpenSettings() {
@@ -2469,7 +2491,7 @@ export function App() {
       templateMode: bootstrap?.needsCreationIntake ? undefined : sessionTemplateMode ?? undefined,
       widgetSize: bootstrap?.needsCreationIntake ? undefined : sessionWidgetSize ?? undefined,
       projectType: bootstrap?.needsCreationIntake ? undefined : sessionProjectType ?? undefined
-    });
+    }, visibleUserText);
   }
 
   async function handleStopAgent() {
@@ -2546,11 +2568,7 @@ export function App() {
                   title={deployDrawerOpen ? "Collapse right panel" : "Open right panel"}
                   onClick={() => setDeployDrawerOpen((open) => !open)}
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden>
-                    <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" />
-                    <path d="M15 4v16" fill="none" stroke="currentColor" strokeWidth="1.7" />
-                    <path d={deployDrawerOpen ? "M11 9l3 3-3 3" : "M14 9l-3 3 3 3"} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
+                  {deployDrawerOpen ? <PanelRightClose size={18} aria-hidden /> : <PanelRightOpen size={18} aria-hidden />}
                 </button>
               ) : null}
             </div>
@@ -2571,16 +2589,7 @@ export function App() {
                 data-analytics-id="settings_back"
                 data-analytics-area="navigation"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M15 18l-6-6 6-6"
-                  />
-                </svg>
+                <ArrowLeft size={14} aria-hidden />
               </button>
               <h1 className="m-0 min-w-0 flex-[0_1_auto] p-0 font-[family-name:var(--font-display)] text-[13px] font-semibold leading-snug tracking-tight text-fg-strong">
                 <span className="block truncate">Settings</span>
@@ -2601,28 +2610,11 @@ export function App() {
             onClick={() => void handleNewChat()}
             data-analytics-id="project_new"
             data-analytics-area="project"
-            disabled={sending}
+            disabled={sending || projectSwitchProgress.active}
             aria-label="New chat"
             title="New chat"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-              <path
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 20H5a2 2 0 01-2-2V7a2 2 0 012-2h3"
-              />
-              <path
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M16 3h5v5M16 3l5 5M21 3l-9 9"
-              />
-            </svg>
+            <SquarePen size={16} aria-hidden />
             <span className="workspace-menu__button-label">New chat</span>
           </button>
         </div>
@@ -2637,15 +2629,47 @@ export function App() {
           </button>
           {(expandedProjects.__all ?? true) ? projectTree.projects.map((project) => {
             const open = expandedProjects[project.id] ?? true;
+            const projectChats = projectTree.chats.filter((chat) => chat.projectId === project.id);
             return <div key={project.id} className="workspace-menu__project-group">
-              <button type="button" className="workspace-menu__project" onClick={() => { setExpandedProjects((p) => ({ ...p, [project.id]: !open })); void handleSelectProject(project.id); }}>
-                <svg className="workspace-menu__project-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                  <path d="M3.5 8a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
-                  <path d="M4 10h16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-                </svg>
-                <span className="truncate">{project.name}</span>
-              </button>
-              {open ? projectTree.chats.filter((chat) => chat.projectId === project.id).map((chat) => <button key={chat.id} type="button" className={cn("workspace-menu__chat", bootstrap?.activeChatId === chat.id && "workspace-menu__chat--active")} onClick={() => void handleSelectChat(chat.id)}>{chat.title}</button>) : null}
+              <div className="workspace-menu__project-row">
+                <button type="button" className="workspace-menu__project" onClick={() => { setExpandedProjects((p) => ({ ...p, [project.id]: !open })); void handleSelectProject(project.id); }}>
+                  <FolderOpen className="workspace-menu__project-icon" size={16} aria-hidden />
+                  <span className="truncate">{project.name}</span>
+                </button>
+                <button
+                  type="button"
+                  className="workspace-menu__project-new-chat"
+                  onClick={(event) => { event.stopPropagation(); void handleNewChatForProject(project.id); }}
+                  disabled={sending || projectSwitchProgress.active}
+                  aria-label={`New chat for ${project.name}`}
+                  title={`New chat for ${project.name}`}
+                  data-analytics-id="project_new_for_project"
+                  data-analytics-area="project"
+                >
+                  <SquarePen size={14} aria-hidden />
+                </button>
+              </div>
+              {open && projectChats.length === 0 ? (
+                <div className="workspace-menu__chat-empty">No chats</div>
+              ) : null}
+              {open ? projectChats.map((chat) => {
+                const active = bootstrap?.activeChatId === chat.id;
+                return <div key={chat.id} className={cn("workspace-menu__chat-row", active && "workspace-menu__chat-row--active")}>
+                  <button type="button" className={cn("workspace-menu__chat", active && "workspace-menu__chat--active")} onClick={() => void handleSelectChat(chat.id)}>
+                    <span className="truncate">{chat.title}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="workspace-menu__chat-archive"
+                    onClick={(event) => { event.stopPropagation(); void handleArchiveChat(chat.id); }}
+                    disabled={sending || projectSwitchProgress.active}
+                    aria-label={`Archive ${chat.title}`}
+                    title={`Archive ${chat.title}`}
+                  >
+                    <Archive size={13} aria-hidden />
+                  </button>
+                </div>;
+              }) : null}
             </div>;
           }) : null}
         </div>
@@ -2677,17 +2701,7 @@ export function App() {
             aria-current={screen === "settings" ? "page" : undefined}
             title="Settings"
           >
-            <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden>
-              <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
-              <path
-                d="M19.4 15a1.7 1.7 0 00.34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 00-1.88-.34 1.7 1.7 0 00-1.03 1.56V21h-4v-.08A1.7 1.7 0 009 19.36a1.7 1.7 0 00-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 004.63 15a1.7 1.7 0 00-1.56-1.03H3v-4h.08A1.7 1.7 0 004.64 9a1.7 1.7 0 00-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 009 4.63a1.7 1.7 0 001.03-1.56V3h4v.08A1.7 1.7 0 0015 4.64a1.7 1.7 0 001.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0019.37 9a1.7 1.7 0 001.56 1.03H21v4h-.08A1.7 1.7 0 0019.4 15z"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            <Settings size={17} aria-hidden />
             <span className="workspace-menu__button-label">Settings</span>
           </button>
         </div>
@@ -2873,15 +2887,13 @@ export function App() {
             >
               {!bootstrap?.activeProjectId ? <div className="ui-composer__project-row">
                 <button type="button" className={cn("project-chat-trigger", projectMenuOpen && "project-chat-trigger--active")} onClick={() => setProjectMenuOpen((open) => !open)} disabled={projectSwitchProgress.active || sending} aria-haspopup="menu" aria-expanded={projectMenuOpen}>
-                  <svg className="ui-composer__project-glyph" width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                    <path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  </svg>
-                  <span className="project-chat-trigger__label">{projectTree.projects.find((project) => project.id === bootstrap?.activeProjectId)?.name ?? "Select project"}</span>
+                  <Folder className="ui-composer__project-glyph" size={16} aria-hidden />
+                  <span className="project-chat-trigger__label">{projectTree.projects.find((project) => project.id === bootstrap?.activeProjectId)?.name ?? "Choose Project"}</span>
                 </button>
                 {projectMenuOpen ? <div className="project-picker-menu" role="menu">
-                  {projectTree.projects.map((project) => <button key={project.id} type="button" role="menuitem" className={cn("project-picker-menu__item", bootstrap?.activeProjectId === project.id && "project-picker-menu__item--active")} onClick={() => void handleSelectProject(project.id)}><span className="project-picker-menu__folder" aria-hidden>□</span><span>{project.name}</span>{bootstrap?.activeProjectId === project.id ? <span className="project-picker-menu__check" aria-hidden>✓</span> : null}</button>)}
+                  {projectTree.projects.map((project) => <button key={project.id} type="button" role="menuitem" className={cn("project-picker-menu__item", bootstrap?.activeProjectId === project.id && "project-picker-menu__item--active")} onClick={() => void handleSelectProject(project.id)}><FolderOpen className="project-picker-menu__folder" size={20} aria-hidden /><span>{project.name}</span>{bootstrap?.activeProjectId === project.id ? <Check className="project-picker-menu__check" size={18} aria-hidden /> : null}</button>)}
                   {projectTree.projects.length > 0 ? <div className="project-picker-menu__divider" /> : null}
-                  <button type="button" role="menuitem" className="project-picker-menu__item" onClick={handleCreateProject}><span className="project-picker-menu__plus" aria-hidden>＋</span><span>Add project</span></button>
+                  <button type="button" role="menuitem" className="project-picker-menu__item" onClick={handleCreateProject}><Plus className="project-picker-menu__plus" size={20} aria-hidden /><span>Add project</span></button>
                 </div> : null}
               </div> : null}
               {chatMediaAttachments.length > 0 ? (
@@ -2922,7 +2934,7 @@ export function App() {
                     void handleSend();
                   }
                 }}
-                placeholder="Message..."
+                placeholder="Do anything"
                 rows={1}
                 aria-label="Message"
                 disabled={chatDisabled}
@@ -2947,16 +2959,7 @@ export function App() {
                       setAutoScrollEnabled(true);
                     }}
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                      <path
-                        d="M12 5v14M12 19l-5-5M12 19l5-5"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.1"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <ArrowDown size={14} aria-hidden />
                   </button>
                 ) : null}
                 <button
@@ -2970,20 +2973,9 @@ export function App() {
                   onClick={() => (sending ? void handleStopAgent() : void handleSend())}
                 >
                   {sending ? (
-                    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                      <rect x="5" y="5" width="14" height="14" rx="1.5" fill="currentColor" />
-                    </svg>
+                    <Square size={14} fill="currentColor" aria-hidden />
                   ) : (
-                    <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden>
-                      <path
-                        d="M12 19V6M12 6l-4.5 4.5M12 6l4.5 4.5"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <ArrowUp size={15} strokeWidth={2.2} aria-hidden />
                   )}
                 </button>
               </div>
@@ -3396,20 +3388,15 @@ export function App() {
           <div className="create-project-popover">
             <div className="create-project-popover__header">
               <h2 id="create-project-title">Create project</h2>
-              <button type="button" className="create-project-popover__close" aria-label="Close" onClick={() => setCreateProjectOpen(false)}>×</button>
+              <button type="button" className="create-project-popover__close" aria-label="Close" onClick={() => setCreateProjectOpen(false)}><X size={22} aria-hidden /></button>
             </div>
             <label className="create-project-name-field">
-              <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden>
-                <path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
-              </svg>
+              <Folder size={24} strokeWidth={1.7} aria-hidden />
               <input value={createProjectName} onChange={(event) => setCreateProjectName(event.target.value)} placeholder="Project name" autoFocus />
             </label>
             <p className="create-project-popover__section-label">Source folder</p>
             <button type="button" className={cn("create-project-folder-picker", createProjectFolder && "create-project-folder-picker--selected")} onClick={() => void handlePickProjectFolder()} disabled={createProjectPicking}>
-              <svg width="32" height="32" viewBox="0 0 24 24" aria-hidden>
-                <path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-                <path d="M12 12v6M9 15h6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
+              <FolderPlus size={32} strokeWidth={1.5} aria-hidden />
               <span>{createProjectFolder ? workspaceFolderBasename(createProjectFolder) : "Add folder Dartsnut Agent can read and edit"}</span>
               {createProjectFolder ? <small>{createProjectFolder}</small> : null}
             </button>

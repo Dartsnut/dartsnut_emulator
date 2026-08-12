@@ -297,6 +297,7 @@ describe("SessionEngine (@openai/agents)", () => {
   it("reports an empty final response as an error instead of a successful placeholder", async () => {
     resetAgentsBootstrapForTests();
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-empty-"));
+    const diagnostics: Array<{ message: string; meta: Record<string, unknown> }> = [];
     const engine = new SessionEngine({
       runFn: async () => createMockStream({ finalOutput: "" }),
       agentModelConfig: buildAgentModelConfig({
@@ -304,7 +305,8 @@ describe("SessionEngine (@openai/agents)", () => {
         apiKey: "test-key"
       }),
       workspacePolicy: new WorkspacePolicy(workspace),
-      skillPrompt: "system skill prompt"
+      skillPrompt: "system skill prompt",
+      onDiagnostic: (message, meta) => diagnostics.push({ message, meta })
     });
     const events: AgentEvent[] = [];
 
@@ -313,6 +315,13 @@ describe("SessionEngine (@openai/agents)", () => {
     expect(result).toBe(EMPTY_MODEL_RESPONSE_MESSAGE);
     expect(events).toContainEqual(expect.objectContaining({ type: "error", message: EMPTY_MODEL_RESPONSE_MESSAGE }));
     expect(events.some((event) => event.type === "final")).toBe(false);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      message: "agent stream completed without assistant text",
+      meta: expect.objectContaining({
+        failure: "empty_mapped_output",
+        finalOutput: { kind: "string", chars: 0 }
+      })
+    }));
   });
 
   it("throws stop message when aborted", async () => {

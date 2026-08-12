@@ -139,12 +139,24 @@ body {
 .workspace-menu__projects { min-height: 0; flex: 1; overflow-y: auto; margin: 12px -2px; }
 .workspace-menu__section, .workspace-menu__project, .workspace-menu__chat { width: 100%; border: 0; background: transparent; color: var(--color-app-btn-text); text-align: left; cursor: pointer; padding: 7px 8px; border-radius: var(--radius-md); }
 .workspace-menu__section { display: flex; align-items: center; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .06em; color: var(--color-text-subtle); }
-.workspace-menu__project { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.workspace-menu__project-row { display: flex; width: 100%; align-items: center; border-radius: var(--radius-md); }
+.workspace-menu__project { display: flex; width: auto; min-width: 0; flex: 1; gap: 6px; align-items: center; font-size: 13px; }
 .workspace-menu__project-icon { flex: 0 0 auto; color: var(--color-text-subtle); }
-.workspace-menu__project:hover, .workspace-menu__chat:hover, .workspace-menu__section:hover { background: var(--color-app-btn-bg-hover); }
+.workspace-menu__project-row:hover, .workspace-menu__project-row:focus-within, .workspace-menu__chat-row:hover, .workspace-menu__chat-row:focus-within, .workspace-menu__chat-row--active, .workspace-menu__section:hover { background: var(--color-app-btn-bg-hover); }
+.workspace-menu__project-new-chat { display: inline-flex; width: 26px; height: 26px; flex: 0 0 26px; align-items: center; justify-content: center; margin-right: 3px; padding: 0; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--color-text-subtle); cursor: pointer; opacity: 0; pointer-events: none; transition: opacity var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), background-color var(--duration-fast) var(--ease-out); }
+.workspace-menu__project-row:hover .workspace-menu__project-new-chat, .workspace-menu__project-row:focus-within .workspace-menu__project-new-chat { opacity: 1; pointer-events: auto; }
+.workspace-menu__project-new-chat:hover:enabled, .workspace-menu__project-new-chat:focus-visible { background: color-mix(in srgb, var(--color-text-primary) 10%, transparent); color: var(--color-text-primary); outline: none; }
+.workspace-menu__project-new-chat:disabled { cursor: not-allowed; opacity: .35; }
 .workspace-menu__project--active, .workspace-menu__chat--active { color: var(--color-neon-mint); background: var(--color-app-btn-bg-hover); }
 .workspace-menu__section:active, .workspace-menu__section:focus, .workspace-menu__section:focus-visible { background: transparent; color: var(--color-app-btn-text); outline: none; box-shadow: none; }
-.workspace-menu__chat { padding-left: 30px; font-size: 12px; }
+.workspace-menu__chat-row { display: flex; width: 100%; align-items: center; border-radius: var(--radius-md); }
+.workspace-menu__chat { width: auto; min-width: 0; flex: 1; padding-left: 30px; font-size: 12px; }
+.workspace-menu__chat-empty { padding: 7px 8px 7px 30px; color: var(--color-text-subtle); font-size: 12px; cursor: default; user-select: none; }
+.workspace-menu__chat--active { background: transparent; }
+.workspace-menu__chat-archive { display: inline-flex; width: 24px; height: 24px; flex: 0 0 24px; align-items: center; justify-content: center; margin-right: 3px; padding: 0; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--color-text-subtle); cursor: pointer; opacity: 0; pointer-events: none; transition: opacity var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), background-color var(--duration-fast) var(--ease-out); }
+.workspace-menu__chat-row:hover .workspace-menu__chat-archive, .workspace-menu__chat-row:focus-within .workspace-menu__chat-archive { opacity: 1; pointer-events: auto; }
+.workspace-menu__chat-archive:hover:enabled, .workspace-menu__chat-archive:focus-visible { background: color-mix(in srgb, var(--color-text-primary) 10%, transparent); color: var(--color-text-primary); outline: none; }
+.workspace-menu__chat-archive:disabled { cursor: not-allowed; opacity: .35; }
 .project-chat-trigger { display: inline-flex; width: auto; min-width: 100px; max-width: 100%; min-height: 28px; align-items: center; gap: 7px; border: 0; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--color-text-primary) 6%, transparent); color: var(--color-text-primary); padding: 6px 14px; text-align: left; cursor: pointer; transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out); }
 .project-chat-trigger:hover:enabled, .project-chat-trigger:focus-visible, .project-chat-trigger--active { border-color: transparent; background: color-mix(in srgb, var(--color-text-primary) 11%, transparent); color: var(--color-text-primary); box-shadow: none; }
 .project-chat-trigger:focus-visible { outline: none; box-shadow: none; }

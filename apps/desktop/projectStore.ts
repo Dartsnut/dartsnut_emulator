@@ -20,6 +20,7 @@ export type ChatRecord = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
 };
 
 type StoreFile = {
@@ -58,18 +59,18 @@ export class ProjectStore {
   private chatDir(id: string): string { return path.join(this.root, "chats", id); }
 
   list(): { projects: ProjectRecord[]; chats: ChatRecord[] } {
-    return { projects: [...this.data.projects].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt)), chats: [...this.data.chats] };
+    return { projects: [...this.data.projects].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt)), chats: this.data.chats.filter((chat) => !chat.archivedAt) };
   }
   getProject(id: string): ProjectRecord | null { return this.data.projects.find((p) => p.id === id) ?? null; }
   getChat(id: string): ChatRecord | null { return this.data.chats.find((c) => c.id === id) ?? null; }
   lastOpenedChat(): ChatRecord | null {
     const explicit = this.data.lastOpenedChatId ? this.getChat(this.data.lastOpenedChatId) : null;
-    if (explicit) return explicit;
-    return [...this.data.chats].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
+    if (explicit && !explicit.archivedAt) return explicit;
+    return this.data.chats.filter((chat) => !chat.archivedAt).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
   }
   markChatOpened(chatId: string): ChatRecord | null {
     const chat = this.getChat(chatId);
-    if (!chat) return null;
+    if (!chat || chat.archivedAt) return null;
     chat.updatedAt = now();
     this.data.lastOpenedChatId = chat.id;
     this.save();
@@ -89,9 +90,22 @@ export class ProjectStore {
     const stamp = now(); const chat: ChatRecord = { id: randomUUID(), projectId, title, createdAt: stamp, updatedAt: stamp };
     this.data.chats.push(chat); fs.mkdirSync(this.chatDir(chat.id), { recursive: true }); this.save(); return chat;
   }
-  chatsForProject(projectId: string): ChatRecord[] { return this.data.chats.filter((c) => c.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); }
+  chatsForProject(projectId: string): ChatRecord[] { return this.data.chats.filter((c) => c.projectId === projectId && !c.archivedAt).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); }
   sessionPersistence(chatId: string): AgentSessionPersistence { return new AgentSessionPersistence(this.chatDir(chatId)); }
   updateChatTitle(chatId: string, title: string): void { const c = this.getChat(chatId); if (!c) return; c.title = title.trim().slice(0, 80) || "New chat"; c.updatedAt = now(); this.save(); }
+  updateDefaultChatTitle(chatId: string, title: string): ChatRecord | null {
+    const chat = this.getChat(chatId);
+    if (!chat || chat.archivedAt || chat.title !== "New chat") return null;
+    chat.title = title.trim().slice(0, 80) || "New chat"; chat.updatedAt = now(); this.save(); return chat;
+  }
+  archiveChat(chatId: string): ChatRecord | null {
+    const chat = this.getChat(chatId);
+    if (!chat) return null;
+    if (chat.archivedAt) return chat;
+    const stamp = now(); chat.archivedAt = stamp; chat.updatedAt = stamp;
+    if (this.data.lastOpenedChatId === chat.id) this.data.lastOpenedChatId = null;
+    this.save(); return chat;
+  }
 
   migrateLegacy(project: ProjectRecord): void {
     if (project.migrationComplete) return;

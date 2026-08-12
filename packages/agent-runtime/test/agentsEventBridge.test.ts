@@ -4,7 +4,7 @@ import type { ResponseStreamEvent } from "openai/resources/responses/responses";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
 import { mapAgentsStreamToAgentEvents } from "../src/agentsEventBridge";
 
-function createMockStream(events: RunStreamEvent[], finalOutput?: string): StreamedRunResult<any, any> {
+function createMockStream(events: RunStreamEvent[], finalOutput?: unknown): StreamedRunResult<any, any> {
   return {
     finalOutput,
     completed: Promise.resolve(),
@@ -165,5 +165,66 @@ describe("agentsEventBridge Responses events", () => {
     const result = await mapAgentsStreamToAgentEvents(stream, (event) => events.push(event));
     expect(result).toMatchObject({ sawToolCall: true, toolNames: ["read_file"] });
     expect(events).toContainEqual(expect.objectContaining({ type: "status", message: expect.stringContaining("main.py") }));
+  });
+
+  it("reports structural stream diagnostics without model content", async () => {
+    const stream = createMockStream([
+      responseEvent({ type: "response.reasoning_summary_text.delta", delta: "private reasoning", sequence_number: 1 }),
+      responseEvent({
+        type: "response.completed",
+        sequence_number: 2,
+        response: {
+          id: "resp_1",
+          status: "completed",
+          output: [{ type: "message", content: [{ type: "output_text", text: "private answer" }] }]
+        }
+      })
+    ], { output: "private final" });
+
+    const result = await mapAgentsStreamToAgentEvents(stream, () => {});
+
+    expect(result.diagnostics).toEqual({
+      runEventTypes: { raw_model_stream_event: 2 },
+      rawDataTypes: { model: 2 },
+      rawModelSources: { "openai-responses": 2 },
+      responseEventTypes: {
+        "response.reasoning_summary_text.delta": 1,
+        "response.completed": 1
+      },
+      terminalResponseStatuses: ["completed"],
+      terminalFailureReasons: [],
+      terminalOutputItemTypes: ["message"],
+      terminalContentItemTypes: ["output_text"],
+      finalOutput: { kind: "object", keys: ["output"] }
+    });
+    expect(JSON.stringify(result.diagnostics)).not.toContain("private");
+  });
+
+  it("reports collected event shapes when stream iteration fails", async () => {
+    const diagnostics: Array<{ message: string; meta: Record<string, unknown> }> = [];
+    const stream = {
+      finalOutput: undefined,
+      completed: Promise.resolve(),
+      cancelled: false,
+      async *[Symbol.asyncIterator]() {
+        yield responseEvent({ type: "response.created", sequence_number: 1 });
+        throw new Error("stream failed");
+      }
+    } as StreamedRunResult<any, any>;
+
+    await expect(mapAgentsStreamToAgentEvents(stream, () => {}, {
+      onDiagnostic: (message, meta) => diagnostics.push({ message, meta })
+    })).rejects.toThrow("stream failed");
+
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        message: "agent stream iteration failed",
+        meta: expect.objectContaining({
+          failure: "stream_iteration_error",
+          runEventTypes: { raw_model_stream_event: 1 },
+          responseEventTypes: { "response.created": 1 }
+        })
+      })
+    ]);
   });
 });

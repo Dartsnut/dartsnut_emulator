@@ -301,8 +301,7 @@
 }
 
 :root[data-platform="win32"] {
-  /* Reserve caption-button hit targets when using `titleBarOverlay` on Windows. */
-  --chrome-margin-inline-end: 132px;
+  --chrome-margin-inline-end: 0px;
 }
 
 [data-theme="light"] {

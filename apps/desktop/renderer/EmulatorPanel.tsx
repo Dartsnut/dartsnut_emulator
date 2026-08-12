@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { Camera, List, RotateCw, Volume2, VolumeX, ZoomIn } from "lucide-react";
 import type { WidgetConfigSnapshot, WidgetFieldValues } from "@dartsnut/shared-ipc";
 import {
   createHiddenVenvPrepDisplay,
@@ -705,16 +706,7 @@ export function EmulatorPanel({
               data-analytics-area="emulator"
               title="Start / Reload"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36M20.49 15a9 9 0 01-14.85 3.36"
-                />
-              </svg>
+              <RotateCw size={16} aria-hidden />
             </button>
             <button
               type="button"
@@ -726,51 +718,7 @@ export function EmulatorPanel({
               data-analytics-area="emulator"
               title={audioToggleLabel}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M11 5L6 9H2v6h4l5 4V5z"
-                />
-                {state.audioMuted ? (
-                  <>
-                    <path
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      d="M23 9l-6 6"
-                    />
-                    <path
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      d="M17 9l6 6"
-                    />
-                  </>
-                ) : (
-                  <>
-                    <path
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      d="M15 9.5a4 4 0 010 5"
-                    />
-                    <path
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      d="M18 7a8 8 0 010 10"
-                    />
-                  </>
-                )}
-              </svg>
+              {state.audioMuted ? <VolumeX size={16} aria-hidden /> : <Volume2 size={16} aria-hidden />}
             </button>
             <button
               type="button"
@@ -786,17 +734,7 @@ export function EmulatorPanel({
                   : "Capture screenshot"
               }
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"
-                />
-                <circle cx="12" cy="13" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
-              </svg>
+              <Camera size={16} aria-hidden />
             </button>
             <button
               type="button"
@@ -807,17 +745,7 @@ export function EmulatorPanel({
               data-analytics-area="emulator"
               title="Zoom 2x"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                <circle cx="11" cy="11" r="8" fill="none" stroke="currentColor" strokeWidth="2" />
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M21 21l-4.35-4.35M11 8v6M8 11h6"
-                />
-              </svg>
+              <ZoomIn size={16} aria-hidden />
             </button>
             <button
               type="button"
@@ -828,16 +756,7 @@ export function EmulatorPanel({
               data-analytics-area="emulator"
               title={logsOpen ? "Hide logs" : "Logs"}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"
-                />
-              </svg>
+              <List size={16} aria-hidden />
             </button>
           </div>
         </div>

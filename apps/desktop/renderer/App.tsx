@@ -6,6 +6,7 @@ import {
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -14,12 +15,37 @@ import {
   useState
 } from "react";
 import {
+  Archive,
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  Check,
+  ChevronDown,
+  CircleAlert,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  Settings,
+  Square,
+  SquarePen,
+  UserRound,
+  X
+} from "lucide-react";
+import {
   type AgentEvent,
   type AgentSessionTokenUsage,
   type AgentTokenUsage,
   type AppUpdateStatus,
   type AssetManifest,
   type BootstrapState,
+  type ProjectTree,
+  type ProjectSwitchProgress,
   type DeployEligibility,
   type ManifestSnapshot,
   type ProviderId,
@@ -79,17 +105,24 @@ import {
   transcriptLineToTimelineEntry,
   type TimelineEntry
 } from "./rawTimeline";
-import { ThemeSwitcherIcon } from "./ThemeSwitcher";
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
 import {
   clampChatPaneWidth,
+  clampWorkspaceMenuWidth,
   getStoredChatPaneWidth,
+  getStoredWorkspaceMenuWidth,
+  getStoredWorkspaceMenuCollapsed,
+  MAX_WORKSPACE_MENU_WIDTH,
   maxChatPaneWidthForViewport,
   MIN_CHAT_PANE_WIDTH,
   MIN_EMULATOR_PANE_WIDTH,
+  MIN_WORKSPACE_MENU_WIDTH,
   nextChatPaneWidthFromDrag,
-  setStoredChatPaneWidth
+  nextWorkspaceMenuWidthFromDrag,
+  setStoredChatPaneWidth,
+  setStoredWorkspaceMenuWidth,
+  setStoredWorkspaceMenuCollapsed
 } from "./splitPaneSizing";
 
 /** Same order as `WIDGET_DISPLAY_SIZES` in `@dartsnut/shared-ipc` — defined here because Vite/Rollup does not resolve that value through the package’s compiled CJS `export *` shim. */
@@ -133,7 +166,7 @@ const EMPTY_WIDGET_CONFIGS: Record<WidgetConfigScope, WidgetConfigSnapshot> = {
 type WidgetValueState = { fields: WidgetFieldDefinition[]; values: WidgetFieldValues };
 
 type AppScreen = "main" | "settings";
-type SettingsSection = "provider" | "privacy-updates";
+type SettingsSection = "general" | "provider";
 type SubmissionLockState = {
   active: boolean;
   stage: CommunitySubmitProgress["stage"] | "idle";
@@ -146,8 +179,6 @@ type UpdatePromptState = AppUpdateStatus & {
 };
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
-const DEPLOY_PANE_RESERVED_WIDTH_PX = 360;
-const WORKSPACE_MENU_WIDTH_PX = 54;
 /** Keep in sync with composer textarea `max-h-[200px]` */
 const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 /**
@@ -189,6 +220,10 @@ function isSettingsShortcut(event: KeyboardEvent): boolean {
     return false;
   }
   return hasPrimaryShortcutModifier(event);
+}
+
+function settingsShortcutLabel(): string {
+  return navigator.platform.toLowerCase().includes("mac") ? "⌘," : "Ctrl+,";
 }
 
 function isComposerSendShortcut(event: { key: string; metaKey: boolean; ctrlKey: boolean }): boolean {
@@ -296,6 +331,66 @@ function DartsnutLlmUsageCard({ quota, loading, error, loggedIn, onRefresh }: Da
   );
 }
 
+function SettingsGroup({ children }: { children: ReactNode }) {
+  return <section className="settings-group">{children}</section>;
+}
+
+function SettingsRow({ title, description, control, children }: {
+  title?: string;
+  description?: string;
+  control?: ReactNode;
+  children?: ReactNode;
+}) {
+  return <div className={cn("settings-row", children && "settings-row--stacked")}>
+    {title ? <div className="settings-row__copy">
+      <span className="settings-row__title">{title}</span>
+      {description ? <span className="settings-row__description">{description}</span> : null}
+    </div> : null}
+    {control ? <div className="settings-row__control">{control}</div> : null}
+    {children ? <div className="settings-row__content">{children}</div> : null}
+  </div>;
+}
+
+function SettingsSelect<T extends string>({ value, options, onChange, label }: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+  label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selected = options.find((option) => option.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", dismiss);
+    return () => document.removeEventListener("mousedown", dismiss);
+  }, [open]);
+
+  return <div className="settings-select" ref={rootRef}>
+    <button type="button" className={cn("settings-select__trigger", open && "settings-select__trigger--open")} onClick={() => setOpen((current) => !current)} aria-label={label} aria-haspopup="menu" aria-expanded={open}>
+      <span>{selected?.label}</span><ChevronDown size={15} aria-hidden />
+    </button>
+    {open ? <div className="settings-select__menu" role="menu">
+      {options.map((option) => <button key={option.value} type="button" className={cn("settings-select__option", option.value === value && "settings-select__option--selected")} onClick={() => { onChange(option.value); setOpen(false); }} role="menuitemradio" aria-checked={option.value === value}>
+        <span>{option.label}</span>{option.value === value ? <Check size={15} aria-hidden /> : null}
+      </button>)}
+    </div> : null}
+  </div>;
+}
+
+function SettingsSwitch({ checked, onChange, label, analyticsId }: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  analyticsId?: string;
+}) {
+  return <button type="button" className={cn("settings-switch", checked && "settings-switch--checked")} onClick={() => onChange(!checked)} role="switch" aria-checked={checked} aria-label={label} data-analytics-id={analyticsId} data-analytics-area="settings"><span /></button>;
+}
+
 function UpdateDownloadPill({ status }: { status: AppUpdateStatus | null }) {
   if (!status || status.kind !== "downloading") {
     return null;
@@ -401,10 +496,7 @@ function TimelineErrorCard({ text }: { text: string }) {
   return (
     <div className="timeline-error-card" role="alert">
       <div className="timeline-error-card__signal" aria-hidden>
-        <svg width="14" height="14" viewBox="0 0 16 16">
-          <path d="M8 2.25v6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          <circle cx="8" cy="11.75" r="1" fill="currentColor" />
-        </svg>
+        <CircleAlert size={14} strokeWidth={1.8} />
       </div>
       <div className="timeline-error-card__content">
         <span className="timeline-error-card__eyebrow">Run interrupted</span>
@@ -530,14 +622,6 @@ function workspaceFolderBasename(workspaceRoot: string): string {
   return segments.length > 0 ? segments[segments.length - 1]! : workspaceRoot;
 }
 
-function isLikelyTempWorkspace(workspaceRoot: string | null | undefined): boolean {
-  if (!workspaceRoot) {
-    return false;
-  }
-  const basename = workspaceFolderBasename(workspaceRoot);
-  return basename.startsWith("dartsnut-chat-");
-}
-
 function AgentMarkdownBody({ source, className }: { source: string; className?: string }) {
   const fallbackClass = className ?? "entry-text";
   return (
@@ -551,6 +635,7 @@ type CommunityAuthStatusProps = {
   communitySession: CommunitySessionInfo;
   onAuthRequired: () => void;
   onSignOut: () => Promise<void>;
+  onOpenSettings: () => void;
   placement?: "header" | "rail";
 };
 
@@ -558,6 +643,7 @@ function CommunityAuthStatus({
   communitySession,
   onAuthRequired,
   onSignOut,
+  onOpenSettings,
   placement = "header"
 }: CommunityAuthStatusProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -589,7 +675,7 @@ function CommunityAuthStatus({
 
   if (communitySession.loggedIn) {
     return (
-      <div className="relative" ref={menuRef}>
+      <div className={cn("relative", inRail && "w-full")} ref={menuRef}>
         <button
           type="button"
           className={cn(
@@ -602,34 +688,37 @@ function CommunityAuthStatus({
           aria-expanded={menuOpen}
           title={communitySession.account || "Signed in"}
         >
-          <svg width={inRail ? 16 : 12} height={inRail ? 16 : 12} viewBox="0 0 24 24" aria-hidden className="shrink-0">
-            <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
-            <path
-              d="M6 21c0-3.3 2.7-6 6-6s6 2.7 6 6"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          </svg>
+          <UserRound size={inRail ? 16 : 12} className="shrink-0" aria-hidden />
+          {inRail ? <span className="workspace-menu__button-label">{communitySession.account || "Account"}</span> : null}
           {!inRail ? <span className="whitespace-nowrap">{communitySession.account || "Signed in"}</span> : null}
         </button>
         {menuOpen ? (
           <div
             className={cn(
-              "absolute z-50 min-w-[120px] rounded-md border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] py-1 shadow-sm",
-              inRail ? "bottom-0 left-full ml-2" : "right-0 top-full mt-1"
+              "absolute z-50 min-w-[190px] rounded-md border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] py-1 shadow-sm",
+              inRail ? "bottom-full left-0" : "right-0 top-full mt-1"
             )}
             role="menu"
           >
             <button
               type="button"
-              className="w-full border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+              className="flex w-full items-center gap-2 border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none"
+              onClick={() => { onOpenSettings(); setMenuOpen(false); }}
+              role="menuitem"
+            >
+              <Settings size={14} className="shrink-0" aria-hidden />
+              <span>Settings</span>
+              <kbd className="ml-auto whitespace-nowrap text-[11px] font-normal text-[var(--color-text-subtle)]">{settingsShortcutLabel()}</kbd>
+            </button>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() => void handleSignOut()}
               disabled={signingOut}
               role="menuitem"
             >
-              {signingOut ? "Signing out..." : "Sign out"}
+              <LogOut size={14} className="shrink-0" aria-hidden />
+              {signingOut ? "Logging out..." : "Log out"}
             </button>
           </div>
         ) : null}
@@ -645,16 +734,8 @@ function CommunityAuthStatus({
       aria-label="Sign in"
       title="Sign in"
     >
-      <svg width={inRail ? 16 : 14} height={inRail ? 16 : 14} viewBox="0 0 24 24" aria-hidden>
-        <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
-        <path
-          d="M6 21c0-3.3 2.7-6 6-6s6 2.7 6 6"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-      </svg>
+      <UserRound size={inRail ? 16 : 14} aria-hidden />
+      {inRail ? <span className="workspace-menu__button-label">Sign in</span> : null}
     </button>
   );
 }
@@ -735,6 +816,15 @@ export function App() {
   }, []);
 
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
+  const [projectTree, setProjectTree] = useState<ProjectTree>({ projects: [], chats: [] });
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
+  const [projectSwitchProgress, setProjectSwitchProgress] = useState<ProjectSwitchProgress>({ active: false, stage: "ready" });
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [createProjectName, setCreateProjectName] = useState("");
+  const [createProjectFolder, setCreateProjectFolder] = useState<string | null>(null);
+  const [createProjectError, setCreateProjectError] = useState<string | null>(null);
+  const [createProjectPicking, setCreateProjectPicking] = useState(false);
   const [entries, setEntries] = useState<TimelineEntry[]>([
     { id: "greeting-initial", role: "agent", text: GREETING_TEXT }
   ]);
@@ -752,7 +842,7 @@ export function App() {
     message: null
   });
   const [screen, setScreen] = useState<AppScreen>("main");
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>("provider");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   /** Preserves widget/game creator routing for follow-up prompts after the first send. */
   const [sessionTemplateMode, setSessionTemplateMode] = useState<
     "game-creator" | "widget-creator" | null
@@ -813,11 +903,24 @@ export function App() {
   const [pendingChangeSlotIds, setPendingChangeSlotIds] = useState<string[]>([]);
   const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>("emulator");
   const [deployPaneTab, setDeployPaneTab] = useState<DeployPaneTab>("deploy");
+  const [deployDrawerOpen, setDeployDrawerOpen] = useState(false);
   const [deployEligibility, setDeployEligibility] = useState<DeployEligibility>({
     ok: false,
     reason: "no_workspace"
   });
   const deployEligible = deployEligibility.ok;
+  const activeProject = projectTree.projects.find((project) => project.id === bootstrap?.activeProjectId) ?? null;
+  const activeChat = projectTree.chats.find((chat) => chat.id === bootstrap?.activeChatId) ?? null;
+  const validProject = Boolean(
+    activeProject &&
+    bootstrap?.workspaceRoot &&
+    deployEligibility.ok &&
+    (deployEligibility.projectType === "game" || deployEligibility.projectType === "widget")
+  );
+  const showEmulator = validProject;
+  const showRuntimeSetup = pythonRuntimeProgress.running || Boolean(pythonRuntimeProgress.error);
+  const showEmulatorPane = screen === "main" && showEmulator && !showRuntimeSetup;
+  const showDeployDrawer = screen === "main" && validProject && !showRuntimeSetup;
   const [widgetConfigs, setWidgetConfigs] = useState<Record<WidgetConfigScope, WidgetConfigSnapshot>>(EMPTY_WIDGET_CONFIGS);
   const [widgetValuesByConfig, setWidgetValuesByConfig] = useState<Record<string, WidgetValueState>>({});
   const [theme, setTheme] = useState<ThemeId>(() => resolveThemeFromEnvironment());
@@ -847,7 +950,15 @@ export function App() {
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
   const [chatPaneWidth, setChatPaneWidth] = useState(getStoredChatPaneWidth);
   const [chatPaneResizing, setChatPaneResizing] = useState(false);
+  const [workspaceMenuWidth, setWorkspaceMenuWidth] = useState(getStoredWorkspaceMenuWidth);
+  const [workspaceMenuCollapsed, setWorkspaceMenuCollapsed] = useState(getStoredWorkspaceMenuCollapsed);
+  const [workspaceMenuResizing, setWorkspaceMenuResizing] = useState(false);
   const chatPaneResizeDragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startWidth: number;
+  } | null>(null);
+  const workspaceMenuResizeDragRef = useRef<{
     pointerId: number;
     startClientX: number;
     startWidth: number;
@@ -857,18 +968,42 @@ export function App() {
 
   const api = window.dartsnutApi;
 
+  useEffect(() => {
+    if (!api) return;
+    void api.listProjects().then(setProjectTree).catch(() => undefined);
+    return api.onProjectSwitchProgress(setProjectSwitchProgress);
+  }, [api]);
+
+  useEffect(() => {
+    if (!api || !bootstrap?.activeChatId) return;
+    void api.listProjects().then(setProjectTree).catch(() => undefined);
+  }, [api, bootstrap?.activeChatId]);
+
+  useEffect(() => {
+    if (!projectMenuOpen) return;
+    const dismiss = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest(".ui-composer__project-row")) setProjectMenuOpen(false);
+    };
+    document.addEventListener("mousedown", dismiss);
+    return () => document.removeEventListener("mousedown", dismiss);
+  }, [projectMenuOpen]);
+
   const splitPaneViewportWidth = useCallback(() => {
     const rawWidth = typeof window === "undefined" ? 1320 : window.innerWidth;
-    return rawWidth - WORKSPACE_MENU_WIDTH_PX - (deployEligible ? DEPLOY_PANE_RESERVED_WIDTH_PX : 0);
-  }, [deployEligible]);
+    const menuWidth = workspaceMenuCollapsed ? 0 : workspaceMenuWidth;
+    return rawWidth - menuWidth - (showEmulatorPane ? MIN_EMULATOR_PANE_WIDTH : 0);
+  }, [showEmulatorPane, workspaceMenuCollapsed, workspaceMenuWidth]);
 
   const mainGridTemplateColumns = useMemo(() => {
     const leftColumn = `${chatPaneWidth}px`;
+    const menuColumn = `${workspaceMenuCollapsed ? 0 : workspaceMenuWidth}px`;
     const emulatorColumn = `minmax(${MIN_EMULATOR_PANE_WIDTH}px,1fr)`;
-    return deployEligible
-      ? `${WORKSPACE_MENU_WIDTH_PX}px ${leftColumn} ${emulatorColumn} minmax(360px,420px)`
-      : `${WORKSPACE_MENU_WIDTH_PX}px ${leftColumn} ${emulatorColumn}`;
-  }, [chatPaneWidth, deployEligible]);
+    if (!showEmulatorPane) {
+      return `${menuColumn} minmax(0,1fr)`;
+    }
+    return `${menuColumn} ${leftColumn} ${emulatorColumn}`;
+  }, [chatPaneWidth, showEmulatorPane, workspaceMenuCollapsed, workspaceMenuWidth]);
 
   const mainGridStyle = useMemo(
     () => ({
@@ -942,6 +1077,60 @@ export function App() {
       setChatPaneWidth(maxChatPaneWidthForViewport(splitPaneViewportWidth()));
     }
   }, [splitPaneViewportWidth]);
+
+  const finishWorkspaceMenuResize = useCallback((target?: Element) => {
+    const activeDrag = workspaceMenuResizeDragRef.current;
+    if (activeDrag && target instanceof HTMLElement && target.hasPointerCapture(activeDrag.pointerId)) {
+      target.releasePointerCapture(activeDrag.pointerId);
+    }
+    workspaceMenuResizeDragRef.current = null;
+    setWorkspaceMenuResizing(false);
+  }, []);
+
+  const handleWorkspaceMenuResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    workspaceMenuResizeDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startWidth: workspaceMenuWidth
+    };
+    setWorkspaceMenuResizing(true);
+    event.preventDefault();
+  }, [workspaceMenuWidth]);
+
+  const handleWorkspaceMenuResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const activeDrag = workspaceMenuResizeDragRef.current;
+    if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
+    setWorkspaceMenuWidth(nextWorkspaceMenuWidthFromDrag({
+      startClientX: activeDrag.startClientX,
+      currentClientX: event.clientX,
+      startWidth: activeDrag.startWidth
+    }));
+  }, []);
+
+  const handleWorkspaceMenuResizePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (workspaceMenuResizeDragRef.current?.pointerId === event.pointerId) {
+      finishWorkspaceMenuResize(event.currentTarget);
+    }
+  }, [finishWorkspaceMenuResize]);
+
+  const handleWorkspaceMenuResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 40 : 16;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setWorkspaceMenuWidth((current) => clampWorkspaceMenuWidth(current - step));
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setWorkspaceMenuWidth((current) => clampWorkspaceMenuWidth(current + step));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setWorkspaceMenuWidth(MIN_WORKSPACE_MENU_WIDTH);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setWorkspaceMenuWidth(MAX_WORKSPACE_MENU_WIDTH);
+    }
+  }, []);
 
   const handleCommunitySubmitProgress = useCallback((progress: CommunitySubmitProgress | null) => {
     if (!progress) {
@@ -1103,6 +1292,18 @@ export function App() {
       void refreshLlmQuota();
     }
   }, [communitySessionVersion, providerSettings.activeProvider, refreshLlmQuota, screen]);
+
+  useEffect(() => {
+    if (!providerSettingsNotice) return;
+    const timeout = window.setTimeout(() => setProviderSettingsNotice(null), 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [providerSettingsNotice]);
+
+  useEffect(() => {
+    if (!providerSettingsError) return;
+    const timeout = window.setTimeout(() => setProviderSettingsError(null), 7_000);
+    return () => window.clearTimeout(timeout);
+  }, [providerSettingsError]);
 
   useEffect(() => {
     if (communitySession.loggedIn) {
@@ -1391,6 +1592,14 @@ export function App() {
   useEffect(() => {
     setStoredChatPaneWidth(chatPaneWidth);
   }, [chatPaneWidth]);
+
+  useEffect(() => {
+    setStoredWorkspaceMenuWidth(workspaceMenuWidth);
+  }, [workspaceMenuWidth]);
+
+  useEffect(() => {
+    setStoredWorkspaceMenuCollapsed(workspaceMenuCollapsed);
+  }, [workspaceMenuCollapsed]);
 
   useEffect(() => {
     scrollTimelineToBottom();
@@ -1852,6 +2061,10 @@ export function App() {
   }, [assetManifest, deployEligible, rightPaneTab]);
 
   useEffect(() => {
+    setDeployDrawerOpen(false);
+  }, [bootstrap?.activeProjectId]);
+
+  useEffect(() => {
     if (!deployEligible || (gamesTabDisabled && deployPaneTab === "games")) {
       setDeployPaneTab("deploy");
     }
@@ -1859,11 +2072,13 @@ export function App() {
 
   useEffect(() => {
     const ws = bootstrap?.workspaceRoot;
-    if (!api || !ws) {
+    if (!api || !ws || !bootstrap?.activeChatId) {
       lastAgentSessionHydrateKeyRef.current = "";
       return;
     }
-    if (lastAgentSessionHydrateKeyRef.current === ws) {
+    if (sending) return;
+    const hydrateKey = `${bootstrap.activeProjectId ?? ""}:${bootstrap.activeChatId}`;
+    if (lastAgentSessionHydrateKeyRef.current === hydrateKey) {
       return;
     }
     let cancelled = false;
@@ -1872,7 +2087,7 @@ export function App() {
       if (cancelled) {
         return;
       }
-      lastAgentSessionHydrateKeyRef.current = ws;
+      lastAgentSessionHydrateKeyRef.current = hydrateKey;
       setTokenUsage(summary.tokenUsage ?? null);
       if (!summary.hasPersistedSession || summary.transcriptTail.length === 0) {
         setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT }]);
@@ -1937,7 +2152,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [api, bootstrap?.workspaceRoot]);
+  }, [api, bootstrap?.workspaceRoot, bootstrap?.activeProjectId, bootstrap?.activeChatId, sending]);
 
   const chatDisabled = useMemo(() => {
     if (!bootstrap) {
@@ -1945,7 +2160,9 @@ export function App() {
     }
     return sending;
   }, [bootstrap, sending]);
-  const showRuntimeSetup = pythonRuntimeProgress.running || Boolean(pythonRuntimeProgress.error);
+  const greetingOnlyTimeline = entries.length > 0 && entries.every(
+    (entry) => entry.role === "agent" && (entry.id === "greeting-initial" || entry.id.startsWith("greeting-"))
+  );
   const runtimeProgressPercent = Math.min(100, Math.max(0, Math.round(pythonRuntimeProgress.percent)));
 
   useEffect(() => {
@@ -2027,7 +2244,7 @@ export function App() {
     activeAgentRunRef.current = null;
   }
 
-  async function submitPrompt(request: PromptRequest) {
+  async function submitPrompt(request: PromptRequest, firstUserMessageForTitle?: string) {
     setWidgetSizePicker({ visible: false, sizes: [], locale: null });
     setProjectTypePicker({ visible: false, types: [], locale: null });
     discardAgentEventsRef.current = false;
@@ -2038,6 +2255,7 @@ export function App() {
     }
     seenAgentToolAnalyticsRef.current.clear();
     activeAgentRunRef.current = { startedAt: Date.now(), finished: false };
+    const shouldGenerateTitle = !request.chatId && Boolean(firstUserMessageForTitle?.trim());
     trackAgentEvent("agent_run_started", {
       provider: providerSettings.activeProvider,
       template_mode: request.templateMode ?? (request.creationIntake ? "creation_intake" : "follow_up"),
@@ -2052,6 +2270,12 @@ export function App() {
       const result: SendPromptResponse = await api.sendPrompt(request);
       const refreshed = await api.getBootstrapState();
       setBootstrap(refreshed);
+      if (shouldGenerateTitle && refreshed.activeChatId && firstUserMessageForTitle) {
+        void api.generateChatTitle({
+          chatId: refreshed.activeChatId,
+          firstUserMessage: firstUserMessageForTitle
+        }).then(({ tree }) => setProjectTree(tree)).catch(() => undefined);
+      }
       if (!result.ok) {
         finishAgentRun("rejected", result.failureReason);
         if (result.failureReason === "auth_required") {
@@ -2125,6 +2349,80 @@ export function App() {
       const message = error instanceof Error ? error.message : "Could not start a new project.";
       setRuntimeError(message);
     }
+  }
+
+  async function handleNewChat() {
+    if (!api || sending || projectSwitchProgress.active) return;
+    await handleNoProject();
+  }
+
+  function handleCreateProject() {
+    if (sending) return;
+    setProjectMenuOpen(false);
+    setCreateProjectName("");
+    setCreateProjectFolder(null);
+    setCreateProjectError(null);
+    setCreateProjectOpen(true);
+  }
+
+  async function handlePickProjectFolder() {
+    if (!api || sending || createProjectPicking) return;
+    setCreateProjectPicking(true);
+    setCreateProjectError(null);
+    try {
+      const picked = await api.pickWorkspace();
+      if (picked.accepted && picked.selectedPath) {
+        setCreateProjectFolder(picked.selectedPath);
+        setCreateProjectName((current) => current.trim() || workspaceFolderBasename(picked.selectedPath!));
+      }
+    } catch (error: unknown) {
+      setCreateProjectError(error instanceof Error ? error.message : "Could not choose source folder.");
+    } finally {
+      setCreateProjectPicking(false);
+    }
+  }
+
+  async function handleSubmitCreateProject() {
+    if (!api || sending || !createProjectFolder) return;
+    setCreateProjectError(null);
+    try {
+      const result = await api.createProject({ folderPath: createProjectFolder, name: createProjectName });
+      setCreateProjectOpen(false);
+      setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi();
+    } catch (error: unknown) {
+      setCreateProjectError(error instanceof Error ? error.message : "Could not create project.");
+    }
+  }
+
+  async function handleSelectProject(projectId: string) {
+    if (!api || sending || projectSwitchProgress.active) return;
+    const result = await api.selectProject({ projectId });
+    if (result.accepted) { setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi(); }
+    setProjectMenuOpen(false);
+  }
+
+  async function handleNoProject() {
+    if (!api || sending || projectSwitchProgress.active) return;
+    const result = await api.selectProject({ projectId: null });
+    if (result.accepted) { setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi(); }
+    setProjectMenuOpen(false);
+  }
+
+  async function handleNewChatForProject(projectId: string) {
+    await handleSelectProject(projectId);
+  }
+
+  async function handleSelectChat(chatId: string) {
+    if (!api || sending) return;
+    const result = await api.selectChat(chatId); setBootstrap(result.state); setProjectTree(result.tree);
+  }
+
+  async function handleArchiveChat(chatId: string) {
+    if (!api || sending || projectSwitchProgress.active) return;
+    const wasActive = bootstrap?.activeChatId === chatId;
+    const result = await api.archiveChat(chatId);
+    setBootstrap(result.state); setProjectTree(result.tree);
+    if (wasActive) resetChatSessionUi();
   }
 
   function handleOpenSettings() {
@@ -2356,10 +2654,12 @@ export function App() {
       prompt: visiblePrompt,
       chatMediaAttachments: attachments,
       workspacePath: bootstrap?.workspaceRoot ?? undefined,
+      projectId: bootstrap?.activeProjectId ?? undefined,
+      chatId: bootstrap?.activeChatId ?? undefined,
       templateMode: bootstrap?.needsCreationIntake ? undefined : sessionTemplateMode ?? undefined,
       widgetSize: bootstrap?.needsCreationIntake ? undefined : sessionWidgetSize ?? undefined,
       projectType: bootstrap?.needsCreationIntake ? undefined : sessionProjectType ?? undefined
-    });
+    }, visibleUserText);
   }
 
   async function handleStopAgent() {
@@ -2383,18 +2683,18 @@ export function App() {
   return (
     <main
       className={cn(
-        "app-shell grid h-full w-full items-stretch overflow-visible pt-0",
+        "app-shell grid h-full w-full items-stretch pt-0",
         "grid-cols-[var(--app-main-grid-cols)]",
         "grid-rows-[auto_minmax(0,1fr)]",
         "pr-[var(--window-control-inset-right)] pb-[var(--window-control-inset-bottom)] pl-[var(--window-control-inset-left)]",
         "max-[1100px]:grid-cols-[54px_minmax(0,1fr)] max-[1100px]:grid-rows-[auto_minmax(0,1fr)]",
-        chatPaneResizing && "app-shell--chat-resizing"
+        (chatPaneResizing || workspaceMenuResizing) && "app-shell--column-resizing"
       )}
       style={mainGridStyle}
       aria-busy={submissionLock.active}
     >
       <header
-        className="app-header col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),40px)] items-center gap-2 border-b border-edge bg-[var(--gradient-app-bar)] shadow-[var(--shadow-app-bar-divider)] [app-region:no-drag] [-webkit-app-region:no-drag]"
+        className="app-header col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),40px)] items-center gap-2 [app-region:no-drag] [-webkit-app-region:no-drag]"
         style={{
           paddingLeft: "calc(6px + var(--chrome-margin-inline-start))",
           paddingRight: "calc(6px + var(--chrome-margin-inline-end))",
@@ -2403,159 +2703,130 @@ export function App() {
         }}
         role="banner"
       >
+        <button
+          type="button"
+          className="header-menu-toggle max-[1100px]:hidden"
+          aria-label={workspaceMenuCollapsed ? "Show side menu" : "Hide side menu"}
+          aria-expanded={!workspaceMenuCollapsed}
+          title={workspaceMenuCollapsed ? "Show side menu" : "Hide side menu"}
+          onClick={() => setWorkspaceMenuCollapsed((collapsed) => !collapsed)}
+        >
+          {workspaceMenuCollapsed ? <PanelLeftOpen size={18} aria-hidden /> : <PanelLeftClose size={18} aria-hidden />}
+        </button>
+        {workspaceMenuCollapsed ? <span className="header-menu-toggle-divider" aria-hidden /> : null}
+        <div className="min-h-0 min-w-0 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]" aria-hidden />
         {screen === "main" ? (
-          <>
-            <div className="flex min-w-0 shrink items-center gap-1.5">
-              <h1
-                className="m-0 min-w-0 p-0 font-[family-name:var(--font-display)] text-[13px] font-semibold leading-snug tracking-tight text-fg-strong"
-                title={
-                  bootstrap?.workspaceRoot && !bootstrap.isTemporaryWorkspace && !isLikelyTempWorkspace(bootstrap.workspaceRoot)
-                    ? bootstrap.workspaceRoot
-                    : "Embedded assistant for pygame + pydartsnut"
-                }
-              >
-                <span className="block truncate">
-                  {bootstrap?.workspaceRoot && !bootstrap.isTemporaryWorkspace && !isLikelyTempWorkspace(bootstrap.workspaceRoot)
-                    ? workspaceFolderBasename(bootstrap.workspaceRoot)
-                    : "Dartsnut Agent"}
-                </span>
-              </h1>
-            </div>
-            <div
-              className="min-h-0 min-w-0 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
-              aria-hidden
-            />
             <div className="inline-flex shrink-0 items-center justify-end gap-3 overflow-visible">
               <UpdateDownloadPill status={appUpdate} />
+              {showDeployDrawer ? (
+                <button
+                  type="button"
+                  className="header-deploy-toggle max-[1100px]:hidden"
+                  aria-label={deployDrawerOpen ? "Collapse Deploy and Community panel" : "Open Deploy and Community panel"}
+                  aria-expanded={deployDrawerOpen}
+                  title={deployDrawerOpen ? "Collapse right panel" : "Open right panel"}
+                  onClick={() => setDeployDrawerOpen((open) => !open)}
+                >
+                  {deployDrawerOpen ? <PanelRightClose size={18} aria-hidden /> : <PanelRightOpen size={18} aria-hidden />}
+                </button>
+              ) : null}
             </div>
-          </>
-        ) : (
-          <>
-            <div className="flex min-w-0 shrink-0 items-center gap-1.5">
-              <button
-                type="button"
-                className={chromeIconBtnClass}
-                onClick={() => {
-                  setScreen("main");
-                  setProviderSettingsError(null);
-                  setProviderSettingsNotice(null);
-                }}
-                aria-label="Back to main view"
-                title="Back to main view"
-                data-analytics-id="settings_back"
-                data-analytics-area="navigation"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M15 18l-6-6 6-6"
-                  />
-                </svg>
-              </button>
-              <h1 className="m-0 min-w-0 flex-[0_1_auto] p-0 font-[family-name:var(--font-display)] text-[13px] font-semibold leading-snug tracking-tight text-fg-strong">
-                <span className="block truncate">Settings</span>
-              </h1>
-            </div>
-            <div
-              className="min-h-0 min-w-6 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
-              aria-hidden
-            />
-          </>
-        )}
+        ) : null}
       </header>
-      <aside className="workspace-menu col-start-1 row-start-2" aria-label="Workspace menu">
+      <aside className={cn("workspace-menu col-start-1 row-start-2", workspaceMenuCollapsed && "workspace-menu--hidden", screen === "settings" && "workspace-menu--settings")} aria-label={screen === "settings" ? "Settings menu" : "Workspace menu"}>
+        {screen === "settings" ? <>
+          <div className="workspace-menu__actions">
+            <button type="button" className="workspace-menu__button" onClick={() => { setScreen("main"); setProviderSettingsError(null); setProviderSettingsNotice(null); }} aria-label="Back to app" title="Back to app">
+              <ArrowLeft size={16} aria-hidden />
+              <span className="workspace-menu__button-label">Back to app</span>
+            </button>
+          </div>
+          <nav className="workspace-menu__settings-nav" aria-label="Settings sections">
+            <p className="workspace-menu__section-label">Settings</p>
+            <button type="button" className={cn("workspace-menu__button", settingsSection === "general" && "workspace-menu__button--active")} onClick={() => setSettingsSection("general")} aria-current={settingsSection === "general" ? "page" : undefined} data-analytics-id="settings_general" data-analytics-area="settings">
+              <Settings size={16} aria-hidden /><span className="workspace-menu__button-label">General</span>
+            </button>
+            <button type="button" className={cn("workspace-menu__button", settingsSection === "provider" && "workspace-menu__button--active")} onClick={() => setSettingsSection("provider")} aria-current={settingsSection === "provider" ? "page" : undefined}>
+              <CircleAlert size={16} aria-hidden /><span className="workspace-menu__button-label">Provider configuration</span>
+            </button>
+          </nav>
+        </> : <>
         <div className="workspace-menu__actions">
           <button
             type="button"
             className="workspace-menu__button"
-            onClick={() => void handleStartNewProject()}
+            onClick={() => void handleNewChat()}
             data-analytics-id="project_new"
             data-analytics-area="project"
-            disabled={sending}
-            aria-label="Start new project"
-            title="Start new project"
+            disabled={sending || projectSwitchProgress.active}
+            aria-label="New chat"
+            title="New chat"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-              <path
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"
-              />
-              <path
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M14 2v6h6M12 11v6M9 14h6"
-              />
-            </svg>
-          </button>
-          {bootstrap?.isTemporaryWorkspace ? (
-            <button
-              type="button"
-              className="workspace-menu__button"
-              onClick={() => void handleSaveTempWorkspace()}
-              data-analytics-id="project_save"
-              data-analytics-area="project"
-              disabled={sending}
-              aria-label="Save project to a folder"
-              title="Save project to a folder"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"
-                />
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M17 21v-8H7v8M7 3v5h8"
-                />
-              </svg>
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="workspace-menu__button"
-            onClick={() => void handlePickWorkspace()}
-            data-analytics-id="project_open"
-            data-analytics-area="project"
-            disabled={sending}
-            aria-label="Open an existing project"
-            title="Open an existing project"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-              <path
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
-              />
-              <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
-            </svg>
+            <SquarePen size={16} aria-hidden />
+            <span className="workspace-menu__button-label">New chat</span>
           </button>
         </div>
+        <div className="workspace-menu__projects">
+          <button
+            type="button"
+            className="workspace-menu__section"
+            aria-expanded={expandedProjects.__all ?? true}
+            onClick={() => setExpandedProjects((p) => ({ ...p, __all: !(p.__all ?? true) }))}
+          >
+            <span>Projects</span>
+          </button>
+          {(expandedProjects.__all ?? true) ? projectTree.projects.map((project) => {
+            const open = expandedProjects[project.id] ?? true;
+            const projectChats = projectTree.chats.filter((chat) => chat.projectId === project.id);
+            return <div key={project.id} className="workspace-menu__project-group">
+              <div className="workspace-menu__project-row">
+                <button type="button" className="workspace-menu__project" onClick={() => { setExpandedProjects((p) => ({ ...p, [project.id]: !open })); void handleSelectProject(project.id); }}>
+                  <FolderOpen className="workspace-menu__project-icon" size={16} aria-hidden />
+                  <span className="truncate">{project.name}</span>
+                </button>
+                <button
+                  type="button"
+                  className="workspace-menu__project-new-chat"
+                  onClick={(event) => { event.stopPropagation(); void handleNewChatForProject(project.id); }}
+                  disabled={sending || projectSwitchProgress.active}
+                  aria-label={`New chat for ${project.name}`}
+                  title={`New chat for ${project.name}`}
+                  data-analytics-id="project_new_for_project"
+                  data-analytics-area="project"
+                >
+                  <SquarePen size={14} aria-hidden />
+                </button>
+              </div>
+              {open && projectChats.length === 0 ? (
+                <div className="workspace-menu__chat-empty">No chats</div>
+              ) : null}
+              {open ? projectChats.map((chat) => {
+                const active = bootstrap?.activeChatId === chat.id;
+                return <div key={chat.id} className={cn("workspace-menu__chat-row", active && "workspace-menu__chat-row--active")}>
+                  <button type="button" className={cn("workspace-menu__chat", active && "workspace-menu__chat--active")} onClick={() => void handleSelectChat(chat.id)}>
+                    <span className="truncate">{chat.title}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="workspace-menu__chat-archive"
+                    onClick={(event) => { event.stopPropagation(); void handleArchiveChat(chat.id); }}
+                    disabled={sending || projectSwitchProgress.active}
+                    aria-label={`Archive ${chat.title}`}
+                    title={`Archive ${chat.title}`}
+                  >
+                    <Archive size={13} aria-hidden />
+                  </button>
+                </div>;
+              }) : null}
+            </div>;
+          }) : null}
+        </div>
+        </>}
         <div className="workspace-menu__utilities">
           <CommunityAuthStatus
             placement="rail"
             communitySession={communitySession}
+            onOpenSettings={handleOpenSettings}
             onAuthRequired={() => requestCommunityAuth("deploy-devices", true)}
             onSignOut={async () => {
               if (!api?.communityLogout) {
@@ -2569,36 +2840,29 @@ export function App() {
               }
             }}
           />
-          <ThemeSwitcherIcon id="rail-theme-switcher" value={theme} onChange={handleThemeChange} />
-          <button
-            type="button"
-            className={cn("workspace-menu__button", screen === "settings" && "workspace-menu__button--active")}
-            onClick={handleOpenSettings}
-            data-analytics-id="settings_open"
-            data-analytics-area="navigation"
-            aria-label="Settings"
-            aria-current={screen === "settings" ? "page" : undefined}
-            title="Settings"
-          >
-            <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden>
-              <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
-              <path
-                d="M19.4 15a1.7 1.7 0 00.34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 00-1.88-.34 1.7 1.7 0 00-1.03 1.56V21h-4v-.08A1.7 1.7 0 009 19.36a1.7 1.7 0 00-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 004.63 15a1.7 1.7 0 00-1.56-1.03H3v-4h.08A1.7 1.7 0 004.64 9a1.7 1.7 0 00-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 009 4.63a1.7 1.7 0 001.03-1.56V3h4v.08A1.7 1.7 0 0015 4.64a1.7 1.7 0 001.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0019.37 9a1.7 1.7 0 001.56 1.03H21v4h-.08A1.7 1.7 0 0019.4 15z"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
         </div>
+        <div
+          className={cn("workspace-menu-splitter", workspaceMenuResizing && "workspace-menu-splitter--active")}
+          role="separator"
+          tabIndex={0}
+          aria-label="Resize side menu"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_WORKSPACE_MENU_WIDTH}
+          aria-valuemax={MAX_WORKSPACE_MENU_WIDTH}
+          aria-valuenow={workspaceMenuWidth}
+          title="Drag to resize side menu"
+          onPointerDown={handleWorkspaceMenuResizePointerDown}
+          onPointerMove={handleWorkspaceMenuResizePointerMove}
+          onPointerUp={handleWorkspaceMenuResizePointerUp}
+          onPointerCancel={handleWorkspaceMenuResizePointerUp}
+          onKeyDown={handleWorkspaceMenuResizeKeyDown}
+        />
       </aside>
       {screen === "main" && showRuntimeSetup ? (
         <section
           className={cn(
             "runtime-config-main col-start-2 row-start-2 min-h-0 h-full overflow-auto bg-[var(--gradient-rail)] max-[1100px]:col-end-3",
-            deployEligible ? "col-end-5" : "col-end-4"
+            showEmulatorPane ? "col-end-4" : "col-end-3"
           )}
           aria-live="polite"
         >
@@ -2629,7 +2893,7 @@ export function App() {
       ) : screen === "main" ? (
         <section
           className={cn(
-            "left-rail left-rail--chat col-start-2 row-start-2 relative min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
+            "left-rail left-rail--chat col-start-2 row-start-2 relative min-w-0 min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
             "max-[1100px]:col-start-2 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]"
           )}
         >
@@ -2662,6 +2926,11 @@ export function App() {
             ))}
             </div>
           </section>
+
+          {activeChat ? <div className="chat-panel-chat-header" title={activeChat.title}>
+            <FolderOpen size={15} aria-hidden />
+            <span>{activeChat.title}</span>
+          </div> : null}
 
           {runtimeError || pythonRuntimeStatus ? (
             <div className="chat-rail-overlay chat-rail-overlay--top pointer-events-none absolute inset-x-0 top-0 z-10">
@@ -2765,7 +3034,6 @@ export function App() {
             <div
               className={cn(
                 "ui-composer",
-                composerExpandedSticky && "flex-col items-stretch gap-2",
                 chatMediaAttachments.length > 0 && "ui-composer--has-attachments",
                 composerDragActive && "ui-composer--drag-active"
               )}
@@ -2774,6 +3042,17 @@ export function App() {
               onDragLeave={handleComposerDragLeave}
               onDrop={handleComposerDrop}
             >
+              {greetingOnlyTimeline ? <div className="ui-composer__project-row">
+                <button type="button" className={cn("project-chat-trigger", projectMenuOpen && "project-chat-trigger--active")} onClick={() => setProjectMenuOpen((open) => !open)} disabled={projectSwitchProgress.active || sending} aria-haspopup="menu" aria-expanded={projectMenuOpen}>
+                  <Folder className="ui-composer__project-glyph" size={16} aria-hidden />
+                  <span className="project-chat-trigger__label">{projectTree.projects.find((project) => project.id === bootstrap?.activeProjectId)?.name ?? "Choose Project"}</span>
+                </button>
+                {projectMenuOpen ? <div className="project-picker-menu" role="menu">
+                  {projectTree.projects.map((project) => <button key={project.id} type="button" role="menuitem" className={cn("project-picker-menu__item", bootstrap?.activeProjectId === project.id && "project-picker-menu__item--active")} onClick={() => void handleSelectProject(project.id)}><FolderOpen className="project-picker-menu__folder" size={20} aria-hidden /><span>{project.name}</span>{bootstrap?.activeProjectId === project.id ? <Check className="project-picker-menu__check" size={18} aria-hidden /> : null}</button>)}
+                  {projectTree.projects.length > 0 ? <div className="project-picker-menu__divider" /> : null}
+                  <button type="button" role="menuitem" className="project-picker-menu__item" onClick={handleCreateProject}><Plus className="project-picker-menu__plus" size={20} aria-hidden /><span>Add project</span></button>
+                </div> : null}
+              </div> : null}
               {chatMediaAttachments.length > 0 ? (
                 <div className="ui-composer-attachments" aria-label="Attached media files">
                   {chatMediaAttachments.map((attachment) => (
@@ -2797,11 +3076,12 @@ export function App() {
                   ))}
                 </div>
               ) : null}
+              <div className="ui-composer__input-row">
               <textarea
                 ref={promptInputRef}
                 className={cn(
                   "m-0 max-h-[200px] min-h-[26px] min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-0.5 text-[13px] leading-snug text-[var(--color-composer-input)] shadow-none outline-none [font:inherit] placeholder:text-[var(--color-composer-placeholder)] focus:border-0 focus:shadow-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-45",
-                  composerExpandedSticky ? "w-full flex-none" : "flex-1"
+                  "flex-1"
                 )}
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
@@ -2811,7 +3091,7 @@ export function App() {
                     void handleSend();
                   }
                 }}
-                placeholder="Message..."
+                placeholder="Do anything"
                 rows={1}
                 aria-label="Message"
                 disabled={chatDisabled}
@@ -2836,16 +3116,7 @@ export function App() {
                       setAutoScrollEnabled(true);
                     }}
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                      <path
-                        d="M12 5v14M12 19l-5-5M12 19l5-5"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.1"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <ArrowDown size={14} aria-hidden />
                   </button>
                 ) : null}
                 <button
@@ -2859,22 +3130,12 @@ export function App() {
                   onClick={() => (sending ? void handleStopAgent() : void handleSend())}
                 >
                   {sending ? (
-                    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                      <rect x="5" y="5" width="14" height="14" rx="1.5" fill="currentColor" />
-                    </svg>
+                    <Square size={14} fill="currentColor" aria-hidden />
                   ) : (
-                    <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden>
-                      <path
-                        d="M12 19V6M12 6l-4.5 4.5M12 6l4.5 4.5"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <ArrowUp size={15} strokeWidth={2.2} aria-hidden />
                   )}
                 </button>
+              </div>
               </div>
             </div>
             {chatAttachmentError ? (
@@ -2885,123 +3146,55 @@ export function App() {
           </section>
             </div>
           </div>
-          <div
-            className={cn("chat-emulator-splitter", chatPaneResizing && "chat-emulator-splitter--active")}
-            role="separator"
-            tabIndex={0}
-            aria-label="Resize chat and emulator panels"
-            aria-orientation="vertical"
-            aria-valuemin={MIN_CHAT_PANE_WIDTH}
-            aria-valuemax={chatPaneResizeMax}
-            aria-valuenow={chatPaneWidth}
-            title="Drag to resize chat and emulator panels"
-            onPointerDown={handleChatPaneResizePointerDown}
-            onPointerMove={handleChatPaneResizePointerMove}
-            onPointerUp={handleChatPaneResizePointerUp}
-            onPointerCancel={handleChatPaneResizePointerUp}
-            onKeyDown={handleChatPaneResizeKeyDown}
-          />
+          {showEmulatorPane ? (
+            <div
+              className={cn("chat-emulator-splitter", chatPaneResizing && "chat-emulator-splitter--active")}
+              role="separator"
+              tabIndex={0}
+              aria-label="Resize chat and emulator panels"
+              aria-orientation="vertical"
+              aria-valuemin={MIN_CHAT_PANE_WIDTH}
+              aria-valuemax={chatPaneResizeMax}
+              aria-valuenow={chatPaneWidth}
+              title="Drag to resize chat and emulator panels"
+              onPointerDown={handleChatPaneResizePointerDown}
+              onPointerMove={handleChatPaneResizePointerMove}
+              onPointerUp={handleChatPaneResizePointerUp}
+              onPointerCancel={handleChatPaneResizePointerUp}
+              onKeyDown={handleChatPaneResizeKeyDown}
+            />
+          ) : null}
         </section>
       ) : (
-        <section
-          className={cn(
-            "left-rail col-start-2 row-start-2 grid min-h-0 h-full overflow-visible border-r border-edge bg-[var(--gradient-rail)] pt-[14px] pb-[18px] px-[18px]",
-            "grid-rows-[auto_minmax(0,1fr)] gap-4",
-            "max-[1100px]:col-start-2 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]",
-            "max-[760px]:gap-2.5 max-[760px]:p-3"
-          )}
-        >
-          <div className="flex min-w-0 flex-col gap-2.5">
-            <div className="flex min-w-0 flex-col gap-2">
-              {providerSettingsError ? (
-                <div
-                  className="m-0 rounded-lg border border-[var(--color-runtime-error-border)] bg-[var(--color-runtime-error-bg)] p-2 text-xs"
-                  role="alert"
-                >
-                  {providerSettingsError}
+        <section className="settings-page col-start-2 col-end-4 row-start-2 min-h-0 overflow-auto">
+          <div className="settings-page__content">
+          <div className="settings-page__body">
+              {settingsSection === "provider" ? (
+                <div>
+                  <h1 className="m-0 text-2xl font-semibold text-fg-strong">Provider configuration</h1>
+                  <p className="mt-1 text-sm leading-relaxed text-fg-muted">Choose and configure the model provider used by Dartsnut Agent.</p>
                 </div>
               ) : null}
-              {providerSettingsNotice ? (
-                <div className="m-0 rounded-lg border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] p-2 text-xs">
-                  {providerSettingsNotice}
-                </div>
-              ) : null}
-            </div>
-          </div>
-          <section className="grid min-h-0 grid-cols-[220px_1fr] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-settings-layout-border)] bg-[var(--color-settings-layout-bg)] shadow-[var(--shadow-sm)]">
-            <nav className="flex flex-col gap-2 border-r border-[var(--color-settings-layout-border)] p-3" aria-label="Settings menu">
-              <button
-                type="button"
-                className={cn(
-                  "w-full rounded-[var(--radius-md)] border-0 bg-transparent px-3 py-2 text-left text-[13px] font-medium text-fg transition-colors focus:outline-none [app-region:no-drag] [-webkit-app-region:no-drag]",
-                  settingsSection === "provider" && "bg-[var(--color-settings-menu-active)]"
-                )}
-                onClick={() => setSettingsSection("provider")}
-                aria-current={settingsSection === "provider" ? "page" : undefined}
-              >
-                Provider configuration
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "w-full rounded-[var(--radius-md)] border-0 bg-transparent px-3 py-2 text-left text-[13px] font-medium text-fg transition-colors focus:outline-none [app-region:no-drag] [-webkit-app-region:no-drag]",
-                  settingsSection === "privacy-updates" && "bg-[var(--color-settings-menu-active)]"
-                )}
-                onClick={() => setSettingsSection("privacy-updates")}
-                aria-current={settingsSection === "privacy-updates" ? "page" : undefined}
-                data-analytics-id="settings_privacy_updates"
-                data-analytics-area="settings"
-              >
-                Privacy & updates
-              </button>
-            </nav>
-            <div className="flex min-h-0 flex-col gap-3 overflow-auto p-4 text-[13px]">
-              {settingsSection === "privacy-updates" ? (
+              {settingsSection === "general" ? (
                 <>
                   <div>
-                    <h2 className="m-0 text-base font-semibold text-fg-strong">Privacy & updates</h2>
-                    <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-                      Control anonymous diagnostics and desktop update downloads.
+                    <h1 className="m-0 text-2xl font-semibold text-fg-strong">General</h1>
+                    <p className="mt-1 text-sm leading-relaxed text-fg-muted">
+                      Control app appearance, updates, and privacy.
                     </p>
                   </div>
-                  <label className="flex items-start gap-2 rounded-[var(--radius-md)] border border-edge bg-[var(--color-settings-layout-bg)] p-3">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5"
-                      checked={analyticsEnabled}
-                      data-analytics-id="analytics_toggle"
-                      data-analytics-area="settings"
-                      onChange={(event) => {
-                        const enabled = event.target.checked;
-                        setAnalyticsEnabled(enabled);
-                        setAnalyticsCollectionEnabledPreference(enabled);
-                      }}
-                    />
-                    <span className="flex min-w-0 flex-col gap-1">
-                      <span className="font-medium text-fg-strong">Share anonymous usage analytics</span>
-                      <span className="text-xs leading-relaxed text-fg-muted">
-                        Helps improve Dartsnut Agent. Chat text, model responses, file paths, IP addresses, device IDs, credentials, account names, and email addresses are never sent.
-                      </span>
-                    </span>
-                  </label>
-                  <label className="flex items-start gap-2 rounded-[var(--radius-md)] border border-edge bg-[var(--color-settings-layout-bg)] p-3">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5"
-                      checked={autoUpdateEnabled}
-                      data-analytics-id="settings_auto_update_toggle"
-                      data-analytics-area="settings"
-                      onChange={(event) => handleAutoUpdateChange(event.target.checked)}
-                    />
-                    <span className="flex min-w-0 flex-col gap-1">
-                      <span className="font-medium text-fg-strong">Automatically download updates</span>
-                      <span className="text-xs leading-relaxed text-fg-muted">
-                        Check for new versions on launch and download them automatically. Installation still requires your confirmation.
-                      </span>
-                    </span>
-                  </label>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <button
+                  <h2 className="settings-group-heading">General</h2>
+                  <SettingsGroup>
+                    <SettingsRow title="Theme" description="Choose how Dartsnut Agent looks." control={
+                      <SettingsSelect value={theme} label="Theme" options={[{ value: "system", label: "System" }, { value: "light", label: "Light" }, { value: "dark", label: "Dark" }]} onChange={handleThemeChange} />
+                    } />
+                  </SettingsGroup>
+                  <h2 className="settings-group-heading">Update</h2>
+                  <SettingsGroup>
+                    <SettingsRow title="Automatically download updates" description="Check for new versions on launch and download them automatically. Installation still requires your confirmation." control={
+                      <SettingsSwitch checked={autoUpdateEnabled} label="Automatically download updates" analyticsId="settings_auto_update_toggle" onChange={handleAutoUpdateChange} />
+                    } />
+                    <SettingsRow title="App updates" description={appUpdate?.kind === "not_available" ? appUpdate.message ?? "Dartsnut Agent is up to date." : appUpdate?.kind === "error" ? appUpdate.message ?? "Update check failed." : "Check for a newer desktop version."} control={<button
                       type="button"
                       className="ui-btn-secondary min-h-8 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-55"
                       disabled={appUpdate?.kind === "checking" || appUpdate?.kind === "downloading" || appUpdate?.kind === "ready"}
@@ -3010,61 +3203,55 @@ export function App() {
                       data-analytics-area="settings"
                     >
                       {appUpdate?.kind === "checking" ? "Checking..." : "Check for updates"}
-                    </button>
-                    {appUpdate?.kind === "not_available" ? (
-                      <span className="text-xs text-fg-muted" role="status">{appUpdate.message ?? "Dartsnut Agent is up to date."}</span>
-                    ) : null}
-                    {appUpdate?.kind === "error" ? (
-                      <span className="text-xs text-[var(--color-error-text)]" role="alert">{appUpdate.message ?? "Update check failed."}</span>
-                    ) : null}
-                  </div>
+                    </button>} />
+                  </SettingsGroup>
+                  <h2 className="settings-group-heading">Privacy</h2>
+                  <SettingsGroup>
+                    <SettingsRow title="Share anonymous usage analytics" description="Helps improve Dartsnut Agent. Chat text, model responses, file paths, credentials, account names, and email addresses are never sent." control={
+                      <SettingsSwitch checked={analyticsEnabled} label="Share anonymous usage analytics" analyticsId="analytics_toggle" onChange={(enabled) => {
+                        setAnalyticsEnabled(enabled);
+                        setAnalyticsCollectionEnabledPreference(enabled);
+                      }} />
+                    } />
+                  </SettingsGroup>
                 </>
               ) : null}
-              {settingsSection === "provider" ? <label className="flex flex-col gap-1.5">
-                <span className="text-[var(--color-text-subtle)]">Provider</span>
-                <select
-                  className="ui-input"
-                  value={providerSettings.activeProvider}
-                  onChange={(event) =>
+              {settingsSection === "provider" ? (<SettingsGroup>
+                <SettingsRow title="Provider" description="Model service used for agent requests." control={
+                  <SettingsSelect value={providerSettings.activeProvider} label="Provider" options={[{ value: "dartsnut-llm", label: "Dartsnut LLM" }, { value: "custom", label: "Custom" }]} onChange={(value) =>
                     setProviderSettings((prev) =>
-                      withProviderId(prev, event.target.value === "custom" ? "custom" : "dartsnut-llm")
+                      withProviderId(prev, value)
                     )
-                  }
-                >
-                  <option value="dartsnut-llm">Dartsnut LLM</option>
-                  <option value="custom">Custom</option>
-                </select>
-              </label> : null}
+                  } />
+                } />
               {settingsSection === "provider" && providerSettings.activeProvider === "dartsnut-llm" ? (
-                <>
-                  <DartsnutLlmUsageCard
+                <SettingsRow title="Daily usage" description="Today's Dartsnut LLM token allowance."><DartsnutLlmUsageCard
                     quota={llmQuota}
                     loading={llmQuotaLoading}
                     error={llmQuotaError}
                     loggedIn={communitySession.loggedIn}
                     onRefresh={() => void refreshLlmQuota()}
-                  />
-                  <div className="rounded-[var(--radius-md)] border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
+                  /></SettingsRow>
+              ) : null}
+              {settingsSection === "provider" && providerSettings.activeProvider === "dartsnut-llm" ? (
+                  <SettingsRow><div className="rounded-[var(--radius-md)] border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
                     <p className="m-0 font-medium">This service is free for a limited time only.</p>
                     <p className="m-0 mt-1 text-fg-muted">
                       Please use Dartsnut LLM only for creating and updating Dartsnut games,
                       widgets, and related project assets. Avoid sending unrelated, sensitive,
                       or personal content.
                     </p>
-                  </div>
-                </>
+                  </div></SettingsRow>
               ) : null}
               {settingsSection === "provider" && providerSettings.activeProvider === "custom" ? (
                 <>
-                  <div className="rounded-[var(--radius-md)] border border-[var(--color-notice-warning-border)] bg-[var(--color-notice-warning-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
+                  <SettingsRow><div className="rounded-[var(--radius-md)] border border-[var(--color-notice-warning-border)] bg-[var(--color-notice-warning-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
                     Custom providers must expose an OpenAI Responses API-compatible endpoint.
                     Chat Completions and Gemini APIs are not supported.
-                  </div>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="text-[var(--color-text-subtle)]">API base URL</span>
-                    <input
+                  </div></SettingsRow>
+                  <SettingsRow title="API base URL" description="Responses API-compatible endpoint." control={<input
                       type="url"
-                      className="ui-input"
+                      className="ui-input settings-row__input"
                       value={providerCustom(providerSettings).baseUrl}
                       onChange={(event) =>
                         setProviderSettings((prev) =>
@@ -3072,13 +3259,10 @@ export function App() {
                         )
                       }
                       placeholder="https://provider.example.com/v1"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="text-[var(--color-text-subtle)]">API key</span>
-                    <input
+                    />} />
+                  <SettingsRow title="API key" description={`Stored key: ${maskApiKey(providerCustom(providerSettings).apiKey) || "(empty)"}`} control={<input
                       type="password"
-                      className="ui-input"
+                      className="ui-input settings-row__input"
                       value={providerCustom(providerSettings).apiKey}
                       onChange={(event) =>
                         setProviderSettings((prev) =>
@@ -3086,17 +3270,10 @@ export function App() {
                         )
                       }
                       placeholder="provider-key"
-                    />
-                  </label>
-                  <div className="text-xs text-fg-muted">
-                    Stored key preview:{" "}
-                    {maskApiKey(providerCustom(providerSettings).apiKey) || "(empty)"}
-                  </div>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="text-[var(--color-text-subtle)]">Model</span>
-                    <input
+                    />} />
+                  <SettingsRow title="Model" description="Model identifier sent to the provider." control={<input
                       type="text"
-                      className="ui-input"
+                      className="ui-input settings-row__input"
                       value={providerCustom(providerSettings).model}
                       onChange={(event) =>
                         setProviderSettings((prev) =>
@@ -3104,11 +3281,10 @@ export function App() {
                         )
                       }
                       placeholder="model-name"
-                    />
-                  </label>
+                    />} />
                 </>
               ) : null}
-              {settingsSection === "provider" ? <div className="flex justify-start">
+              {settingsSection === "provider" ? <SettingsRow title="Save configuration" description="Apply provider changes to future requests." control={
                 <button
                   type="button"
                   className="ui-btn-primary mt-0 disabled:cursor-not-allowed disabled:opacity-55"
@@ -3119,12 +3295,13 @@ export function App() {
                 >
                   {savingProviderSettings ? "Saving..." : "Save"}
                 </button>
-              </div> : null}
-            </div>
-          </section>
+              } /> : null}
+              </SettingsGroup>) : null}
+          </div>
+          </div>
         </section>
       )}
-      <aside
+      {showEmulatorPane ? <aside
         className={cn(
           "right-pane col-start-3 row-start-2 flex min-h-0 h-full min-w-[360px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
           showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
@@ -3192,13 +3369,21 @@ export function App() {
               </div>
             ) : null}
         </div>
-      </aside>
-      {deployEligible ? (
+      </aside> : null}
+      {showDeployDrawer ? (
+        <div
+          className={cn(
+            "deploy-drawer-viewport max-[1100px]:hidden",
+            deployDrawerOpen ? "deploy-drawer-viewport--open" : "deploy-drawer-viewport--closed"
+          )}
+        >
         <aside
           className={cn(
-            "right-pane col-start-4 row-start-2 flex min-h-0 h-full min-w-[360px] flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
-            showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
+            "right-pane deploy-drawer flex min-h-0 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+            deployDrawerOpen ? "deploy-drawer--open" : "deploy-drawer--closed"
           )}
+          aria-hidden={!deployDrawerOpen}
+          inert={deployDrawerOpen ? undefined : true}
         >
           <div className="flex gap-0.5 border-b border-edge px-3 pb-0 pt-2" role="tablist" aria-label="Deploy view">
             <button
@@ -3234,7 +3419,7 @@ export function App() {
           <div className="flex min-h-0 flex-1 flex-col">
             <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "deploy" && "hidden")}>
               <DeployPanel
-                active={deployPaneTab === "deploy"}
+                active={deployDrawerOpen && deployPaneTab === "deploy"}
                 showWidgetParams={deployPanelShowsWidgetParams}
                 widgetConfig={widgetConfigs.workspace}
                 widgetValuesByConfig={widgetValuesByConfig}
@@ -3247,7 +3432,7 @@ export function App() {
             </div>
             <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "games" && "hidden")}>
               <MyGamesPanel
-                active={deployPaneTab === "games"}
+                active={deployDrawerOpen && deployPaneTab === "games"}
                 communitySession={communitySession}
                 communitySessionVersion={communitySessionVersion + communityAuthSkippedVersion}
                 communityWorkspaceRefreshKey={communityWorkspaceRefreshKey}
@@ -3258,6 +3443,48 @@ export function App() {
             </div>
           </div>
         </aside>
+        </div>
+      ) : null}
+      {providerSettingsError || providerSettingsNotice ? (
+        <div className="global-toast-stack" aria-live="polite">
+          {providerSettingsError ? <div className="global-toast global-toast--error" role="alert">{providerSettingsError}</div> : null}
+          {providerSettingsNotice ? <div className="global-toast global-toast--success" role="status">{providerSettingsNotice}</div> : null}
+        </div>
+      ) : null}
+      {projectSwitchProgress.active ? <div className="project-switch-overlay" role="status" aria-live="polite"><div><h2>Switching project</h2><p>{projectSwitchProgress.message ?? "Preparing…"}</p></div></div> : null}
+      {createProjectOpen ? (
+        <div
+          className="create-project-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="create-project-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCreateProjectOpen(false);
+          }}
+        >
+          <div className="create-project-popover">
+            <div className="create-project-popover__header">
+              <h2 id="create-project-title">Create project</h2>
+              <button type="button" className="create-project-popover__close" aria-label="Close" onClick={() => setCreateProjectOpen(false)}><X size={22} aria-hidden /></button>
+            </div>
+            <label className="create-project-name-field">
+              <Folder size={24} strokeWidth={1.7} aria-hidden />
+              <input value={createProjectName} onChange={(event) => setCreateProjectName(event.target.value)} placeholder="Project name" autoFocus />
+            </label>
+            <p className="create-project-popover__section-label">Source folder</p>
+            <button type="button" className={cn("create-project-folder-picker", createProjectFolder && "create-project-folder-picker--selected")} onClick={() => void handlePickProjectFolder()} disabled={createProjectPicking}>
+              <FolderPlus size={32} strokeWidth={1.5} aria-hidden />
+              <span>{createProjectFolder ? workspaceFolderBasename(createProjectFolder) : "Add folder Dartsnut Agent can read and edit"}</span>
+              {createProjectFolder ? <small>{createProjectFolder}</small> : null}
+            </button>
+            <p className="create-project-popover__hint">Each project uses one source folder.</p>
+            {createProjectError ? <p className="create-project-popover__error" role="alert">{createProjectError}</p> : null}
+            <div className="create-project-popover__actions">
+              <button type="button" className="create-project-popover__cancel" onClick={() => setCreateProjectOpen(false)}>Cancel</button>
+              <button type="button" className="create-project-popover__submit" disabled={!createProjectFolder || createProjectPicking || sending} onClick={() => void handleSubmitCreateProject()}>Create project</button>
+            </div>
+          </div>
+        </div>
       ) : null}
       <DeployAuthGate
         open={deployAuthGateOpen}

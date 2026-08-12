@@ -20,6 +20,7 @@ body {
   overflow-x: clip;
   overflow-y: visible;
   --app-header-clearance: max(var(--window-control-inset-top), 40px);
+  transition: grid-template-columns 220ms var(--ease-out);
 }
 
 /* Subtle arcade scanlines + grain (Neon Pit atmosphere) */
@@ -68,18 +69,49 @@ body {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color-bg-page) 76%, transparent);
+  background: transparent;
   color: var(--color-text-primary);
   cursor: pointer;
   backdrop-filter: blur(10px);
 }
 
+.header-menu-toggle {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+
+.header-menu-toggle:hover,
+.header-menu-toggle:focus-visible {
+  border-color: var(--color-emulator-toolbar-border);
+  background: var(--color-app-btn-bg-hover);
+  color: var(--color-app-btn-text-hover);
+  outline: none;
+}
+
+.header-menu-toggle-divider {
+  width: 1px;
+  height: 20px;
+  flex: 0 0 1px;
+  background: color-mix(in srgb, var(--color-text-primary) 22%, transparent);
+}
+
 .header-deploy-toggle:hover,
 .header-deploy-toggle:focus-visible {
-  border-color: color-mix(in srgb, var(--color-text-primary) 24%, transparent);
-  background: color-mix(in srgb, var(--color-text-primary) 10%, var(--color-bg-page));
+  border-color: var(--color-emulator-toolbar-border);
+  background: var(--color-app-btn-bg-hover);
+  color: var(--color-app-btn-text-hover);
   outline: none;
 }
 
@@ -127,6 +159,7 @@ body {
   position: relative;
   z-index: 4;
   display: flex;
+  min-width: 0;
   min-height: 0;
   flex-direction: column;
   align-items: stretch;
@@ -138,12 +171,100 @@ body {
   box-shadow: var(--shadow-inset-subtle);
   -webkit-app-region: no-drag;
   app-region: no-drag;
+  transition: transform 220ms var(--ease-out), opacity 220ms var(--ease-out), visibility 0s linear 0s;
 }
 
-.workspace-menu__projects { min-height: 0; flex: 1; overflow-y: auto; margin: 12px -2px; }
+.workspace-menu-splitter {
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  right: -7px;
+  bottom: 0;
+  width: 14px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.workspace-menu-splitter::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 6px;
+  width: 2px;
+  background: color-mix(in srgb, var(--color-border) 68%, transparent);
+  opacity: 0.55;
+  transition: background-color 120ms ease, opacity 120ms ease, width 120ms ease;
+}
+
+.workspace-menu-splitter:hover::before,
+.workspace-menu-splitter:focus-visible::before,
+.workspace-menu-splitter--active::before {
+  left: 5px;
+  width: 4px;
+  background: color-mix(in srgb, var(--color-neon-mint) 62%, var(--color-border));
+  opacity: 1;
+}
+
+.workspace-menu-splitter:focus-visible {
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.workspace-menu--hidden {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-18px);
+  visibility: hidden;
+  transition: transform 220ms var(--ease-out), opacity 220ms var(--ease-out), visibility 0s linear 220ms;
+}
+
+.workspace-menu--hidden .workspace-menu__button,
+.workspace-menu--hidden .workspace-menu__section,
+.workspace-menu--hidden .workspace-menu__project,
+.workspace-menu--hidden .workspace-menu__chat {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.workspace-menu--hidden .workspace-menu__button-label,
+.workspace-menu--hidden .workspace-menu__projects,
+.workspace-menu--hidden .workspace-menu__settings-nav {
+  font-size: 0;
+}
+
+.workspace-menu--hidden .workspace-menu__section {
+  display: none;
+}
+
+.workspace-menu--hidden .workspace-menu__project-group,
+.workspace-menu--hidden .workspace-menu__project-row,
+.workspace-menu--hidden .workspace-menu__chat-row {
+  display: block;
+}
+
+.workspace-menu--hidden .workspace-menu__project-new-chat,
+.workspace-menu--hidden .workspace-menu__chat,
+.workspace-menu--hidden .workspace-menu__chat-empty,
+.workspace-menu--hidden .workspace-menu__section-label {
+  display: none;
+}
+
+.workspace-menu--hidden .workspace-menu__projects {
+  overflow: hidden;
+}
+
+.workspace-menu--hidden .workspace-menu-splitter {
+  display: none;
+}
+
+.workspace-menu__projects { min-height: 0; min-width: 0; flex: 1; overflow-x: hidden; overflow-y: auto; margin: 12px -2px; scrollbar-width: none; -ms-overflow-style: none; }
+.workspace-menu__projects::-webkit-scrollbar { display: none; }
 .workspace-menu__section, .workspace-menu__project, .workspace-menu__chat { width: 100%; border: 0; background: transparent; color: var(--color-app-btn-text); text-align: left; cursor: pointer; padding: 7px 8px; border-radius: var(--radius-md); }
 .workspace-menu__section { display: flex; align-items: center; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .06em; color: var(--color-text-subtle); }
-.workspace-menu__project-row { display: flex; width: 100%; align-items: center; border-radius: var(--radius-md); }
+.workspace-menu__project-row { display: flex; width: 100%; min-width: 0; align-items: center; overflow: hidden; border-radius: var(--radius-md); }
 .workspace-menu__project { display: flex; width: auto; min-width: 0; flex: 1; gap: 6px; align-items: center; font-size: 13px; }
 .workspace-menu__project-icon { flex: 0 0 auto; color: var(--color-text-subtle); }
 .workspace-menu__project-row:hover, .workspace-menu__project-row:focus-within, .workspace-menu__chat-row:hover, .workspace-menu__chat-row:focus-within, .workspace-menu__chat-row--active, .workspace-menu__section:hover { background: var(--color-app-btn-bg-hover); }
@@ -153,7 +274,7 @@ body {
 .workspace-menu__project-new-chat:disabled { cursor: not-allowed; opacity: .35; }
 .workspace-menu__project--active, .workspace-menu__chat--active { color: var(--color-neon-mint); background: var(--color-app-btn-bg-hover); }
 .workspace-menu__section:active, .workspace-menu__section:focus, .workspace-menu__section:focus-visible { background: transparent; color: var(--color-app-btn-text); outline: none; box-shadow: none; }
-.workspace-menu__chat-row { display: flex; width: 100%; align-items: center; border-radius: var(--radius-md); }
+.workspace-menu__chat-row { display: flex; width: 100%; min-width: 0; align-items: center; overflow: hidden; border-radius: var(--radius-md); }
 .workspace-menu__chat { width: auto; min-width: 0; flex: 1; padding-left: 30px; font-size: 12px; }
 .workspace-menu__chat-empty { padding: 7px 8px 7px 30px; color: var(--color-text-subtle); font-size: 12px; cursor: default; user-select: none; }
 .workspace-menu__chat--active { background: transparent; }
@@ -296,12 +417,17 @@ body {
 .workspace-menu--settings .workspace-menu__settings-nav {
   display: flex;
   min-height: 0;
+  min-width: 0;
   flex: 1;
   flex-direction: column;
   gap: 4px;
   overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   margin: 16px -2px;
 }
+.workspace-menu--settings .workspace-menu__settings-nav::-webkit-scrollbar { display: none; }
 .workspace-menu__section-label {
   margin: 0 8px 4px;
   color: var(--color-text-subtle);
@@ -2741,15 +2867,33 @@ kbd,
   box-shadow: var(--shadow-focus-ring);
 }
 
-.app-shell--chat-resizing,
-.app-shell--chat-resizing * {
+.app-shell--column-resizing,
+.app-shell--column-resizing * {
   cursor: col-resize !important;
   user-select: none;
 }
 
 @media (max-width: 1100px) {
+  .header-menu-toggle,
+  .workspace-menu-splitter,
   .chat-emulator-splitter {
     display: none;
+  }
+
+  .workspace-menu--hidden {
+    display: flex;
+    width: 54px;
+    padding-inline: 7px;
+    opacity: 1;
+    transform: none;
+    visibility: visible;
+    pointer-events: auto;
+  }
+}
+
+@media (min-width: 1101px) {
+  .app-shell:has(.workspace-menu--hidden) .chat-panel-chat-header {
+    left: calc(var(--chrome-margin-inline-start) + var(--window-control-inset-left) + 52px);
   }
 }
 

@@ -4,11 +4,22 @@ const test = require("node:test");
 const {
   CHAT_PANE_WIDTH_STORAGE_KEY,
   DEFAULT_CHAT_PANE_WIDTH,
+  DEFAULT_WORKSPACE_MENU_WIDTH,
+  MAX_WORKSPACE_MENU_WIDTH,
   MIN_CHAT_PANE_WIDTH,
+  MIN_WORKSPACE_MENU_WIDTH,
+  WORKSPACE_MENU_WIDTH_STORAGE_KEY,
+  WORKSPACE_MENU_COLLAPSED_STORAGE_KEY,
   clampChatPaneWidth,
+  clampWorkspaceMenuWidth,
   getStoredChatPaneWidth,
+  getStoredWorkspaceMenuWidth,
+  getStoredWorkspaceMenuCollapsed,
   nextChatPaneWidthFromDrag,
-  setStoredChatPaneWidth
+  nextWorkspaceMenuWidthFromDrag,
+  setStoredChatPaneWidth,
+  setStoredWorkspaceMenuWidth,
+  setStoredWorkspaceMenuCollapsed
 } = require("./splitPaneSizing.ts");
 
 test("clampChatPaneWidth keeps the chat pane inside desktop layout bounds", () => {
@@ -58,5 +69,47 @@ test("invalid or unavailable stored widths use the default", () => {
 
   assert.equal(getStoredChatPaneWidth(), DEFAULT_CHAT_PANE_WIDTH);
   assert.doesNotThrow(() => setStoredChatPaneWidth(720));
+  delete global.window;
+});
+
+test("workspace menu width clamps and follows pointer movement", () => {
+  assert.equal(clampWorkspaceMenuWidth(100), MIN_WORKSPACE_MENU_WIDTH);
+  assert.equal(clampWorkspaceMenuWidth(900), MAX_WORKSPACE_MENU_WIDTH);
+  assert.equal(nextWorkspaceMenuWidthFromDrag({
+    startClientX: 280,
+    currentClientX: 340,
+    startWidth: DEFAULT_WORKSPACE_MENU_WIDTH
+  }), DEFAULT_WORKSPACE_MENU_WIDTH + 60);
+});
+
+test("workspace menu width round-trips through local storage", () => {
+  const values = new Map();
+  global.window = {
+    localStorage: {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value)
+    }
+  };
+
+  setStoredWorkspaceMenuWidth(311.6);
+
+  assert.equal(values.get(WORKSPACE_MENU_WIDTH_STORAGE_KEY), "312");
+  assert.equal(getStoredWorkspaceMenuWidth(), 312);
+  delete global.window;
+});
+
+test("workspace menu collapsed state round-trips through local storage", () => {
+  const values = new Map();
+  global.window = {
+    localStorage: {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value)
+    }
+  };
+
+  setStoredWorkspaceMenuCollapsed(true);
+
+  assert.equal(values.get(WORKSPACE_MENU_COLLAPSED_STORAGE_KEY), "true");
+  assert.equal(getStoredWorkspaceMenuCollapsed(), true);
   delete global.window;
 });

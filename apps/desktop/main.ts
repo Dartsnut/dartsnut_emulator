@@ -1,11 +1,10 @@
 import path from "node:path";
 import fs from "node:fs";
-import os from "node:os";
 import { randomUUID } from "node:crypto";
 import dotenv from "dotenv";
 import { spawn, spawnSync } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, session, shell } from "electron";
-import type { MessageBoxOptions, OpenDialogOptions } from "electron";
+import type { MessageBoxOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { AgentRunCoordinator } from "./agentRunCoordinator";
 import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
@@ -30,9 +29,6 @@ import {
   type AppUpdateInstallResponse,
   type AppUpdateDownloadResponse,
   type AppUpdateCheckResponse,
-  type SaveTempWorkspaceResponse,
-  isTemporaryWorkspaceForBootstrap,
-  normalizeFsPathComparable,
   workspaceNeedsCreationIntake,
   type DeployActionResponse,
   type DeployConnectRequest,
@@ -181,10 +177,7 @@ import {
   type PersistedWindowState
 } from "./windowState";
 import {
-  decideBeforeQuitBridgeAction,
-  decideBeforeQuitDeployAction,
-  shouldAllocateTempWorkspaceAfterDiscard,
-  type TempWorkspaceGuardReason
+  createShutdownCleanupRunner
 } from "./quitFlow";
 import {
   getAppUpdateStatus,
@@ -203,27 +196,12 @@ let activeProjectId: string | null = null;
 let activeChatId: string | null = null;
 let projectStore: ProjectStore | null = null;
 let projectSwitchInFlight: Promise<boolean> | null = null;
-/** Persisted unsaved temp workspace directory (under OS temp), or null. */
-let trackedTempWorkspacePath: string | null = null;
-/** When true, the next window close can continue without showing the temp-workspace prompt again. */
-let allowWindowCloseWithoutTempPrompt = false;
-/** Set once app quit has been requested so the guarded close can resume quitting after save/discard. */
-let appQuitRequested = false;
-/** Temp dir to remove on `will-quit` after the bridge is killed (quit-time discard). */
-let pendingTempDirRemovalOnQuit: string | null = null;
 let firstRunComplete = false;
 let bridgeProcess: ReturnType<typeof spawn> | null = null;
 /** Launch config key for the current bridge (restart bridge when this changes). */
 let bridgeRuntimeKey: string | null = null;
 /** True after graceful bridge teardown so quit does not orphan pygame/SDL audio. */
 let emulatorBridgeTeardownDone = false;
-let emulatorBridgeTeardownInFlight: Promise<void> | null = null;
-/** True after quit-time remote deploy cleanup has restored the connected machine. */
-let deployMachineRestoreDone = false;
-let deployMachineRestoreInFlight: Promise<void> | null = null;
-let quitCleanupRequitScheduled = false;
-/** In-flight agent cancellation; settles only after the backend run has been finished. */
-let agentRunStopOnQuitInFlight: Promise<boolean> | null = null;
 /** Current backend-backed LLM run, closed immediately when a user stops or quits the app. */
 let activeDartsnutLlmBridgeRun: DartsnutLlmBridgeRun | null = null;
 let desktopNetwork: DesktopNetwork | null = null;
@@ -431,35 +409,21 @@ async function disconnectDeployMachine(): Promise<void> {
 async function restoreDeployMachineForQuit(): Promise<void> {
   const session = deployMachineSession;
   if (!session || !session.connected) {
-    deployMachineRestoreDone = true;
     await disconnectDeployMachine();
     return;
   }
   try {
     emitDeployLog("[deploy] Quit — restore machine, stop debug apps, restart dartsnut_python.service…");
-    session.stopLogTail();
     const elig = readDeployEligibilityFromWorkspace();
-    if (elig.ok) {
-      await session.stopDebugApp(elig.appId).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        emitDeployLog(`[deploy] Quit current app cleanup failed: ${message}`);
-      });
-      await session.removeRemoteAppFolder(elig.appId).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        emitDeployLog(`[deploy] Quit app folder cleanup failed: ${message}`);
-      });
+    const failures = await session.cleanupForQuit(elig.ok ? elig.appId : undefined);
+    for (const failure of failures) {
+      emitDeployLog(`[deploy] Quit cleanup failed: ${failure}`);
     }
-    await session.killAppMainPyProcesses().catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      emitDeployLog(`[deploy] Quit broad process cleanup failed: ${message}`);
-    });
-    await session.restartSystemdService().catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      emitDeployLog(`[deploy] Quit service restart failed: ${message}`);
-    });
+    if (failures.length > 0) {
+      throw new Error(failures.join(", "));
+    }
   } finally {
     await disconnectDeployMachine();
-    deployMachineRestoreDone = true;
   }
 }
 
@@ -870,7 +834,6 @@ let previousAgentObservationSurfaceHash: string | null = null;
 let agentDartSlots: [number, number][] = Array.from({ length: 12 }, () => [-1, -1]);
 
 const proofStatePath = () => path.join(app.getPath("userData"), "first-run-proof.json");
-const tempWorkspaceRecordPath = () => path.join(app.getPath("userData"), "temp-workspace.json");
 const emulatorStatePath = () => path.join(app.getPath("userData"), "emulator-state.json");
 const providerSettingsPath = () => path.join(app.getPath("userData"), "provider-settings.json");
 const windowStatePath = () => path.join(app.getPath("userData"), "window-state.json");
@@ -1195,37 +1158,6 @@ function writeEmulatorState() {
   fs.writeFileSync(emulatorStatePath(), JSON.stringify({ lastWidgetDir }, null, 2));
 }
 
-function readTempWorkspaceJsonFromDisk(): string | null {
-  const file = tempWorkspaceRecordPath();
-  if (!fs.existsSync(file)) {
-    return null;
-  }
-  try {
-    const content = JSON.parse(fs.readFileSync(file, "utf-8")) as { temporaryPath?: unknown };
-    if (typeof content.temporaryPath === "string" && content.temporaryPath.trim()) {
-      return path.resolve(content.temporaryPath.trim());
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function writeTempWorkspaceRecordToDisk(next: string | null): void {
-  trackedTempWorkspacePath = next;
-  const file = tempWorkspaceRecordPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ temporaryPath: next }, null, 2));
-}
-
-function loadTrackedTempWorkspaceFromDisk(): void {
-  trackedTempWorkspacePath = readTempWorkspaceJsonFromDisk();
-}
-
-function isTemporaryWorkspaceActiveNow(): boolean {
-  return isTemporaryWorkspaceForBootstrap(workspaceRoot, trackedTempWorkspacePath);
-}
-
 function getDialogParent(): BrowserWindow | undefined {
   return win && !win.isDestroyed() ? win : undefined;
 }
@@ -1233,95 +1165,6 @@ function getDialogParent(): BrowserWindow | undefined {
 async function showAppMessageBox(options: MessageBoxOptions) {
   const parent = getDialogParent();
   return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
-}
-
-async function showAppOpenDialog(options: OpenDialogOptions) {
-  const parent = getDialogParent();
-  return parent ? dialog.showOpenDialog(parent, options) : dialog.showOpenDialog(options);
-}
-
-function removeDirectoryBestEffort(dir: string): void {
-  try {
-    fs.rmSync(dir, { recursive: true, force: true });
-  } catch {
-    // ignore
-  }
-}
-
-function removeDirectoryDeferredOnQuit(dir: string): void {
-  try {
-    if (process.platform === "win32") {
-      const escaped = dir.replace(/"/g, "\"\"");
-      const child = spawn("cmd.exe", ["/d", "/s", "/c", `rmdir /s /q "${escaped}"`], {
-        detached: true,
-        stdio: "ignore",
-      });
-      child.unref();
-      return;
-    }
-    const child = spawn("/bin/rm", ["-rf", "--", dir], {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
-  } catch {
-    // Fall back to best-effort sync removal if detached cleanup cannot be started.
-    removeDirectoryBestEffort(dir);
-  }
-}
-
-function isProbableAllocatedTempDir(absPath: string): boolean {
-  const base = path.basename(absPath);
-  if (!base.startsWith("dartsnut-chat-")) {
-    return false;
-  }
-  const abs = path.resolve(absPath);
-  const tmp = path.resolve(os.tmpdir());
-  const rel = path.relative(tmp, abs);
-  return rel !== "" && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
-}
-
-function markNewTemporaryWorkspaceAllocated(root: string): void {
-  const absRoot = path.resolve(root);
-  const previous = trackedTempWorkspacePath;
-  if (
-    previous &&
-    normalizeFsPathComparable(previous) !== normalizeFsPathComparable(absRoot) &&
-    fs.existsSync(previous) &&
-    isProbableAllocatedTempDir(previous)
-  ) {
-    removeDirectoryBestEffort(previous);
-  }
-  writeTempWorkspaceRecordToDisk(absRoot);
-}
-
-function tempGuardDialogMessage(reason: TempWorkspaceGuardReason): string {
-  switch (reason) {
-    case "quit":
-      return "You have an unsaved project in a temporary folder. Save it to a permanent folder, discard it, or cancel.";
-    case "open_workspace":
-      return "Opening another workspace will leave your temporary project. Save it, discard it, or cancel.";
-    case "new_project":
-      return "Starting a new project will clear the current session. Save the temporary project, discard it, or cancel to stay.";
-  }
-}
-
-async function promptSaveDiscardCancel(reason: TempWorkspaceGuardReason): Promise<"save" | "discard" | "cancel"> {
-  const { response } = await showAppMessageBox({
-    type: "question",
-    buttons: ["Save", "Discard", "Cancel"],
-    defaultId: 2,
-    cancelId: 2,
-    title: "Unsaved temporary project",
-    message: tempGuardDialogMessage(reason)
-  });
-  if (response === 0) {
-    return "save";
-  }
-  if (response === 1) {
-    return "discard";
-  }
-  return "cancel";
 }
 
 function sleepMs(ms: number): Promise<void> {
@@ -1403,138 +1246,6 @@ function stopPythonBridgeProcess(): void {
   emulatorBridgeTeardownDone = true;
 }
 
-async function discardTrackedTemporaryProject(reason?: TempWorkspaceGuardReason): Promise<void> {
-  const tracked = trackedTempWorkspacePath;
-  if (!tracked) {
-    return;
-  }
-  const toRemove = path.resolve(tracked);
-  const discardingOnQuit = reason === "quit";
-  if (discardingOnQuit) {
-    pendingTempDirRemovalOnQuit = toRemove;
-    clearSessionStateForQuitDiscard(toRemove);
-    return;
-  }
-  if (workspaceRoot && path.resolve(workspaceRoot) === toRemove) {
-    performSessionCleanup({ clearWorkspace: true });
-  } else {
-    writeTempWorkspaceRecordToDisk(null);
-  }
-  removeDirectoryBestEffort(toRemove);
-  if (shouldAllocateTempWorkspaceAfterDiscard(reason)) {
-    ensureTemporaryWorkspaceRootAllocated();
-  }
-}
-
-async function runInteractiveSaveTemporaryWorkspace(): Promise<boolean> {
-  const tracked = trackedTempWorkspacePath;
-  if (!tracked || !isTemporaryWorkspaceActiveNow()) {
-    return false;
-  }
-  if (!fs.existsSync(tracked)) {
-    return false;
-  }
-  const pick = await showAppOpenDialog({
-    title: "Save project — choose an empty folder",
-    properties: ["openDirectory", "createDirectory"]
-  });
-  if (pick.canceled || !pick.filePaths[0]) {
-    return false;
-  }
-  const dest = pick.filePaths[0];
-  if (!isDirectoryEmpty(dest)) {
-    await showAppMessageBox({
-      type: "warning",
-      title: "Cannot save",
-      message: "The destination folder must be empty."
-    });
-    return false;
-  }
-  try {
-    fs.cpSync(tracked, dest, { recursive: true });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await showAppMessageBox({
-      type: "error",
-      title: "Save failed",
-      message: `Could not copy the project: ${message}`
-    });
-    return false;
-  }
-  const toRemove = path.resolve(tracked);
-  writeTempWorkspaceRecordToDisk(null);
-  applyWorkspaceRoot(dest);
-  removeDirectoryBestEffort(toRemove);
-  return true;
-}
-
-async function ensureTemporaryWorkspaceResolvedForGuard(reason: TempWorkspaceGuardReason): Promise<boolean> {
-  if (!isTemporaryWorkspaceActiveNow()) {
-    return true;
-  }
-  const ws = workspaceRoot;
-  if (
-    ws &&
-    fs.existsSync(ws) &&
-    fs.statSync(ws).isDirectory() &&
-    isDirectoryEmpty(ws)
-  ) {
-    await discardTrackedTemporaryProject(reason);
-    return true;
-  }
-  for (; ;) {
-    const choice = await promptSaveDiscardCancel(reason);
-    if (choice === "cancel") {
-      return false;
-    }
-    if (choice === "discard") {
-      await discardTrackedTemporaryProject(reason);
-      return true;
-    }
-    const saved = await runInteractiveSaveTemporaryWorkspace();
-    if (saved) {
-      return true;
-    }
-  }
-}
-
-async function maybeRecoverTrackedTempWorkspaceAtLaunch(): Promise<void> {
-  loadTrackedTempWorkspaceFromDisk();
-  const tp = trackedTempWorkspacePath;
-  if (!tp) {
-    return;
-  }
-  if (!fs.existsSync(tp) || !fs.statSync(tp).isDirectory()) {
-    writeTempWorkspaceRecordToDisk(null);
-    return;
-  }
-  if (isDirectoryEmpty(tp)) {
-    const resolved = path.resolve(tp);
-    writeTempWorkspaceRecordToDisk(resolved);
-    applyWorkspaceRoot(resolved);
-    return;
-  }
-  const { response } = await showAppMessageBox({
-    type: "question",
-    buttons: ["Resume", "Discard"],
-    defaultId: 0,
-    cancelId: 1,
-    title: "Temporary project",
-    message:
-      "A project folder from your last session is still in temporary storage.\n\nResume to continue editing, or Discard to delete it.",
-    detail: tp
-  });
-  if (response === 1) {
-    const toRemove = path.resolve(tp);
-    writeTempWorkspaceRecordToDisk(null);
-    removeDirectoryBestEffort(toRemove);
-    return;
-  }
-  const resolved = path.resolve(tp);
-  writeTempWorkspaceRecordToDisk(resolved);
-  applyWorkspaceRoot(resolved);
-}
-
 function providerStatus(): BootstrapState["providerStatus"] {
   const stored = readProviderSettings();
   const config = resolveCachedProviderConfigForDesktop(stored);
@@ -1552,7 +1263,6 @@ function getBootstrapState(): BootstrapState {
     activeChatId,
     providerStatus: providerStatus(),
     firstRunComplete,
-    isTemporaryWorkspace: false,
     needsCreationIntake: computeNeedsCreationIntake()
   };
 }
@@ -1762,30 +1472,12 @@ async function stopActiveAgentRun(): Promise<boolean> {
   return cancelled;
 }
 
-function allocateTemporaryWorkspaceRoot(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-chat-"));
-}
-
-/** Allocate and select a temp workspace when none is active (eager allocation). */
-function ensureTemporaryWorkspaceRootAllocated(): string {
-  if (workspaceRoot) {
-    return workspaceRoot;
-  }
-  const root = allocateTemporaryWorkspaceRoot();
-  applyWorkspaceRoot(root);
-  markNewTemporaryWorkspaceAllocated(root);
-  return root;
-}
-
 function readWorkspaceConfJsonExists(absoluteWorkspacePath: string): boolean {
   return fs.existsSync(path.join(absoluteWorkspacePath, "conf.json"));
 }
 
 function computeNeedsCreationIntake(): boolean {
-  // No active workspace yet (early-startup race before ensureTemporaryWorkspaceRootAllocated
-  // runs, or right after a cleanup): the next prompt will eagerly allocate a fresh temp dir
-  // which by definition has no conf.json, so intake is required. Reporting `true` here keeps
-  // the renderer's chip gate correct against a stale bootstrap snapshot.
+  // No active project means creation intake will be needed after one is selected.
   if (!workspaceRoot) {
     return true;
   }
@@ -1797,12 +1489,6 @@ function applyWorkspaceRoot(selectedPath: string): void {
     performSessionCleanup({ clearWorkspace: false });
   }
   workspaceRoot = selectedPath;
-  if (
-    trackedTempWorkspacePath &&
-    path.resolve(trackedTempWorkspacePath) !== path.resolve(selectedPath)
-  ) {
-    writeTempWorkspaceRecordToDisk(null);
-  }
   if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
     startPythonBridge();
   }
@@ -2464,23 +2150,10 @@ function performSessionCleanup(options: { clearWorkspace: boolean }): void {
     assetManager.stop();
     stopDeployConfWatcher();
     lastWidgetDir = null;
-    writeTempWorkspaceRecordToDisk(null);
     writeEmulatorState();
   }
   sendToRenderer(IPCChannels.sessionReset);
   emitEmulatorState();
-}
-
-function clearSessionStateForQuitDiscard(toRemove: string): void {
-  // During quit, avoid renderer reset churn to prevent visible timeline flicker.
-  if (workspaceRoot && path.resolve(workspaceRoot) === toRemove) {
-    workspaceRoot = null;
-  }
-  assetManager.stop();
-  stopDeployConfWatcher();
-  lastWidgetDir = null;
-  writeTempWorkspaceRecordToDisk(null);
-  writeEmulatorState();
 }
 
 function emitEmulatorState() {
@@ -2862,40 +2535,12 @@ async function createWindow() {
   } else {
     await win.loadFile(path.join(__dirname, "../dist/index.html"));
   }
-  // Guard quit here while the window is still alive; async native dialogs during `before-quit`
-  // caused unstable macOS teardown behavior.
-  win.on("close", (event) => {
-    devLog.info("[quit] win.close fired", {
-      t: Date.now(),
-      allowWithoutPrompt: allowWindowCloseWithoutTempPrompt,
-      isTempWorkspace: isTemporaryWorkspaceActiveNow(),
-      appQuitRequested,
-    });
+  win.on("close", () => {
+    devLog.info("[quit] win.close fired", { t: Date.now() });
     persistWindowState();
-    if (allowWindowCloseWithoutTempPrompt || !isTemporaryWorkspaceActiveNow()) {
-      allowWindowCloseWithoutTempPrompt = false;
-      devLog.info("[quit] win.close → allowing close immediately");
-      return;
-    }
-    event.preventDefault();
-    devLog.info("[quit] win.close → prevented; running temp-workspace guard");
-    // `close` can run before `before-quit` on macOS; mark quit intent now so one Cmd+Q finishes after the guard.
-    appQuitRequested = true;
-    void (async () => {
-      const proceed = await ensureTemporaryWorkspaceResolvedForGuard("quit");
-      devLog.info("[quit] win.close → guard resolved", { proceed });
-      if (!proceed) {
-        appQuitRequested = false;
-        return;
-      }
-      allowWindowCloseWithoutTempPrompt = true;
-      // Resume the original quit request immediately after the guard succeeds.
-      app.quit();
-    })();
   });
   win.on("closed", () => {
     devLog.info("[quit] win.closed fired", { t: Date.now() });
-    allowWindowCloseWithoutTempPrompt = false;
     chromeInsetInsertedCssKey = undefined;
     win = null;
   });
@@ -2994,111 +2639,44 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
+let quitCleanupComplete = false;
+let quitCleanupRequitScheduled = false;
+const runQuitCleanup = createShutdownCleanupRunner(
+  () => [
+    { name: "agent", run: () => stopActiveAgentRun() },
+    { name: "emulator", run: () => gracefulStopEmulatorBridge(3000, { permanent: true }) },
+    { name: "deploy", run: () => restoreDeployMachineForQuit() },
+  ],
+  ({ name, reason }) => {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    devLog.warn(`[quit] ${name} cleanup failed`, message);
+  },
+);
+
 app.on("before-quit", (event) => {
-  appQuitRequested = true;
-  const winState = win && !win.isDestroyed()
-    ? { visible: win.isVisible(), isTempWorkspace: isTemporaryWorkspaceActiveNow() }
-    : { visible: false, isTempWorkspace: isTemporaryWorkspaceActiveNow() };
-  devLog.info("[quit] before-quit fired", { t: Date.now(), ...winState });
-  // Hide immediately so quit feels responsive. Only keep the window visible if the
-  // temp-workspace guard will actually need to show a save/discard dialog — i.e. the
-  // workspace exists and is non-empty. An empty workspace auto-discards without any
-  // dialog (mirrors the condition in ensureTemporaryWorkspaceResolvedForGuard).
-  const needsTempWorkspaceDialog = isTemporaryWorkspaceActiveNow() && !(
-    workspaceRoot != null &&
-    fs.existsSync(workspaceRoot) &&
-    fs.statSync(workspaceRoot).isDirectory() &&
-    isDirectoryEmpty(workspaceRoot)
-  );
-  if (win && !win.isDestroyed() && win.isVisible() && !needsTempWorkspaceDialog) {
-    devLog.info("[quit] before-quit → hiding window now", { needsTempWorkspaceDialog });
+  devLog.info("[quit] before-quit fired", { t: Date.now(), cleanupComplete: quitCleanupComplete });
+  if (win && !win.isDestroyed() && win.isVisible()) {
     win.hide();
-  } else {
-    devLog.info("[quit] before-quit → skipping hide", {
-      winNull: !win,
-      destroyed: win ? win.isDestroyed() : true,
-      visible: win && !win.isDestroyed() ? win.isVisible() : false,
-      needsTempWorkspaceDialog,
-    });
   }
-  const action = decideBeforeQuitBridgeAction({
-    teardownDone: emulatorBridgeTeardownDone,
-    hasBridgeProcess: !!bridgeProcess,
-    teardownInFlight: !!emulatorBridgeTeardownInFlight
-  });
-  const deployAction = decideBeforeQuitDeployAction({
-    restoreDone: deployMachineRestoreDone,
-    connected: !!deployMachineSession?.connected,
-    restoreInFlight: !!deployMachineRestoreInFlight
-  });
-  const hasActiveAgentRun = sendPromptCoordinator.hasActiveRun();
-  devLog.info("[quit] before-quit → teardown actions", {
-    bridge: action,
-    deploy: deployAction,
-    agent: hasActiveAgentRun ? "cancel_active_run" : "proceed"
-  });
-  if (action === "proceed" && deployAction === "proceed" && !hasActiveAgentRun) {
+  assetManager.stop();
+  stopDeployConfWatcher();
+  if (quitCleanupComplete) {
     return;
   }
-  if (action === "mark_teardown_done") {
-    emulatorBridgeTeardownDone = true;
-  }
-  if (deployAction === "mark_restore_done") {
-    deployMachineRestoreDone = true;
-  }
-  if (
-    (action === "proceed" || action === "mark_teardown_done") &&
-    (deployAction === "proceed" || deployAction === "mark_restore_done") &&
-    !hasActiveAgentRun
-  ) {
+  const hasAsyncCleanup = sendPromptCoordinator.hasActiveRun() || !!bridgeProcess || !!deployMachineSession?.connected;
+  if (!hasAsyncCleanup) {
+    quitCleanupComplete = true;
     return;
   }
   event.preventDefault();
-  devLog.info("[quit] before-quit → prevented; starting quit cleanup");
-  if (hasActiveAgentRun && !agentRunStopOnQuitInFlight) {
-    // The prompt handler settles its lease only after `bridgeRun.finish()` has told the
-    // backend to close the LLM run. Hold Electron's quit sequence until that cleanup completes.
-    agentRunStopOnQuitInFlight = stopActiveAgentRun();
-  }
-  if (action === "start_teardown") {
-    emulatorBridgeTeardownInFlight = gracefulStopEmulatorBridge(3000, { permanent: true })
-      .catch(() => undefined);
-  }
-  if (deployAction === "start_restore") {
-    deployMachineRestoreInFlight = restoreDeployMachineForQuit()
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        devLog.warn("[quit] deploy restore failed", message);
-        emitDeployLog(`[deploy] Quit restore failed: ${message}`);
-      });
-  }
-  const hasInFlightQuitCleanup =
-    hasActiveAgentRun ||
-    action === "wait_for_inflight_teardown" ||
-    action === "start_teardown" ||
-    deployAction === "wait_for_inflight_restore" ||
-    deployAction === "start_restore";
-  if (hasInFlightQuitCleanup) {
-    if (!quitCleanupRequitScheduled) {
-      quitCleanupRequitScheduled = true;
-      Promise.all([
-        agentRunStopOnQuitInFlight ?? Promise.resolve(),
-        emulatorBridgeTeardownInFlight ?? Promise.resolve(),
-        deployMachineRestoreInFlight ?? Promise.resolve(),
-      ])
-        .catch((error: unknown) => {
-          devLog.warn("[quit] agent run cleanup failed", error);
-        })
-        .finally(() => {
-          devLog.info("[quit] before-quit → cleanup complete, re-quitting", { t: Date.now() });
-          agentRunStopOnQuitInFlight = null;
-          emulatorBridgeTeardownInFlight = null;
-          deployMachineRestoreInFlight = null;
-          quitCleanupRequitScheduled = false;
-          app.quit();
-        });
-    }
-    return;
+  if (!quitCleanupRequitScheduled) {
+    quitCleanupRequitScheduled = true;
+    devLog.info("[quit] starting concurrent cleanup", { t: Date.now() });
+    void runQuitCleanup().finally(() => {
+      quitCleanupComplete = true;
+      devLog.info("[quit] cleanup complete, re-quitting", { t: Date.now() });
+      app.quit();
+    });
   }
 });
 
@@ -3106,12 +2684,8 @@ app.on("will-quit", () => {
   devLog.info("[quit] will-quit fired", { t: Date.now() });
   stopPythonBridgeProcess();
   assetManager.stop();
+  stopDeployConfWatcher();
   void disconnectDeployMachine();
-  const pending = pendingTempDirRemovalOnQuit;
-  pendingTempDirRemovalOnQuit = null;
-  if (pending) {
-    removeDirectoryDeferredOnQuit(pending);
-  }
 });
 
 ipcMain.handle(IPCChannels.windowChromeInsets, (): WindowChromeInsets => {
@@ -3142,11 +2716,6 @@ ipcMain.handle(IPCChannels.appUpdateInstallNow, async (): Promise<AppUpdateInsta
   if (!isDownloadedAppUpdateReady()) {
     return { ok: false, reason: "not_ready" };
   }
-  const proceed = await ensureTemporaryWorkspaceResolvedForGuard("quit");
-  if (!proceed) {
-    return { ok: false, reason: "cancelled" };
-  }
-  allowWindowCloseWithoutTempPrompt = true;
   installDownloadedAppUpdate();
   return { ok: true };
 });
@@ -4012,27 +3581,6 @@ ipcMain.handle(IPCChannels.saveProviderSettings, async (_event: unknown, request
   return saved;
 });
 
-ipcMain.handle(IPCChannels.startNewProject, async () => {
-  const ws = workspaceRoot;
-  if (
-    isTemporaryWorkspaceActiveNow() &&
-    ws &&
-    fs.existsSync(ws) &&
-    fs.statSync(ws).isDirectory() &&
-    isDirectoryEmpty(ws)
-  ) {
-    performSessionCleanup({ clearWorkspace: false });
-    return getBootstrapState();
-  }
-  const proceed = await ensureTemporaryWorkspaceResolvedForGuard("new_project");
-  if (!proceed) {
-    return getBootstrapState();
-  }
-  performSessionCleanup({ clearWorkspace: true });
-  ensureTemporaryWorkspaceRootAllocated();
-  return getBootstrapState();
-});
-
 ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: PickWorkspaceRequest) => {
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory", "createDirectory"]
@@ -4059,20 +3607,6 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
     selectedPath,
     accepted: true
   } satisfies PickWorkspaceResponse;
-});
-
-ipcMain.handle(IPCChannels.saveTempWorkspace, async (): Promise<SaveTempWorkspaceResponse> => {
-  if (!workspaceRoot) {
-    return { ok: false, reason: "missing_workspace" };
-  }
-  if (!isTemporaryWorkspaceActiveNow()) {
-    return { ok: false, reason: "not_temporary" };
-  }
-  const saved = await runInteractiveSaveTemporaryWorkspace();
-  if (!saved) {
-    return { ok: false, reason: "cancelled" };
-  }
-  return { ok: true, state: getBootstrapState() };
 });
 
 ipcMain.handle(

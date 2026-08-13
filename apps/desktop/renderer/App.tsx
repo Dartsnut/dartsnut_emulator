@@ -55,7 +55,6 @@ import {
   type CustomProviderSettings,
   type PromptRequest,
   type SendPromptResponse,
-  type SaveTempWorkspaceResponse,
   type MainProcessConsoleMirrorPayload,
   type MachineMcpQuestionMachine,
   type WidgetSize,
@@ -2260,9 +2259,7 @@ export function App() {
       provider: providerSettings.activeProvider,
       template_mode: request.templateMode ?? (request.creationIntake ? "creation_intake" : "follow_up"),
       project_type: request.projectType ?? sessionProjectType ?? "unknown",
-      workspace_kind: request.workspacePath
-        ? (bootstrap?.isTemporaryWorkspace ? "temporary" : "persisted")
-        : "none",
+      workspace_kind: request.workspacePath ? "persisted" : "none",
       attachment_count: request.chatMediaAttachments?.length ?? 0,
       creation_intake: request.creationIntake === true
     });
@@ -2307,48 +2304,6 @@ export function App() {
     }
     const updated = await api.pickWorkspace();
     setBootstrap(updated.state);
-  }
-
-  async function handleSaveTempWorkspace() {
-    if (!api || sending) {
-      return;
-    }
-    try {
-      const result: SaveTempWorkspaceResponse = await api.saveTempWorkspace();
-      if (!result.ok) {
-        if (result.reason !== "cancelled") {
-          postStatus(result.message ?? `Could not save workspace (${result.reason}).`);
-        }
-        return;
-      }
-      setBootstrap(result.state);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Save failed.";
-      setRuntimeError(message);
-    }
-  }
-
-  async function handleStartNewProject() {
-    if (!api || sending) {
-      return;
-    }
-    if (!bootstrap?.isTemporaryWorkspace) {
-      const confirmed = window.confirm(
-        "Start a new project?\n\n" +
-          "Your game files on disk stay saved.\n\n" +
-          "This will leave the current workspace unset, stop the emulator, clear emulator logs, and clear this chat.",
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
-    try {
-      const refreshed = await api.startNewProject();
-      setBootstrap(refreshed);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Could not start a new project.";
-      setRuntimeError(message);
-    }
   }
 
   async function handleNewChat() {

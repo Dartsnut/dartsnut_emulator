@@ -6,6 +6,8 @@ const {
   buildDebugLaunchScript,
   buildEnsureAppVenvScript,
   buildKillAppMainPyProcessesScript,
+  buildQuitCleanupScript,
+  parseQuitCleanupFailures,
   buildKillDebugPythonScript,
   buildSyncWorkspaceScript,
   remoteAppPythonBin,
@@ -156,4 +158,42 @@ test("buildKillAppMainPyProcessesScript matches app-specific legacy and uv main.
   assert.match(script, /pkill -f "\$legacy_pattern"/);
   assert.match(script, /pkill -f "\$uv_pattern"/);
   assert.match(script, /sudo -S rm -f "\$PIDFILE"/);
+});
+
+test("buildQuitCleanupScript keeps ordered best-effort cleanup in one script", () => {
+  const script = buildQuitCleanupScript({
+    appId: APP_ID,
+    password: "rpi",
+    pidPath: "/tmp/dartsnut_dbg.pid",
+    remoteRoot: "/home/rpi/dartsnut_rpi",
+  });
+  const stopPid = script.indexOf('sudo -S cat "$PIDFILE"');
+  const killApps = script.indexOf('pkill -f "$legacy_pattern"');
+  const removeFolder = script.indexOf('rm -rf "$APP_DIR"');
+  const restartService = script.indexOf("systemctl restart dartsnut_python.service");
+  assert.ok(stopPid >= 0);
+  assert.ok(stopPid < killApps);
+  assert.ok(killApps < removeFolder);
+  assert.ok(removeFolder < restartService);
+  assert.match(script, /DARTSNUT_QUIT_CLEANUP_FAILED:/);
+  assert.match(script, /exit 0/);
+});
+
+test("buildQuitCleanupScript skips app-folder removal without app id", () => {
+  const script = buildQuitCleanupScript({
+    password: "rpi",
+    pidPath: "/tmp/dartsnut_dbg.pid",
+    remoteRoot: "/home/rpi/dartsnut_rpi",
+  });
+  assert.match(script, /APP_DIR=''/);
+  assert.match(script, /systemctl restart dartsnut_python.service/);
+});
+
+test("parseQuitCleanupFailures returns unique tagged failures only", () => {
+  assert.deepEqual(parseQuitCleanupFailures([
+    "sudo: warning",
+    "DARTSNUT_QUIT_CLEANUP_FAILED:kill_app_processes",
+    "DARTSNUT_QUIT_CLEANUP_FAILED:restart_service",
+    "DARTSNUT_QUIT_CLEANUP_FAILED:restart_service",
+  ].join("\n")), ["kill_app_processes", "restart_service"]);
 });

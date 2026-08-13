@@ -4,16 +4,13 @@ import type { UserLocale } from "./userLocale";
 
 export const IPCChannels = {
   bootstrapState: "agent:bootstrap-state",
-  /** Main → renderer: workspace/bootstrap changed (temp allocation, pick folder, new project). */
+  /** Main -> renderer: active project/chat or workspace bootstrap changed. */
   bootstrapStateChanged: "agent:bootstrap-state-changed",
   pickWorkspace: "agent:pick-workspace",
   /** Completes a blocking `dartsnut_ask_question` call for project type or widget size (chip row). */
   intakeSubmitQuestionAnswer: "agent:intake-submit-question-answer",
   /** Completes a blocking machine selection/input question for MCP connection. */
   machineMcpSubmitQuestionAnswer: "agent:machine-mcp-submit-question-answer",
-  startNewProject: "agent:start-new-project",
-  /** Copy/move the tracked temp workspace to a user-chosen folder and clear temp tracking. */
-  saveTempWorkspace: "agent:save-temp-workspace",
   /** Main → renderer: clear chat/logs/session UI (bootstrap comes from invoke return values). */
   sessionReset: "agent:session-reset",
   sendPrompt: "agent:send-prompt",
@@ -166,8 +163,6 @@ export interface BootstrapState {
   activeChatId: string | null;
   providerStatus: ProviderStatus;
   firstRunComplete: boolean;
-  /** @deprecated retained for renderer compatibility; always false after project-store migration. */
-  isTemporaryWorkspace: boolean;
   /** True when the active workspace has no `conf.json` yet (run creation intake before creator tools). */
   needsCreationIntake: boolean;
 }
@@ -179,20 +174,6 @@ export interface ProjectCreateRequest { folderPath: string; name?: string; }
 export interface ProjectSelectRequest { projectId: string | null; chatId?: string; }
 export interface ChatGenerateTitleRequest { chatId: string; firstUserMessage: string; }
 export type ProjectSwitchProgress = { active: boolean; stage: "confirming" | "stopping-deployment" | "stopping-emulator" | "switching" | "reloading" | "ready" | "error"; message?: string };
-
-/** IPC return from `saveTempWorkspace`. */
-export type SaveTempWorkspaceResponse =
-  | { ok: true; state: BootstrapState }
-  | {
-    ok: false;
-    reason:
-    | "not_temporary"
-    | "cancelled"
-    | "non_empty_destination"
-    | "copy_failed"
-    | "missing_workspace";
-    message?: string;
-  };
 
 export type AgentSessionIntent = "auto" | "resume" | "fresh";
 

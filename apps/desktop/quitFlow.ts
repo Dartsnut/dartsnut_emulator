@@ -1,51 +1,41 @@
-export type TempWorkspaceGuardReason = "quit" | "open_workspace" | "new_project";
-
-export type BeforeQuitBridgeAction =
-  | "proceed"
-  | "mark_teardown_done"
-  | "wait_for_inflight_teardown"
-  | "start_teardown";
-
-export type BeforeQuitDeployAction =
-  | "proceed"
-  | "mark_restore_done"
-  | "wait_for_inflight_restore"
-  | "start_restore";
-
-export function decideBeforeQuitBridgeAction(args: {
-  teardownDone: boolean;
-  hasBridgeProcess: boolean;
-  teardownInFlight: boolean;
-}): BeforeQuitBridgeAction {
-  if (args.teardownDone) {
-    return "proceed";
-  }
-  if (!args.hasBridgeProcess) {
-    return "mark_teardown_done";
-  }
-  if (args.teardownInFlight) {
-    return "wait_for_inflight_teardown";
-  }
-  return "start_teardown";
+export interface ShutdownCleanupTask {
+  name: string;
+  run: () => Promise<unknown> | unknown;
 }
 
-export function decideBeforeQuitDeployAction(args: {
-  restoreDone: boolean;
-  connected: boolean;
-  restoreInFlight: boolean;
-}): BeforeQuitDeployAction {
-  if (args.restoreDone) {
-    return "proceed";
-  }
-  if (!args.connected) {
-    return "mark_restore_done";
-  }
-  if (args.restoreInFlight) {
-    return "wait_for_inflight_restore";
-  }
-  return "start_restore";
+export interface ShutdownCleanupFailure {
+  name: string;
+  reason: unknown;
 }
 
-export function shouldAllocateTempWorkspaceAfterDiscard(reason?: TempWorkspaceGuardReason): boolean {
-  return reason !== "quit";
+export async function runShutdownCleanup(
+  tasks: ShutdownCleanupTask[],
+  onFailure: (failure: ShutdownCleanupFailure) => void,
+): Promise<void> {
+  const started = tasks.map((task) => {
+    try {
+      return Promise.resolve(task.run());
+    } catch (reason) {
+      return Promise.reject(reason);
+    }
+  });
+  const settled = await Promise.allSettled(started);
+  settled.forEach((result, index) => {
+    if (result.status === "rejected") {
+      onFailure({ name: tasks[index].name, reason: result.reason });
+    }
+  });
+}
+
+export function createShutdownCleanupRunner(
+  taskFactory: () => ShutdownCleanupTask[],
+  onFailure: (failure: ShutdownCleanupFailure) => void,
+): () => Promise<void> {
+  let inFlight: Promise<void> | null = null;
+  return () => {
+    if (!inFlight) {
+      inFlight = runShutdownCleanup(taskFactory(), onFailure);
+    }
+    return inFlight;
+  };
 }

@@ -28,7 +28,6 @@ import type {
   ReadPreviewResponse,
   SaveProviderSettingsRequest,
   SendPromptResponse,
-  SaveTempWorkspaceResponse,
   UnbindSlotRequest,
   UnbindSlotResponse,
   DeployConnectRequest,
@@ -96,8 +95,6 @@ declare global {
       downloadAppUpdate: () => Promise<AppUpdateDownloadResponse>;
       checkAppUpdate: () => Promise<AppUpdateCheckResponse>;
       setShellUiTheme: (theme: ShellUiTheme) => Promise<void>;
-      startNewProject: () => Promise<BootstrapState>;
-      saveTempWorkspace: () => Promise<SaveTempWorkspaceResponse>;
       pickWorkspace: (request?: PickWorkspaceRequest) => Promise<PickWorkspaceResponse>;
       intakeSubmitQuestionAnswer: (
         body: IntakeSubmitQuestionAnswerRequest

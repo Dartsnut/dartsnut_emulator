@@ -12,6 +12,8 @@
     "package": "pnpm --dir packages/shared-ipc run build && pnpm --dir packages/emulator-protocol run build && pnpm --dir packages/agent-runtime run build && pnpm --dir apps/desktop run package",
     "package:mac": "pnpm --dir packages/shared-ipc run build && pnpm --dir packages/emulator-protocol run build && pnpm --dir packages/agent-runtime run build && pnpm --dir apps/desktop run package:mac",
     "package:win": "pnpm --dir packages/shared-ipc run build && pnpm --dir packages/emulator-protocol run build && pnpm --dir packages/agent-runtime run build && pnpm --dir apps/desktop run package:win",
+    "release:publish": "node scripts/publish-release.mjs",
+    "test:release-publish": "node --test scripts/publish_release.test.js",
     "test": "pnpm --dir packages/shared-ipc run test && pnpm --dir packages/agent-runtime run test",
     "export:agent-plugin": "node scripts/export_agent_plugin.mjs",
     "check:agent-plugin": "node scripts/export_agent_plugin.mjs --check && node scripts/check_agent_plugin.mjs",

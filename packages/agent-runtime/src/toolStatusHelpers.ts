@@ -116,10 +116,6 @@ export function buildToolStatusMessage(
     }
     case "get_dartsnut_skill":
       return { text: phase === "call" ? "Loading Dartsnut skill…" : "Loaded Dartsnut skill.", meta: baseMeta };
-    case "dartsnut_ask_question":
-      return { text: phase === "call" ? "Asking question…" : "Recorded answer.", meta: baseMeta };
-    case "dartsnut_project_intake":
-      return { text: phase === "call" ? "Updating project intake…" : "Updated project intake.", meta: baseMeta };
     case "reload_emulator":
       return { text: phase === "call" ? "Reloading emulator…" : "Reloaded emulator.", meta: baseMeta };
     case "get_emulator_logs":

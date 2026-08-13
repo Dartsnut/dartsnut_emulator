@@ -16,51 +16,17 @@ const codexMarketplacePath = path.join(repoRoot, ".agents", "plugins", "marketpl
 const claudeMarketplacePath = path.join(repoRoot, ".claude-plugin", "marketplace.json");
 
 const exportedSkills = [
-  "caveman",
-  "karpathy-guidelines",
-  "creator-incremental",
-  "conf-contract",
-  "pydartsnut-core",
-  "pydartsnut-game-io",
-  "pydartsnut-widget-loop",
-  "widget-fonts",
-  "game-dart-colors",
-  "dartsnut-display-mapping",
-  "dartsnut-smallform-design",
-  "design-console-smallform",
-  "asset-pipeline",
-  "dartsnut-skill"
+  "dartsnut-core",
+  "dartsnut-game",
+  "dartsnut-widget",
+  "dartsnut-assets"
 ];
 
 const skillDescriptions = {
-  "caveman":
-    "Ultra-compressed communication mode for terse, accurate Dartsnut Agent responses.",
-  "karpathy-guidelines":
-    "Behavioral guidelines for surgical coding changes, verification, assumptions, and avoiding overcomplicated edits.",
-  "creator-incremental":
-    "Dartsnut workspace scaffold rules, just-in-time skill loading, file constraints, and emulator verification workflow.",
-  "conf-contract":
-    "Root conf.json schema, defaults, size rules, preview handling, and reload requirements for Dartsnut projects.",
-  "pydartsnut-core":
-    "Core pydartsnut integration: Dartsnut instance setup, framebuffer rules, loop guard, dependencies, and run steps.",
-  "pydartsnut-game-io":
-    "Dartsnut game main.py guidance for pygame loops, dart hits, buttons, and framebuffer updates.",
-  "pydartsnut-widget-loop":
-    "Dartsnut widget main.py guidance for Pillow rendering, widget_params, and update loop behavior.",
-  "widget-fonts":
-    "Dartsnut widget font catalog usage, font copy conventions, and safe font loading rules.",
-  "game-dart-colors":
-    "Dartsnut game dart slot color mapping based on dart_index modulo four.",
-  "dartsnut-display-mapping":
-    "Dartsnut display and framebuffer mapping rules for panels, physical screens, layout, clipping, and fonts.",
-  "dartsnut-smallform-design":
-    "Dartsnut small-form visual design guidance for tiny games and widgets.",
-  "design-console-smallform":
-    "Legacy compact-console design alias that routes to Dartsnut small-form design guidance.",
-  "asset-pipeline":
-    "Dartsnut asset manifest, loader-helper, placeholder, and apply-mode workflow for art-bearing entities.",
-  "dartsnut-skill":
-    "Legacy Dartsnut runtime index that routes to the granular pydartsnut, conf, display, and asset skills."
+  "dartsnut-core": "Core project contract, pydartsnut integration, display mapping, and verification.",
+  "dartsnut-game": "Pygame game loops, machine input APIs, dependencies, and game layout.",
+  "dartsnut-widget": "Pillow widget loops, parameters, fonts, dependencies, and widget layout.",
+  "dartsnut-assets": "Asset manifest, loader contract, binding, placeholders, and apply mode."
 };
 
 function readText(filePath) {
@@ -83,11 +49,7 @@ function rimraf(dirPath) {
 function normalizeSkillBody(skillId, body) {
   let normalized = body.replace(/\r\n/g, "\n").trimEnd();
 
-  if (skillId !== "karpathy-guidelines") {
-    normalized = normalized
-      .replace(/get_dartsnut_skill/g, "the corresponding Dartsnut plugin skill")
-      .replace(/`pydartsnut-skill`/g, "`dartsnut-skill`");
-  }
+  normalized = normalized.replace(/get_dartsnut_skill/g, "the corresponding Dartsnut plugin skill");
 
   if (/^---\n[\s\S]*?\n---\n/.test(normalized)) {
     return normalized;

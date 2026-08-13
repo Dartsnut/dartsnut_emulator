@@ -1,14 +1,12 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import {
   OpenAIProvider,
-  setDefaultOpenAIClient,
-  setOpenAIAPI,
   setDefaultModelProvider,
   setTraceProcessors,
   setTracingDisabled
 } from "@openai/agents";
 import type { AgentModelConfig } from "./agentProviderConfig";
-import { normalizeProviderBaseUrl } from "./providerConfig";
+import { createResponsesClient } from "./responsesClient";
 
 let configuredKey: string | undefined;
 let lastConfiguredClient: OpenAI | undefined;
@@ -30,27 +28,18 @@ export function configureAgentsSdk(config: AgentModelConfig, options?: { force?:
   if (!config.model || !config.apiKey) {
     throw new Error("Provider config missing: model and apiKey are required.");
   }
-  const baseUrl = normalizeProviderBaseUrl(config.baseUrl ?? "");
+  const baseUrl = config.baseUrl ?? "";
   const cacheKey = `${config.endpointKind}\0${baseUrl}\0${config.apiKey}`;
   if (!options?.force && configuredKey === cacheKey && lastConfiguredProvider) {
     return lastConfiguredProvider;
   }
-  const timeoutMs = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS) || 180_000;
-  const client = new OpenAI({
-    apiKey: config.apiKey,
-    baseURL: baseUrl,
-    timeout: timeoutMs,
-    maxRetries: 0,
-    fetch: config.fetchImpl
-  });
+  const client = createResponsesClient(config);
   const provider = new OpenAIProvider({
     openAIClient: client,
     useResponses: true,
     useResponsesWebSocket: false,
     cacheResponsesWebSocketModels: false
   });
-  setDefaultOpenAIClient(client);
-  setOpenAIAPI("responses");
   setDefaultModelProvider(provider);
   configuredKey = cacheKey;
   lastConfiguredClient = client;

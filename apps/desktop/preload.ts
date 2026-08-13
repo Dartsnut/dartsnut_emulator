@@ -19,8 +19,6 @@ import {
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
-  type IntakeSubmitQuestionAnswerRequest,
-  type IntakeSubmitQuestionAnswerResponse,
   type MachineMcpSubmitQuestionAnswerRequest,
   type MachineMcpSubmitQuestionAnswerResponse,
   type PromptRequest,
@@ -114,8 +112,6 @@ const api = {
     (request === undefined
       ? ipcRenderer.invoke(IPCChannels.pickWorkspace)
       : ipcRenderer.invoke(IPCChannels.pickWorkspace, request)) as Promise<PickWorkspaceResponse>,
-  intakeSubmitQuestionAnswer: (body: IntakeSubmitQuestionAnswerRequest) =>
-    ipcRenderer.invoke(IPCChannels.intakeSubmitQuestionAnswer, body) as Promise<IntakeSubmitQuestionAnswerResponse>,
   machineMcpSubmitQuestionAnswer: (body: MachineMcpSubmitQuestionAnswerRequest) =>
     ipcRenderer.invoke(IPCChannels.machineMcpSubmitQuestionAnswer, body) as Promise<MachineMcpSubmitQuestionAnswerResponse>,
   sendPrompt: (request: PromptRequest) =>

@@ -12,7 +12,6 @@ function ctx(partial: Partial<DartsnutRunContext>, workspacePath: string): Darts
   return {
     workspacePath,
     templateMode: partial.templateMode ?? null,
-    intakeReady: partial.intakeReady ?? false,
     artifacts: partial.artifacts ?? { confJson: false, mainPy: false, initialPassComplete: false },
     assetApplierMode: partial.assetApplierMode ?? false,
     skillsDir: partial.skillsDir ?? path.join(process.cwd(), "skills"),
@@ -34,60 +33,17 @@ function findTool(tools: Tool[], name: string): Tool | undefined {
   return tools.find((t) => t.type === "function" && (t as any).name === name);
 }
 
-describe("intake gate on file mutations", () => {
-  it("blocks write_file / replace_in_file / copy_asset_file until intake is ready", async () => {
+describe("file mutations without intake", () => {
+  it("allows a blank workspace to be scaffolded immediately", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-gate-"));
-    const runContext = ctx({ intakeReady: false }, workspace);
+    const runContext = ctx({}, workspace);
     const tools = buildAgentTools({
       workspacePolicy: new WorkspacePolicy(workspace),
-      profile: "full",
-      getRunContext: () => runContext
-    });
-    const write = await exec(findTool(tools, "write_file"), { path: "main.py", content: "x=1\n" });
-    expect(write.ok).toBe(false);
-    expect(write.error).toMatch(/Record the project type/i);
-    expect(fs.existsSync(path.join(workspace, "main.py"))).toBe(false);
-  });
-
-  it("allows writes once intake is ready", async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-gate-"));
-    const runContext = ctx({ intakeReady: true, projectType: "widget", widgetSize: "128x128" }, workspace);
-    const tools = buildAgentTools({
-      workspacePolicy: new WorkspacePolicy(workspace),
-      profile: "full",
-      getRunContext: () => runContext
-    });
-    const write = await exec(findTool(tools, "write_file"), { path: "conf.json", content: "{}\n" });
-    expect(write.ok).toBe(true);
-    expect(fs.existsSync(path.join(workspace, "conf.json"))).toBe(true);
-  });
-
-  it("allows writes when a conf.json already exists even if intake not re-run", async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-gate-"));
-    fs.writeFileSync(path.join(workspace, "conf.json"), "{}\n", "utf-8");
-    const runContext = ctx(
-      { intakeReady: false, artifacts: { confJson: true, mainPy: false, initialPassComplete: false } },
-      workspace
-    );
-    const tools = buildAgentTools({
-      workspacePolicy: new WorkspacePolicy(workspace),
-      profile: "full",
-      getRunContext: () => runContext
+      profile: "full"
     });
     const write = await exec(findTool(tools, "write_file"), { path: "main.py", content: "x=1\n" });
     expect(write.ok).toBe(true);
-  });
-
-  it("does not gate asset-applier mode", async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-gate-"));
-    const runContext = ctx({ intakeReady: false, assetApplierMode: true }, workspace);
-    const tools = buildAgentTools({
-      workspacePolicy: new WorkspacePolicy(workspace),
-      profile: "asset-applier",
-      getRunContext: () => runContext
-    });
-    const write = await exec(findTool(tools, "write_file"), { path: "assets_loader.py", content: "x=1\n" });
-    expect(write.ok).toBe(true);
+    expect(fs.existsSync(path.join(workspace, "main.py"))).toBe(true);
   });
 });
 
@@ -100,6 +56,8 @@ describe("search + file tools", () => {
     await fsp.writeFile(path.join(workspace, "fonts", "tiny.py"), "FONT = 'tiny'\n", "utf-8");
     await fsp.mkdir(path.join(workspace, "node_modules"), { recursive: true });
     await fsp.writeFile(path.join(workspace, "node_modules", "skip.py"), "ALPHA = 999\n", "utf-8");
+    await fsp.mkdir(path.join(workspace, ".venv", "lib"), { recursive: true });
+    await fsp.writeFile(path.join(workspace, ".venv", "lib", "skip.py"), "ALPHA = 998\n", "utf-8");
     return workspace;
   }
 
@@ -115,6 +73,7 @@ describe("search + file tools", () => {
     const paths = res.matches.map((m: any) => m.path);
     expect(paths).toContain("main.py");
     expect(paths).not.toContain("node_modules/skip.py");
+    expect(paths).not.toContain(".venv/lib/skip.py");
     const mainMatch = res.matches.find((m: any) => m.path === "main.py");
     expect(mainMatch.line).toBe(2);
 
@@ -139,6 +98,19 @@ describe("search + file tools", () => {
     expect(res.files).toContain("main.py");
     expect(res.files).toContain("fonts/tiny.py");
     expect(res.files).not.toContain("node_modules/skip.py");
+    expect(res.files).not.toContain(".venv/lib/skip.py");
+  });
+
+  it("list_files skips generated environments and bounds output", async () => {
+    const workspace = await seedWorkspace();
+    const tools = buildTools(workspace);
+    const res = await exec(findTool(tools, "list_files"), { max_results: 2 });
+
+    expect(res.ok).toBe(true);
+    expect(res.files).toHaveLength(2);
+    expect(res.truncated).toBe(true);
+    expect(res.files.some((file: string) => file.startsWith(".venv/"))).toBe(false);
+    expect(res.files.some((file: string) => file.startsWith("node_modules/"))).toBe(false);
   });
 
   it("read_file returns whole file by default and numbered slice with offset/limit", async () => {

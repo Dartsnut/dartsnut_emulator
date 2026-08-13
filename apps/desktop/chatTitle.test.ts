@@ -23,15 +23,35 @@ describe("chat title generation", () => {
     expect(fallbackChatTitle("x".repeat(100))).toHaveLength(80);
   });
 
-  it("calls Responses API without tools or storage", async () => {
+  it("uses a no-tool Agents SDK run without storage", async () => {
+    let requestBody: Record<string, unknown> | undefined;
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body));
-      expect(Object.keys(body).sort()).toEqual(["input", "max_output_tokens", "model", "store", "tools"]);
-      expect(body.tools).toEqual([]);
-      expect(body.store).toBe(false);
-      expect(body.max_output_tokens).toBe(64);
-      expect(body.input).toContain("Fix project switching");
-      return new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: "Project Switch Fix" }] }] }), { status: 200 });
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        id: "resp_title",
+        object: "response",
+        created_at: 0,
+        status: "completed",
+        error: null,
+        incomplete_details: null,
+        instructions: null,
+        metadata: null,
+        model: "test-model",
+        output: [{ id: "msg_1", type: "message", role: "assistant", content: [{ type: "output_text", text: "Project Switch Fix", annotations: [] }] }],
+        output_text: "Project Switch Fix",
+        parallel_tool_calls: false,
+        previous_response_id: null,
+        prompt: null,
+        reasoning: null,
+        service_tier: "default",
+        temperature: null,
+        text: { format: { type: "text" } },
+        tool_choice: "auto",
+        tools: [],
+        top_p: null,
+        truncation: "disabled",
+        usage: { input_tokens: 1, output_tokens: 3, total_tokens: 4 }
+      }), { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
     const config: AgentModelConfig = {
       model: "test-model",
@@ -43,6 +63,10 @@ describe("chat title generation", () => {
 
     await expect(generateChatTitle(config, "Fix project switching")).resolves.toBe("Project Switch Fix");
     expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(requestBody?.tools).toEqual([]);
+    expect(requestBody?.store).toBe(false);
+    expect(requestBody?.max_output_tokens).toBe(64);
+    expect(JSON.stringify(requestBody?.input)).toContain("Fix project switching");
   });
 
   it("uses the first-message fallback when the provider fails", async () => {

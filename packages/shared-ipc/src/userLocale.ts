@@ -113,24 +113,18 @@ export function resolveSessionUserLocale(
 /** System message block for SessionEngine (not routing). */
 export function buildLanguageSystemPrompt(locale?: UserLocale | null): string {
   const lines = [
-    "Language policy (mandatory for user-visible prose):",
-    "- Users may write in **English**, **Simplified Chinese (zh-Hans)**, or **Traditional Chinese (zh-Hant)**.",
-    "- **output-only:** response language applies only to model-authored, user-visible prose: explanations, status-style summaries, and questions.",
-    "- **Must** use the same natural language as the user for model-authored explanations, status-style summaries, and questions.",
-    "- **Persist** across turns: if the conversation is in Chinese, do **not** revert to English after short follow-ups (e.g. ok, 继续, 好), tool results, or English-only scaffolding in system messages.",
-    "- **Variant:** Simplified user text → Simplified replies; Traditional → Traditional; mixed/unclear Chinese → match the script the user used most recently in this session.",
-    "- Use **English** when the user's latest message is clearly English; keep the session locale for short/ambiguous follow-ups.",
-    "- Language **must not change behavior**, routing, tool choice, intake decisions, project type inference, build steps, verification, or success criteria.",
-    "- **Never translate** code, file paths, JSON keys, `skill_id`, tool names, or conventional API/library names (e.g. `get_dartsnut_skill`, `128x128`).",
-    "- Interpret **intent** from meaning in any supported language; skill ids and tool names stay English."
+    "Language policy (output-only):",
+    "- Must reply in the user's language and Chinese variant; persist it across short or ambiguous follow-ups.",
+    "- Language must not change behavior, routing, tool choice, project inference, or verification.",
+    "- Never translate code, paths, JSON keys, skill ids, tool names, or API/library names."
   ];
   if (locale === "zh-Hans") {
     lines.push(
-      "- Session locale: zh-Hans (Simplified Chinese). Keep all assistant explanations and questions in Simplified Chinese for this session unless the user clearly switches to English or Traditional."
+      "- Session locale: zh-Hans. Use Simplified Chinese unless the user clearly switches."
     );
   } else if (locale === "zh-Hant") {
     lines.push(
-      "- Session locale: zh-Hant (Traditional Chinese). Keep all assistant explanations and questions in Traditional Chinese for this session unless the user clearly switches to English or Simplified."
+      "- Session locale: zh-Hant. Use Traditional Chinese unless the user clearly switches."
     );
   } else if (locale === "en") {
     lines.push("- Session locale: English.");

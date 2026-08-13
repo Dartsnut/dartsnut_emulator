@@ -1,11 +1,8 @@
-import type { FunctionTool } from "openai/resources/responses/responses";
 import type { ChatMediaAttachment } from "@dartsnut/shared-ipc";
 import type { WorkspacePolicy } from "./workspacePolicy";
 import type { AgentSkillLibrary } from "./sessionEngine";
-import type { DartsnutRunContext } from "./dartsnutRunContext";
+import type { AgentToolSchema } from "./toolSchemas";
 
-export type HostIntakeToolHandler = (args: Record<string, unknown>) => Promise<string>;
-export type HostAskQuestionHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostReloadEmulatorHandler = (args?: {
   params?: Record<string, unknown>;
   clear_inputs?: boolean;
@@ -28,11 +25,8 @@ export type AgentToolsOptions = {
     chatAttachments?: ChatMediaAttachment[];
   };
   profile?: AgentToolProfile;
-  toolSchemas?: FunctionTool[];
-  /** Live run-context accessor — gates file mutations until intake is recorded. */
-  getRunContext?: () => DartsnutRunContext;
-  hostIntakeToolHandler?: HostIntakeToolHandler;
-  hostAskQuestionHandler?: HostAskQuestionHandler;
+  supportsHostedTools?: boolean;
+  toolSchemas?: AgentToolSchema[];
   hostReloadEmulatorHandler?: HostReloadEmulatorHandler;
   hostGetEmulatorLogsHandler?: HostGetEmulatorLogsHandler;
   hostCheckPythonHandler?: HostCheckPythonHandler;

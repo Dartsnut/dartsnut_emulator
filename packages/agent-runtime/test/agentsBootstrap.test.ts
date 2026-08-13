@@ -87,7 +87,7 @@ describe("configureAgentsSdk", () => {
     expect(clientB).not.toBe(clientA);
   });
 
-  it("sends Responses input and never Chat Completions messages", async () => {
+  it("sends Responses-native input", async () => {
     resetAgentsBootstrapForTests();
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const fetchImpl: typeof fetch = async (input, init) => {

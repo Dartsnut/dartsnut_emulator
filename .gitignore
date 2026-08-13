@@ -3,6 +3,7 @@
 **/dist-electron
 **/.vite
 .env
+.env.release.local
 .env.macos-notarize
 apps/desktop/packagedEnv.generated.ts
 .electron-cache

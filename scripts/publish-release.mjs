@@ -15,11 +15,14 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 function runPackage(packageScript) {
   return new Promise((resolve, reject) => {
-    const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-    const child = spawn(command, ["run", packageScript], {
+    const isWindows = process.platform === "win32";
+    const command = isWindows ? `pnpm.cmd run ${packageScript}` : "pnpm";
+    const args = isWindows ? [] : ["run", packageScript];
+    const child = spawn(command, args, {
       cwd: repoRoot,
       env: process.env,
-      stdio: "inherit"
+      stdio: "inherit",
+      shell: isWindows
     });
     child.on("error", reject);
     child.on("exit", (code, signal) => {

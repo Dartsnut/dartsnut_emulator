@@ -16,7 +16,6 @@ import {
   type ProjectCreateRequest,
   type ProjectSelectRequest,
   type ProjectSwitchProgress,
-  type SaveTempWorkspaceResponse,
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
@@ -111,9 +110,6 @@ const api = {
     ipcRenderer.invoke(IPCChannels.appUpdateCheck) as Promise<AppUpdateCheckResponse>,
   setShellUiTheme: (theme: ShellUiTheme) =>
     ipcRenderer.invoke(IPCChannels.shellUiTheme, theme) as Promise<void>,
-  startNewProject: () => ipcRenderer.invoke(IPCChannels.startNewProject) as Promise<BootstrapState>,
-  saveTempWorkspace: () =>
-    ipcRenderer.invoke(IPCChannels.saveTempWorkspace) as Promise<SaveTempWorkspaceResponse>,
   pickWorkspace: (request?: PickWorkspaceRequest) =>
     (request === undefined
       ? ipcRenderer.invoke(IPCChannels.pickWorkspace)

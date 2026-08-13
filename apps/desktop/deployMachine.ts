@@ -10,7 +10,9 @@ import {
   buildEnsureAppVenvScript,
   buildKillAppMainPyProcessesScript,
   buildKillDebugPythonScript,
+  buildQuitCleanupScript,
   buildSyncWorkspaceScript,
+  parseQuitCleanupFailures,
   remoteAppPythonBin,
   remoteLegacyPythonBin,
 } from "./deployMachineScripts";
@@ -429,6 +431,25 @@ export class DeployMachineSession {
   async stopDebugApp(appId: string): Promise<void> {
     await this.killDebugPython();
     await this.killAppMainPyProcessesForApp(appId);
+  }
+
+  async cleanupForQuit(appId?: string): Promise<string[]> {
+    if (!this.client) {
+      return [];
+    }
+    this.stopLogTail();
+    const script = buildQuitCleanupScript({
+      appId,
+      password: SSH_PASSWORD,
+      pidPath: REMOTE_PID,
+      remoteRoot: REMOTE_DARTSNUT_ROOT,
+    });
+    const { stderr, code } = await execBashScriptStdin(this.client, script);
+    const failures = parseQuitCleanupFailures(stderr);
+    if (code !== 0) {
+      failures.push(`remote_script_exit_${code ?? "unknown"}`);
+    }
+    return [...new Set(failures)];
   }
 
   async startDebugPython(

@@ -239,6 +239,60 @@ export function buildKillAppMainPyProcessesScript({
   ].join("\n");
 }
 
+export type BuildQuitCleanupScriptOptions = {
+  appId?: string;
+  password: string;
+  pidPath: string;
+  remoteRoot: string;
+};
+
+export function buildQuitCleanupScript({
+  appId,
+  password,
+  pidPath,
+  remoteRoot,
+}: BuildQuitCleanupScriptOptions): string {
+  const appDir = appId == null ? "" : `${remoteRoot}/apps/${appId}`;
+  const quotedAppDir = `'${appDir.replace(/'/g, `'"'"'`)}'`;
+  return [
+    "set +e",
+    "PASS=" + JSON.stringify(password),
+    "PIDFILE=" + JSON.stringify(pidPath),
+    "APP_DIR=" + quotedAppDir,
+    'fail() { echo "DARTSNUT_QUIT_CLEANUP_FAILED:$1" >&2; }',
+    'if [ -f "$PIDFILE" ]; then',
+    '  pid="$(echo "$PASS" | sudo -S cat "$PIDFILE" 2>/dev/null)"',
+    '  if [ $? -ne 0 ]; then fail stop_pid; fi',
+    '  if [ -n "$pid" ]; then',
+    '    echo "$PASS" | sudo -S kill -- -"$pid" 2>/dev/null || true',
+    '    echo "$PASS" | sudo -S kill "$pid" 2>/dev/null || true',
+    "  fi",
+    '  echo "$PASS" | sudo -S rm -f "$PIDFILE" >/dev/null 2>&1 || fail stop_pid',
+    "fi",
+    'legacy_pattern="dartsnut_rpi/apps/[^/]+/main\\.py"',
+    'uv_pattern="dartsnut_rpi/apps/[^/]+/\\.venv/bin/python.*(^|[ ])main\\.py"',
+    'echo "$PASS" | sudo -S pkill -f "$legacy_pattern" 2>/dev/null',
+    'rc=$?; if [ "$rc" -gt 1 ]; then fail kill_app_processes; fi',
+    'echo "$PASS" | sudo -S pkill -f "$uv_pattern" 2>/dev/null',
+    'rc=$?; if [ "$rc" -gt 1 ]; then fail kill_app_processes; fi',
+    'echo "$PASS" | sudo -S rm -f "$PIDFILE" >/dev/null 2>&1 || fail kill_app_processes',
+    'if [ -n "$APP_DIR" ]; then',
+    '  echo "$PASS" | sudo -S rm -rf "$APP_DIR" >/dev/null 2>&1 || fail remove_app_folder',
+    "fi",
+    'echo "$PASS" | sudo -S systemctl restart dartsnut_python.service >/dev/null 2>&1 || fail restart_service',
+    "exit 0",
+  ].join("\n");
+}
+
+export function parseQuitCleanupFailures(stderr: string): string[] {
+  return [...new Set(
+    stderr
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("DARTSNUT_QUIT_CLEANUP_FAILED:"))
+      .map((line) => line.slice("DARTSNUT_QUIT_CLEANUP_FAILED:".length)),
+  )];
+}
+
 export function remoteLegacyPythonBin(root: string): string {
   return `${root}/venv0/bin/python`;
 }

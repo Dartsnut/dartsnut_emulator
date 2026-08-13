@@ -17,8 +17,6 @@ import type {
   ManifestSnapshot,
   PickWorkspaceRequest,
   PickWorkspaceResponse,
-  IntakeSubmitQuestionAnswerRequest,
-  IntakeSubmitQuestionAnswerResponse,
   MachineMcpSubmitQuestionAnswerRequest,
   MachineMcpSubmitQuestionAnswerResponse,
   PromptRequest,
@@ -96,9 +94,6 @@ declare global {
       checkAppUpdate: () => Promise<AppUpdateCheckResponse>;
       setShellUiTheme: (theme: ShellUiTheme) => Promise<void>;
       pickWorkspace: (request?: PickWorkspaceRequest) => Promise<PickWorkspaceResponse>;
-      intakeSubmitQuestionAnswer: (
-        body: IntakeSubmitQuestionAnswerRequest
-      ) => Promise<IntakeSubmitQuestionAnswerResponse>;
       machineMcpSubmitQuestionAnswer: (
         body: MachineMcpSubmitQuestionAnswerRequest
       ) => Promise<MachineMcpSubmitQuestionAnswerResponse>;

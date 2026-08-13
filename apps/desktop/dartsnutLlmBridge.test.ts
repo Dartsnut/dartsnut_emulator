@@ -25,6 +25,7 @@ test("maps stable API bridge failures", () => {
 
 test("starts run and injects account token plus run id into model requests", async () => {
   const calls = [];
+  const diagnostics = [];
   const fetchImpl = async (input, init) => {
     calls.push({ url: String(input), init });
     return new Response(JSON.stringify({
@@ -40,10 +41,12 @@ test("starts run and injects account token plus run id into model requests", asy
     baseApi: "https://api.dartsnut.com",
     token: "community-secret",
     runId: "run-1",
-    fetchImpl
+    fetchImpl,
+    onDiagnostic: (message, meta) => diagnostics.push({ message, meta })
   });
   assert.equal(result.ok, true);
   if (!result.ok) return;
+  assert.equal(result.run.modelConfig.supportsHostedTools, true);
   assert.equal(result.run.modelConfig.apiKey, "dartsnut-api-bridge-run-1");
   assert.equal(result.run.modelConfig.model, "dartsnut-llm");
   assert.equal(JSON.stringify(result.run.modelConfig).includes("must-not-reach-desktop"), false);
@@ -54,8 +57,8 @@ test("starts run and injects account token plus run id into model requests", asy
     headers: { Authorization: "Bearer placeholder", "Content-Type": "application/json" },
     body: "{}"
   });
-  await result.run.finish();
-  await result.run.finish();
+  await result.run.finish("first-caller");
+  await result.run.finish("second-caller");
 
   // Stop and app-quit can race with the prompt finalizer; only one backend close is sent.
   assert.equal(calls.length, 3);
@@ -66,6 +69,80 @@ test("starts run and injects account token plus run id into model requests", asy
   assert.equal(modelHeaders.get("x-dartsnut-agent-run-id"), "run-1");
   assert.equal(modelHeaders.get("source"), "agent");
   assert.equal(modelHeaders.has("authorization"), false);
+  const serializedDiagnostics = JSON.stringify(diagnostics);
+  assert.match(serializedDiagnostics, /bridge model request/);
+  assert.match(serializedDiagnostics, /bridge model response/);
+  assert.match(serializedDiagnostics, /bridge run finished/);
+  assert.equal(serializedDiagnostics.includes("community-secret"), false);
+  assert.equal(serializedDiagnostics.includes("Bearer placeholder"), false);
+  assert.match(serializedDiagnostics, /bridge run finish reused/);
+  assert.match(serializedDiagnostics, /first-caller/);
+  assert.match(serializedDiagnostics, /second-caller/);
+});
+
+test("logs model request shape without prompt or tool arguments", async () => {
+  const diagnostics = [];
+  const fetchImpl = async (input) => new Response(
+    String(input).endsWith("/runs/start") ? JSON.stringify({ code: 1001 }) : "event: done\n\n",
+    {
+      status: 200,
+      headers: {
+        "Content-Type": String(input).endsWith("/runs/start") ? "application/json" : "text/event-stream",
+        "x-request-id": "request-123"
+      }
+    }
+  );
+  const result = await startDartsnutLlmBridgeRun({
+    baseApi: "https://api.dartsnut.com",
+    token: "secret-token",
+    runId: "run-safe-log",
+    fetchImpl,
+    onDiagnostic: (message, meta) => diagnostics.push({ message, meta })
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/responses", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "dartsnut-llm",
+      stream: true,
+      input: [{ role: "user", content: "private prompt" }],
+      instructions: "private instructions",
+      previous_response_id: "private-response-id",
+      reasoning: { effort: "high" },
+      tools: [{ type: "function", name: "write_file", arguments: "private arguments" }]
+    })
+  });
+
+  const request = diagnostics.find((entry) => entry.message === "bridge model request");
+  assert.deepEqual(request.meta, {
+    runId: "run-safe-log",
+    method: "POST",
+    path: "/agent/llm/v1/responses",
+    stream: true,
+    model: "dartsnut-llm",
+    inputItems: 1,
+    toolCount: 1,
+    toolTypes: ["function"],
+    hasPreviousResponseId: true,
+    hasReasoning: true,
+    hasInstructions: true,
+    bodyBytes: Buffer.byteLength(JSON.stringify({
+      model: "dartsnut-llm",
+      stream: true,
+      input: [{ role: "user", content: "private prompt" }],
+      instructions: "private instructions",
+      previous_response_id: "private-response-id",
+      reasoning: { effort: "high" },
+      tools: [{ type: "function", name: "write_file", arguments: "private arguments" }]
+    }))
+  });
+  const serialized = JSON.stringify(diagnostics);
+  assert.equal(serialized.includes("private prompt"), false);
+  assert.equal(serialized.includes("private instructions"), false);
+  assert.equal(serialized.includes("private arguments"), false);
+  assert.equal(serialized.includes("private-response-id"), false);
 });
 
 test("always keeps Responses alias regardless of run-start model metadata", async () => {

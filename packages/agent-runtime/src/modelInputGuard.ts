@@ -7,6 +7,7 @@ export const EMPTY_MODEL_RESPONSE_MESSAGE =
 export type RepeatedModelInputDiagnostic = {
   inputItems: number;
   instructionsChars: number;
+  repeatedCount?: number;
 };
 
 function fingerprintModelInput(modelData: Parameters<CallModelInputFilter>[0]["modelData"]): string {
@@ -25,16 +26,31 @@ function summarizeModelInput(
   };
 }
 
-/** Reject an immediately repeated model request before it can loop forever. */
+/**
+ * Reject a genuinely stuck model request before it can loop forever.
+ *
+ * Responses-compatible gateways may emit one duplicate request while they
+ * settle a tool result. Treat the first repeat as progress-tolerant; abort
+ * only after three consecutive identical inputs.
+ */
 export function createSafeCallModelInputFilter(
   onRepeatedInput?: (diagnostic: RepeatedModelInputDiagnostic) => void
 ): CallModelInputFilter {
   let previousFingerprint: string | null = null;
+  let repeatedCount = 0;
   return ({ modelData }) => {
     const fingerprint = fingerprintModelInput(modelData);
     if (fingerprint === previousFingerprint) {
-      onRepeatedInput?.(summarizeModelInput(modelData));
-      throw new Error(EMPTY_MODEL_RESPONSE_MESSAGE);
+      repeatedCount += 1;
+      if (repeatedCount >= 3) {
+        onRepeatedInput?.({
+          ...summarizeModelInput(modelData),
+          repeatedCount
+        });
+        throw new Error(EMPTY_MODEL_RESPONSE_MESSAGE);
+      }
+    } else {
+      repeatedCount = 0;
     }
     previousFingerprint = fingerprint;
     return modelData;

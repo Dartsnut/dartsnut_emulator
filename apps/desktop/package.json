@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@dartsnut/agent-runtime": "workspace:*",
+    "@openai/agents": "0.15.0",
     "@dartsnut/emulator-protocol": "workspace:*",
     "@dartsnut/shared-ipc": "workspace:*",
     "clsx": "^2.1.1",

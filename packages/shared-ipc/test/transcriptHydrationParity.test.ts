@@ -58,7 +58,7 @@ describe("transcript hydration parity", () => {
       kind: "tool_status",
       at: 4,
       text:
-        "Loaded Dartsnut skill. @@tool_status_meta@@{\"callId\":\"c2\",\"toolName\":\"get_dartsnut_skill\",\"phase\":\"result\",\"skillId\":\"conf-contract\"}"
+        "Loaded Dartsnut skill. @@tool_status_meta@@{\"callId\":\"c2\",\"toolName\":\"get_dartsnut_skill\",\"phase\":\"result\",\"skillId\":\"dartsnut-core\"}"
     };
 
     expect(transcriptLineToTimelineEntry(line, 0)).toMatchObject({
@@ -67,7 +67,7 @@ describe("transcript hydration parity", () => {
       toolStatusMeta: {
         toolName: "get_dartsnut_skill",
         phase: "result",
-        skillId: "conf-contract"
+        skillId: "dartsnut-core"
       }
     });
   });
@@ -94,7 +94,7 @@ describe("transcript hydration parity", () => {
         kind: "tool_status",
         at: 7,
         text:
-          "Loaded Dartsnut skill. @@tool_status_meta@@{\"callId\":\"c3\",\"toolName\":\"get_dartsnut_skill\",\"phase\":\"result\",\"skillId\":\"conf-contract\"}"
+          "Loaded Dartsnut skill. @@tool_status_meta@@{\"callId\":\"c3\",\"toolName\":\"get_dartsnut_skill\",\"phase\":\"result\",\"skillId\":\"dartsnut-core\"}"
       },
       0
     );
@@ -103,7 +103,7 @@ describe("transcript hydration parity", () => {
         kind: "tool_status",
         at: 8,
         text:
-          "Loaded Dartsnut skill. @@tool_status_meta@@{\"callId\":\"c4\",\"toolName\":\"get_dartsnut_skill\",\"phase\":\"result\",\"skillId\":\"pydartsnut-core\"}"
+          "Loaded Dartsnut skill. @@tool_status_meta@@{\"callId\":\"c4\",\"toolName\":\"get_dartsnut_skill\",\"phase\":\"result\",\"skillId\":\"dartsnut-widget\"}"
       },
       1
     );
@@ -113,11 +113,11 @@ describe("transcript hydration parity", () => {
     const merged = mergeTimelineSkillStatusEntry(first!, second!);
 
     expect(merged).toMatchObject({
-      text: "Loaded skills: conf-contract, pydartsnut-core",
+      text: "Loaded skills: dartsnut-core, dartsnut-widget",
       toolStatusMeta: {
         toolName: "get_dartsnut_skill",
         phase: "result",
-        skillIds: ["conf-contract", "pydartsnut-core"]
+        skillIds: ["dartsnut-core", "dartsnut-widget"]
       }
     });
   });

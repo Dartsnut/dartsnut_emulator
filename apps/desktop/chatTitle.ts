@@ -1,4 +1,5 @@
-import type { AgentModelConfig } from "@dartsnut/agent-runtime";
+import { Agent, Runner } from "@openai/agents";
+import { configureAgentsSdk, type AgentModelConfig } from "@dartsnut/agent-runtime";
 
 const MAX_TITLE_INPUT_CHARS = 4_000;
 const MAX_TITLE_CHARS = 80;
@@ -35,46 +36,11 @@ export function sanitizeGeneratedChatTitle(output: string, firstUserMessage: str
 export function buildChatTitlePrompt(firstUserMessage: string): string {
   const message = firstUserMessage.trim().slice(0, MAX_TITLE_INPUT_CHARS);
   return [
-    "Generate a concise title for this chat based only on the user's first message.",
-    "Rules:",
-    "- Use the same language as the user.",
-    "- Use 3 to 7 words.",
-    "- Do not use quotes.",
-    "- Do not end with punctuation.",
-    "- Return only the title.",
+    "Return only a title of 3 to 7 words in the user's language, without quotes or trailing punctuation.",
     "",
     "First user message:",
     message
   ].join("\n");
-}
-
-function responsesUrl(baseUrl: string | undefined): string {
-  const trimmed = (baseUrl || "https://api.openai.com/v1").trim().replace(/\/+$/, "");
-  try {
-    const url = new URL(trimmed);
-    if (url.pathname === "" || url.pathname === "/") url.pathname = "/v1";
-    return `${url.toString().replace(/\/+$/, "")}/responses`;
-  } catch {
-    return `${trimmed}/responses`;
-  }
-}
-
-function responseOutputText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return "";
-  const response = payload as { output_text?: unknown; output?: unknown };
-  if (typeof response.output_text === "string") return response.output_text;
-  if (!Array.isArray(response.output)) return "";
-  for (const item of response.output) {
-    if (!item || typeof item !== "object") continue;
-    const content = (item as { content?: unknown }).content;
-    if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      if (!part || typeof part !== "object") continue;
-      const text = (part as { text?: unknown }).text;
-      if (typeof text === "string" && text.trim()) return text;
-    }
-  }
-  return "";
 }
 
 export async function generateChatTitle(
@@ -86,24 +52,20 @@ export async function generateChatTitle(
   if (!firstUserMessage.trim()) return fallback;
   if (!modelConfig.model || !modelConfig.apiKey) return fallback;
   try {
-    const fetchImpl = modelConfig.fetchImpl ?? fetch;
-    const response = await fetchImpl(responsesUrl(modelConfig.baseUrl), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${modelConfig.apiKey}`
-      },
-      signal: abortSignal,
-      body: JSON.stringify({
-        model: modelConfig.model,
-        input: buildChatTitlePrompt(firstUserMessage),
-        tools: [],
-        store: false,
-        max_output_tokens: 64
-      })
+    const provider = configureAgentsSdk(modelConfig, { force: true });
+    const titleAgent = new Agent({
+      name: "ChatTitle",
+      model: modelConfig.model,
+      instructions: "Return only a short chat title. Never call tools.",
+      tools: [],
+      modelSettings: { store: false, maxTokens: 64 }
     });
-    if (!response.ok) return fallback;
-    return sanitizeGeneratedChatTitle(responseOutputText(await response.json()), firstUserMessage);
+    const result = await new Runner({ modelProvider: provider }).run(
+      titleAgent,
+      buildChatTitlePrompt(firstUserMessage),
+      { signal: abortSignal, maxTurns: 1 }
+    );
+    return sanitizeGeneratedChatTitle(typeof result.finalOutput === "string" ? result.finalOutput : "", firstUserMessage);
   } catch {
     return fallback;
   }

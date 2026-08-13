@@ -10,19 +10,19 @@ describe("toolStatusHelpers", () => {
       "get_dartsnut_skill",
       "result",
       (event) => events.push(event),
-      { callId: "c1", skillId: "conf-contract" },
+      { callId: "c1", skillId: "dartsnut-core" },
       (kind, text) => persisted.push({ kind, text })
     );
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       type: "status",
-      message: expect.stringContaining('"skillId":"conf-contract"')
+      message: expect.stringContaining('"skillId":"dartsnut-core"')
     });
     expect(persisted).toHaveLength(1);
     expect(persisted[0]).toMatchObject({
       kind: "tool_status",
-      text: expect.stringContaining('"skillId":"conf-contract"')
+      text: expect.stringContaining('"skillId":"dartsnut-core"')
     });
   });
 

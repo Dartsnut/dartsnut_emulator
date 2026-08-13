@@ -8,13 +8,14 @@ import path from "node:path";
 function toolNames(workspace: string, profile: "full" | "asset-applier"): string[] {
   const tools = buildAgentTools({
     workspacePolicy: new WorkspacePolicy(workspace),
-    profile
+    profile,
+    supportsHostedTools: profile === "full"
   });
-  return tools.map((t) => (t.type === "function" ? (t as { name: string }).name : ""));
+  return tools.map((tool) => "name" in tool ? String(tool.name) : "");
 }
 
 describe("buildAgentTools profiles", () => {
-  it("full profile exposes search, file, skill, emulator, check_python and intake tools", () => {
+  it("full profile exposes workspace, skill, emulator, and machine tools", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-tools-"));
     const names = toolNames(workspace, "full");
     for (const expected of [
@@ -32,15 +33,15 @@ describe("buildAgentTools profiles", () => {
       "control_emulator_input",
       "run_emulator_scenario",
       "check_python",
-      "dartsnut_project_intake",
-      "dartsnut_ask_question",
-      "dartsnut_machine_mcp"
+      "dartsnut_machine_mcp",
+      "web_search",
+      "code_interpreter"
     ]) {
       expect(names).toContain(expected);
     }
   });
 
-  it("asset-applier profile keeps search + file tools but drops copy_asset_file and intake", () => {
+  it("asset-applier profile keeps constrained search, file, and verification tools", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-tools-"));
     const names = toolNames(workspace, "asset-applier");
     expect(names).toContain("grep_files");
@@ -52,8 +53,8 @@ describe("buildAgentTools profiles", () => {
     expect(names).toContain("run_emulator_scenario");
     expect(names).not.toContain("copy_asset_file");
     expect(names).not.toContain("copy_chat_attachment");
-    expect(names).not.toContain("dartsnut_project_intake");
-    expect(names).not.toContain("dartsnut_ask_question");
     expect(names).not.toContain("dartsnut_machine_mcp");
+    expect(names).not.toContain("web_search");
+    expect(names).not.toContain("code_interpreter");
   });
 });

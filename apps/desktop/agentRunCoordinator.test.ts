@@ -26,6 +26,19 @@ test("cancel waits until the active run finishes cleanup", async () => {
   assert.equal(cancelFinished, true);
 });
 
+test("records explicit cancellation reason on abort signal", async () => {
+  const coordinator = new AgentRunCoordinator();
+  const run = await coordinator.begin();
+  const cancelPromise = coordinator.cancelAndWait("user_stop");
+
+  await nextTurn();
+  assert.equal(run.abortController.signal.aborted, true);
+  assert.equal(run.abortController.signal.reason, "user_stop");
+
+  run.settle();
+  assert.equal(await cancelPromise, true);
+});
+
 test("replacement run waits for the previous run to settle", async () => {
   const coordinator = new AgentRunCoordinator();
   const first = await coordinator.begin();
@@ -37,6 +50,7 @@ test("replacement run waits for the previous run to settle", async () => {
 
   await nextTurn();
   assert.equal(first.abortController.signal.aborted, true);
+  assert.equal(first.abortController.signal.reason, "replacement_run");
   assert.equal(second, undefined);
 
   first.settle();

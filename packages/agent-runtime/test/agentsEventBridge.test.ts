@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { RunStreamEvent, StreamedRunResult } from "@openai/agents";
-import type { ResponseStreamEvent } from "openai/resources/responses/responses";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
-import { mapAgentsStreamToAgentEvents } from "../src/agentsEventBridge";
+import type { RunStreamEvent, StreamedRunResult } from "@openai/agents";
+import { forwardAgentsStream, serializeAgentsStreamEvent } from "../src/agentsEventBridge";
 
-function createMockStream(events: RunStreamEvent[], finalOutput?: unknown): StreamedRunResult<any, any> {
+function mockStream(events: RunStreamEvent[], options: {
+  finalOutput?: unknown;
+  lastResponseId?: string;
+  usage?: Record<string, number>;
+} = {}): StreamedRunResult<any, any> {
   return {
-    finalOutput,
+    finalOutput: options.finalOutput,
+    lastResponseId: options.lastResponseId,
+    state: { usage: options.usage ?? {} },
     completed: Promise.resolve(),
     cancelled: false,
     async *[Symbol.asyncIterator]() {
@@ -15,216 +20,142 @@ function createMockStream(events: RunStreamEvent[], finalOutput?: unknown): Stre
   } as StreamedRunResult<any, any>;
 }
 
-function responseEvent(event: Record<string, unknown>): RunStreamEvent {
-  return {
-    type: "raw_model_stream_event",
-    source: "openai-responses",
-    data: {
-      type: "model",
-      event: event as ResponseStreamEvent,
-      providerData: { rawModelEventSource: "openai-responses" }
-    }
-  } as RunStreamEvent;
-}
-
-function functionCallAdded(itemId: string, callId: string, name: string): RunStreamEvent {
-  return responseEvent({
-    type: "response.output_item.added",
-    output_index: 0,
-    sequence_number: 1,
-    item: {
-      id: itemId,
-      type: "function_call",
-      call_id: callId,
-      name,
-      arguments: "",
-      status: "in_progress"
-    }
-  });
-}
-
-function terminalEvent(
-  type: "response.completed" | "response.failed" | "response.incomplete",
-  id: string,
-  usage?: Record<string, number>
-): RunStreamEvent {
-  return responseEvent({
-    type,
-    sequence_number: 99,
-    response: { id, usage }
-  });
-}
-
-describe("agentsEventBridge Responses events", () => {
-  it("maps text and reasoning deltas", async () => {
-    const events: AgentEvent[] = [];
-    const stream = createMockStream([
-      responseEvent({ type: "response.reasoning_summary_text.delta", delta: "think", item_id: "r1", output_index: 0, summary_index: 0, sequence_number: 1 }),
-      responseEvent({ type: "response.output_text.delta", delta: "Hello", item_id: "m1", output_index: 0, content_index: 0, logprobs: [], sequence_number: 2 })
-    ], "Hello");
-
-    const result = await mapAgentsStreamToAgentEvents(stream, (event) => events.push(event));
-    expect(result).toMatchObject({ finalText: "Hello", sawReasoning: true, stepReasoning: "think" });
-    expect(events).toContainEqual(expect.objectContaining({ type: "stream", delta: "Hello" }));
-    expect(events).toContainEqual(expect.objectContaining({ type: "reasoning_stream", delta: "think" }));
-    expect(events).toContainEqual(expect.objectContaining({ type: "reasoning_done" }));
-  });
-
-  it("streams Responses function arguments into file previews", async () => {
-    const events: AgentEvent[] = [];
-    const stream = createMockStream([
-      functionCallAdded("item_1", "call_1", "write_file"),
-      responseEvent({ type: "response.function_call_arguments.delta", item_id: "item_1", output_index: 0, sequence_number: 2, delta: "{\"path\":\"a.txt\"" }),
-      responseEvent({ type: "response.function_call_arguments.delta", item_id: "item_1", output_index: 0, sequence_number: 3, delta: ",\"content\":\"hello\"}" }),
-      responseEvent({ type: "response.function_call_arguments.done", item_id: "item_1", output_index: 0, sequence_number: 4, name: "write_file", arguments: "{\"path\":\"a.txt\",\"content\":\"hello\"}" })
-    ], "Done");
-
-    await mapAgentsStreamToAgentEvents(stream, (event) => events.push(event));
-    expect(events.filter((event) => event.type === "tool_call_delta").at(-1)).toMatchObject({
-      callId: "call_1",
-      toolName: "write_file",
-      path: "a.txt",
-      argumentsJson: "{\"path\":\"a.txt\",\"content\":\"hello\"}"
-    });
-  });
-
-  it("emits progressive previews for one large function-arguments delta", async () => {
-    const events: AgentEvent[] = [];
-    const content = Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join("\n");
-    const args = JSON.stringify({ path: "main.py", content });
-    const stream = createMockStream([
-      functionCallAdded("item_1", "call_1", "write_file"),
-      responseEvent({ type: "response.function_call_arguments.delta", item_id: "item_1", output_index: 0, sequence_number: 2, delta: args })
-    ], "Done");
-
-    await mapAgentsStreamToAgentEvents(stream, (event) => events.push(event), { filePreviewPacingMs: 0 });
-    const deltas = events.filter((event) => event.type === "tool_call_delta");
-    expect(deltas.length).toBeGreaterThan(1);
-    expect(JSON.parse(deltas.at(-1)!.argumentsJson).content.split("\n")).toHaveLength(80);
-  });
-
-  it.each(["response.completed", "response.failed", "response.incomplete"] as const)(
-    "reads usage from %s once per response ID",
-    async (terminalType) => {
-      const usageUpdates: unknown[] = [];
-      const stream = createMockStream([
-        terminalEvent(terminalType, "resp_1", { input_tokens: 5, output_tokens: 2, total_tokens: 7 }),
-        terminalEvent(terminalType, "resp_1", { input_tokens: 5, output_tokens: 2, total_tokens: 7 })
-      ], "Done");
-
-      const result = await mapAgentsStreamToAgentEvents(stream, () => {}, {
-        onTokenUsage: (usage) => usageUpdates.push(usage)
-      });
-      expect(result.tokenUsage).toEqual({ inputTokens: 5, outputTokens: 2, totalTokens: 7 });
-      expect(usageUpdates).toHaveLength(1);
-    }
-  );
-
-  it("reads failed/incomplete usage from SDK response_done terminal records", async () => {
-    const usageUpdates: unknown[] = [];
-    const responseDone = {
+describe("Agents SDK stream transport", () => {
+  it("serializes raw model events without changing their data", () => {
+    const data = { type: "model", event: { type: "response.output_text.delta", delta: "Hi" } };
+    expect(serializeAgentsStreamEvent({
       type: "raw_model_stream_event",
-      data: {
-        type: "response_done",
-        response: {
-          id: "resp_failed",
-          output: [],
-          usage: { inputTokens: 4, outputTokens: 3, totalTokens: 7 },
-          providerData: { status: "failed" }
-        }
-      }
-    } as RunStreamEvent;
-    const result = await mapAgentsStreamToAgentEvents(createMockStream([responseDone], "Done"), () => {}, {
-      onTokenUsage: (usage) => usageUpdates.push(usage)
+      source: "openai-responses",
+      data
+    } as RunStreamEvent)).toEqual({
+      type: "raw_model_stream_event",
+      source: "openai-responses",
+      data
     });
-    expect(result.tokenUsage).toEqual({ inputTokens: 4, outputTokens: 3, totalTokens: 7 });
-    expect(usageUpdates).toHaveLength(1);
   });
 
-  it("ignores terminal events without usage", async () => {
-    const result = await mapAgentsStreamToAgentEvents(
-      createMockStream([terminalEvent("response.completed", "resp_no_usage")], "Done"),
-      () => {}
-    );
-    expect(result.tokenUsage).toBeUndefined();
-    expect(result.chainableResponseId).toBe("resp_no_usage");
+  it("uses SDK JSON methods for run items and agents", () => {
+    expect(serializeAgentsStreamEvent({
+      type: "run_item_stream_event",
+      name: "tool_called",
+      item: { toJSON: () => ({ type: "tool_call_item", rawItem: { name: "read_file" } }) }
+    } as RunStreamEvent)).toEqual({
+      type: "run_item_stream_event",
+      name: "tool_called",
+      item: { type: "tool_call_item", rawItem: { name: "read_file" } }
+    });
+    expect(serializeAgentsStreamEvent({
+      type: "agent_updated_stream_event",
+      agent: { name: "WidgetAgent", toJSON: () => ({ name: "WidgetAgent" }) }
+    } as RunStreamEvent)).toEqual({
+      type: "agent_updated_stream_event",
+      agent: { name: "WidgetAgent" }
+    });
   });
 
-  it("keeps run-item tool status behavior", async () => {
+  it("forwards SDK events and reads final result metadata", async () => {
     const events: AgentEvent[] = [];
-    const stream = createMockStream([
-      {
-        type: "run_item_stream_event",
-        name: "tool_called",
-        item: {
-          type: "tool_call_item",
-          rawItem: { type: "function_call", name: "read_file", callId: "call_1", arguments: "{\"path\":\"main.py\"}", status: "completed" }
-        }
-      } as RunStreamEvent
-    ], "Done");
-    const result = await mapAgentsStreamToAgentEvents(stream, (event) => events.push(event));
-    expect(result).toMatchObject({ sawToolCall: true, toolNames: ["read_file"] });
-    expect(events).toContainEqual(expect.objectContaining({ type: "status", message: expect.stringContaining("main.py") }));
+    const result = await forwardAgentsStream(mockStream([], {
+      finalOutput: "Done.",
+      lastResponseId: "resp_1",
+      usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 }
+    }), (event) => events.push(event));
+    expect(result).toEqual({
+      finalText: "Done.",
+      lastResponseId: "resp_1",
+      tokenUsage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 },
+      diagnostics: {
+        rawModelEvents: 0,
+        runItemEvents: 0,
+        agentUpdatedEvents: 0,
+        responseEventTypes: {},
+        runItemNames: {}
+      }
+    });
+    expect(events).toEqual([]);
   });
 
-  it("reports structural stream diagnostics without model content", async () => {
-    const stream = createMockStream([
-      responseEvent({ type: "response.reasoning_summary_text.delta", delta: "private reasoning", sequence_number: 1 }),
-      responseEvent({
-        type: "response.completed",
-        sequence_number: 2,
-        response: {
-          id: "resp_1",
-          status: "completed",
-          output: [{ type: "message", content: [{ type: "output_text", text: "private answer" }] }]
-        }
-      })
-    ], { output: "private final" });
-
-    const result = await mapAgentsStreamToAgentEvents(stream, () => {});
+  it("counts SDK event types without retaining event payloads", async () => {
+    const raw = {
+      type: "raw_model_stream_event",
+      source: "openai-responses",
+      data: { type: "model", event: { type: "response.output_text.delta", delta: "private text" } }
+    } as RunStreamEvent;
+    const runItem = {
+      type: "run_item_stream_event",
+      name: "tool_called",
+      item: { toJSON: () => ({ type: "tool_call_item", rawItem: { arguments: "private args" } }) }
+    } as RunStreamEvent;
+    const result = await forwardAgentsStream(mockStream([raw, raw, runItem], { finalOutput: "Done." }), () => {});
 
     expect(result.diagnostics).toEqual({
-      runEventTypes: { raw_model_stream_event: 2 },
-      rawDataTypes: { model: 2 },
-      rawModelSources: { "openai-responses": 2 },
-      responseEventTypes: {
-        "response.reasoning_summary_text.delta": 1,
-        "response.completed": 1
-      },
-      terminalResponseStatuses: ["completed"],
-      terminalFailureReasons: [],
-      terminalOutputItemTypes: ["message"],
-      terminalContentItemTypes: ["output_text"],
-      finalOutput: { kind: "object", keys: ["output"] }
+      rawModelEvents: 2,
+      runItemEvents: 1,
+      agentUpdatedEvents: 0,
+      responseEventTypes: { "response.output_text.delta": 2 },
+      runItemNames: { tool_called: 1 }
     });
     expect(JSON.stringify(result.diagnostics)).not.toContain("private");
   });
 
-  it("reports collected event shapes when stream iteration fails", async () => {
-    const diagnostics: Array<{ message: string; meta: Record<string, unknown> }> = [];
+  it("propagates stream validation failures", async () => {
+    const diagnostics: unknown[] = [];
     const stream = {
       finalOutput: undefined,
+      state: { usage: {} },
       completed: Promise.resolve(),
-      cancelled: false,
       async *[Symbol.asyncIterator]() {
-        yield responseEvent({ type: "response.created", sequence_number: 1 });
-        throw new Error("stream failed");
+        throw new Error("invalid SDK stream");
+      }
+    } as StreamedRunResult<any, any>;
+    await expect(forwardAgentsStream(stream, () => {}, undefined, (value, text) => diagnostics.push({ value, text })))
+      .rejects.toThrow("invalid SDK stream");
+    expect(diagnostics).toEqual([{
+      value: {
+        rawModelEvents: 0,
+        runItemEvents: 0,
+        agentUpdatedEvents: 0,
+        responseEventTypes: {},
+        runItemNames: {}
+      },
+      text: ""
+    }]);
+  });
+
+  it("retains normalized streamed text when iteration fails", async () => {
+    let partialText = "";
+    const stream = {
+      finalOutput: undefined,
+      state: { usage: {} },
+      completed: Promise.resolve(),
+      async *[Symbol.asyncIterator]() {
+        yield {
+          type: "raw_model_stream_event",
+          data: { type: "response_started" }
+        } as RunStreamEvent;
+        yield {
+          type: "raw_model_stream_event",
+          data: { type: "output_text_delta", delta: "Earlier answer." }
+        } as RunStreamEvent;
+        yield {
+          type: "raw_model_stream_event",
+          data: { type: "response_done" }
+        } as RunStreamEvent;
+        yield {
+          type: "raw_model_stream_event",
+          data: { type: "response_started" }
+        } as RunStreamEvent;
+        yield {
+          type: "raw_model_stream_event",
+          data: { type: "output_text_delta", delta: "Recovered answer." }
+        } as RunStreamEvent;
+        throw new Error("loop guard");
       }
     } as StreamedRunResult<any, any>;
 
-    await expect(mapAgentsStreamToAgentEvents(stream, () => {}, {
-      onDiagnostic: (message, meta) => diagnostics.push({ message, meta })
-    })).rejects.toThrow("stream failed");
-
-    expect(diagnostics).toEqual([
-      expect.objectContaining({
-        message: "agent stream iteration failed",
-        meta: expect.objectContaining({
-          failure: "stream_iteration_error",
-          runEventTypes: { raw_model_stream_event: 1 },
-          responseEventTypes: { "response.created": 1 }
-        })
-      })
-    ]);
+    await expect(forwardAgentsStream(stream, () => {}, undefined, (_diagnostics, text) => {
+      partialText = text;
+    })).rejects.toThrow("loop guard");
+    expect(partialText).toBe("Recovered answer.");
   });
 });

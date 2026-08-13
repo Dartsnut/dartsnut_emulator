@@ -6,7 +6,7 @@ import {
 } from "../src/modelInputGuard";
 
 describe("modelInputGuard", () => {
-  it("reports repeated-input structure without input content", () => {
+  it("allows transient duplicate inputs and stops after three repeats", () => {
     const diagnostics: unknown[] = [];
     const filter = createSafeCallModelInputFilter((diagnostic) => diagnostics.push(diagnostic));
     const args = {
@@ -19,8 +19,10 @@ describe("modelInputGuard", () => {
     } as unknown as Parameters<CallModelInputFilter>[0];
 
     filter(args);
+    expect(() => filter(args)).not.toThrow();
+    expect(() => filter(args)).not.toThrow();
     expect(() => filter(args)).toThrow(EMPTY_MODEL_RESPONSE_MESSAGE);
-    expect(diagnostics).toEqual([{ inputItems: 1, instructionsChars: 20 }]);
+    expect(diagnostics).toEqual([{ inputItems: 1, instructionsChars: 20, repeatedCount: 3 }]);
     expect(JSON.stringify(diagnostics)).not.toContain("private");
   });
 });

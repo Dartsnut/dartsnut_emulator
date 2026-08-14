@@ -27,7 +27,11 @@ describe("consolidated skills", () => {
 
   it("keeps essential runtime and config contracts in core", () => {
     const body = readDeferredSkillMarkdown(SKILLS_DIR, "dartsnut-core");
-    expect(body).toContain("conf.json");
+    expect(body).toContain("`conf.json` is required only for widgets");
+    expect(body).toContain("only required top-level sections are `fields` and `size`");
+    expect(body).toContain("New games need `main.py` and `pyproject.toml`");
+    expect(body).not.toContain("Required keys: `id`, `type`, `name`, `author`, `version`, `description`");
+    expect(body).not.toContain('New projects include `"preview": [""]`');
     expect(body).toContain("np.transpose");
     expect(body).toContain("observe_emulator");
     for (const type of ["text", "slider", "dropdown", "checkbox", "location", "image"]) {

@@ -165,6 +165,10 @@ describe("SessionEngine (@openai/agents)", () => {
       type: "run_item_stream_event",
       name: "tool_called"
     }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "status",
+      message: expect.stringContaining("Created hello.txt")
+    }));
     expect(events).toContainEqual(expect.objectContaining({ type: "raw_model_stream_event" }));
     expect(events.some((e) => e.type === "final")).toBe(true);
   });

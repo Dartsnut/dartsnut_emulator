@@ -27,6 +27,10 @@ describe("buildDartsnutAgent", () => {
     });
     expect(agent.name).toBe(DARTSNUT_MAIN_AGENT_NAME);
     expect(agent.handoffs ?? []).toHaveLength(0);
+    expect(agent.modelSettings?.retry).toMatchObject({
+      maxRetries: 5,
+      backoff: { initialDelayMs: 1_000, maxDelayMs: 16_000, multiplier: 2, jitter: false }
+    });
   });
 
   it("exposes the full tool surface in creator mode", () => {

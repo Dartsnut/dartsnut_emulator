@@ -18,6 +18,7 @@ function createMockStream(params: {
   finalOutput?: string;
   lastResponseId?: string;
   usage?: Record<string, number>;
+  iterationError?: unknown;
 }): StreamedRunResult<any, any> {
   const events = params.events ?? [];
   const stream = {
@@ -30,6 +31,7 @@ function createMockStream(params: {
       for (const event of events) {
         yield event;
       }
+      if (params.iterationError) throw params.iterationError;
     }
   };
   return stream as StreamedRunResult<any, any>;
@@ -349,6 +351,87 @@ describe("SessionEngine (@openai/agents)", () => {
     expect(persistence.readModelChainResponseId(agentModelChainKey(modelConfig))).toBe("resp_fresh");
   });
 
+  it("retries a continuation rejection raised during stream iteration before events escape", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-chain-stream-retry-"));
+    const persistence = new AgentSessionPersistence(workspace);
+    const modelConfig = buildAgentModelConfig({ model: "gpt-4.1-mini", apiKey: "test-key" });
+    persistence.writeModelChainResponseIdAtomic(agentModelChainKey(modelConfig), "resp_stale");
+    const seenPreviousIds: Array<string | undefined> = [];
+    const runFn: typeof import("@openai/agents").run = async (_agent, _input, options) => {
+      seenPreviousIds.push(options?.previousResponseId);
+      if (options?.previousResponseId) {
+        return createMockStream({
+          iterationError: Object.assign(new Error("previous_response_id is only supported on Responses WebSocket v2"), {
+            status: 400
+          })
+        });
+      }
+      return createMockStream({ finalOutput: "Recovered.", lastResponseId: "resp_fresh" });
+    };
+    const engine = new SessionEngine({
+      runFn,
+      agentModelConfig: modelConfig,
+      workspacePolicy: new WorkspacePolicy(workspace),
+      sessionPersistence: persistence
+    });
+    const events: AgentEvent[] = [];
+
+    await expect(engine.runPrompt("continue", (event) => events.push(event))).resolves.toBe("Recovered.");
+    expect(seenPreviousIds).toEqual(["resp_stale", undefined]);
+    expect(events.filter((event) => event.type === "error")).toHaveLength(0);
+    expect(persistence.readModelChainResponseId(agentModelChainKey(modelConfig))).toBe("resp_fresh");
+  });
+
+  it("does not replay a continuation request after a streamed event escapes", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-chain-no-replay-"));
+    const persistence = new AgentSessionPersistence(workspace);
+    const modelConfig = buildAgentModelConfig({ model: "gpt-4.1-mini", apiKey: "test-key" });
+    persistence.writeModelChainResponseIdAtomic(agentModelChainKey(modelConfig), "resp_stale");
+    let calls = 0;
+    const engine = new SessionEngine({
+      runFn: async () => {
+        calls += 1;
+        return createMockStream({
+          events: [textDelta("partial")],
+          iterationError: new Error("previous_response_id is only supported on Responses WebSocket v2")
+        });
+      },
+      agentModelConfig: modelConfig,
+      workspacePolicy: new WorkspacePolicy(workspace),
+      sessionPersistence: persistence
+    });
+
+    await expect(engine.runPrompt("continue", () => {})).rejects.toThrow("previous_response_id");
+    expect(calls).toBe(1);
+  });
+
+  it("does not use a persisted response chain when provider continuation is unsupported", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-chain-disabled-"));
+    const persistence = new AgentSessionPersistence(workspace);
+    const modelConfig = {
+      ...buildAgentModelConfig({ model: "custom-model", baseUrl: "https://poloai.top/v1", apiKey: "test-key" }),
+      supportsResponseContinuation: false
+    };
+    persistence.writeModelChainResponseIdAtomic(agentModelChainKey(modelConfig), "resp_stale");
+    const seenPreviousIds: Array<string | undefined> = [];
+    const engine = new SessionEngine({
+      runFn: async (_agent, _input, options) => {
+        seenPreviousIds.push(options?.previousResponseId);
+        return createMockStream({ finalOutput: "Done.", lastResponseId: "resp_unused" });
+      },
+      agentModelConfig: modelConfig,
+      workspacePolicy: new WorkspacePolicy(workspace),
+      sessionPersistence: persistence
+    });
+
+    await expect(engine.runPrompt("continue", () => {})).resolves.toBe("Done.");
+    expect(seenPreviousIds).toEqual([undefined]);
+    expect(persistence.readModelChainResponseId(agentModelChainKey(modelConfig))).toBeNull();
+  });
+
   it("reports an empty final response as an error instead of a successful placeholder", async () => {
     resetAgentsBootstrapForTests();
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-empty-"));
@@ -365,10 +448,9 @@ describe("SessionEngine (@openai/agents)", () => {
     });
     const events: AgentEvent[] = [];
 
-    const result = await engine.runPrompt("x", (event) => events.push(event));
+    await expect(engine.runPrompt("x", (event) => events.push(event))).rejects.toThrow(EMPTY_MODEL_RESPONSE_MESSAGE);
 
-    expect(result).toBe(EMPTY_MODEL_RESPONSE_MESSAGE);
-    expect(events).toContainEqual(expect.objectContaining({ type: "error", message: EMPTY_MODEL_RESPONSE_MESSAGE }));
+    expect(events.some((event) => event.type === "error")).toBe(false);
     expect(events.some((event) => event.type === "final")).toBe(false);
     expect(diagnostics).toContainEqual(expect.objectContaining({
       message: "agent stream completed without assistant text",

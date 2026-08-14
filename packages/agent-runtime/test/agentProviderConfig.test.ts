@@ -15,6 +15,19 @@ describe("Responses provider config", () => {
     }).endpointKind).toBe("openai");
   });
 
+  it("disables HTTP response continuation for PoloAI", () => {
+    expect(buildAgentModelConfig({
+      model: "gpt-5.6-terra",
+      baseUrl: "https://poloai.top/v1",
+      apiKey: "key"
+    }).supportsResponseContinuation).toBe(false);
+    expect(buildAgentModelConfig({
+      model: "custom-model",
+      baseUrl: "https://gateway.example.com/v1",
+      apiKey: "key"
+    }).supportsResponseContinuation).toBe(true);
+  });
+
   it("scopes chains by provider, model, and credential without exposing credential", () => {
     const base = {
       model: "model-a",

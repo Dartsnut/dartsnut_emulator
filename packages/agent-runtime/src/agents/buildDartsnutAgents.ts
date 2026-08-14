@@ -5,12 +5,14 @@ import type { AgentToolsOptions } from "../agentToolsTypes";
 import type { DartsnutRunContext } from "../dartsnutRunContext";
 import { formatRunContextSnapshot } from "../dartsnutRunContext";
 import { resolveSkillRouterPrompt } from "../skillBundle";
+import { createModelRetrySettings, type ModelRetryDiagnostic } from "../modelRetry";
 
 export type BuildDartsnutAgentsOptions = {
   model: string;
   toolsBase: Omit<AgentToolsOptions, "profile">;
   contextSnapshot: DartsnutRunContext;
   preferredUserLocale?: UserLocale | null;
+  onModelRetry?: (diagnostic: ModelRetryDiagnostic) => void;
 };
 
 export const DARTSNUT_MAIN_AGENT_NAME = "DartsnutAgent";
@@ -44,6 +46,7 @@ export function buildDartsnutAgent(options: BuildDartsnutAgentsOptions): Agent<D
     name: DARTSNUT_MAIN_AGENT_NAME,
     model,
     instructions,
+    modelSettings: { retry: createModelRetrySettings(options.onModelRetry) },
     tools: buildAgentTools({
       ...toolsBase,
       profile: assetMode ? "asset-applier" : "full"

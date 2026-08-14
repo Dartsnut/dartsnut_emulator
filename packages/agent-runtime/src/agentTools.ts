@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";
-import { tool } from "@openai/agents";
+import { codeInterpreterTool, tool, webSearchTool } from "@openai/agents";
 import type { Tool, ToolInputParameters } from "@openai/agents";
 import { DEFERRED_SKILL_IDS, readDeferredSkillMarkdown } from "./skillBundle";
 import type { DeferredSkillId } from "./skillBundle";
@@ -10,10 +10,10 @@ import {
   AGENT_TOOL_SCHEMAS,
   getAgentToolDefinition
 } from "./toolSchemas";
+import type { AgentToolSchema } from "./toolSchemas";
 import type { AgentToolProfile, AgentToolsOptions } from "./agentToolsTypes";
-import type { FunctionTool } from "openai/resources/responses/responses";
 
-function schemasForProfile(profile: AgentToolProfile | undefined): FunctionTool[] {
+function schemasForProfile(profile: AgentToolProfile | undefined): AgentToolSchema[] {
   switch (profile) {
     case "asset-applier":
       return AGENT_ASSET_APPLIER_TOOL_SCHEMAS;
@@ -32,7 +32,19 @@ function stripAssetHashSuffix(value: string): string {
 }
 
 /** Directories never walked by list_files / grep_files / glob_files. */
-const SEARCH_SKIP_DIRS = new Set([".dartsnut", "node_modules", ".git", "__pycache__"]);
+const SEARCH_SKIP_DIRS = new Set([
+  ".dartsnut",
+  ".git",
+  ".venv",
+  "venv",
+  "env",
+  "node_modules",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".cache"
+]);
 
 /** Skip obviously-binary contents in grep (NUL byte in first chunk). */
 function looksBinary(buffer: Buffer): boolean {
@@ -72,9 +84,12 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${re}$`);
 }
 
-async function walkRelativeFiles(rootDir: string, startDir: string): Promise<string[]> {
+async function walkRelativeFiles(rootDir: string, startDir: string, maxFiles = Number.POSITIVE_INFINITY): Promise<string[]> {
   const out: string[] = [];
   const walk = async (dir: string): Promise<void> => {
+    if (out.length >= maxFiles) {
+      return;
+    }
     let entries: fs.Dirent[];
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -82,6 +97,9 @@ async function walkRelativeFiles(rootDir: string, startDir: string): Promise<str
       return;
     }
     for (const entry of entries) {
+      if (out.length >= maxFiles) {
+        return;
+      }
       if (entry.isDirectory()) {
         if (SEARCH_SKIP_DIRS.has(entry.name)) {
           continue;
@@ -118,28 +136,18 @@ function defineJsonSchemaTool(
 }
 
 export function buildAgentTools(options: AgentToolsOptions): Tool[] {
-  /** Hard gate: refuse file mutations until intake recorded project type (and size) or a project already exists. */
-  const fileMutationBlockedReason = (): string | undefined => {
-    const ctx = options.getRunContext?.();
-    if (!ctx) {
-      return undefined;
-    }
-    if (ctx.assetApplierMode) {
-      return undefined;
-    }
-    if (ctx.intakeReady || ctx.artifacts.confJson) {
-      return undefined;
-    }
-    return "Record the project type (and widget size for widgets) via dartsnut_project_intake / dartsnut_ask_question before writing workspace files.";
-  };
-
   const listFiles = defineJsonSchemaTool("list_files", async (args) => {
     const rel = typeof args.path === "string" ? args.path : ".";
+    const cap = Math.min(
+      2000,
+      Math.max(1, typeof args.max_results === "number" ? Math.floor(args.max_results) : 500)
+    );
     try {
       const target = options.workspacePolicy.resolveWithinRoot(rel);
-      const out = await walkRelativeFiles(target, target);
+      const out = await walkRelativeFiles(target, target, cap + 1);
       out.sort((a, b) => a.localeCompare(b));
-      return JSON.stringify({ ok: true, files: out });
+      const truncated = out.length > cap;
+      return JSON.stringify({ ok: true, files: out.slice(0, cap), truncated });
     } catch (error) {
       return JSON.stringify({
         ok: false,
@@ -261,10 +269,6 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
   });
 
   const writeFile = defineJsonSchemaTool("write_file", async (args) => {
-    const blocked = fileMutationBlockedReason();
-    if (blocked) {
-      return JSON.stringify({ ok: false, error: blocked });
-    }
     const rel = typeof args.path === "string" ? args.path : "";
     const content = typeof args.content === "string" ? args.content : "";
     try {
@@ -281,10 +285,6 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
   });
 
   const replaceInFile = defineJsonSchemaTool("replace_in_file", async (args) => {
-    const blocked = fileMutationBlockedReason();
-    if (blocked) {
-      return JSON.stringify({ ok: false, error: blocked });
-    }
     const rel = typeof args.path === "string" ? args.path : "";
     const find = typeof args.find === "string" ? args.find : "";
     const replace = typeof args.replace === "string" ? args.replace : "";
@@ -317,10 +317,6 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
   });
 
   const copyAssetFile = defineJsonSchemaTool("copy_asset_file", async (args) => {
-    const blocked = fileMutationBlockedReason();
-    if (blocked) {
-      return JSON.stringify({ ok: false, error: blocked });
-    }
     const sourceRaw = typeof args.source === "string" ? args.source : "";
     const toRaw = typeof args.path === "string" ? args.path : "";
     const source = stripAssetHashSuffix(sourceRaw);
@@ -344,10 +340,6 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
   });
 
   const copyChatAttachment = defineJsonSchemaTool("copy_chat_attachment", async (args) => {
-    const blocked = fileMutationBlockedReason();
-    if (blocked) {
-      return JSON.stringify({ ok: false, error: blocked });
-    }
     const attachmentId = typeof args.attachment_id === "string" ? args.attachment_id : "";
     const toRaw = typeof args.path === "string" ? args.path : "";
     const overwrite = args.overwrite === true;
@@ -411,20 +403,6 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
         error: error instanceof Error ? error.message : String(error)
       });
     }
-  });
-
-  const projectIntake = defineJsonSchemaTool("dartsnut_project_intake", async (args) => {
-    if (!options.hostIntakeToolHandler) {
-      return JSON.stringify({ ok: false, error: "Intake handler unavailable." });
-    }
-    return options.hostIntakeToolHandler(args);
-  });
-
-  const askQuestion = defineJsonSchemaTool("dartsnut_ask_question", async (args) => {
-    if (!options.hostAskQuestionHandler) {
-      return JSON.stringify({ ok: false, error: "Ask-question handler unavailable." });
-    }
-    return options.hostAskQuestionHandler(args);
   });
 
   const reloadEmulator = defineJsonSchemaTool("reload_emulator", async (args) => {
@@ -498,8 +476,6 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     copy_asset_file: copyAssetFile,
     copy_chat_attachment: copyChatAttachment,
     get_dartsnut_skill: getSkill,
-    dartsnut_project_intake: projectIntake,
-    dartsnut_ask_question: askQuestion,
     reload_emulator: reloadEmulator,
     get_emulator_logs: getEmulatorLogs,
     observe_emulator: observeEmulator,
@@ -514,8 +490,11 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
       .map((entry) => entry.name)
       .filter((name): name is string => Boolean(name))
   );
-  if (requested.size === 0) {
-    return Object.values(registry);
+  const tools = requested.size === 0
+    ? Object.values(registry)
+    : [...requested].map((name) => registry[name]).filter((entry): entry is Tool => Boolean(entry));
+  if (options.profile === "full" && options.supportsHostedTools === true) {
+    tools.push(webSearchTool(), codeInterpreterTool({ container: { type: "auto" } }));
   }
-  return [...requested].map((name) => registry[name]).filter((entry): entry is Tool => Boolean(entry));
+  return tools;
 }

@@ -37,7 +37,7 @@ describe("AgentSessionPersistence", () => {
       createdAt: "2020-01-01T00:00:00.000Z",
       updatedAt: "2020-01-02T00:00:00.000Z",
       templateMode: "widget-creator",
-      section: "creation-intake"
+      section: "build"
     });
     const m = p.readManifest();
     expect(m?.sessionId).toBe("s1");

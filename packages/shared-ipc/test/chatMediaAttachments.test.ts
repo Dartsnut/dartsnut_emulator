@@ -72,6 +72,6 @@ describe("buildPromptWithChatMediaAttachments", () => {
 
     expect(prompt).toContain("assets/chat/title.png");
     expect(prompt).not.toContain("/Volumes/drive/Downloads/title.png");
-    expect(prompt).toContain("Use ONLY the workspace-relative paths above");
+    expect(prompt).toContain("Use only these workspace-relative paths");
   });
 });

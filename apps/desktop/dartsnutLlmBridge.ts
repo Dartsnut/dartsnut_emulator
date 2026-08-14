@@ -15,10 +15,11 @@ export type DartsnutLlmBridgeRun = {
   runId: string;
   modelConfig: AgentModelConfig;
   readFailure: () => DartsnutLlmBridgeFailure | null;
-  finish: () => Promise<void>;
+  finish: (reason?: string) => Promise<void>;
 };
 
 type FetchLike = typeof fetch;
+type DiagnosticLogger = (message: string, meta: Record<string, unknown>) => void;
 
 type DartsnutApiEnvelope = {
   code?: number;
@@ -109,6 +110,69 @@ async function readFailureResponse(response: Response): Promise<DartsnutLlmBridg
     // Use status-based fallback below.
   }
   return mapDartsnutLlmBridgeFailure(response.status, parsed);
+}
+
+async function readFailureEnvelope(response: Response): Promise<DartsnutApiEnvelope | null> {
+  try {
+    return (await response.clone().json()) as DartsnutApiEnvelope;
+  } catch {
+    return null;
+  }
+}
+
+function requestPath(input: RequestInfo | URL): string {
+  try {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    return url.pathname;
+  } catch {
+    return "unknown";
+  }
+}
+
+function summarizeResponsesRequest(input: RequestInfo | URL, init?: RequestInit): Record<string, unknown> {
+  const body = typeof init?.body === "string" ? init.body : undefined;
+  let parsed: Record<string, unknown> | null = null;
+  if (body) {
+    try {
+      const value = JSON.parse(body) as unknown;
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        parsed = value as Record<string, unknown>;
+      }
+    } catch {
+      // Body shape remains visible through bodyBytes without logging its contents.
+    }
+  }
+  const tools = Array.isArray(parsed?.tools) ? parsed.tools : [];
+  const toolTypes = [...new Set(tools.map((tool) => {
+    if (!tool || typeof tool !== "object") return "unknown";
+    const type = (tool as { type?: unknown }).type;
+    return typeof type === "string" ? type : "unknown";
+  }))];
+  const inputItems = Array.isArray(parsed?.input)
+    ? parsed.input.length
+    : typeof parsed?.input === "string"
+      ? 1
+      : undefined;
+  return {
+    method: init?.method ?? (input instanceof Request ? input.method : "GET"),
+    path: requestPath(input),
+    stream: parsed?.stream === true,
+    ...(typeof parsed?.model === "string" ? { model: parsed.model } : {}),
+    ...(inputItems !== undefined ? { inputItems } : {}),
+    toolCount: tools.length,
+    toolTypes,
+    hasPreviousResponseId: typeof parsed?.previous_response_id === "string" && parsed.previous_response_id.length > 0,
+    hasReasoning: Boolean(parsed?.reasoning),
+    hasInstructions: typeof parsed?.instructions === "string" && parsed.instructions.length > 0,
+    ...(body ? { bodyBytes: Buffer.byteLength(body, "utf-8") } : {})
+  };
+}
+
+function responseRequestId(response: Response): string | undefined {
+  return response.headers.get("x-request-id")
+    ?? response.headers.get("request-id")
+    ?? response.headers.get("x-dartsnut-request-id")
+    ?? undefined;
 }
 
 function fetchFailureDetails(error: unknown): string {
@@ -203,6 +267,7 @@ export async function startDartsnutLlmBridgeRun(options: {
   accountScope?: string;
   runId: string;
   fetchImpl?: FetchLike;
+  onDiagnostic?: DiagnosticLogger;
 }): Promise<{ ok: true; run: DartsnutLlmBridgeRun } | { ok: false; failure: DartsnutLlmBridgeFailure }> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const token = options.token.trim();
@@ -214,11 +279,14 @@ export async function startDartsnutLlmBridgeRun(options: {
   }
 
   let startResponse: Response;
+  const startRequestAt = Date.now();
+  options.onDiagnostic?.("bridge run start request", { runId: options.runId });
   try {
     startResponse = await postRunEndpoint(options.baseApi, "start", token, options.runId, fetchImpl);
   } catch (error) {
-    console.warn("[agent] Dartsnut LLM run start request failed", {
+    options.onDiagnostic?.("bridge run start request failed", {
       runId: options.runId,
+      elapsedMs: Date.now() - startRequestAt,
       error: fetchFailureDetails(error) || String(error)
     });
     return {
@@ -226,6 +294,13 @@ export async function startDartsnutLlmBridgeRun(options: {
       failure: { reason: "service_unavailable", message: fetchFailureMessage(error, options.baseApi) }
     };
   }
+  options.onDiagnostic?.("bridge run start response", {
+    runId: options.runId,
+    status: startResponse.status,
+    ok: startResponse.ok,
+    elapsedMs: Date.now() - startRequestAt,
+    requestId: responseRequestId(startResponse)
+  });
   if (!startResponse.ok) {
     return { ok: false, failure: await readFailureResponse(startResponse) };
   }
@@ -243,8 +318,15 @@ export async function startDartsnutLlmBridgeRun(options: {
 
   let latestFailure: DartsnutLlmBridgeFailure | null = null;
   let finishPromise: Promise<void> | null = null;
+  let finishReason: string | null = null;
   const bridgeFetch: FetchLike = async (input, init) => {
     let response: Response;
+    const requestAt = Date.now();
+    const requestSummary = summarizeResponsesRequest(input, init);
+    options.onDiagnostic?.("bridge model request", {
+      runId: options.runId,
+      ...requestSummary
+    });
     try {
       response = await fetchImpl(input, {
         ...init,
@@ -255,14 +337,32 @@ export async function startDartsnutLlmBridgeRun(options: {
         reason: "service_unavailable",
         message: fetchFailureMessage(error, options.baseApi)
       };
-      console.warn("[agent] Dartsnut LLM request failed", {
+      options.onDiagnostic?.("bridge model request failed", {
         runId: options.runId,
+        ...requestSummary,
+        elapsedMs: Date.now() - requestAt,
         error: fetchFailureDetails(error) || String(error)
       });
       throw error;
     }
+    const responseMeta = {
+      runId: options.runId,
+      status: response.status,
+      ok: response.ok,
+      contentType: response.headers.get("content-type") ?? undefined,
+      elapsedMs: Date.now() - requestAt,
+      requestId: responseRequestId(response)
+    };
+    options.onDiagnostic?.("bridge model response", responseMeta);
     if (!response.ok) {
-      latestFailure = await readFailureResponse(response);
+      const envelope = await readFailureEnvelope(response);
+      latestFailure = mapDartsnutLlmBridgeFailure(response.status, envelope);
+      options.onDiagnostic?.("bridge model rejected", {
+        ...responseMeta,
+        code: errorCodeFromEnvelope(envelope) || undefined,
+        apiCode: typeof envelope?.code === "number" ? envelope.code : undefined,
+        message: latestFailure.message
+      });
     }
     return response;
   };
@@ -276,36 +376,54 @@ export async function startDartsnutLlmBridgeRun(options: {
         apiKey: `${DARTSNUT_LLM_BRIDGE_API_KEY_PLACEHOLDER}-${options.runId}`,
         model: DARTSNUT_LLM_MODEL_ALIAS,
         endpointKind: "openai-compatible",
+        supportsHostedTools: true,
         chainScope: createHash("sha256")
           .update(`${trimBaseApi(options.baseApi)}\0${options.accountScope?.trim() || token}`)
           .digest("hex"),
         fetchImpl: bridgeFetch
       },
       readFailure: () => latestFailure,
-      finish: () => {
+      finish: (reason = "unspecified") => {
         if (!finishPromise) {
+          finishReason = reason;
           finishPromise = (async () => {
+            const finishRequestAt = Date.now();
+            options.onDiagnostic?.("bridge run finish request", { runId: options.runId, reason });
             try {
               const response = await postRunEndpoint(options.baseApi, "finish", token, options.runId, fetchImpl);
               if (!response.ok) {
-                console.warn("[agent] backend run finish failed", {
+                options.onDiagnostic?.("bridge run finish failed", {
                   runId: options.runId,
-                  status: response.status
+                  reason,
+                  status: response.status,
+                  elapsedMs: Date.now() - finishRequestAt,
+                  requestId: responseRequestId(response)
                 });
               } else {
-                console.info("[agent] backend run finished", {
+                options.onDiagnostic?.("bridge run finished", {
                   runId: options.runId,
-                  status: response.status
+                  reason,
+                  status: response.status,
+                  elapsedMs: Date.now() - finishRequestAt,
+                  requestId: responseRequestId(response)
                 });
               }
             } catch (error) {
               // A failed finish cannot keep the desktop open forever, but must be visible in logs.
-              console.warn("[agent] backend run finish request failed", {
+              options.onDiagnostic?.("bridge run finish request failed", {
                 runId: options.runId,
+                reason,
+                elapsedMs: Date.now() - finishRequestAt,
                 error: fetchFailureDetails(error) || String(error)
               });
             }
           })();
+        } else {
+          options.onDiagnostic?.("bridge run finish reused", {
+            runId: options.runId,
+            requestedReason: reason,
+            originalReason: finishReason
+          });
         }
         return finishPromise;
       }

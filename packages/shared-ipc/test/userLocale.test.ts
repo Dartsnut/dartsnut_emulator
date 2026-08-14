@@ -64,6 +64,6 @@ describe("buildLanguageSystemPrompt", () => {
     expect(prompt).toContain("must not change behavior");
     expect(prompt).toContain("routing");
     expect(prompt).toContain("tool choice");
-    expect(prompt).toContain("intake");
+    expect(prompt).toContain("project inference");
   });
 });

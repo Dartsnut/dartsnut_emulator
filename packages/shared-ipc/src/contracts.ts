@@ -1,14 +1,10 @@
-import { POST_INTAKE_BUILD_REQUEST_PREFIX } from "./postIntakeCreatorPrompt";
 import type { ChatMediaAttachment } from "./chatMediaAttachments";
-import type { UserLocale } from "./userLocale";
 
 export const IPCChannels = {
   bootstrapState: "agent:bootstrap-state",
   /** Main -> renderer: active project/chat or workspace bootstrap changed. */
   bootstrapStateChanged: "agent:bootstrap-state-changed",
   pickWorkspace: "agent:pick-workspace",
-  /** Completes a blocking `dartsnut_ask_question` call for project type or widget size (chip row). */
-  intakeSubmitQuestionAnswer: "agent:intake-submit-question-answer",
   /** Completes a blocking machine selection/input question for MCP connection. */
   machineMcpSubmitQuestionAnswer: "agent:machine-mcp-submit-question-answer",
   /** Main → renderer: clear chat/logs/session UI (bootstrap comes from invoke return values). */
@@ -163,8 +159,6 @@ export interface BootstrapState {
   activeChatId: string | null;
   providerStatus: ProviderStatus;
   firstRunComplete: boolean;
-  /** True when the active workspace has no `conf.json` yet (run creation intake before creator tools). */
-  needsCreationIntake: boolean;
 }
 
 export interface ProjectRecord { id: string; name: string; folderPath: string; createdAt: string; updatedAt: string; lastOpenedAt: string; migrationComplete?: boolean; }
@@ -194,22 +188,6 @@ export interface PromptRequest {
   agentSession?: {
     intent: AgentSessionIntent;
   };
-  /**
-   * When true and no workspace is selected yet, main runs a short **creation intake** turn
-   * (host tools `dartsnut_ask_question` + `dartsnut_project_intake`), then may chain into the normal
-   * creator run once workspace + routing are resolved.
-   */
-  creationIntake?: boolean;
-  /**
-   * With `creationIntake`, records a size the user chose from the in-app widget size chip row.
-   * Main tells the model via an `[UI] …` line so intake can call `set_widget_size` without re-asking.
-   */
-  intakeWidgetSizeChoice?: WidgetSize;
-  /**
-   * With `creationIntake`, records **game** vs **widget** from the in-app type chip row.
-   * Main pre-seeds intake and adds an `[UI] …` line so the model calls `set_project_type` without re-asking.
-   */
-  intakeProjectTypeChoice?: ProjectType;
   /** Required when `templateMode === "asset-applier"`. */
   assetApply?: {
     slotIds: string[];
@@ -274,27 +252,6 @@ export type WidgetSize = "128x160" | "128x128" | "128x64" | "64x32";
 /** Supported physical widget display sizes (WxH string tokens). */
 export const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
 
-/**
- * Creation-intake assistant text must include this exact substring when (and only when) asking the
- * user to choose **game** vs **widget**. The desktop app then shows the Game/Widget chip row.
- */
-export const INTAKE_UI_SHOW_PROJECT_TYPE_MARKER = "@dartsnut-intake-ui:project-type";
-
-/**
- * Creation-intake assistant text must include this exact substring when (and only when) asking
- * the user to pick a **widget display size**. The desktop app then shows the size chip row.
- */
-export const INTAKE_UI_SHOW_WIDGET_SIZE_MARKER = "@dartsnut-intake-ui:widget-size";
-
-/** Payload from the renderer when the user picks a chip during `dartsnut_ask_question`. */
-export type IntakeSubmitQuestionAnswerRequest =
-  | { kind: "project_type"; value: ProjectType }
-  | { kind: "widget_size"; value: WidgetSize };
-
-export type IntakeSubmitQuestionAnswerResponse =
-  | { ok: true }
-  | { ok: false; reason: "no_pending" | "kind_mismatch" | "invalid_value" };
-
 export type MachineMcpQuestionMachine = {
   deviceId: string;
   name: string;
@@ -314,14 +271,9 @@ export type MachineMcpSubmitQuestionAnswerResponse =
 
 const TRANSCRIPT_USER_REQUEST_SECTION = "\n\nUser request:\n";
 
-/** Prefix line inside the post-intake creator user prompt (see `buildPostIntakeCreatorUserPrompt`). */
-const TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX =
-  "Original first message (use only if it already states what to build):";
-
 /**
- * Routed agent turns send a long `user` message (creator template + JSON context + instructions).
- * The timeline should only show what the human typed (or nothing when the host supplied only
- * boilerplate after intake).
+ * Routed agent turns may append creation context before the human request.
+ * The timeline only shows what the human typed.
  */
 export function transcriptUserBubbleText(fullUserPrompt: string): string | null {
   const trimmed = fullUserPrompt.trim();
@@ -335,49 +287,7 @@ export function transcriptUserBubbleText(fullUserPrompt: string): string | null 
     return null;
   }
 
-  const buildAt = body.indexOf(POST_INTAKE_BUILD_REQUEST_PREFIX);
-  if (buildAt >= 0) {
-    const afterBuild = body.slice(buildAt + POST_INTAKE_BUILD_REQUEST_PREFIX.length).trim();
-    if (
-      afterBuild.length === 0 ||
-      afterBuild === "(none recorded before intake)" ||
-      afterBuild === "There was no substantive first message before intake."
-    ) {
-      return null;
-    }
-    return afterBuild;
-  }
-
-  const originalAt = body.indexOf(TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX);
-  if (originalAt >= 0) {
-    const afterOriginal = body.slice(originalAt + TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX.length).trim();
-    return afterOriginal.length > 0 ? afterOriginal : null;
-  }
-
-  if (body === "There was no substantive first message before intake.") {
-    return null;
-  }
-  if (body.includes("Creation **intake just finished**")) {
-    return null;
-  }
-
   return body;
-}
-
-/** Remove intake UI control tokens from text shown in the chat timeline. */
-export function stripIntakeUiMarkers(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => {
-      const trimmed = line.trim();
-      if (trimmed === INTAKE_UI_SHOW_PROJECT_TYPE_MARKER || trimmed === INTAKE_UI_SHOW_WIDGET_SIZE_MARKER) {
-        return "";
-      }
-      return line
-        .replaceAll(INTAKE_UI_SHOW_PROJECT_TYPE_MARKER, "")
-        .replaceAll(INTAKE_UI_SHOW_WIDGET_SIZE_MARKER, "");
-    })
-    .join("\n");
 }
 
 export interface PickWorkspaceRequest {
@@ -406,41 +316,27 @@ export interface ProviderSettings {
 
 export type SaveProviderSettingsRequest = ProviderSettings;
 
+export type AgentSdkStreamEvent =
+  | {
+    type: "raw_model_stream_event";
+    source?: string;
+    data: unknown;
+  }
+  | {
+    type: "run_item_stream_event";
+    name: string;
+    item: unknown;
+  }
+  | {
+    type: "agent_updated_stream_event";
+    agent: unknown;
+  };
+
 export type AgentEvent =
-  | {
-    type: "stream";
-    delta: string;
-    at: number;
-  }
-  | {
-    /** Incremental model reasoning (e.g. wire `reasoning_content`); timeline renders separately from assistant content. */
-    type: "reasoning_stream";
-    /** Correlates all reasoning chunks and completion for a single completion step. */
-    reasoningId: string;
-    delta: string;
-    at: number;
-  }
-  | {
-    /** End of one completion step’s reasoning stream; renderer finalizes the active Thought block. */
-    type: "reasoning_done";
-    /** Must match the corresponding `reasoning_stream.reasoningId`. */
-    reasoningId: string;
-    at: number;
-  }
+  | AgentSdkStreamEvent
   | {
     type: "status";
     message: string;
-    at: number;
-  }
-  | {
-    /** Incremental tool-call argument streaming progress (used for large file writes). */
-    type: "tool_call_delta";
-    callId: string;
-    toolName: string;
-    /** Current accumulated argument JSON text from model streaming. */
-    argumentsJson: string;
-    /** Best-effort file path extracted from partial arguments, when available. */
-    path?: string;
     at: number;
   }
   | {
@@ -458,25 +354,6 @@ export type AgentEvent =
     at: number;
     runUsage: AgentTokenUsage;
     sessionUsage: AgentSessionTokenUsage;
-  }
-  | {
-    type: "intake_widget_size_prompt";
-    at: number;
-    /** When true, the renderer shows the size chip row (`sizes`) after the model calls `dartsnut_ask_question` with `question_id` `widget_display_size`. When false, hide it. */
-    visible: boolean;
-    /** Locale for visible chip-dialog copy. Hide events omit this. */
-    locale?: UserLocale;
-    /** Supported WxH tokens for chips; set when `visible` is true. */
-    sizes?: WidgetSize[];
-  }
-  | {
-    type: "intake_project_type_prompt";
-    at: number;
-    /** When true, the renderer shows the Game / Widget chip row (`options`) after the model calls `dartsnut_ask_question` with `question_id` `project_type`. When false, hide it. */
-    visible: boolean;
-    /** Locale for visible chip-dialog copy. Hide events omit this. */
-    locale?: UserLocale;
-    options?: ProjectType[];
   }
   | {
     type: "machine_mcp_prompt";

@@ -15,6 +15,7 @@
     "appUpdater.ts",
     "appUpdatePreferences.ts",
     "dartsnutLlmBridge.ts",
+    "responsesCompatibility.ts",
     "desktopNetwork.ts",
     "authNetworkError.ts",
     "packagedEnv.generated.ts",
@@ -27,7 +28,6 @@
     "widgetConfig.ts",
     "googleOAuth.ts",
     "communityAuth.ts",
-    "emulatorAgentTools.ts",
-    "intakePromptEvents.ts"
+    "emulatorAgentTools.ts"
   ]
 }

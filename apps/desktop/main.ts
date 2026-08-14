@@ -7,8 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, session, shel
 import type { MessageBoxOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { AgentRunCoordinator } from "./agentRunCoordinator";
-import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
-import { buildIntakeProjectTypePromptEvent, buildIntakeWidgetSizePromptEvent } from "./intakePromptEvents";
+import { appendDevFileLog, devLog, getDevLogPath, isDevLoggingEnabled } from "./devOnlyLog";
 import { createPublishTarball } from "./publishPackage";
 import { syncWorkspaceProjectMetadata } from "./workspaceProjectMetadata";
 import { buildPythonScriptLaunch, pythonRuntimeDir, runtimeDir, uvBinaryPath, venvPythonPath } from "./pythonRuntime";
@@ -29,7 +28,6 @@ import {
   type AppUpdateInstallResponse,
   type AppUpdateDownloadResponse,
   type AppUpdateCheckResponse,
-  workspaceNeedsCreationIntake,
   type DeployActionResponse,
   type DeployConnectRequest,
   type DeployConnectResponse,
@@ -50,14 +48,11 @@ import {
   type UnbindSlotRequest,
   type UnbindSlotResponse,
   validateDeployWorkspaceConf,
-  WIDGET_DISPLAY_SIZES,
   type WidgetSize,
   type ShellUiTheme,
   type WindowChromeInsets,
   type SendPromptResponse,
   type MainProcessConsoleMirrorPayload,
-  type IntakeSubmitQuestionAnswerRequest,
-  type IntakeSubmitQuestionAnswerResponse,
   type MachineMcpQuestionMachine,
   type MachineMcpSubmitQuestionAnswerRequest,
   type MachineMcpSubmitQuestionAnswerResponse,
@@ -92,7 +87,6 @@ import {
   buildPromptWithChatMediaAttachments,
   resolveSessionUserLocale,
   type UserLocale,
-  buildCreationIntakeUserPrompt,
   parseWidgetFontCatalogFromManifest,
   type WidgetFontCatalogEntry,
   type WidgetConfigScope,
@@ -106,19 +100,12 @@ import {
   SessionEngine,
   AgentSessionRuntime,
   WorkspacePolicy,
-  bundleForTemplateMode,
-  resolveSkillRouterPrompt,
   allowedDeferredSkillIdsForMode,
   AGENT_TOOL_SCHEMAS,
   AgentSessionPersistence,
   isAgentSessionPersistenceDisabledByEnv,
   AGENT_STOPPED_MESSAGE,
-  executeIntakeHostTool,
-  nextAfterProjectType,
   parseConfWidgetSize,
-  precheckAskQuestion,
-  isIntakeStateReady,
-  type IntakeToolState,
   type AgentInputItem,
   type AgentModelConfig,
   type ProviderConfig
@@ -189,6 +176,7 @@ import {
   isDownloadedAppUpdateReady,
   startAppUpdateCheck
 } from "./appUpdater";
+import { normalizePoloAiResponse } from "./responsesCompatibility";
 
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
@@ -208,6 +196,80 @@ let desktopNetwork: DesktopNetwork | null = null;
 
 function cloudFetch(): typeof fetch {
   return desktopNetwork?.fetch ?? fetch;
+}
+
+function customProviderFetch(): typeof fetch {
+  const fetchImpl = cloudFetch();
+  return async (input, init) => {
+    const startedAt = Date.now();
+    const requestUrl = input instanceof Request ? input.url : String(input);
+    let parsedBody: Record<string, unknown> | null = null;
+    const body = typeof init?.body === "string" ? init.body : undefined;
+    if (body) {
+      try {
+        const value = JSON.parse(body) as unknown;
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+          parsedBody = value as Record<string, unknown>;
+        }
+      } catch {
+        // Keep diagnostics structural when request body is not JSON.
+      }
+    }
+    let url: URL | null = null;
+    try {
+      url = new URL(requestUrl);
+    } catch {
+      // URL validation happens before run; retain safe fallback below.
+    }
+    const inputValue = parsedBody?.input;
+    const inputItems = Array.isArray(inputValue) ? inputValue.length : inputValue == null ? undefined : 1;
+    const tools = Array.isArray(parsedBody?.tools) ? parsedBody.tools : [];
+    terminalAgentLifecycleLog("[agent] custom model request", {
+      method: init?.method ?? (input instanceof Request ? input.method : "GET"),
+      host: url?.host,
+      path: url?.pathname,
+      model: typeof parsedBody?.model === "string" ? parsedBody.model : undefined,
+      stream: parsedBody?.stream === true,
+      inputItems,
+      toolCount: tools.length,
+      bodyBytes: body ? Buffer.byteLength(body, "utf8") : undefined
+    });
+    try {
+      const response = normalizePoloAiResponse(await fetchImpl(input, init), requestUrl);
+      const meta = {
+        host: url?.host,
+        path: url?.pathname,
+        status: response.status,
+        ok: response.ok,
+        contentType: response.headers.get("content-type") ?? undefined,
+        requestId: response.headers.get("x-request-id") ?? response.headers.get("request-id") ?? undefined,
+        elapsedMs: Date.now() - startedAt
+      };
+      if (!response.ok) {
+        let errorBody: string | undefined;
+        try {
+          errorBody = (await response.clone().text()).slice(0, 2000);
+        } catch {
+          // Some streaming responses cannot be cloned/read after failure.
+        }
+        terminalAgentLifecycleLog("[agent] custom model rejected", {
+          ...meta,
+          ...(errorBody ? { errorBody } : {})
+        });
+      } else {
+        terminalAgentLifecycleLog("[agent] custom model response", meta);
+      }
+      return response;
+    } catch (error) {
+      terminalAgentLifecycleLog("[agent] custom model request failed", {
+        host: url?.host,
+        path: url?.pathname,
+        elapsedMs: Date.now() - startedAt,
+        error: error instanceof Error ? `${error.name} ${error.message}` : String(error)
+      });
+      throw error;
+    }
+  };
 }
 
 // Ensure consistent app name for getPath('userData') in both dev and packaged modes
@@ -658,7 +720,7 @@ async function executeHostReloadEmulatorForAgent(args?: {
   if (!workspaceRoot) {
     return JSON.stringify({
       ok: false,
-      error: "No workspace is selected — finish intake or pick a project folder first."
+      error: "No workspace is selected. Pick a project folder first."
     });
   }
   const ready = ensureBridgeReady();
@@ -1046,7 +1108,7 @@ function resolveProviderConfigForDesktop(providerSettings: ProviderSettings): Pr
   if (providerSettings.activeProvider === "dartsnut-llm") {
     return resolveDartsnutBridgeProviderConfig();
   }
-  return loadProviderConfig({ providerSettings, fetchImpl: cloudFetch() });
+  return loadProviderConfig({ providerSettings, fetchImpl: customProviderFetch() });
 }
 
 function resolveCachedProviderConfigForDesktop(providerSettings: ProviderSettings): ProviderConfig {
@@ -1111,7 +1173,8 @@ async function prepareAgentProvider(providerSettings: ProviderSettings): Promise
     token: auth.token,
     accountScope: auth.account,
     runId: randomUUID(),
-    fetchImpl: cloudFetch()
+    fetchImpl: cloudFetch(),
+    onDiagnostic: (message, meta) => terminalAgentLifecycleLog(`[agent] ${message}`, meta)
   });
   if (!started.ok) {
     if (started.failure.reason === "auth_required") {
@@ -1262,8 +1325,7 @@ function getBootstrapState(): BootstrapState {
     activeProjectId,
     activeChatId,
     providerStatus: providerStatus(),
-    firstRunComplete,
-    needsCreationIntake: computeNeedsCreationIntake()
+    firstRunComplete
   };
 }
 
@@ -1394,16 +1456,7 @@ function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
   return null;
 }
 
-/** Cleared in `sendPrompt` finally so an in-flight deferred chip question cannot strand the agent. */
 let agentEventEmitter: ((event: AgentEvent) => void) | null = null;
-
-interface IntakeChipQuestionPending {
-  kind: "project_type" | "widget_size";
-  resolve: (json: string) => void;
-  state: IntakeToolState;
-}
-
-let intakeChipQuestionPending: IntakeChipQuestionPending | null = null;
 
 interface MachineMcpQuestionPending {
   resolve: (answer: { host: string; deviceId?: string } | null) => void;
@@ -1429,25 +1482,7 @@ type MachineMcpSession = {
 let machineMcpSession: MachineMcpSession | null = null;
 let machineMcpRequestId = 1;
 
-function cancelAllIntakeUserInputPending(): void {
-  if (intakeChipQuestionPending) {
-    const { resolve, kind } = intakeChipQuestionPending;
-    intakeChipQuestionPending = null;
-    if (agentEventEmitter) {
-      if (kind === "project_type") {
-        agentEventEmitter(buildIntakeProjectTypePromptEvent(false, null, Date.now()));
-      } else {
-        agentEventEmitter(buildIntakeWidgetSizePromptEvent(false, WIDGET_DISPLAY_SIZES, null, Date.now()));
-      }
-    }
-    resolve(
-      JSON.stringify({
-        ok: false,
-        cancelled: true,
-        message: "Choice was interrupted."
-      })
-    );
-  }
+function cancelPendingAgentInput(): void {
   if (machineMcpQuestionPending) {
     const { resolve } = machineMcpQuestionPending;
     machineMcpQuestionPending = null;
@@ -1460,28 +1495,17 @@ function cancelAllIntakeUserInputPending(): void {
  * Waits for the prompt handler's finalizer, which finishes the backend Dartsnut LLM run
  * before settling the coordinator lease. Used by both the Stop control and app shutdown.
  */
-async function stopActiveAgentRun(): Promise<boolean> {
-  cancelAllIntakeUserInputPending();
-
-  // Close the account's backend run immediately rather than waiting for the Agents SDK to
-  // unwind its stream/tool work. `finish()` is idempotent, so the prompt finalizer can await
-  // the same request before its coordinator lease settles.
-  const cancellation = sendPromptCoordinator.cancelAndWait();
-  const backendFinish = activeDartsnutLlmBridgeRun?.finish() ?? Promise.resolve();
-  const [cancelled] = await Promise.all([cancellation, backendFinish]);
+async function stopActiveAgentRun(reason: "user_stop" | "app_quit"): Promise<boolean> {
+  cancelPendingAgentInput();
+  terminalAgentLifecycleLog("[agent] cancellation requested", {
+    reason,
+    hasActiveRun: sendPromptCoordinator.hasActiveRun(),
+    hasBridgeRun: Boolean(activeDartsnutLlmBridgeRun)
+  });
+  // Prompt finalizer closes backend run after SDK fetch has observed abort. Finishing in
+  // parallel races the still-active Responses request and can make backend cleanup return 503.
+  const cancelled = await sendPromptCoordinator.cancelAndWait(reason);
   return cancelled;
-}
-
-function readWorkspaceConfJsonExists(absoluteWorkspacePath: string): boolean {
-  return fs.existsSync(path.join(absoluteWorkspacePath, "conf.json"));
-}
-
-function computeNeedsCreationIntake(): boolean {
-  // No active project means creation intake will be needed after one is selected.
-  if (!workspaceRoot) {
-    return true;
-  }
-  return workspaceNeedsCreationIntake(workspaceRoot, readWorkspaceConfJsonExists(workspaceRoot));
 }
 
 function applyWorkspaceRoot(selectedPath: string): void {
@@ -1507,54 +1531,6 @@ function applyWorkspaceRoot(selectedPath: string): void {
   assetManager.watch(selectedPath);
   startDeployConfWatcher(selectedPath);
   emitBootstrapStateToRenderer();
-}
-
-async function intakeHostToolExecute(
-  args: Record<string, unknown>,
-  state: IntakeToolState,
-  lastUserPrompt?: string
-): Promise<string> {
-  const root = workspaceRoot;
-  if (!root) {
-    return JSON.stringify({ ok: false, error: "No workspace is active." });
-  }
-  return executeIntakeHostTool(args, state, root, { lastUserPrompt });
-}
-
-async function askQuestionHostExecute(
-  args: Record<string, unknown>,
-  state: IntakeToolState,
-  preferredUserLocale?: UserLocale | null
-): Promise<string> {
-  const precheck = precheckAskQuestion(args, state);
-  if (precheck.handled && precheck.response !== undefined) {
-    return precheck.response;
-  }
-  const questionId = args.question_id;
-  if (typeof questionId !== "string") {
-    return JSON.stringify({ ok: false, error: "question_id is required" });
-  }
-  if (intakeChipQuestionPending) {
-    return JSON.stringify({
-      ok: false,
-      error: "Another intake question is already waiting for the user."
-    });
-  }
-  if (questionId === "project_type") {
-    agentEventEmitter?.(buildIntakeProjectTypePromptEvent(true, preferredUserLocale, Date.now()));
-    return await new Promise<string>((resolve) => {
-      intakeChipQuestionPending = { kind: "project_type", resolve, state };
-    });
-  }
-  if (questionId === "widget_display_size") {
-    agentEventEmitter?.(
-      buildIntakeWidgetSizePromptEvent(true, WIDGET_DISPLAY_SIZES, preferredUserLocale, Date.now())
-    );
-    return await new Promise<string>((resolve) => {
-      intakeChipQuestionPending = { kind: "widget_size", resolve, state };
-    });
-  }
-  return JSON.stringify({ ok: false, error: `Unknown question_id: ${questionId}` });
 }
 
 function normalizeMachineHost(value: string): string | null {
@@ -1750,14 +1726,8 @@ function buildAssetApplierPrompt(request: PromptRequest): string {
   const slotIds = Array.isArray(apply.slotIds) ? apply.slotIds : [];
   const workspacePath = request.workspacePath ?? workspaceRoot ?? "";
   const directives = [
-    "You are running in **asset-applier** mode (see `asset-pipeline` skill, Apply mode section).",
-    `Project type: ${apply.projectType}.`,
-    `Workspace path: ${workspacePath}.`,
-    `Slot ids that just changed: ${slotIds.length > 0 ? slotIds.join(", ") : "(none)"}.`,
-    "",
-    "Allowed actions: read `dartsnut.assets.json`, ensure `assets_loader.py` matches the backend snippet for the project type, and switch placeholder draws to `slot.draw(...)` only for the named slot ids.",
-    "Do not scaffold, rename, or restructure files. Do not change layout, fonts, gameplay, or any code unrelated to the named slot ids.",
-    "If the loader is already up-to-date and named slot ids already render through `slot.draw(...)`, return an empty `actions` array and a one-sentence response."
+    `Asset apply context: ${apply.projectType} project at ${workspacePath}.`,
+    `Changed slot ids: ${slotIds.length > 0 ? slotIds.join(", ") : "(none)"}.`
   ].join("\n");
   const userPrompt = request.prompt && request.prompt.trim().length > 0
     ? request.prompt
@@ -1765,7 +1735,7 @@ function buildAssetApplierPrompt(request: PromptRequest): string {
   return [directives, "", "User request:", userPrompt].join("\n");
 }
 
-function buildRoutedPrompt(request: PromptRequest, intakeState?: IntakeToolState): string {
+function buildRoutedPrompt(request: PromptRequest): string {
   if (request.templateMode === "asset-applier") {
     return buildAssetApplierPrompt(request);
   }
@@ -1774,28 +1744,6 @@ function buildRoutedPrompt(request: PromptRequest, intakeState?: IntakeToolState
     typeof request.workspacePath === "string" && request.workspacePath
       ? request.workspacePath
       : workspaceRoot;
-  const confPath =
-    effectiveWorkspacePath && effectiveWorkspacePath.length > 0
-      ? path.join(effectiveWorkspacePath, "conf.json")
-      : "";
-  const confJsonExists = confPath.length > 0 && fs.existsSync(confPath);
-  const intakeReady = intakeState != null && isIntakeStateReady(intakeState);
-  const needsCreationIntake =
-    Boolean(effectiveWorkspacePath) &&
-    effectiveWorkspacePath!.length > 0 &&
-    !confJsonExists &&
-    !intakeReady;
-
-  if (needsCreationIntake) {
-    return buildCreationIntakeUserPrompt(request.prompt, {
-      projectTypeFromPicker:
-        request.projectType === "game" || request.projectType === "widget"
-          ? request.projectType
-          : undefined,
-      widgetSizeFromPicker: request.widgetSize
-    });
-  }
-
   let templateMode: CreatorTemplateMode | undefined =
     request.templateMode === "game-creator" || request.templateMode === "widget-creator"
       ? request.templateMode
@@ -1838,8 +1786,6 @@ function buildRoutedPrompt(request: PromptRequest, intakeState?: IntakeToolState
     widgetFontManifestPath: templateMode === "widget-creator" ? widgetFontManifestPath : undefined,
     availableWidgetFonts: templateMode === "widget-creator" ? availableWidgetFonts : undefined
   };
-  const resolvedProjectType: ProjectType =
-    projectType === "game" || projectType === "widget" ? projectType : templateMode === "widget-creator" ? "widget" : "game";
   return [
     "Creation context:",
     JSON.stringify(context, null, 2),
@@ -1857,27 +1803,20 @@ function resolveAgentRuntimeSkillsDir(): string {
     path.resolve(process.cwd(), "../packages/agent-runtime/skills"),
     path.resolve(__dirname, "../../../packages/agent-runtime/skills")
   ];
-  const existing = candidates.find((dir) => fs.existsSync(path.join(dir, "dartsnut-skill.md")));
+  const existing = candidates.find((dir) => fs.existsSync(path.join(dir, "dartsnut-core.md")));
   if (!existing) {
-    throw new Error(`Skill directory not found (expected dartsnut-skill.md); tried: ${candidates.join(", ")}`);
+    throw new Error(`Skill directory not found (expected dartsnut-core.md); tried: ${candidates.join(", ")}`);
   }
   return existing;
 }
 
 function resolveSkillSessionContext(
-  templateMode?: PromptRequest["templateMode"] | "creation-intake" | null
+  templateMode?: PromptRequest["templateMode"] | null
 ): {
-  skillPrompt: string;
-  skillLibrary?: { skillsDir: string; allowedIds: ReturnType<typeof allowedDeferredSkillIdsForMode> };
+  skillLibrary: { skillsDir: string; allowedIds: ReturnType<typeof allowedDeferredSkillIdsForMode> };
 } {
   const skillsDir = resolveAgentRuntimeSkillsDir();
-  if (templateMode === "creation-intake") {
-    return {
-      skillPrompt: bundleForTemplateMode(skillsDir, "creation-intake")
-    };
-  }
   return {
-    skillPrompt: resolveSkillRouterPrompt(skillsDir, templateMode ?? null),
     skillLibrary: {
       skillsDir,
       allowedIds: allowedDeferredSkillIdsForMode(templateMode ?? null)
@@ -1935,6 +1874,7 @@ function terminalAgentLifecycleLog(message: string, meta?: Record<string, unknow
   }
   const line = meta ? `${message} ${JSON.stringify(meta)}` : message;
   devLog.log(line);
+  appendDevFileLog("log", message, meta ?? {});
   mirrorMainProcessConsole({ level: "log", prefix: "", message: line });
 }
 
@@ -1942,7 +1882,7 @@ function logAgentEventToConsole(event: AgentEvent, mirrorToDevtools: boolean): v
   if (!isDevLoggingEnabled()) {
     return;
   }
-  if (event.type === "stream" || event.type === "reasoning_stream") {
+  if (event.type === "raw_model_stream_event") {
     return;
   }
   const formatted = formatAgentEventForConsole(event);
@@ -2389,17 +2329,12 @@ async function buildSession(
     workspacePath?: string;
     toolSchemas?: typeof AGENT_TOOL_SCHEMAS;
     chatMediaAttachments?: PromptRequest["chatMediaAttachments"];
-    hostIntakeToolHandler?: (args: Record<string, unknown>) => Promise<string>;
-    hostAskQuestionHandler?: (args: Record<string, unknown>) => Promise<string>;
-    hostIntakeReadyToFinish?: () => boolean;
     skipInitialWorkspaceResolve?: boolean;
-    skillBundleMode?: PromptRequest["templateMode"] | "creation-intake" | null;
+    skillBundleMode?: PromptRequest["templateMode"] | null;
     sessionPersistence?: AgentSessionPersistence;
     initialItems?: AgentInputItem[];
     preferredUserLocale?: UserLocale | null;
     latestUserTextForLocale?: string;
-    intakeState?: IntakeToolState;
-    getIntakeState?: () => IntakeToolState;
     projectType?: ProjectType;
     widgetSize?: WidgetSize;
     assetApplierMode?: boolean;
@@ -2413,7 +2348,7 @@ async function buildSession(
   const agentModelConfig = extras?.agentModelConfig ?? buildAgentModelConfigFromProviderSettings(readProviderSettings());
   const skillBundleMode =
     extras?.skillBundleMode !== undefined ? extras.skillBundleMode : templateMode ?? null;
-  const { skillPrompt, skillLibrary } = resolveSkillSessionContext(skillBundleMode);
+  const { skillLibrary } = resolveSkillSessionContext(skillBundleMode);
   const preferredUserLocale =
     extras?.preferredUserLocale ??
     (extras?.latestUserTextForLocale != null
@@ -2422,7 +2357,6 @@ async function buildSession(
   const engine = new SessionEngine({
     agentModelConfig,
     workspacePolicy: new WorkspacePolicy(workspacePath),
-    skillPrompt,
     skillLibrary,
     preferredUserLocale,
     assetRoots: {
@@ -2430,9 +2364,6 @@ async function buildSession(
       chatAttachments: extras?.chatMediaAttachments
     },
     toolSchemas: extras?.toolSchemas,
-    hostIntakeToolHandler: extras?.hostIntakeToolHandler,
-    hostAskQuestionHandler: extras?.hostAskQuestionHandler,
-    hostIntakeReadyToFinish: extras?.hostIntakeReadyToFinish,
     hostReloadEmulatorHandler: (args) => executeHostReloadEmulatorForAgent(args),
     hostGetEmulatorLogsHandler: (args) => Promise.resolve(executeHostGetEmulatorLogsForAgent(args)),
     hostCheckPythonHandler: (args) => Promise.resolve(executeHostCheckPythonForAgent(args)),
@@ -2451,10 +2382,8 @@ async function buildSession(
       widgetSize: extras?.widgetSize,
       templateMode: templateMode ?? skillBundleMode ?? null,
       assetApplierMode: extras?.assetApplierMode ?? templateMode === "asset-applier",
-      intakeState: extras?.intakeState,
       originalUserPrompt: extras?.latestUserTextForLocale
     },
-    getIntakeState: extras?.getIntakeState,
     onDiagnostic: (message, meta) => terminalAgentLifecycleLog(`[agent] ${message}`, meta)
   });
   return new AgentSessionRuntime({
@@ -2560,6 +2489,7 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   try {
+    terminalAgentLifecycleLog("[dev-log] writing agent diagnostics", { path: getDevLogPath() });
     desktopNetwork = await initializeDesktopNetwork(session.defaultSession, {
       onDiagnostic: (diagnostic) => {
         console.info("[network] system proxy", diagnostic);
@@ -2643,7 +2573,7 @@ let quitCleanupComplete = false;
 let quitCleanupRequitScheduled = false;
 const runQuitCleanup = createShutdownCleanupRunner(
   () => [
-    { name: "agent", run: () => stopActiveAgentRun() },
+    { name: "agent", run: () => stopActiveAgentRun("app_quit") },
     { name: "emulator", run: () => gracefulStopEmulatorBridge(3000, { permanent: true }) },
     { name: "deploy", run: () => restoreDeployMachineForQuit() },
   ],
@@ -2770,7 +2700,7 @@ ipcMain.handle("agent:chat-generate-title", async (_event: unknown, request: { c
     // Title generation must not affect the completed agent request.
   } finally {
     try {
-      await bridgeRun?.finish();
+      await bridgeRun?.finish("title_finalizer");
     } catch {
       // Keep deterministic fallback available even when bridge cleanup fails.
     }
@@ -3610,61 +3540,6 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
 });
 
 ipcMain.handle(
-  IPCChannels.intakeSubmitQuestionAnswer,
-  async (_event: unknown, body: IntakeSubmitQuestionAnswerRequest): Promise<IntakeSubmitQuestionAnswerResponse> => {
-    if (!intakeChipQuestionPending) {
-      return { ok: false, reason: "no_pending" };
-    }
-    if (body.kind === "project_type") {
-      if (intakeChipQuestionPending.kind !== "project_type") {
-        return { ok: false, reason: "kind_mismatch" };
-      }
-      if (body.value !== "game" && body.value !== "widget") {
-        return { ok: false, reason: "invalid_value" };
-      }
-      const { resolve, state } = intakeChipQuestionPending;
-      intakeChipQuestionPending = null;
-      state.projectType = body.value;
-      state.projectTypeUserConfirmed = true;
-      if (body.value === "game") {
-        state.widgetSize = undefined;
-      }
-      agentEventEmitter?.(buildIntakeProjectTypePromptEvent(false, null, Date.now()));
-      resolve(
-        JSON.stringify({
-          ok: true,
-          recorded: { projectType: body.value },
-          next: nextAfterProjectType(body.value)
-        })
-      );
-      return { ok: true };
-    }
-    if (body.kind === "widget_size") {
-      if (intakeChipQuestionPending.kind !== "widget_size") {
-        return { ok: false, reason: "kind_mismatch" };
-      }
-      if (!WIDGET_DISPLAY_SIZES.includes(body.value)) {
-        return { ok: false, reason: "invalid_value" };
-      }
-      const { resolve, state } = intakeChipQuestionPending;
-      intakeChipQuestionPending = null;
-      state.widgetSize = body.value;
-      state.widgetSizeUserConfirmed = true;
-      agentEventEmitter?.(buildIntakeWidgetSizePromptEvent(false, WIDGET_DISPLAY_SIZES, null, Date.now()));
-      resolve(
-        JSON.stringify({
-          ok: true,
-          recorded: { widgetSize: body.value },
-          next: "Call **read_workspace_conf** — returns `conf.json` status for the active workspace."
-        })
-      );
-      return { ok: true };
-    }
-    return { ok: false, reason: "invalid_value" };
-  }
-);
-
-ipcMain.handle(
   IPCChannels.machineMcpSubmitQuestionAnswer,
   async (_event: unknown, body: MachineMcpSubmitQuestionAnswerRequest): Promise<MachineMcpSubmitQuestionAnswerResponse> => {
     if (!machineMcpQuestionPending) {
@@ -3818,7 +3693,7 @@ ipcMain.handle(
       sendToRenderer(IPCChannels.subscribeEvents, event);
       return { ok: false, reason: "unknown", message };
     } finally {
-      await bridgeRun?.finish();
+      await bridgeRun?.finish("asset_finalizer");
     }
   }
 );
@@ -3837,8 +3712,8 @@ function createEmitAgentToRenderer(): AgentEventBatcher & { dispose: () => void 
 }
 
 ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest): Promise<SendPromptResponse> => {
-  await chatTitleCoordinator.cancelAndWait();
-  const runLease = await sendPromptCoordinator.begin();
+  await chatTitleCoordinator.cancelAndWait("agent_prompt_started");
+  const runLease = await sendPromptCoordinator.begin("replacement_prompt");
   const runAbort = runLease.abortController;
   const emitAgentSink = createEmitAgentToRenderer();
   const emitAgent = (agentEvent: AgentEvent) => emitAgentSink.emit(agentEvent);
@@ -3868,7 +3743,6 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
       emitBootstrapStateToRenderer();
     }
     let sessionRouting: SendPromptResponse["sessionRouting"];
-    const hostState: IntakeToolState = {};
     const effectiveWorkspacePath =
       typeof req.workspacePath === "string" && req.workspacePath.length > 0 ? req.workspacePath : workspaceRoot;
     const request: PromptRequest = {
@@ -3876,10 +3750,6 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
       chatId: activeChatId,
       prompt: buildPromptWithChatMediaAttachments(req.prompt, req.chatMediaAttachments ?? [])
     };
-    const lastIntakeUserPrompt = request.prompt;
-    const sharedIntakeHandler = async (args: Record<string, unknown>) =>
-      intakeHostToolExecute(args, hostState, lastIntakeUserPrompt);
-
     const intent = request.agentSession?.intent ?? "auto";
     const persistence = buildWorkspaceSessionPersistence(workspaceRoot);
     if (intent === "fresh" && persistence) {
@@ -3908,17 +3778,12 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     const session = await buildSession(request.templateMode, {
       toolSchemas: AGENT_TOOL_SCHEMAS,
       chatMediaAttachments: request.chatMediaAttachments,
-      hostIntakeToolHandler: sharedIntakeHandler,
-      hostAskQuestionHandler: (args) => askQuestionHostExecute(args, hostState, preferredUserLocale),
-      hostIntakeReadyToFinish: () => isIntakeStateReady(hostState),
       sessionPersistence: persistence,
       initialItems,
       preferredUserLocale,
       latestUserTextForLocale: request.prompt,
-      intakeState: hostState,
       projectType: routedProjectType ?? hintedRouting?.projectType,
       widgetSize: routedWidgetSize ?? hintedRouting?.widgetSize,
-      getIntakeState: () => hostState,
       agentModelConfig: prepared.modelConfig
     });
     if (routedTemplateMode) {
@@ -3930,7 +3795,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         ...(routedWidgetSize ? { widgetSize: routedWidgetSize } : {})
       };
     }
-    const prompt = buildRoutedPrompt(request, hostState);
+    const prompt = buildRoutedPrompt(request);
     terminalAgentLifecycleLog("[agent] runPrompt start", { promptChars: prompt.length });
     await session.runPrompt(prompt, emitAgent, runAbort.signal, { userPrompt: request.prompt });
 
@@ -3949,15 +3814,11 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     if (!firstRunComplete) {
       writeProofState(true);
     }
-    if (isIntakeStateReady(hostState)) {
-      const pt = hostState.projectType;
-      if (pt === "game" || pt === "widget") {
-        sessionRouting = {
-          templateMode: pt === "game" ? "game-creator" : "widget-creator",
-          projectType: pt,
-          ...(pt === "widget" && hostState.widgetSize ? { widgetSize: hostState.widgetSize } : {})
-        };
-      }
+    const createdRouting = effectiveWorkspacePath
+      ? readWorkspaceCreatorHints(effectiveWorkspacePath)
+      : null;
+    if (createdRouting) {
+      sessionRouting = createdRouting;
     }
     return { ok: true, sessionRouting };
   } catch (error) {
@@ -3969,19 +3830,19 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     }
     return { ok: false };
   } finally {
-    await bridgeRun?.finish();
+    await bridgeRun?.finish("prompt_finalizer");
     if (activeDartsnutLlmBridgeRun === bridgeRun) {
       activeDartsnutLlmBridgeRun = null;
     }
     emitAgentSink.flush();
-    cancelAllIntakeUserInputPending();
+    cancelPendingAgentInput();
     agentEventEmitter = null;
     runLease.settle();
   }
 });
 
 ipcMain.handle(IPCChannels.cancelAgent, async () => {
-  await stopActiveAgentRun();
+  await stopActiveAgentRun("user_stop");
   return { ok: true };
 });
 

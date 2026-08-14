@@ -5,10 +5,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
 import type { RunStreamEvent } from "@openai/agents";
-import type { ResponseStreamEvent } from "openai/resources/responses/responses";
-import { SessionEngine } from "../src/sessionEngine";
+import { promptRequestsHostedTools, SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
-import { buildAgentModelConfig } from "../src/agentProviderConfig";
+import { agentModelChainKey, buildAgentModelConfig } from "../src/agentProviderConfig";
 import { resetAgentsBootstrapForTests } from "../src/agentsBootstrap";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
 import type { StreamedRunResult } from "@openai/agents";
@@ -17,10 +16,14 @@ import { EMPTY_MODEL_RESPONSE_MESSAGE } from "../src/modelInputGuard";
 function createMockStream(params: {
   events?: RunStreamEvent[];
   finalOutput?: string;
+  lastResponseId?: string;
+  usage?: Record<string, number>;
 }): StreamedRunResult<any, any> {
   const events = params.events ?? [];
   const stream = {
     finalOutput: params.finalOutput,
+    lastResponseId: params.lastResponseId,
+    state: { usage: params.usage ?? {} },
     completed: Promise.resolve(),
     cancelled: false,
     async *[Symbol.asyncIterator]() {
@@ -38,7 +41,7 @@ function responseEvent(event: Record<string, unknown>): RunStreamEvent {
     source: "openai-responses",
     data: {
       type: "model",
-      event: event as ResponseStreamEvent,
+      event,
       providerData: { rawModelEventSource: "openai-responses" }
     }
   } as RunStreamEvent;
@@ -53,40 +56,68 @@ function terminalUsage(id: string, usage: Record<string, number>): RunStreamEven
 }
 
 function toolCalled(name: string, callId: string, args: Record<string, unknown>): RunStreamEvent {
+  const json = {
+    type: "tool_call_item",
+    rawItem: {
+      type: "function_call",
+      name,
+      callId,
+      arguments: JSON.stringify(args),
+      status: "completed"
+    }
+  };
   return {
     type: "run_item_stream_event",
     name: "tool_called",
-    item: {
-      type: "tool_call_item",
-      rawItem: {
-        type: "function_call",
-        name,
-        callId,
-        arguments: JSON.stringify(args),
-        status: "completed"
-      }
-    }
+    item: { ...json, toJSON: () => json }
   } as RunStreamEvent;
 }
 
 function toolOutput(name: string, callId: string): RunStreamEvent {
+  const json = {
+    type: "tool_call_output_item",
+    rawItem: {
+      type: "function_call_result",
+      name,
+      callId,
+      status: "completed",
+      output: JSON.stringify({ ok: true })
+    }
+  };
   return {
     type: "run_item_stream_event",
     name: "tool_output",
-    item: {
-      type: "tool_call_output_item",
-      rawItem: {
-        type: "function_call_result",
-        name,
-        callId,
-        status: "completed",
-        output: JSON.stringify({ ok: true })
-      }
-    }
+    item: { ...json, toJSON: () => json }
   } as RunStreamEvent;
 }
 
 describe("SessionEngine (@openai/agents)", () => {
+  it("enables hosted tools only for explicit hosted-tool requests", () => {
+    expect(promptRequestsHostedTools("Build a Pong game")).toBe(false);
+    expect(promptRequestsHostedTools("Search the web for current weather APIs")).toBe(true);
+    expect(promptRequestsHostedTools("Use code interpreter for data analysis")).toBe(true);
+  });
+
+  it("does not send hosted tools for ordinary project prompts", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-hosted-tools-"));
+    let names: string[] = [];
+    const engine = new SessionEngine({
+      runFn: async (agent) => {
+        names = agent.tools.map((tool) => "name" in tool ? String(tool.name) : "");
+        return createMockStream({ finalOutput: "Done." });
+      },
+      agentModelConfig: {
+        ...buildAgentModelConfig({ model: "gpt-4.1-mini", apiKey: "test-key" }),
+        supportsHostedTools: true
+      },
+      workspacePolicy: new WorkspacePolicy(workspace)
+    });
+
+    await engine.runPrompt("Build a Pong game", () => {});
+    expect(names).not.toContain("web_search");
+    expect(names).not.toContain("code_interpreter");
+  });
   it("executes tool calls and emits final response", async () => {
     resetAgentsBootstrapForTests();
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-"));
@@ -118,7 +149,6 @@ describe("SessionEngine (@openai/agents)", () => {
         apiKey: "test-key"
       }),
       workspacePolicy: new WorkspacePolicy(workspace),
-      skillPrompt: "system skill prompt",
       sessionTemplateMode: "widget-creator"
     });
     const events: AgentEvent[] = [];
@@ -129,16 +159,11 @@ describe("SessionEngine (@openai/agents)", () => {
     expect(fs.readFileSync(path.join(workspace, "hello.txt"), "utf-8")).toBe("hello from test");
     expect(result).toContain("Writing file now");
     expect(calls).toBe(1);
-    const statusMessages = events.filter((e) => e.type === "status").map((e) => e.message);
-    expect(statusMessages.some((m) => m.includes("Created hello.txt."))).toBe(true);
-    const toolDeltas = events.filter((e) => e.type === "tool_call_delta");
-    expect(toolDeltas.length).toBeGreaterThan(0);
-    expect(toolDeltas[0]).toMatchObject({
-      type: "tool_call_delta",
-      callId: "call_1",
-      toolName: "write_file",
-      path: "hello.txt"
-    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "run_item_stream_event",
+      name: "tool_called"
+    }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "raw_model_stream_event" }));
     expect(events.some((e) => e.type === "final")).toBe(true);
   });
 
@@ -156,7 +181,7 @@ describe("SessionEngine (@openai/agents)", () => {
         events: [
           {
             type: "agent_updated_stream_event",
-            agent: { name: "WidgetModifier" }
+            agent: { name: "WidgetModifier", toJSON: () => ({ name: "WidgetModifier" }) }
           } as RunStreamEvent,
           toolCalled("read_file", "call_1", { path: "main.py" }),
           toolOutput("read_file", "call_1"),
@@ -181,8 +206,7 @@ describe("SessionEngine (@openai/agents)", () => {
       skillPrompt: "system skill prompt",
       runContextSeed: {
         projectType: "widget",
-        widgetSize: "128x128",
-        intakeReady: true
+        widgetSize: "128x128"
       }
     });
 
@@ -199,6 +223,7 @@ describe("SessionEngine (@openai/agents)", () => {
     const runFn: typeof import("@openai/agents").run = async () =>
       createMockStream({
         finalOutput: "Done.",
+        usage: { inputTokens: 7, outputTokens: 4, totalTokens: 11 },
         events: [
           textDelta("Done."),
           terminalUsage("resp_1", { input_tokens: 7, output_tokens: 4, total_tokens: 11 })
@@ -249,6 +274,7 @@ describe("SessionEngine (@openai/agents)", () => {
       const id = seenPreviousIds.length === 1 ? "resp_first" : "resp_second";
       return createMockStream({
         finalOutput: "Done.",
+        lastResponseId: id,
         events: [textDelta("Done."), terminalUsage(id, { input_tokens: 1, output_tokens: 1, total_tokens: 2 })]
       });
     };
@@ -277,6 +303,7 @@ describe("SessionEngine (@openai/agents)", () => {
       const id = seenPreviousIds.length === 1 ? "resp_first" : "resp_second";
       return createMockStream({
         finalOutput: "Done.",
+        lastResponseId: id,
         events: [textDelta("Done."), terminalUsage(id, { input_tokens: 1, output_tokens: 1, total_tokens: 2 })]
       });
     };
@@ -292,6 +319,34 @@ describe("SessionEngine (@openai/agents)", () => {
     await makeEngine("gpt-4.1").runPrompt("second", () => {});
 
     expect(seenPreviousIds).toEqual([undefined, undefined]);
+  });
+
+  it("retries once without continuation when a persisted response ID is unavailable", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-chain-retry-"));
+    const persistence = new AgentSessionPersistence(workspace);
+    const modelConfig = buildAgentModelConfig({ model: "gpt-4.1-mini", apiKey: "test-key" });
+    persistence.writeModelChainResponseIdAtomic(agentModelChainKey(modelConfig), "resp_stale");
+    const seenPreviousIds: Array<string | undefined> = [];
+    const runFn: typeof import("@openai/agents").run = async (_agent, _input, options) => {
+      seenPreviousIds.push(options?.previousResponseId);
+      if (options?.previousResponseId) {
+        throw Object.assign(new Error("400 Previous model response is unavailable."), {
+          code: "INVALID_PREVIOUS_RESPONSE"
+        });
+      }
+      return createMockStream({ finalOutput: "Recovered.", lastResponseId: "resp_fresh" });
+    };
+    const engine = new SessionEngine({
+      runFn,
+      agentModelConfig: modelConfig,
+      workspacePolicy: new WorkspacePolicy(workspace),
+      sessionPersistence: persistence
+    });
+
+    await expect(engine.runPrompt("continue", () => {})).resolves.toBe("Recovered.");
+    expect(seenPreviousIds).toEqual(["resp_stale", undefined]);
+    expect(persistence.readModelChainResponseId(agentModelChainKey(modelConfig))).toBe("resp_fresh");
   });
 
   it("reports an empty final response as an error instead of a successful placeholder", async () => {
@@ -319,14 +374,105 @@ describe("SessionEngine (@openai/agents)", () => {
       message: "agent stream completed without assistant text",
       meta: expect.objectContaining({
         failure: "empty_mapped_output",
-        finalOutput: { kind: "string", chars: 0 }
+        hadPreviousResponseId: false
       })
     }));
+  });
+
+  it("recovers normalized streamed text when repeated-input guard stops the SDK loop", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-stream-recovery-"));
+    const diagnostics: Array<{ message: string; meta: Record<string, unknown> }> = [];
+    const events: AgentEvent[] = [];
+    const stream = {
+      finalOutput: undefined,
+      state: { usage: {} },
+      completed: Promise.resolve(),
+      cancelled: false,
+      async *[Symbol.asyncIterator]() {
+        yield responseEvent({ type: "response.output_text.delta", delta: "raw duplicate", sequence_number: 1 });
+        yield {
+          type: "raw_model_stream_event",
+          source: "openai-responses",
+          data: { type: "response_started" }
+        } as RunStreamEvent;
+        yield {
+          type: "raw_model_stream_event",
+          source: "openai-responses",
+          data: { type: "output_text_delta", delta: "Project summary." }
+        } as RunStreamEvent;
+        throw new Error(EMPTY_MODEL_RESPONSE_MESSAGE);
+      }
+    } as StreamedRunResult<any, any>;
+    const engine = new SessionEngine({
+      runFn: async () => stream,
+      agentModelConfig: buildAgentModelConfig({ model: "gpt-4.1-mini", apiKey: "test-key" }),
+      workspacePolicy: new WorkspacePolicy(workspace),
+      onDiagnostic: (message, meta) => diagnostics.push({ message, meta })
+    });
+
+    const result = await engine.runPrompt("summarize", (event) => events.push(event));
+
+    expect(result).toBe("Project summary.");
+    expect(events).toContainEqual(expect.objectContaining({ type: "final", content: "Project summary." }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      message: "agent recovered streamed assistant text after loop guard",
+      meta: expect.objectContaining({ recovery: "streamed_text_fallback", finalChars: 16 })
+    }));
+  });
+
+  it("reports privacy-safe SDK lifecycle diagnostics", async () => {
+    resetAgentsBootstrapForTests();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-diagnostics-"));
+    const diagnostics: Array<{ message: string; meta: Record<string, unknown> }> = [];
+    const engine = new SessionEngine({
+      runFn: async () => createMockStream({
+        finalOutput: "Done.",
+        lastResponseId: "resp_private",
+        usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+        events: [textDelta("private streamed text"), toolCalled("read_file", "call_private", { path: "private.txt" })]
+      }),
+      agentModelConfig: buildAgentModelConfig({ model: "gpt-4.1-mini", apiKey: "test-key" }),
+      workspacePolicy: new WorkspacePolicy(workspace),
+      onDiagnostic: (message, meta) => diagnostics.push({ message, meta })
+    });
+
+    await engine.runPrompt("private prompt", () => {});
+
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      message: "agent SDK run configured",
+      meta: expect.objectContaining({
+        model: "gpt-4.1-mini",
+        hasPreviousResponseId: false,
+        promptChars: 14
+      })
+    }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      message: "agent SDK stream opened",
+      meta: expect.objectContaining({ retriedWithoutContinuation: false })
+    }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      message: "agent SDK run completed",
+      meta: expect.objectContaining({
+        finalChars: 5,
+        lastResponseIdPresent: true,
+        rawModelEvents: 1,
+        runItemEvents: 1,
+        responseEventTypes: { "response.output_text.delta": 1 },
+        runItemNames: { tool_called: 1 }
+      })
+    }));
+    const serialized = JSON.stringify(diagnostics);
+    expect(serialized).not.toContain("private prompt");
+    expect(serialized).not.toContain("private streamed text");
+    expect(serialized).not.toContain("private.txt");
+    expect(serialized).not.toContain("resp_private");
   });
 
   it("throws stop message when aborted", async () => {
     resetAgentsBootstrapForTests();
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-abort-"));
+    const diagnostics: Array<{ message: string; meta: Record<string, unknown> }> = [];
     const engine = new SessionEngine({
       runFn: async () => createMockStream({ finalOutput: "nope" }),
       agentModelConfig: buildAgentModelConfig({
@@ -334,10 +480,12 @@ describe("SessionEngine (@openai/agents)", () => {
         apiKey: "test-key"
       }),
       workspacePolicy: new WorkspacePolicy(workspace),
-      skillPrompt: "system skill prompt"
+      skillPrompt: "system skill prompt",
+      onDiagnostic: (message, meta) => diagnostics.push({ message, meta })
     });
     const abort = new AbortController();
-    abort.abort();
+    abort.abort("user_stop");
     await expect(engine.runPrompt("x", () => {}, abort.signal)).rejects.toThrow("Agent stopped.");
+    expect(diagnostics).toEqual([]);
   });
 });

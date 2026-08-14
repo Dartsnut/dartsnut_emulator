@@ -1,5 +1,5 @@
 import type { AgentEvent, AgentSessionTranscriptLine } from "@dartsnut/shared-ipc";
-import { stripIntakeUiMarkers, transcriptUserBubbleText } from "@dartsnut/shared-ipc";
+import { transcriptUserBubbleText } from "@dartsnut/shared-ipc";
 
 export interface TimelineErrorPresentation {
   title: string;
@@ -28,10 +28,6 @@ export interface TimelineEntry {
 export function formatAgentEventForTimeline(event: AgentEvent): string {
   if (event.type === "error") {
     return event.message;
-  }
-  if (event.type === "tool_call_delta") {
-    const pathText = event.path ? ` ${event.path}` : "";
-    return `[tool_call_delta] ${event.toolName}${pathText} (${event.argumentsJson.length} chars streamed)`;
   }
   return JSON.stringify(event, null, 2);
 }
@@ -240,10 +236,10 @@ export function transcriptLineToTimelineEntry(
     if (visible == null || !visible.trim()) {
       return null;
     }
-    return { id, role: "user", text: stripIntakeUiMarkers(visible) };
+    return { id, role: "user", text: visible };
   }
   if (line.kind === "assistant") {
-    const body = stripIntakeUiMarkers(line.text).trim();
+    const body = line.text.trim();
     if (!body) {
       return null;
     }
@@ -251,7 +247,7 @@ export function transcriptLineToTimelineEntry(
   }
 
   if (line.kind === "thinking") {
-    const body = stripIntakeUiMarkers(line.text).trim();
+    const body = line.text.trim();
     if (!body) {
       return null;
     }
@@ -265,7 +261,7 @@ export function transcriptLineToTimelineEntry(
   }
 
   if (line.kind === "tool_status") {
-    const body = stripIntakeUiMarkers(line.text).trim();
+    const body = line.text.trim();
     if (!body) {
       return null;
     }
@@ -281,7 +277,7 @@ export function transcriptLineToTimelineEntry(
     };
   }
 
-  const body = stripIntakeUiMarkers(line.text).trim();
+  const body = line.text.trim();
   if (!body) {
     return null;
   }

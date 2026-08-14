@@ -3,8 +3,7 @@
 ## Objective
 
 `api.dartsnut.com` is the only bridge between Dartsnut Agent and upstream LLM service.
-Desktop sends OpenAI Responses bodies plus community authentication and run ID. API keeps both
-Responses and Chat Completions endpoints for existing consumers.
+Desktop sends OpenAI Responses bodies plus community authentication and run ID.
 API validates account eligibility, injects upstream credentials/model, proxies response, records usage, and enforces quota.
 
 Hard rules:
@@ -56,31 +55,6 @@ Success:
 }
 ```
 
-### Proxy Chat Completions
-
-```http
-POST /agent/llm/v1/chat/completions
-token: <community-session-token>
-x-dartsnut-agent-run-id: <uuid>
-Content-Type: application/json
-```
-
-Request body remains OpenAI Chat Completions-compatible. API must:
-
-- Revalidate token/account and run ownership.
-- Reject forged, expired, finished, or over-request-limit runs.
-- Allow the already-accepted completion to finish, then atomically close the run when daily usage reaches 10M.
-- Reject every later completion for that quota-closed run with `DAILY_QUOTA_EXCEEDED`.
-- Ignore/override client model with server-configured upstream model.
-- Inject upstream URL and API key server-side.
-- Preserve messages, tools, tool choice, stream mode, reasoning/tool-call deltas, and supported generation fields.
-- Force upstream token usage metadata for streaming requests.
-- Preserve OpenAI-compatible JSON/SSE responses.
-- Capture and atomically persist upstream usage for every accepted completion.
-- Refresh inactivity lease without extending 30-minute absolute deadline.
-- Count accepted upstream usage even if desktop disconnects before receiving full response.
-- Never expose upstream credentials, provider configuration, or raw database errors.
-
 ### Proxy Responses
 
 ```http
@@ -90,9 +64,10 @@ x-dartsnut-agent-run-id: <uuid>
 Content-Type: application/json
 ```
 
-Request body remains OpenAI Responses-compatible. API applies same ownership, machine, quota,
-request-limit, timeout, disconnect, model override, and accounting rules as Chat Completions.
-Responses adapter preserves `input`, function calls, reasoning, text, and SSE event records. It
+Request body remains OpenAI Responses-compatible. API revalidates token/account and run ownership;
+enforces machine, quota, request-limit, timeout, disconnect, and model-override rules; injects
+upstream credentials server-side; and records accepted upstream usage atomically. Adapter preserves
+`input`, function calls, reasoning, text, supported generation fields, and SSE event records. It
 reads response ID and usage from `response.completed`, `response.failed`, or
 `response.incomplete`, treats `response.error` as upstream failure, and withholds terminal records
 until accounting finishes. Desktop uses this endpoint exclusively.

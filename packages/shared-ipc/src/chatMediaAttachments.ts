@@ -87,7 +87,7 @@ export function buildPromptWithChatMediaAttachments(
   const attachmentLines = attachments.map(describeAttachment).join("\n");
   const allCopiedIntoWorkspace = attachments.every((attachment) => Boolean(attachment.workspacePath));
   const handlingDirective = allCopiedIntoWorkspace
-    ? "These files have already been copied into the workspace. Use ONLY the workspace-relative paths above in code/config. Do not reference the user's original filesystem paths."
-    : "Choose where each attachment belongs in the workspace, then call copy_chat_attachment with its attachment_id and your chosen workspace-relative destination path. You may overwrite an existing asset by setting overwrite=true when that is the right replacement. Use only the returned workspace path in code/config. Do not reference the user's original filesystem paths.";
+    ? "Use only these workspace-relative paths in code/config."
+    : "Copy each attachment with copy_chat_attachment, then use only its returned workspace path in code/config.";
   return `${userRequest}\n\nAttached media files:\n${attachmentLines}\n\n${handlingDirective}`;
 }

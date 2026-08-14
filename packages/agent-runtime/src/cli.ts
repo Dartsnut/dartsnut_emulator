@@ -11,14 +11,11 @@ export async function runInteractiveCli(session: SessionEngine): Promise<void> {
       break;
     }
     await session.runPrompt(prompt, (event) => {
-      if (event.type === "stream") {
-        output.write(event.delta);
-      }
-      if (event.type === "reasoning_stream") {
-        output.write(event.delta);
-      }
-      if (event.type === "reasoning_done") {
-        output.write("\n");
+      if (event.type === "raw_model_stream_event" && event.data && typeof event.data === "object") {
+        const data = event.data as { type?: unknown; event?: { type?: unknown; delta?: unknown } };
+        if (data.type === "model" && data.event?.type === "response.output_text.delta" && typeof data.event.delta === "string") {
+          output.write(data.event.delta);
+        }
       }
       if (event.type === "status") {
         output.write(`[status] ${event.message}\n`);

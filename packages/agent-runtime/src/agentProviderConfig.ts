@@ -11,6 +11,8 @@ export interface AgentModelConfig {
   endpointKind: AgentEndpointKind;
   /** Stable non-secret identity for response chains when transport credentials rotate per run. */
   chainScope?: string;
+  /** Hosted OpenAI tools require explicit provider support on compatible gateways. */
+  supportsHostedTools?: boolean;
 }
 
 /** Stable, credential-scoped identity for server-managed response chains. */
@@ -53,6 +55,7 @@ export function buildAgentModelConfig(input: {
     baseUrl,
     apiKey,
     fetchImpl: input.fetchImpl,
-    endpointKind: isOpenAiFirstParty(baseUrl) ? "openai" : "openai-compatible"
+    endpointKind: isOpenAiFirstParty(baseUrl) ? "openai" : "openai-compatible",
+    supportsHostedTools: isOpenAiFirstParty(baseUrl)
   };
 }

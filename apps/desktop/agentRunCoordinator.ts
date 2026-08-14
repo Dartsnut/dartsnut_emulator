@@ -28,12 +28,12 @@ export class AgentRunCoordinator {
     return release;
   }
 
-  async begin(): Promise<AgentRunLease> {
+  async begin(replacementReason = "replacement_run"): Promise<AgentRunLease> {
     const releaseTransition = await this.acquireTransition();
     try {
       const previous = this.activeRun;
       if (previous) {
-        previous.abortController.abort();
+        previous.abortController.abort(replacementReason);
         await previous.settled;
       }
 
@@ -71,14 +71,14 @@ export class AgentRunCoordinator {
     return this.activeRun !== null;
   }
 
-  async cancelAndWait(): Promise<boolean> {
+  async cancelAndWait(reason = "cancel_requested"): Promise<boolean> {
     const releaseTransition = await this.acquireTransition();
     try {
       const run = this.activeRun;
       if (!run) {
         return false;
       }
-      run.abortController.abort();
+      run.abortController.abort(reason);
       await run.settled;
       return true;
     } finally {

@@ -18,22 +18,4 @@ describe("transcriptUserBubbleText", () => {
     ].join("\n");
     expect(transcriptUserBubbleText(full)).toBe("make a clock");
   });
-
-  it("extracts the user line from post-intake host instructions", () => {
-    const body = [
-      "Creation **intake just finished**: …",
-      "",
-      "User request: 给我点儿惊喜"
-    ].join("\n");
-    const full = ["## Workspace metadata", "", "User request:", body].join("\n");
-    expect(transcriptUserBubbleText(full)).toBe("给我点儿惊喜");
-  });
-
-  it("returns null when post-intake block has no original message", () => {
-    const body = ["Creation **intake just finished**: …", "", "User request: (none recorded before intake)"].join(
-      "\n"
-    );
-    const full = ["## Workspace metadata", "", "User request:", body].join("\n");
-    expect(transcriptUserBubbleText(full)).toBeNull();
-  });
 });

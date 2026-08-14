@@ -61,14 +61,12 @@ import {
   type CommunitySessionInfo,
   type CommunityLlmQuotaStatus,
   type CommunitySubmitProgress,
-  type UserLocale,
   type ChatMediaAttachment,
   type WidgetConfigScope,
   type WidgetConfigSnapshot,
   type WidgetFieldDefinition,
   type WidgetFieldValues,
   createDefaultWidgetFieldValues,
-  getIntakeCopy,
   inferChatMediaAttachmentKind,
   mergeChatMediaAttachments,
   reconcileWidgetFieldValues
@@ -124,10 +122,6 @@ import {
   setStoredWorkspaceMenuCollapsed
 } from "./splitPaneSizing";
 
-/** Same order as `WIDGET_DISPLAY_SIZES` in `@dartsnut/shared-ipc` — defined here because Vite/Rollup does not resolve that value through the package’s compiled CJS `export *` shim. */
-const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
-
-const CREATION_INTAKE_PROJECT_TYPES: readonly ProjectType[] = ["game", "widget"];
 const AgentMarkdownRenderer = lazy(() => import("./AgentMarkdownRenderer"));
 
 function isValidMachineHost(value: string): boolean {
@@ -782,7 +776,14 @@ function extractPartialStringField(argumentsJson: string, fieldName: string): st
   return out;
 }
 
-function summarizeFileToolCallDelta(event: Extract<AgentEvent, { type: "tool_call_delta" }>): string {
+type FunctionCallPreview = {
+  callId: string;
+  toolName: string;
+  argumentsJson: string;
+  path?: string;
+};
+
+function summarizeFileToolCallDelta(event: FunctionCallPreview): string {
   const args = event.argumentsJson ?? "";
   const trimmedPath = typeof event.path === "string" && event.path.trim() ? event.path.trim() : "file";
   if (event.toolName === "write_file") {
@@ -849,18 +850,6 @@ export function App() {
   const [sessionWidgetSize, setSessionWidgetSize] = useState<WidgetSize | null>(null);
   const [sessionProjectType, setSessionProjectType] = useState<ProjectType | null>(null);
   const [tokenUsage, setTokenUsage] = useState<AgentSessionTokenUsage | null>(null);
-  /** Shown until intake records project type (`intake_project_type_prompt` from host). */
-  const [projectTypePicker, setProjectTypePicker] = useState<{
-    visible: boolean;
-    types: ProjectType[];
-    locale: UserLocale | null;
-  }>({ visible: false, types: [], locale: null });
-  /** Shown after intake records `widget` but not yet `set_widget_size` (host pushes `intake_widget_size_prompt`). */
-  const [widgetSizePicker, setWidgetSizePicker] = useState<{
-    visible: boolean;
-    sizes: WidgetSize[];
-    locale: UserLocale | null;
-  }>({ visible: false, sizes: [], locale: null });
   const [machineMcpPicker, setMachineMcpPicker] = useState<{
     visible: boolean;
     machines: MachineMcpQuestionMachine[];
@@ -871,19 +860,12 @@ export function App() {
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
-  const projectTypeIntakeCopy = useMemo(
-    () => getIntakeCopy(projectTypePicker.locale),
-    [projectTypePicker.locale]
-  );
-  const widgetSizeIntakeCopy = useMemo(
-    () => getIntakeCopy(widgetSizePicker.locale),
-    [widgetSizePicker.locale]
-  );
   const activeStreamDeltaRef = useRef("");
   const activeReasoningStreamEntryIdRef = useRef<string | null>(null);
   const activeReasoningIdRef = useRef<string | null>(null);
   const activeReasoningStreamDeltaRef = useRef("");
   const activeReasoningStartedAtRef = useRef<number | null>(null);
+  const sdkFunctionCallsRef = useRef(new Map<string, FunctionCallPreview>());
   const activeToolStatusEntryByKeyRef = useRef<Map<string, string>>(new Map());
   const seenAgentToolAnalyticsRef = useRef<Set<string>>(new Set());
   const activeAgentRunRef = useRef<{ startedAt: number; finished: boolean } | null>(null);
@@ -1443,11 +1425,11 @@ export function App() {
     const role = agentEventTimelineRole(event);
     setEntries((prev) => [
       ...prev,
-      { id: `evt-${seq}-${event.at}`, role, text: formatAgentEventForTimeline(event) }
+      { id: `evt-${seq}-${"at" in event ? event.at : Date.now()}`, role, text: formatAgentEventForTimeline(event) }
     ]);
   }
 
-  function appendOrPatchReasoningStream(event: Extract<AgentEvent, { type: "reasoning_stream" }>): void {
+  function appendOrPatchReasoningStream(event: { reasoningId: string; delta: string; at: number }): void {
     const activeId = activeReasoningStreamEntryIdRef.current;
     const activeReasoningId = activeReasoningIdRef.current;
     if (!activeId || (activeReasoningId && activeReasoningId !== event.reasoningId)) {
@@ -1494,7 +1476,7 @@ export function App() {
     return Math.round(secs).toString();
   }
 
-  function appendOrPatchStream(event: Extract<AgentEvent, { type: "stream" }>): void {
+  function appendOrPatchStream(event: { delta: string; at: number }): void {
     const activeId = activeStreamEntryIdRef.current;
     if (!activeId) {
       const seq = eventSeqRef.current;
@@ -1650,42 +1632,8 @@ export function App() {
       if (discardAgentEventsRef.current) {
         return;
       }
-      if (event.type === "intake_project_type_prompt") {
-        if (event.visible) {
-          setMachineMcpPicker({ visible: false, machines: [], manualOnly: true });
-        }
-        setProjectTypePicker({
-          visible: event.visible,
-          locale: event.visible ? event.locale ?? null : null,
-          types:
-            event.visible && event.options && event.options.length > 0
-              ? event.options
-              : event.visible
-                ? [...CREATION_INTAKE_PROJECT_TYPES]
-                : []
-        });
-        return;
-      }
-      if (event.type === "intake_widget_size_prompt") {
-        if (event.visible) {
-          setMachineMcpPicker({ visible: false, machines: [], manualOnly: true });
-        }
-        setWidgetSizePicker({
-          visible: event.visible,
-          locale: event.visible ? event.locale ?? null : null,
-          sizes:
-            event.visible && event.sizes && event.sizes.length > 0
-              ? event.sizes
-              : event.visible
-                ? [...WIDGET_DISPLAY_SIZES]
-                : []
-        });
-        return;
-      }
       if (event.type === "machine_mcp_prompt") {
         if (event.visible) {
-          setProjectTypePicker({ visible: false, types: [], locale: null });
-          setWidgetSizePicker({ visible: false, sizes: [], locale: null });
           setMachineMcpManualIp("");
           setMachineMcpInputError(null);
         }
@@ -1700,81 +1648,118 @@ export function App() {
         setTokenUsage(event.sessionUsage);
         return;
       }
-      if (event.type === "reasoning_stream") {
-        appendOrPatchReasoningStream(event);
-        return;
-      }
-      if (event.type === "stream") {
-        appendOrPatchStream(event);
-        return;
-      }
-      if (event.type === "tool_call_delta") {
-        clearActiveCoalescedStreamEntries();
-        const key = toolStatusKey({ callId: event.callId, toolName: event.toolName, filePath: event.path });
-        if (!key) {
+      if (event.type === "raw_model_stream_event") {
+        const data = event.data && typeof event.data === "object" ? event.data as Record<string, unknown> : null;
+        const responseEvent = data?.type === "model" && data.event && typeof data.event === "object"
+          ? data.event as Record<string, unknown>
+          : null;
+        if (!responseEvent) return;
+        const responseType = typeof responseEvent?.type === "string" ? responseEvent.type : "";
+        if (responseType === "response.output_text.delta" && typeof responseEvent?.delta === "string") {
+          appendOrPatchStream({ delta: responseEvent.delta, at: Date.now() });
           return;
         }
-        const priorId = activeToolStatusEntryByKeyRef.current.get(key);
-        const text = summarizeFileToolCallDelta(event);
-        if (priorId) {
-          setEntries((prev) =>
-            prev.map((entry) =>
+        if (
+          (responseType === "response.reasoning_text.delta" || responseType === "response.reasoning_summary_text.delta") &&
+          typeof responseEvent?.delta === "string"
+        ) {
+          const itemId = typeof responseEvent.item_id === "string" ? responseEvent.item_id : "reasoning";
+          appendOrPatchReasoningStream({ reasoningId: itemId, delta: responseEvent.delta, at: Date.now() });
+          return;
+        }
+        if (responseType === "response.reasoning_text.done" || responseType === "response.reasoning_summary_text.done") {
+          const activeId = activeReasoningStreamEntryIdRef.current;
+          const startedAt = activeReasoningStartedAtRef.current;
+          if (activeId && startedAt != null) {
+            const elapsed = formatReasoningElapsedSeconds(startedAt, Date.now());
+            setEntries((prev) => prev.map((entry) =>
+              entry.id === activeId ? { ...entry, text: `Thought for ${elapsed} s`, reasoningMode: "summary" } : entry
+            ));
+          }
+          activeReasoningStreamEntryIdRef.current = null;
+          activeReasoningIdRef.current = null;
+          activeReasoningStreamDeltaRef.current = "";
+          activeReasoningStartedAtRef.current = null;
+          return;
+        }
+        if (responseType === "response.output_item.added") {
+          const item = responseEvent.item && typeof responseEvent.item === "object"
+            ? responseEvent.item as Record<string, unknown>
+            : null;
+          if (item?.type === "function_call") {
+            const itemId = typeof item.id === "string" ? item.id : String(item.call_id ?? "");
+            sdkFunctionCallsRef.current.set(itemId, {
+              callId: String(item.call_id ?? itemId),
+              toolName: String(item.name ?? "tool"),
+              argumentsJson: typeof item.arguments === "string" ? item.arguments : ""
+            });
+          } else if (item?.type === "web_search_call" || item?.type === "code_interpreter_call") {
+            const toolName = item.type === "web_search_call" ? "web_search" : "code_interpreter";
+            trackAgentEvent("agent_tool_used", { tool_name: toolName, phase: "call" });
+          }
+          return;
+        }
+        if (responseType === "response.function_call_arguments.delta" || responseType === "response.function_call_arguments.done") {
+          const itemId = String(responseEvent.item_id ?? "");
+          const current = sdkFunctionCallsRef.current.get(itemId);
+          if (!current) return;
+          current.argumentsJson = responseType.endsWith(".done") && typeof responseEvent.arguments === "string"
+            ? responseEvent.arguments
+            : current.argumentsJson + (typeof responseEvent.delta === "string" ? responseEvent.delta : "");
+          const path = extractPartialStringField(current.argumentsJson, "path");
+          if (path) current.path = path;
+          if (current.toolName !== "write_file" && current.toolName !== "replace_in_file") return;
+          clearActiveCoalescedStreamEntries();
+          const key = toolStatusKey({ callId: current.callId, toolName: current.toolName, filePath: current.path });
+          if (!key) return;
+          const priorId = activeToolStatusEntryByKeyRef.current.get(key);
+          const text = summarizeFileToolCallDelta(current);
+          if (priorId) {
+            setEntries((prev) => prev.map((entry) =>
               entry.id === priorId
                 ? {
                   ...entry,
                   role: "status",
                   text,
                   toolStatusMeta: {
-                    callId: event.callId,
-                    toolName: event.toolName,
+                    callId: current.callId,
+                    toolName: current.toolName,
                     phase: "call",
-                    filePath: event.path
+                    filePath: current.path
                   }
                 }
                 : entry
-            )
-          );
-          return;
-        }
-        const seq = eventSeqRef.current;
-        eventSeqRef.current += 1;
-        const id = `evt-${seq}-${event.at}`;
-        setEntries((prev) => [
-          ...prev,
-          {
+            ));
+            return;
+          }
+          const seq = eventSeqRef.current;
+          eventSeqRef.current += 1;
+          const id = `evt-${seq}-${Date.now()}`;
+          setEntries((prev) => [...prev, {
             id,
             role: "status",
             text,
             toolStatusMeta: {
-              callId: event.callId,
-              toolName: event.toolName,
+              callId: current.callId,
+              toolName: current.toolName,
               phase: "call",
-              filePath: event.path
+              filePath: current.path
             }
-          }
-        ]);
-        activeToolStatusEntryByKeyRef.current.set(key, id);
+          }]);
+          activeToolStatusEntryByKeyRef.current.set(key, id);
+          return;
+        }
         return;
       }
-      if (event.type === "reasoning_done") {
-        const activeId = activeReasoningStreamEntryIdRef.current;
-        const activeReasoningId = activeReasoningIdRef.current;
-        const startedAt = activeReasoningStartedAtRef.current;
-        if (activeId && startedAt != null && activeReasoningId === event.reasoningId) {
-          const elapsed = formatReasoningElapsedSeconds(startedAt, event.at);
-          setEntries((prev) =>
-            prev.map((entry) =>
-              entry.id === activeId
-                ? { ...entry, text: `Thought for ${elapsed} s`, reasoningMode: "summary" }
-                : entry
-            )
-          );
-        }
-        if (activeReasoningId === event.reasoningId) {
-          activeReasoningStreamEntryIdRef.current = null;
-          activeReasoningIdRef.current = null;
-          activeReasoningStreamDeltaRef.current = "";
-          activeReasoningStartedAtRef.current = null;
+      if (event.type === "agent_updated_stream_event") {
+        return;
+      }
+      if (event.type === "run_item_stream_event") {
+        const item = event.item && typeof event.item === "object" ? event.item as Record<string, unknown> : null;
+        const raw = item?.rawItem && typeof item.rawItem === "object" ? item.rawItem as Record<string, unknown> : null;
+        const toolName = typeof raw?.name === "string" ? raw.name : "tool";
+        if (event.name === "tool_called") {
+          trackAgentEvent("agent_tool_used", { tool_name: toolName, phase: "call" });
         }
         return;
       }
@@ -1865,10 +1850,12 @@ export function App() {
       }
       if (event.type === "final") {
         activeToolStatusEntryByKeyRef.current.clear();
-        if (
-          activeStreamEntryIdRef.current &&
-          activeStreamDeltaRef.current.trim() === event.content.trim()
-        ) {
+        const activeStreamId = activeStreamEntryIdRef.current;
+        if (activeStreamId) {
+          const finalText = event.content.trim();
+          setEntries((prev) => prev.map((entry) =>
+            entry.id === activeStreamId ? { ...entry, text: finalText } : entry
+          ));
           activeStreamEntryIdRef.current = null;
           activeStreamDeltaRef.current = "";
           return;
@@ -1878,8 +1865,19 @@ export function App() {
         const id = `evt-${seq}-${event.at}`;
         setEntries((prev) => {
           const last = prev.length > 0 ? prev[prev.length - 1] : null;
-          if (last && last.role === "agent" && last.text.trim() === event.content.trim()) {
-            return prev;
+          const finalText = event.content.trim();
+          if (last && last.role === "agent") {
+            const lastText = last.text.trim();
+            // Streamed assistant text may be partial, while finalOutput contains
+            // the complete response. Replace that entry instead of appending a
+            // second, overlapping timeline item.
+            if (
+              lastText === finalText ||
+              (lastText.length >= 24 && finalText.startsWith(lastText)) ||
+              (finalText.length >= 24 && lastText.startsWith(finalText))
+            ) {
+              return prev.map((entry) => entry.id === last.id ? { ...entry, text: finalText } : entry);
+            }
           }
           return [...prev, { id, role: "agent", text: event.content }];
         });
@@ -2193,8 +2191,6 @@ export function App() {
     setSessionWidgetSize(null);
     setSessionProjectType(null);
     setTokenUsage(null);
-    setWidgetSizePicker({ visible: false, sizes: [], locale: null });
-    setProjectTypePicker({ visible: false, types: [], locale: null });
     setPrompt("");
     setChatMediaAttachments([]);
     setChatAttachmentError(null);
@@ -2244,8 +2240,6 @@ export function App() {
   }
 
   async function submitPrompt(request: PromptRequest, firstUserMessageForTitle?: string) {
-    setWidgetSizePicker({ visible: false, sizes: [], locale: null });
-    setProjectTypePicker({ visible: false, types: [], locale: null });
     discardAgentEventsRef.current = false;
     setSending(true);
     if (!api) {
@@ -2257,11 +2251,10 @@ export function App() {
     const shouldGenerateTitle = !request.chatId && Boolean(firstUserMessageForTitle?.trim());
     trackAgentEvent("agent_run_started", {
       provider: providerSettings.activeProvider,
-      template_mode: request.templateMode ?? (request.creationIntake ? "creation_intake" : "follow_up"),
+      template_mode: request.templateMode ?? "follow_up",
       project_type: request.projectType ?? sessionProjectType ?? "unknown",
       workspace_kind: request.workspacePath ? "persisted" : "none",
-      attachment_count: request.chatMediaAttachments?.length ?? 0,
-      creation_intake: request.creationIntake === true
+      attachment_count: request.chatMediaAttachments?.length ?? 0
     });
     try {
       const result: SendPromptResponse = await api.sendPrompt(request);
@@ -2445,44 +2438,6 @@ export function App() {
     }
   }
 
-  async function handleProjectTypeChip(projectType: ProjectType) {
-    if (!api) {
-      return;
-    }
-    const res = await api.intakeSubmitQuestionAnswer({ kind: "project_type", value: projectType });
-    trackAgentEvent("agent_question_answered", {
-      question_type: "project_type",
-      answer_method: "chip",
-      outcome: res.ok ? "success" : "rejected"
-    });
-    if (!res.ok) {
-      if (res.reason === "no_pending") {
-        postStatus(projectTypeIntakeCopy.status.noPendingProjectType);
-      } else if (res.reason === "kind_mismatch" || res.reason === "invalid_value") {
-        postStatus(projectTypeIntakeCopy.status.choiceMismatch);
-      }
-    }
-  }
-
-  async function handleWidgetSizeChip(size: WidgetSize) {
-    if (!api) {
-      return;
-    }
-    const res = await api.intakeSubmitQuestionAnswer({ kind: "widget_size", value: size });
-    trackAgentEvent("agent_question_answered", {
-      question_type: "widget_size",
-      answer_method: "chip",
-      outcome: res.ok ? "success" : "rejected"
-    });
-    if (!res.ok) {
-      if (res.reason === "no_pending") {
-        postStatus(widgetSizeIntakeCopy.status.noPendingWidgetSize);
-      } else if (res.reason === "kind_mismatch" || res.reason === "invalid_value") {
-        postStatus(widgetSizeIntakeCopy.status.choiceMismatch);
-      }
-    }
-  }
-
   async function handleMachineMcpChoice(value: string) {
     if (!api) {
       return;
@@ -2611,9 +2566,9 @@ export function App() {
       workspacePath: bootstrap?.workspaceRoot ?? undefined,
       projectId: bootstrap?.activeProjectId ?? undefined,
       chatId: bootstrap?.activeChatId ?? undefined,
-      templateMode: bootstrap?.needsCreationIntake ? undefined : sessionTemplateMode ?? undefined,
-      widgetSize: bootstrap?.needsCreationIntake ? undefined : sessionWidgetSize ?? undefined,
-      projectType: bootstrap?.needsCreationIntake ? undefined : sessionProjectType ?? undefined
+      templateMode: sessionTemplateMode ?? undefined,
+      widgetSize: sessionWidgetSize ?? undefined,
+      projectType: sessionProjectType ?? undefined
     }, visibleUserText);
   }
 
@@ -2623,8 +2578,6 @@ export function App() {
     }
     clearActiveCoalescedStreamEntries();
     activeToolStatusEntryByKeyRef.current.clear();
-    setWidgetSizePicker({ visible: false, sizes: [], locale: null });
-    setProjectTypePicker({ visible: false, types: [], locale: null });
     finishAgentRun("cancelled");
     try {
       await api.cancelAgent();
@@ -2927,28 +2880,7 @@ export function App() {
               </div>
             </div>
           ) : null}
-          {/* Blocking `dartsnut_ask_question` UI — shown while the host waits for an answer. */}
-          {projectTypePicker.visible && projectTypePicker.types.length > 0 ? (
-            <AskQuestionCard
-              question={projectTypeIntakeCopy.projectTypeQuestion}
-              labels={projectTypeIntakeCopy.card}
-              options={projectTypePicker.types.map((pt) => ({
-                value: pt,
-                label: projectTypeIntakeCopy.projectTypeLabels[pt],
-              }))}
-              onSubmit={(value) => void handleProjectTypeChip(value as ProjectType)}
-            />
-          ) : widgetSizePicker.visible && widgetSizePicker.sizes.length > 0 ? (
-            <AskQuestionCard
-              question={widgetSizeIntakeCopy.widgetSizeQuestion}
-              labels={widgetSizeIntakeCopy.card}
-              options={widgetSizePicker.sizes.map((sz) => ({
-                value: sz,
-                label: sz,
-              }))}
-              onSubmit={(value) => void handleWidgetSizeChip(value as WidgetSize)}
-            />
-          ) : machineMcpPicker.visible ? (
+          {machineMcpPicker.visible ? (
             <AskQuestionCard
               question={
                 machineMcpPicker.manualOnly
@@ -3202,7 +3134,6 @@ export function App() {
                 <>
                   <SettingsRow><div className="rounded-[var(--radius-md)] border border-[var(--color-notice-warning-border)] bg-[var(--color-notice-warning-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
                     Custom providers must expose an OpenAI Responses API-compatible endpoint.
-                    Chat Completions and Gemini APIs are not supported.
                   </div></SettingsRow>
                   <SettingsRow title="API base URL" description="Responses API-compatible endpoint." control={<input
                       type="url"

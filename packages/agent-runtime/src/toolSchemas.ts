@@ -2,16 +2,21 @@
  * OpenAI Responses function definitions for the agent runtime's tools.
  *
  * File tools mirror `SessionEngine.normalizeAction` / `executeAction`.
- * `dartsnut_project_intake` and `dartsnut_ask_question` are executed by the host (Electron main) when configured.
  */
 
-import type { FunctionTool } from "openai/resources/responses/responses";
 import { DEFERRED_SKILL_IDS } from "./skillBundle";
 
-type ToolDefinition = Omit<FunctionTool, "type">;
+export type AgentToolSchema = {
+  type: "function";
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  strict: boolean;
+};
+type ToolDefinition = Omit<AgentToolSchema, "type">;
 type WrappedToolDefinition = { type: "function"; function: ToolDefinition };
 
-function responseTool(definition: WrappedToolDefinition): FunctionTool {
+function responseTool(definition: WrappedToolDefinition): AgentToolSchema {
   return { type: "function", ...definition.function };
 }
 
@@ -19,12 +24,8 @@ const GET_DARTSNUT_SKILL_TOOL = responseTool({
   type: "function",
   function: {
     name: "get_dartsnut_skill",
-    description: [
-      "Load markdown for a **Dartsnut house skill** (incremental scaffold, conf contract, pydartsnut runtime, display mapping, assets, etc.).",
-      "Load **just-in-time** when the **upcoming step** needs it — decide from **meaning** in English, Simplified Chinese, or Traditional Chinese, not exact keywords (e.g. user offers a picture → `asset-pipeline`, then Assets pane bind — not chat paste).",
-      "Per the router: always load `caveman` first, then `creator-incremental`, `conf-contract`, `pydartsnut-core` first for new projects; other ids only when that step needs them.",
-      "Call before write_file / replace_in_file / copy_asset_file for the step you are on. Not for workspace files — use read_file. Returns JSON with `content` when `ok` is true."
-    ].join(" "),
+    description:
+      "Load one Dartsnut domain skill before editing related project files. Returns JSON with `content` when successful.",
     parameters: {
       type: "object",
       properties: {
@@ -38,71 +39,6 @@ const GET_DARTSNUT_SKILL_TOOL = responseTool({
       additionalProperties: false
     },
     strict: true
-  }
-});
-
-const DARTSNUT_ASK_QUESTION_TOOL = responseTool({
-  type: "function",
-  function: {
-    name: "dartsnut_ask_question",
-    description: [
-      "Dartsnut Agent **creation intake** only (host-executed). Presents a **blocking** question in the desktop UI — the call does not return until the user answers.",
-      "Use native function calls only. Prefer this whenever the user must choose in the UI rather than inferring from their message.",
-      "**question_id** `project_type` — Game vs Widget chips; on success updates the same intake state as `set_project_type`.",
-      "**question_id** `widget_display_size` — only when intake is already `widget`; shows WxH chips; on success same as `set_widget_size`.",
-      "Policy: if project type or widget size is uncertain, ask first; do not guess or default."
-    ].join(" "),
-    parameters: {
-      type: "object",
-      properties: {
-        question_id: {
-          type: "string",
-          enum: ["project_type", "widget_display_size"],
-          description: "Which blocking intake question to present."
-        }
-      },
-      required: ["question_id"],
-      additionalProperties: false
-    },
-    strict: true
-  }
-});
-
-const DARTSNUT_PROJECT_INTAKE_TOOL = responseTool({
-  type: "function",
-  function: {
-    name: "dartsnut_project_intake",
-    description: [
-      "Dartsnut Agent **new-project / workspace** setup (host-executed). Use standard function calls only.",
-      "Actions:",
-      "- **set_project_type** — record whether the user is building a `game` or `widget` (required before scaffolding). Use when the user already stated it clearly in text; otherwise call **`dartsnut_ask_question`** with `question_id` `project_type` first.",
-      "- **set_widget_size** — for widgets only; one of the supported WxH tokens. Use when the user already named a supported size; otherwise call **`dartsnut_ask_question`** with `widget_display_size` first.",
-      "- Never default project_type or widget_size when uncertain; ask the user.",
-      "- **read_workspace_conf** — reads `conf.json` in the **selected** workspace and reports deploy-style validity plus guidance. **If no workspace is selected yet**, the host **creates** an empty directory under the OS temp folder, selects it, then reads — call after type (and widget size if applicable) are resolved; call again if the user switches workspace via the app shell.",
-      "Typical order when starting from no workspace: infer or **`dartsnut_ask_question`(`project_type`)** → if widget, infer size or **`dartsnut_ask_question`(`widget_display_size`)** then `set_widget_size` when needed → **`read_workspace_conf`** (host allocates temp workspace on first call if needed), then ask **one** focused follow-up question when the snapshot shows an existing project or invalid `conf.json`."
-    ].join(" "),
-    parameters: {
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: ["set_project_type", "set_widget_size", "read_workspace_conf"]
-        },
-        project_type: {
-          type: "string",
-          enum: ["game", "widget"],
-          description: "Required when action is set_project_type."
-        },
-        widget_size: {
-          type: "string",
-          enum: ["128x160", "128x128", "128x64", "64x32"],
-          description: "Required when action is set_widget_size."
-        }
-      },
-      required: ["action"],
-      additionalProperties: false
-    },
-    strict: false
   }
 });
 
@@ -147,7 +83,7 @@ const AGENT_FILE_TOOL_DEFINITIONS: WrappedToolDefinition[] = [
     function: {
       name: "list_files",
       description:
-        "List files inside the agent workspace, recursively. Returns paths relative to the workspace root. Use this to discover the layout before reading or editing.",
+        "List files inside the agent workspace, recursively. Returns paths relative to the workspace root. Generated dependency/cache directories including `.venv/`, `venv/`, `node_modules/`, `.dartsnut/`, and `.git/` are skipped.",
       parameters: {
         type: "object",
         properties: {
@@ -155,6 +91,10 @@ const AGENT_FILE_TOOL_DEFINITIONS: WrappedToolDefinition[] = [
             type: "string",
             description:
               "Relative subdirectory to list. Defaults to the workspace root when omitted."
+          },
+          max_results: {
+            type: "number",
+            description: "Maximum number of paths to return (default 500, hard cap 2000)."
           }
         },
         additionalProperties: false
@@ -167,7 +107,7 @@ const AGENT_FILE_TOOL_DEFINITIONS: WrappedToolDefinition[] = [
     function: {
       name: "grep_files",
       description:
-        "Search workspace file contents with a regular expression. Returns matching lines with their workspace-relative path and 1-based line number. Use this to find where something is defined or used before reading or editing. Binary files, `.dartsnut/`, and `node_modules/` are skipped.",
+        "Search workspace file contents with a regular expression. Returns matching lines with their workspace-relative path and 1-based line number. Binary files and generated dependency/cache directories such as `.venv/`, `venv/`, `.dartsnut/`, and `node_modules/` are skipped.",
       parameters: {
         type: "object",
         properties: {
@@ -204,7 +144,7 @@ const AGENT_FILE_TOOL_DEFINITIONS: WrappedToolDefinition[] = [
     function: {
       name: "glob_files",
       description:
-        "List workspace files whose relative path matches a glob pattern (e.g. `**/*.py`, `fonts/**`, `conf.json`). Returns sorted workspace-relative paths. Use to discover files by name/extension before reading them.",
+        "List workspace files whose relative path matches a glob pattern (e.g. `**/*.py`, `fonts/**`, `conf.json`). Generated dependency/cache directories such as `.venv/`, `venv/`, `.dartsnut/`, and `node_modules/` are skipped.",
       parameters: {
         type: "object",
         properties: {
@@ -366,7 +306,7 @@ const AGENT_FILE_TOOL_DEFINITIONS: WrappedToolDefinition[] = [
   }
 ];
 
-export const AGENT_FILE_TOOL_SCHEMAS: FunctionTool[] = AGENT_FILE_TOOL_DEFINITIONS.map(responseTool);
+export const AGENT_FILE_TOOL_SCHEMAS: AgentToolSchema[] = AGENT_FILE_TOOL_DEFINITIONS.map(responseTool);
 
 const RELOAD_EMULATOR_TOOL = responseTool({
   type: "function",
@@ -519,12 +459,12 @@ const CHECK_PYTHON_TOOL = responseTool({
 
 const SEARCH_TOOL_NAMES = ["grep_files", "glob_files"] as const;
 
-function fileTool(name: string): FunctionTool {
+function fileTool(name: string): AgentToolSchema {
   return AGENT_FILE_TOOL_SCHEMAS.find((tool) => tool.name === name)!;
 }
 
-/** Default / full tool surface: file + search tools, deferred skills, emulator verify, check_python, project intake. */
-export const AGENT_TOOL_SCHEMAS: FunctionTool[] = [
+/** Default tool surface: workspace, skills, emulator verification, and machine MCP. */
+export const AGENT_TOOL_SCHEMAS: AgentToolSchema[] = [
   ...AGENT_FILE_TOOL_SCHEMAS,
   GET_DARTSNUT_SKILL_TOOL,
   RELOAD_EMULATOR_TOOL,
@@ -533,8 +473,6 @@ export const AGENT_TOOL_SCHEMAS: FunctionTool[] = [
   CONTROL_EMULATOR_INPUT_TOOL,
   RUN_EMULATOR_SCENARIO_TOOL,
   CHECK_PYTHON_TOOL,
-  DARTSNUT_ASK_QUESTION_TOOL,
-  DARTSNUT_PROJECT_INTAKE_TOOL,
   DARTSNUT_MACHINE_MCP_TOOL
 ];
 
@@ -544,7 +482,7 @@ export type AgentToolSchemaDefinition = {
 };
 
 /** Asset applier: bind art to existing slots (no copy_asset_file, no intake). */
-export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: FunctionTool[] = [
+export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: AgentToolSchema[] = [
   fileTool("list_files"),
   ...SEARCH_TOOL_NAMES.map(fileTool),
   fileTool("read_file"),
@@ -559,7 +497,7 @@ export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: FunctionTool[] = [
   CHECK_PYTHON_TOOL
 ];
 
-const ALL_TOOL_SCHEMAS: FunctionTool[] = [
+const ALL_TOOL_SCHEMAS: AgentToolSchema[] = [
   ...AGENT_TOOL_SCHEMAS,
   ...AGENT_ASSET_APPLIER_TOOL_SCHEMAS
 ];

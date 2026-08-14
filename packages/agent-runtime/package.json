@@ -10,8 +10,8 @@
   },
   "dependencies": {
     "@dartsnut/shared-ipc": "workspace:*",
-    "@openai/agents": "^0.11.6",
-    "openai": "^6.35.0",
+    "@openai/agents": "0.15.0",
+    "openai": "7.2.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

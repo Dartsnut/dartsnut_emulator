@@ -1,17 +1,12 @@
 import type { ProjectType, UserLocale, WidgetSize } from "@dartsnut/shared-ipc";
 import type { ProjectArtifactStatus } from "./projectArtifacts";
 import { readProjectArtifactStatus } from "./projectArtifacts";
-import {
-  isIntakeStateReady,
-  readWorkspaceCreatorHints,
-  type IntakeToolState
-} from "./creationIntakeHost";
+import { readWorkspaceCreatorHints } from "./projectRouting";
 
 export type DartsnutTemplateMode =
   | "game-creator"
   | "widget-creator"
   | "asset-applier"
-  | "creation-intake"
   | null;
 
 /** Mutable SDK run context shared across orchestrator handoffs. */
@@ -20,12 +15,11 @@ export interface DartsnutRunContext {
   projectType?: ProjectType;
   widgetSize?: WidgetSize;
   templateMode: DartsnutTemplateMode;
-  intakeReady: boolean;
   artifacts: ProjectArtifactStatus;
   assetApplierMode: boolean;
   skillsDir: string;
   preferredUserLocale: UserLocale | null;
-  /** Original user message for the active prompt (creator continuation after intake). */
+  /** Original user message for the active prompt. */
   originalUserPrompt?: string;
   /** Last active specialist agent name (updated by event bridge). */
   activeAgentName?: string;
@@ -39,74 +33,48 @@ export type SeedDartsnutRunContextInput = {
   widgetSize?: WidgetSize;
   templateMode?: DartsnutTemplateMode;
   assetApplierMode?: boolean;
-  intakeState?: IntakeToolState;
-  hostIntakeReadyToFinish?: () => boolean;
   /** Original user prompt for creator continuation / handoff payloads. */
   originalUserPrompt?: string;
 };
 
-function resolveWorkspaceIntakeHydration(
+function resolveWorkspaceRouting(
   workspacePath: string,
-  artifacts: ProjectArtifactStatus
-): Pick<DartsnutRunContext, "intakeReady" | "projectType" | "widgetSize"> {
+  _artifacts: ProjectArtifactStatus
+): Pick<DartsnutRunContext, "projectType" | "widgetSize"> {
   const hints = readWorkspaceCreatorHints(workspacePath);
-  if (!hints) {
-    return { intakeReady: false };
-  }
-  if (artifacts.initialPassComplete) {
-    return {
-      intakeReady: true,
-      projectType: hints.projectType,
-      widgetSize: hints.widgetSize
-    };
-  }
-  const intakeReady = hints.projectType === "game" || Boolean(hints.widgetSize);
+  if (!hints) return {};
   return {
-    intakeReady,
     projectType: hints.projectType,
     widgetSize: hints.widgetSize
   };
 }
 
-function mergeIntakeRouting(
+function mergeRouting(
   input: SeedDartsnutRunContextInput,
   artifacts: ProjectArtifactStatus
-): Pick<DartsnutRunContext, "intakeReady" | "projectType" | "widgetSize"> {
+): Pick<DartsnutRunContext, "projectType" | "widgetSize"> {
   const templateMode = input.templateMode ?? null;
-  const fromHostState =
-    input.hostIntakeReadyToFinish?.() ??
-    (input.intakeState ? isIntakeStateReady(input.intakeState) : false);
-  if (fromHostState) {
-    return {
-      intakeReady: true,
-      projectType:
-        input.intakeState?.projectType ??
-        input.projectType ??
-        (templateMode === "widget-creator" ? "widget" : templateMode === "game-creator" ? "game" : undefined),
-      widgetSize: input.intakeState?.widgetSize ?? input.widgetSize
-    };
-  }
-  const fromWorkspace = resolveWorkspaceIntakeHydration(input.workspacePath, artifacts);
-  if (fromWorkspace.intakeReady) {
+  const fromWorkspace = resolveWorkspaceRouting(input.workspacePath, artifacts);
+  if (fromWorkspace.projectType) {
     return fromWorkspace;
   }
   return {
-    intakeReady: false,
-    projectType: input.projectType,
+    projectType:
+      input.projectType ??
+      (templateMode === "widget-creator" ? "widget" : templateMode === "game-creator" ? "game" : undefined),
     widgetSize: input.widgetSize
   };
 }
 
 export function seedDartsnutRunContext(input: SeedDartsnutRunContextInput): DartsnutRunContext {
   const artifacts = readProjectArtifactStatus(input.workspacePath);
-  const { intakeReady, projectType, widgetSize } = mergeIntakeRouting(input, artifacts);
+  const { projectType, widgetSize } = mergeRouting(input, artifacts);
   const templateMode = input.templateMode ?? null;
   return {
     workspacePath: input.workspacePath,
     projectType,
     widgetSize,
     templateMode,
-    intakeReady,
     artifacts,
     assetApplierMode: input.assetApplierMode ?? templateMode === "asset-applier",
     skillsDir: input.skillsDir,
@@ -115,31 +83,13 @@ export function seedDartsnutRunContext(input: SeedDartsnutRunContextInput): Dart
   };
 }
 
-export function refreshDartsnutRunContext(
-  ctx: DartsnutRunContext,
-  hostIntakeReadyToFinish?: () => boolean,
-  intakeState?: IntakeToolState
-): void {
+export function refreshDartsnutRunContext(ctx: DartsnutRunContext): void {
   ctx.artifacts = readProjectArtifactStatus(ctx.workspacePath);
-  const hostReady =
-    (intakeState ? isIntakeStateReady(intakeState) : false) ||
-    (hostIntakeReadyToFinish?.() ?? false);
-  if (hostReady && intakeState) {
-    ctx.intakeReady = true;
-    ctx.projectType = intakeState.projectType;
-    ctx.widgetSize = intakeState.widgetSize;
-    return;
-  }
-  const fromWorkspace = resolveWorkspaceIntakeHydration(ctx.workspacePath, ctx.artifacts);
-  if (fromWorkspace.intakeReady) {
-    ctx.intakeReady = true;
+  const fromWorkspace = resolveWorkspaceRouting(ctx.workspacePath, ctx.artifacts);
+  if (fromWorkspace.projectType) {
     ctx.projectType = fromWorkspace.projectType;
     ctx.widgetSize = fromWorkspace.widgetSize;
-    return;
   }
-  ctx.intakeReady = false;
-  ctx.projectType = undefined;
-  ctx.widgetSize = undefined;
 }
 
 export function formatRunContextSnapshot(ctx: DartsnutRunContext): string {
@@ -149,7 +99,6 @@ export function formatRunContextSnapshot(ctx: DartsnutRunContext): string {
       projectType: ctx.projectType ?? null,
       widgetSize: ctx.widgetSize ?? null,
       templateMode: ctx.templateMode,
-      intakeReady: ctx.intakeReady,
       artifacts: ctx.artifacts,
       assetApplierMode: ctx.assetApplierMode,
       originalUserPrompt: ctx.originalUserPrompt ?? null

@@ -1,5 +1,5 @@
 import { Agent, Runner } from "@openai/agents";
-import { configureAgentsSdk, type AgentModelConfig } from "@dartsnut/agent-runtime";
+import { configureAgentsSdk, createModelRetrySettings, type AgentModelConfig } from "@dartsnut/agent-runtime";
 
 const MAX_TITLE_INPUT_CHARS = 4_000;
 const MAX_TITLE_CHARS = 80;
@@ -58,7 +58,7 @@ export async function generateChatTitle(
       model: modelConfig.model,
       instructions: "Return only a short chat title. Never call tools.",
       tools: [],
-      modelSettings: { store: false, maxTokens: 64 }
+      modelSettings: { store: false, maxTokens: 64, retry: createModelRetrySettings() }
     });
     const result = await new Runner({ modelProvider: provider }).run(
       titleAgent,

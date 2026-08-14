@@ -9,6 +9,7 @@ export * from "./agentsEventBridge";
 export * from "./agentTools";
 export * from "./dartsnutAgentsSession";
 export * from "./modelInputGuard";
+export * from "./modelRetry";
 export * from "./toolStatusHelpers";
 export * from "./tokenUsage";
 export * from "./agentProviderConfig";

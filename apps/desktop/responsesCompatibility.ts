@@ -1,5 +1,6 @@
 const POLOAI_HOST = "poloai.top";
 const VALID_TERMINAL_TYPES = new Set(["response.completed", "response.incomplete"]);
+const VALID_OUTPUT_STATUSES = new Set(["in_progress", "completed", "incomplete"]);
 
 export function isPoloAiUrl(input: string | URL): boolean {
   try { return new URL(String(input)).hostname.toLowerCase() === POLOAI_HOST; } catch { return false; }
@@ -12,7 +13,9 @@ export function normalizePoloAiTerminalPayload(payload: unknown): { payload: unk
   const expectedStatus = record.type === "response.completed" ? "completed" : "incomplete";
   let normalizedCount = 0;
   const output = record.response!.output.map((item) => {
-    if (!item || typeof item !== "object" || (item as { status?: unknown }).status !== "finished") return item;
+    if (!item || typeof item !== "object") return item;
+    const status = (item as { status?: unknown }).status;
+    if (typeof status === "string" && VALID_OUTPUT_STATUSES.has(status)) return item;
     normalizedCount += 1;
     return { ...(item as Record<string, unknown>), status: expectedStatus };
   });

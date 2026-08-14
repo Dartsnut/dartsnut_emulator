@@ -6,6 +6,7 @@ import {
   generateChatTitle,
   sanitizeGeneratedChatTitle
 } from "./chatTitle";
+import { fetchBufferedModelResponse } from "./bufferedModelFetch";
 
 describe("chat title generation", () => {
   it("builds a simple prompt from only the first user message", () => {
@@ -70,14 +71,87 @@ describe("chat title generation", () => {
   });
 
   it("uses the first-message fallback when the provider fails", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(async () => new Response("failed", { status: 500 }));
     const config: AgentModelConfig = {
       model: "test-model",
       baseUrl: "https://example.com/v1",
       apiKey: "test-key",
       endpointKind: "openai-compatible",
-      fetchImpl: vi.fn(async () => new Response("failed", { status: 500 })) as unknown as typeof fetch
+      fetchImpl: ((input, init) => fetchBufferedModelResponse(
+        fetchImpl as unknown as typeof fetch,
+        input,
+        init
+      )) as typeof fetch
     };
 
-    await expect(generateChatTitle(config, "  Fix   project switching  ")).resolves.toBe("Fix project switching");
+    try {
+      const title = generateChatTitle(config, "  Fix   project switching  ");
+      await vi.runAllTimersAsync();
+      await expect(title).resolves.toBe("Fix project switching");
+      expect(fetchImpl).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a disconnected SSE response before exposing partial events", async () => {
+    vi.useFakeTimers();
+    const brokenStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("data: partial\n\n"));
+        controller.error(new Error("net::ERR_CONNECTION_CLOSED"));
+      }
+    });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(brokenStream, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: "resp_title_retry",
+        object: "response",
+        created_at: 0,
+        status: "completed",
+        error: null,
+        incomplete_details: null,
+        instructions: null,
+        metadata: null,
+        model: "test-model",
+        output: [{ id: "msg_retry", type: "message", role: "assistant", content: [{ type: "output_text", text: "Recovered Title", annotations: [] }] }],
+        output_text: "Recovered Title",
+        parallel_tool_calls: false,
+        previous_response_id: null,
+        prompt: null,
+        reasoning: null,
+        service_tier: "default",
+        temperature: null,
+        text: { format: { type: "text" } },
+        tool_choice: "auto",
+        tools: [],
+        top_p: null,
+        truncation: "disabled",
+        usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 }
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    const config: AgentModelConfig = {
+      model: "test-model",
+      baseUrl: "https://example.com/v1",
+      apiKey: "test-key",
+      endpointKind: "openai-compatible",
+      fetchImpl: ((input, init) => fetchBufferedModelResponse(
+        fetchImpl as unknown as typeof fetch,
+        input,
+        init
+      )) as typeof fetch
+    };
+
+    try {
+      const title = generateChatTitle(config, "Recover this title");
+      await vi.runAllTimersAsync();
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      await expect(title).resolves.toBe("Recovered Title");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

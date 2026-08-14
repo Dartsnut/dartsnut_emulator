@@ -177,6 +177,7 @@ import {
   startAppUpdateCheck
 } from "./appUpdater";
 import { normalizePoloAiResponse } from "./responsesCompatibility";
+import { fetchBufferedModelResponse } from "./bufferedModelFetch";
 
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
@@ -235,7 +236,7 @@ function customProviderFetch(): typeof fetch {
       bodyBytes: body ? Buffer.byteLength(body, "utf8") : undefined
     });
     try {
-      const response = normalizePoloAiResponse(await fetchImpl(input, init), requestUrl);
+      const response = normalizePoloAiResponse(await fetchBufferedModelResponse(fetchImpl, input, init), requestUrl);
       const meta = {
         host: url?.host,
         path: url?.pathname,
@@ -3822,13 +3823,20 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     }
     return { ok: true, sessionRouting };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown prompt error";
+    const bridgeFailure = bridgeRun?.readFailure();
+    const message = bridgeFailure?.message ?? (error instanceof Error ? error.message : "Unknown prompt error");
     if (message !== AGENT_STOPPED_MESSAGE) {
       const event: AgentEvent = { type: "error", message, at: Date.now() };
       logAgentEventToConsole(event, true);
       sendToRenderer(IPCChannels.subscribeEvents, event);
     }
-    return { ok: false };
+    if (bridgeFailure?.reason === "auth_required") {
+      clearCommunityAuth(getCommunityUserDataPath());
+    }
+    return {
+      ok: false,
+      ...(bridgeFailure ? { failureReason: bridgeFailure.reason, message: bridgeFailure.message } : {})
+    };
   } finally {
     await bridgeRun?.finish("prompt_finalizer");
     if (activeDartsnutLlmBridgeRun === bridgeRun) {

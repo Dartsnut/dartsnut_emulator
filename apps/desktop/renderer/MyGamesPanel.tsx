@@ -561,7 +561,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
       setVersionConflict(null);
       setVersionUpdateError(null);
       setError(null);
-      setNotice(`Updated conf.json and pyproject.toml to version ${result.workspace.version}. Submit again when ready.`);
+      setNotice(`Updated pyproject.toml to version ${result.workspace.version}. Submit again when ready.`);
     } finally {
       setUpdatingVersion(false);
     }
@@ -654,7 +654,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
                   <p className="mt-1 text-xs text-[var(--color-text-subtle)]">
                     {workspace.eligible
                       ? `${projectLabel(workspace.projectType)} · ${workspace.appId} · v${workspace.version || "unset"}`
-                      : "Open a project with a valid conf.json to submit it."}
+                      : "Open a project with a valid pyproject.toml to submit it."}
                   </p>
                 </div>
                 {workspace.eligible ? <span className="community-workspace-pulse" aria-hidden /> : null}
@@ -833,7 +833,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <label className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Version<input className={inputClass} value={form.version} disabled /></label>
-                <div className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]"><span>Source</span><div className="flex h-10 items-center rounded-md border border-edge bg-[var(--color-surface)] px-3 font-[family-name:var(--font-mono)] text-[10px] text-[var(--color-text-muted)]">conf.json · canonical</div></div>
+                <div className="flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]"><span>Source</span><div className="flex h-10 items-center rounded-md border border-edge bg-[var(--color-surface)] px-3 font-[family-name:var(--font-mono)] text-[10px] text-[var(--color-text-muted)]">pyproject.toml · canonical</div></div>
                 <label className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Release notes<textarea className={textAreaClass} value={form.description} maxLength={2000} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} /></label>
                 <label className="col-span-2 flex flex-col gap-1 text-xs text-[var(--color-text-subtle)]">Optional fields<textarea className={cn(textAreaClass, "min-h-16")} value={form.fields} maxLength={2000} onChange={(event) => setForm((current) => ({ ...current, fields: event.target.value }))} /></label>
               </div>
@@ -912,7 +912,7 @@ export const MyGamesPanel = memo(function MyGamesPanel({
             </label>
             {versionUpdateError ? <p className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs leading-relaxed text-red-700 dark:text-red-200">{versionUpdateError}</p> : null}
             <div className="mt-3 rounded-md border border-edge bg-[var(--color-surface)] px-3 py-2 font-[family-name:var(--font-mono)] text-[10px] leading-relaxed text-[var(--color-text-muted)]">
-              <div>conf.json → version</div>
+              <div>pyproject.toml → project.name</div>
               <div>pyproject.toml → project.version</div>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">

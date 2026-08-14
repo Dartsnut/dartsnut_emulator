@@ -5,6 +5,7 @@ import {
   type WidgetConfigScope,
   type WidgetConfigSnapshot,
 } from "@dartsnut/shared-ipc";
+import { readWorkspaceProjectClassification } from "./workspaceProjectMetadata";
 
 export function watchWidgetConfigFile(
   confPath: string,
@@ -40,18 +41,16 @@ export function readWidgetConfigSnapshot(
     };
   }
   const configKey = path.resolve(confPath);
-  if (!fs.existsSync(confPath)) {
-    return { scope, status: "missing", configKey, confPath, message: "conf.json was not found." };
-  }
+  const projectRoot = path.dirname(confPath);
   try {
-    const raw = JSON.parse(fs.readFileSync(confPath, "utf-8")) as unknown;
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      return { scope, status: "invalid", configKey, confPath, message: "conf.json must contain a JSON object." };
+    const classification = readWorkspaceProjectClassification(projectRoot);
+    if (!classification.ok) {
+      return { scope, status: "invalid", configKey, confPath, message: classification.message };
     }
-    const conf = raw as Record<string, unknown>;
-    if (conf.type?.toString().toLowerCase() !== "widget") {
+    if (classification.projectType !== "widget" || !classification.conf) {
       return { scope, status: "not_widget", configKey, confPath, message: "The selected project is not a widget." };
     }
+    const conf = classification.conf;
     const parsed = parseWidgetFieldDefinitions(conf.fields ?? []);
     return {
       scope,
@@ -67,7 +66,7 @@ export function readWidgetConfigSnapshot(
       status: "invalid",
       configKey,
       confPath,
-      message: error instanceof Error ? `Could not parse conf.json: ${error.message}` : "Could not parse conf.json.",
+      message: error instanceof Error ? error.message : "Could not read the project configuration.",
     };
   }
 }

@@ -5,45 +5,41 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
-  syncPyprojectProjectMetadata,
+  updatePyprojectProjectVersion,
   syncWorkspaceProjectMetadata
 } = require("./dist-electron/workspaceProjectMetadata.js");
 
-test("syncPyprojectProjectMetadata updates only project name and version", () => {
+test("updatePyprojectProjectVersion updates only project version", () => {
   const source = `# custom\n[project]\nname = "old"\nversion = "0.1.0"\ndependencies = ["demo==1"]\n\n[tool.demo]\nname = "untouched"\nversion = "also-untouched"\n`;
-  const result = syncPyprojectProjectMetadata(source, "canonical-id", "2.3.4");
-  assert.match(result, /\[project\]\nname = "canonical-id"\nversion = "2\.3\.4"/);
+  const result = updatePyprojectProjectVersion(source, "2.3.4");
+  assert.match(result, /\[project\]\nname = "old"\nversion = "2\.3\.4"/);
   assert.match(result, /dependencies = \["demo==1"\]/);
   assert.match(result, /\[tool\.demo\]\nname = "untouched"\nversion = "also-untouched"/);
 });
 
-test("syncPyprojectProjectMetadata inserts missing project fields", () => {
-  const result = syncPyprojectProjectMetadata("[project]\nrequires-python = \">=3.11\"\n", "demo", "1.0.0");
-  assert.match(result, /\[project\]\n\nname = "demo"\nversion = "1\.0\.0"\nrequires-python/);
+test("updatePyprojectProjectVersion requires an existing project version", () => {
+  assert.throws(() => updatePyprojectProjectVersion("[project]\nname = \"demo\"\n", "1.0.0"), /version/);
 });
 
-test("syncWorkspaceProjectMetadata treats conf.json as canonical", () => {
+test("syncWorkspaceProjectMetadata reads pyproject.toml as canonical for a game", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-metadata-"));
   try {
-    fs.writeFileSync(path.join(workspace, "conf.json"), JSON.stringify({ id: "conf-id", version: "1.2.0", keep: true }, null, 2));
-    fs.writeFileSync(path.join(workspace, "pyproject.toml"), "[project]\nname = \"wrong\"\nversion = \"0.0.1\"\ndependencies = []\n");
-    assert.deepEqual(syncWorkspaceProjectMetadata(workspace), { appId: "conf-id", version: "1.2.0" });
+    fs.writeFileSync(path.join(workspace, "pyproject.toml"), "[project]\nname = \"game-id\"\nversion = \"1.2.0\"\ndependencies = [\"pydartsnut\"]\n");
+    assert.deepEqual(syncWorkspaceProjectMetadata(workspace), { appId: "game-id", version: "1.2.0" });
     const pyproject = fs.readFileSync(path.join(workspace, "pyproject.toml"), "utf-8");
-    assert.match(pyproject, /name = "conf-id"/);
+    assert.match(pyproject, /name = "game-id"/);
     assert.match(pyproject, /version = "1\.2\.0"/);
-    assert.match(pyproject, /dependencies = \[\]/);
+    assert.match(pyproject, /dependencies = \["pydartsnut"\]/);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
 
-test("syncWorkspaceProjectMetadata updates both version fields after confirmation", () => {
+test("syncWorkspaceProjectMetadata updates only pyproject.toml version", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-version-"));
   try {
-    fs.writeFileSync(path.join(workspace, "conf.json"), JSON.stringify({ id: "demo", version: "1.0.0" }, null, 2));
-    fs.writeFileSync(path.join(workspace, "pyproject.toml"), "[project]\nname = \"other\"\nversion = \"0.0.0\"\n");
+    fs.writeFileSync(path.join(workspace, "pyproject.toml"), "[project]\nname = \"demo\"\nversion = \"1.0.0\"\ndependencies = [\"pydartsnut\"]\n");
     assert.deepEqual(syncWorkspaceProjectMetadata(workspace, "1.0.1"), { appId: "demo", version: "1.0.1" });
-    assert.equal(JSON.parse(fs.readFileSync(path.join(workspace, "conf.json"), "utf-8")).version, "1.0.1");
     const pyproject = fs.readFileSync(path.join(workspace, "pyproject.toml"), "utf-8");
     assert.match(pyproject, /name = "demo"/);
     assert.match(pyproject, /version = "1\.0\.1"/);

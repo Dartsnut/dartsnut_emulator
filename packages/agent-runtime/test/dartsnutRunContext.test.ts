@@ -12,8 +12,9 @@ describe("dartsnutRunContext workspace hydration", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-ctx-"));
     fs.writeFileSync(
       path.join(workspace, "conf.json"),
-      JSON.stringify({ type: "widget", size: [128, 128] })
+      JSON.stringify({ size: [128, 128], fields: [] })
     );
+    fs.writeFileSync(path.join(workspace, "pyproject.toml"), '[project]\nname="demo"\nversion="1"\ndependencies=["pydartsnut"]\n');
     fs.writeFileSync(path.join(workspace, "main.py"), "print('ok')\n");
 
     const ctx = seedDartsnutRunContext({
@@ -30,8 +31,9 @@ describe("dartsnutRunContext workspace hydration", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-ctx-refresh-"));
     fs.writeFileSync(
       path.join(workspace, "conf.json"),
-      JSON.stringify({ type: "widget", size: [128, 128] })
+      JSON.stringify({ size: [128, 128], fields: [] })
     );
+    fs.writeFileSync(path.join(workspace, "pyproject.toml"), '[project]\nname="demo"\nversion="1"\ndependencies=["pydartsnut"]\n');
     fs.writeFileSync(path.join(workspace, "main.py"), "print('ok')\n");
 
     const ctx = seedDartsnutRunContext({

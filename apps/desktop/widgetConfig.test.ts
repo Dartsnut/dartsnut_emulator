@@ -6,6 +6,10 @@ const test = require("node:test");
 
 const { readWidgetConfigSnapshot, watchWidgetConfigFile, widgetConfigPathForScope } = require("./dist-electron/widgetConfig.js");
 
+function writePyproject(root) {
+  fs.writeFileSync(path.join(root, "pyproject.toml"), '[project]\nname="demo"\nversion="1"\ndependencies=["pydartsnut"]\n');
+}
+
 function waitFor(predicate, timeoutMs = 1500) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
@@ -27,13 +31,12 @@ test("widgetConfigPathForScope selects workspace and emulator roots", () => {
 test("readWidgetConfigSnapshot handles missing, invalid, non-widget, and ready configs", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-widget-config-"));
   try {
-    assert.equal(readWidgetConfigSnapshot("workspace", root, null).status, "missing");
+    writePyproject(root);
+    assert.equal(readWidgetConfigSnapshot("workspace", root, null).status, "not_widget");
     fs.writeFileSync(path.join(root, "conf.json"), "{");
     assert.equal(readWidgetConfigSnapshot("workspace", root, null).status, "invalid");
-    fs.writeFileSync(path.join(root, "conf.json"), JSON.stringify({ type: "game", fields: [] }));
-    assert.equal(readWidgetConfigSnapshot("workspace", root, null).status, "not_widget");
     fs.writeFileSync(path.join(root, "conf.json"), JSON.stringify({
-      type: "widget",
+      size: [128, 128],
       fields: [{ field_key: "title", field_name: "Title", field_type: "text", default: "Hi" }],
     }));
     const ready = readWidgetConfigSnapshot("workspace", root, null);
@@ -48,8 +51,9 @@ test("readWidgetConfigSnapshot handles missing, invalid, non-widget, and ready c
 test("readWidgetConfigSnapshot reports malformed fields without dropping valid definitions", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-widget-fields-"));
   try {
+    writePyproject(root);
     fs.writeFileSync(path.join(root, "conf.json"), JSON.stringify({
-      type: "widget",
+      size: [128, 128],
       fields: [
         { id: "title", name: "Title", type: "text" },
         { id: "bad", name: "Bad", type: "unknown" },
@@ -68,7 +72,7 @@ test("watchWidgetConfigFile observes atomic conf.json replacement", async () => 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-widget-watch-"));
   const confPath = path.join(root, "conf.json");
   let notifications = 0;
-  fs.writeFileSync(confPath, JSON.stringify({ type: "widget", fields: [] }));
+  fs.writeFileSync(confPath, JSON.stringify({ size: [128, 128], fields: [] }));
   const stop = watchWidgetConfigFile(confPath, () => { notifications += 1; }, 20);
   try {
     const nextPath = path.join(root, "conf.next.json");

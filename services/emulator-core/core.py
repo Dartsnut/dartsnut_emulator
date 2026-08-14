@@ -246,19 +246,16 @@ class EmulatorCore:
 
     def load_widget_config(self, path: str, params: dict[str, Any] | None = None) -> None:
         root = _widget_root_fs_path(self.workspace_root, path)
-        conf_path = os.path.join(root, "conf.json")
-        with open(conf_path, "r", encoding="utf-8") as f:
-            self.config = json.load(f)
+        app_env = _load_app_env()
+        app_type, config, app_id, _version = app_env.classify_workspace_project(root)
+        self.config = config
         self.current_path = root
         self.current_params = params or {}
-        app_id = self.config.get("id", "unknown_app")
         self.data_store_path = os.path.join(self.workspace_root, "user", "guest", app_id)
         os.makedirs(self.data_store_path, exist_ok=True)
         self.state.widgetPath = path
-        raw_id = self.config.get("id")
-        widget_id = str(raw_id).strip() if raw_id is not None else ""
-        self.state.widgetId = widget_id or None
-        self.state.widgetType = str(self.config.get("type", "game"))
+        self.state.widgetId = app_id
+        self.state.widgetType = app_type
         self.capture_base_name = sanitize_name(str(self.config.get("name", "capture")))
         self.state.status = ""
 

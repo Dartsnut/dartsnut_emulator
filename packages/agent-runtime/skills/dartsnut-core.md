@@ -9,6 +9,8 @@ description: Core Dartsnut project contract, workspace workflow, display mapping
 
 - Inspect existing files before editing. Preserve unrelated code and config.
 - New games need `main.py` and `pyproject.toml`. New widgets additionally need `conf.json`.
+- A project is valid only when `pyproject.toml` has non-empty `[project].name` and `[project].version`, plus direct `pydartsnut` in `[project].dependencies`.
+- `[project].name` is project identity and `[project].version` is publish version. Games omit `conf.json`; a present `conf.json` must contain both `size` and `fields` or the widget is broken.
 - Use one `pydartsnut.Dartsnut()` instance per process.
 - Access hardware only through `pydartsnut`; do not import `bluezero`, `dbus-python`, `RPi.GPIO`, or `evdev`.
 - Declare non-stdlib dependencies in `pyproject.toml` using `[project]`, `requires-python = ">=3.11"`, `dependencies = [...]`, and `[tool.uv] package = false`.

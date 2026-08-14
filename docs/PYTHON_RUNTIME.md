@@ -40,7 +40,7 @@ The bridge process and one-shot tools (e.g. asset preprocess) use **bundled** `p
 
 When a workspace is loaded, the bridge mirrors `dartsnut_rpi` `ensure_app_venv`:
 
-1. Materialize or refresh the managed default for `conf.json` `type` (`game` or `widget`) from `services/emulator-core/app_defaults/`; custom `pyproject.toml` files are left unchanged.
+1. Validate the workspace `pyproject.toml` before syncing. It must have `[project]` name, version, and direct `pydartsnut` dependency; no default `pyproject.toml` is materialized at launch.
 2. Before every preview, run exact-default `uv sync --directory <workspace>` using bundled uv + bundled base Python (`UV_PYTHON`). The existing `.venv` is reused, but undeclared packages are removed.
 3. Launch with `uv run --no-sync --directory <workspace> main.py …` so the exact preparation step is the only dependency sync and the workspace `.venv` is used.
 

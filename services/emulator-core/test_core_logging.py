@@ -41,20 +41,46 @@ def _load_core_module():
 def _write_widget_conf(workspace: Path, widget_dir_name: str) -> None:
     widget_dir = workspace / widget_dir_name
     widget_dir.mkdir(parents=True, exist_ok=True)
+    (widget_dir / "pyproject.toml").write_text(
+        "[project]\nname = 'demo-widget'\nversion = '1'\ndependencies = ['pydartsnut']\n",
+        encoding="utf-8",
+    )
     (widget_dir / "conf.json").write_text(
         json.dumps(
             {
-                "id": "demo-widget",
                 "name": "Demo Widget",
-                "type": "game",
                 "size": [128, 160],
+                "fields": [],
             }
         ),
         encoding="utf-8",
     )
 
 
+def _write_game_project(workspace: Path, game_dir_name: str) -> None:
+    game_dir = workspace / game_dir_name
+    game_dir.mkdir(parents=True, exist_ok=True)
+    (game_dir / "pyproject.toml").write_text(
+        "[project]\nname = 'demo-game'\nversion = '1'\ndependencies = ['pydartsnut']\n",
+        encoding="utf-8",
+    )
+
+
 class LifecycleLoggingTests(unittest.TestCase):
+    def test_load_game_without_conf_uses_pyproject_identity(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            _write_game_project(workspace, "demo")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+
+            state = core.apply_command({"type": "set_path", "path": "demo"})
+
+            self.assertEqual(state["widgetType"], "game")
+            self.assertEqual(state["widgetId"], "demo-game")
+
     def test_reload_widget_logs_launch_attempt_and_failure(self):
         module = _load_core_module()
         with tempfile.TemporaryDirectory() as workspace_dir:

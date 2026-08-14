@@ -9,7 +9,10 @@ import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBat
 import { AgentRunCoordinator } from "./agentRunCoordinator";
 import { appendDevFileLog, devLog, getDevLogPath, isDevLoggingEnabled } from "./devOnlyLog";
 import { createPublishTarball } from "./publishPackage";
-import { syncWorkspaceProjectMetadata } from "./workspaceProjectMetadata";
+import {
+  readWorkspaceProjectClassification,
+  syncWorkspaceProjectMetadata
+} from "./workspaceProjectMetadata";
 import { buildPythonScriptLaunch, pythonRuntimeDir, runtimeDir, uvBinaryPath, venvPythonPath } from "./pythonRuntime";
 import { ensureRuntime, type DownloadProgress } from "./pythonRuntimeDownloader";
 import {
@@ -47,7 +50,6 @@ import {
   type CustomProviderSettings,
   type UnbindSlotRequest,
   type UnbindSlotResponse,
-  validateDeployWorkspaceConf,
   type WidgetSize,
   type ShellUiTheme,
   type WindowChromeInsets,
@@ -105,7 +107,7 @@ import {
   AgentSessionPersistence,
   isAgentSessionPersistenceDisabledByEnv,
   AGENT_STOPPED_MESSAGE,
-  parseConfWidgetSize,
+  readWorkspaceCreatorHints,
   type AgentInputItem,
   type AgentModelConfig,
   type ProviderConfig
@@ -347,9 +349,9 @@ const chatTitleCoordinator = new AgentRunCoordinator();
 /** Set while desktop Google OAuth is waiting for the browser callback or login API. */
 let communityGoogleLoginAbortController: AbortController | null = null;
 
-/** Poll `conf.json` like `AssetManager` does for the manifest — survives atomic writes; works before the file exists. */
-const DEPLOY_CONF_POLL_MS = 600;
-let deployConfWatch: { watchedPath: string; workspacePath: string } | null = null;
+/** Poll project metadata files; survives atomic writes and works before either file exists. */
+const PROJECT_FILE_POLL_MS = 600;
+let deployConfWatch: { watchedPaths: string[]; workspacePath: string } | null = null;
 const widgetConfigWatches = new Map<WidgetConfigScope, () => void>();
 
 function currentWidgetConfigSnapshot(scope: WidgetConfigScope): WidgetConfigSnapshot {
@@ -376,9 +378,15 @@ function startWidgetConfigWatchers(): void {
   for (const scope of ["workspace", "emulator"] as const) {
     const watchedPath = widgetConfigPathForScope(scope, workspaceRoot, lastWidgetDir);
     if (watchedPath) {
+      const pyprojectPath = path.join(path.dirname(watchedPath), "pyproject.toml");
+      const stopConfWatch = watchWidgetConfigFile(watchedPath, () => emitWidgetConfigSnapshot(scope), PROJECT_FILE_POLL_MS);
+      const stopPyprojectWatch = watchWidgetConfigFile(pyprojectPath, () => emitWidgetConfigSnapshot(scope), PROJECT_FILE_POLL_MS);
       widgetConfigWatches.set(
         scope,
-        watchWidgetConfigFile(watchedPath, () => emitWidgetConfigSnapshot(scope), DEPLOY_CONF_POLL_MS),
+        () => {
+          stopConfWatch();
+          stopPyprojectWatch();
+        },
       );
     }
     emitWidgetConfigSnapshot(scope);
@@ -387,42 +395,28 @@ function startWidgetConfigWatchers(): void {
 
 function stopDeployConfWatcher(): void {
   if (deployConfWatch) {
-    try {
-      fs.unwatchFile(deployConfWatch.watchedPath);
-    } catch {
-      // ignore
+    for (const watchedPath of deployConfWatch.watchedPaths) {
+      try {
+        fs.unwatchFile(watchedPath);
+      } catch {
+        // ignore
+      }
     }
     deployConfWatch = null;
   }
   stopWidgetConfigWatchers();
 }
 
-function syncWorkspaceMetadataFromConf(workspacePath: string): void {
-  if (
-    !fs.existsSync(path.join(workspacePath, "conf.json")) ||
-    !fs.existsSync(path.join(workspacePath, "pyproject.toml"))
-  ) {
-    return;
-  }
-  try {
-    syncWorkspaceProjectMetadata(workspacePath);
-  } catch (error) {
-    devLog.warn("[workspace] Could not synchronize pyproject.toml from conf.json:", error);
-  }
-}
-
 function startDeployConfWatcher(workspacePath: string): void {
   stopDeployConfWatcher();
-  const watchedPath = path.join(workspacePath, "conf.json");
-  fs.watchFile(watchedPath, { interval: DEPLOY_CONF_POLL_MS }, () => {
-    if (!deployConfWatch || deployConfWatch.workspacePath !== workspaceRoot) {
-      return;
-    }
-    syncWorkspaceMetadataFromConf(workspacePath);
-    sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
-  });
-  deployConfWatch = { watchedPath, workspacePath };
-  syncWorkspaceMetadataFromConf(workspacePath);
+  const watchedPaths = [path.join(workspacePath, "pyproject.toml"), path.join(workspacePath, "conf.json")];
+  for (const watchedPath of watchedPaths) {
+    fs.watchFile(watchedPath, { interval: PROJECT_FILE_POLL_MS }, () => {
+      if (!deployConfWatch || deployConfWatch.workspacePath !== workspaceRoot) return;
+      sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
+    });
+  }
+  deployConfWatch = { watchedPaths, workspacePath };
   sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
   startWidgetConfigWatchers();
 }
@@ -494,20 +488,21 @@ function readDeployEligibilityFromWorkspace(): DeployEligibility {
   if (!workspaceRoot) {
     return { ok: false, reason: "no_workspace" };
   }
-  const confPath = path.join(workspaceRoot, "conf.json");
-  if (!fs.existsSync(confPath)) {
-    return { ok: false, reason: "missing_conf" };
-  }
   try {
-    const raw = JSON.parse(fs.readFileSync(confPath, "utf-8"));
-    return validateDeployWorkspaceConf(raw);
+    const classification = readWorkspaceProjectClassification(workspaceRoot);
+    if (!classification.ok) return { ok: false, reason: classification.reason };
+    return {
+      ok: true,
+      appId: classification.appId,
+      version: classification.version,
+      projectType: classification.projectType
+    };
   } catch {
-    return { ok: false, reason: "invalid_conf" };
+    return { ok: false, reason: "invalid_project" };
   }
 }
 
 function readCommunityWorkspaceDefaults(): CommunityWorkspaceDefaults {
-  const elig = readDeployEligibilityFromWorkspace();
   const fallback = {
     eligible: false,
     appId: "",
@@ -517,24 +512,25 @@ function readCommunityWorkspaceDefaults(): CommunityWorkspaceDefaults {
     description: "",
     widgetSize: ""
   };
-  if (!workspaceRoot || !elig.ok) {
+  let classification: ReturnType<typeof readWorkspaceProjectClassification> | null;
+  try {
+    classification = workspaceRoot ? readWorkspaceProjectClassification(workspaceRoot) : null;
+  } catch {
     return fallback;
   }
-  const confPath = path.join(workspaceRoot, "conf.json");
-  try {
-    const conf = JSON.parse(fs.readFileSync(confPath, "utf-8")) as Record<string, unknown>;
-    return {
-      eligible: elig.projectType === "game" || elig.projectType === "widget",
-      appId: elig.appId,
-      projectType: elig.projectType,
-      appName: String(conf.name || elig.appId).trim(),
-      version: String(conf.version || "1.0.0").trim(),
-      description: String(conf.description || "").trim(),
-      widgetSize: String(conf.size || "").trim()
-    };
-  } catch {
-    return { ...fallback, appId: elig.appId, projectType: elig.projectType };
+  if (!workspaceRoot || !classification?.ok) {
+    return fallback;
   }
+  const conf = classification.conf;
+  return {
+    eligible: true,
+    appId: classification.appId,
+    projectType: classification.projectType,
+    appName: String(conf?.name || classification.appId).trim(),
+    version: classification.version,
+    description: String(conf?.description || "").trim(),
+    widgetSize: String(conf?.size || "").trim()
+  };
 }
 
 function fileBlobFromPath(filePath: string, mimeType = "application/octet-stream"): Blob {
@@ -1422,41 +1418,6 @@ function isDirectoryEmpty(directoryPath: string): boolean {
   return entries.length === 0;
 }
 
-type CreatorTemplateMode = "game-creator" | "widget-creator";
-
-function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
-  templateMode: CreatorTemplateMode;
-  projectType: ProjectType;
-  widgetSize?: WidgetSize;
-} | null {
-  const confPath = path.join(absoluteWorkspacePath, "conf.json");
-  if (!fs.existsSync(confPath)) {
-    return null;
-  }
-  try {
-    const conf = JSON.parse(fs.readFileSync(confPath, "utf-8")) as {
-      type?: string;
-      size?: unknown;
-    };
-    if (conf.type === "widget") {
-      return {
-        templateMode: "widget-creator",
-        projectType: "widget",
-        widgetSize: parseConfWidgetSize(conf.size)
-      };
-    }
-    if (conf.type === "game") {
-      return {
-        templateMode: "game-creator",
-        projectType: "game"
-      };
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
 let agentEventEmitter: ((event: AgentEvent) => void) | null = null;
 
 interface MachineMcpQuestionPending {
@@ -1745,7 +1706,7 @@ function buildRoutedPrompt(request: PromptRequest): string {
     typeof request.workspacePath === "string" && request.workspacePath
       ? request.workspacePath
       : workspaceRoot;
-  let templateMode: CreatorTemplateMode | undefined =
+  let templateMode: "game-creator" | "widget-creator" | undefined =
     request.templateMode === "game-creator" || request.templateMode === "widget-creator"
       ? request.templateMode
       : undefined;
@@ -3215,7 +3176,7 @@ ipcMain.handle(
         return { ok: false, code: "api_error", message: "Workspace identity changed. Refresh Community and try again." };
       }
       if (String(request.version || "").trim() !== metadata.version) {
-        return { ok: false, code: "api_error", message: "Submission version must match conf.json." };
+        return { ok: false, code: "api_error", message: "Submission version must match pyproject.toml." };
       }
       emitCommunitySubmitProgress("packaging", "Packaging workspace and running tar...");
       tarballPath = await createPublishTarball(workspaceRoot, elig.appId);
@@ -3639,18 +3600,11 @@ ipcMain.handle(
     if (requestedSlots.length === 0) {
       return { ok: false, reason: "no_pending_changes" };
     }
-    const confPath = path.join(targetWorkspace, "conf.json");
-    if (!fs.existsSync(confPath)) {
-      return { ok: false, reason: "missing_conf", message: `no conf.json at ${targetWorkspace}` };
+    const classification = readWorkspaceProjectClassification(targetWorkspace);
+    if (!classification.ok) {
+      return { ok: false, reason: "unknown", message: classification.message };
     }
-    let projectType: ProjectType;
-    try {
-      const conf = JSON.parse(fs.readFileSync(confPath, "utf-8")) as { type?: string };
-      projectType = conf.type === "widget" ? "widget" : "game";
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "failed to parse conf.json";
-      return { ok: false, reason: "missing_conf", message };
-    }
+    const projectType = classification.projectType;
     let bridgeRun: DartsnutLlmBridgeRun | null = null;
     try {
       const prepared = await prepareAgentProvider(readProviderSettings());

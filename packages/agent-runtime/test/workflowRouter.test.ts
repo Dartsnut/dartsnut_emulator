@@ -20,9 +20,9 @@ describe("workflow router", () => {
     expect(route.initialPassComplete).toBe(false);
   });
 
-  it("routes workspace with conf.json and main.py to modification", () => {
+  it("routes a valid game with main.py to modification", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-router-mod-"));
-    fs.writeFileSync(path.join(workspace, "conf.json"), '{"type":"widget","size":[128,128]}', "utf-8");
+    fs.writeFileSync(path.join(workspace, "pyproject.toml"), '[project]\nname="demo"\nversion="1"\ndependencies=["pydartsnut"]\n', "utf-8");
     fs.writeFileSync(path.join(workspace, "main.py"), "print('hi')\n", "utf-8");
     const route = decideWorkflowRoute(workspace);
     expect(route.kind).toBe("modification");
@@ -36,5 +36,13 @@ describe("workflow router", () => {
     expect(route.kind).toBe("creation");
     expect(route.mainPyExists).toBe(true);
     expect(route.confExists).toBe(false);
+  });
+
+  it("routes a broken widget to creation", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-router-broken-widget-"));
+    fs.writeFileSync(path.join(workspace, "pyproject.toml"), '[project]\nname="demo"\nversion="1"\ndependencies=["pydartsnut"]\n', "utf-8");
+    fs.writeFileSync(path.join(workspace, "conf.json"), '{"size":[128,128]}', "utf-8");
+    fs.writeFileSync(path.join(workspace, "main.py"), "print('hi')\n", "utf-8");
+    expect(decideWorkflowRoute(workspace).kind).toBe("creation");
   });
 });

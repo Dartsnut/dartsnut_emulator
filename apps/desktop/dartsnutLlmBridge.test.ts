@@ -266,3 +266,42 @@ test("turns a DNS fetch failure into an actionable bridge message", async () => 
     message: "Couldn’t reach Dartsnut LLM because api.dartsnut.com could not be found. Check your internet, DNS, or VPN settings, then try again."
   });
 });
+
+test("clears a transient model failure after a later attempt succeeds", async () => {
+  let count = 0;
+  const result = await startDartsnutLlmBridgeRun({
+    baseApi: "https://api.dartsnut.com",
+    token: "token",
+    runId: "run-transient-recovery",
+    fetchImpl: async () => {
+      count += 1;
+      if (count === 1) {
+        return new Response(JSON.stringify({ code: 1001 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      if (count === 2) {
+        return new Response(JSON.stringify({ error: "temporary" }), {
+          status: 503,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      return new Response("event: done\n\n", {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      });
+    }
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/responses", {});
+  assert.deepEqual(result.run.readFailure(), {
+    reason: "service_unavailable",
+    message: "Dartsnut LLM is temporarily unavailable. Please try again later."
+  });
+
+  await result.run.modelConfig.fetchImpl("https://api.dartsnut.com/agent/llm/v1/responses", {});
+  assert.equal(result.run.readFailure(), null);
+});

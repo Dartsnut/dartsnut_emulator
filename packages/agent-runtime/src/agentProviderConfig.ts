@@ -13,6 +13,8 @@ export interface AgentModelConfig {
   chainScope?: string;
   /** Hosted OpenAI tools require explicit provider support on compatible gateways. */
   supportsHostedTools?: boolean;
+  /** Some compatible HTTP gateways only support response continuation over WebSocket. */
+  supportsResponseContinuation?: boolean;
 }
 
 /** Stable, credential-scoped identity for server-managed response chains. */
@@ -35,16 +37,16 @@ export function buildAgentModelConfig(input: {
   apiKey?: string;
   fetchImpl?: typeof fetch;
 }): AgentModelConfig {
-  const isOpenAiFirstParty = (url: string | undefined): boolean => {
-    if (!url) {
-      return true;
-    }
+  const providerHost = (url: string | undefined): string | undefined => {
+    if (!url) return "api.openai.com";
     try {
-      const normalized = new URL(normalizeProviderBaseUrl(url));
-      return normalized.hostname === "api.openai.com";
+      return new URL(normalizeProviderBaseUrl(url)).hostname.toLowerCase();
     } catch {
-      return false;
+      return undefined;
     }
+  };
+  const isOpenAiFirstParty = (url: string | undefined): boolean => {
+    return providerHost(url) === "api.openai.com";
   };
 
   const model = input.model;
@@ -56,6 +58,7 @@ export function buildAgentModelConfig(input: {
     apiKey,
     fetchImpl: input.fetchImpl,
     endpointKind: isOpenAiFirstParty(baseUrl) ? "openai" : "openai-compatible",
-    supportsHostedTools: isOpenAiFirstParty(baseUrl)
+    supportsHostedTools: isOpenAiFirstParty(baseUrl),
+    supportsResponseContinuation: providerHost(baseUrl) !== "poloai.top"
   };
 }

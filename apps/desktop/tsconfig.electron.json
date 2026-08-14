@@ -15,6 +15,7 @@
     "appUpdater.ts",
     "appUpdatePreferences.ts",
     "dartsnutLlmBridge.ts",
+    "bufferedModelFetch.ts",
     "responsesCompatibility.ts",
     "desktopNetwork.ts",
     "authNetworkError.ts",

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { DartsnutLlmFailureReason } from "@dartsnut/shared-ipc";
 import type { AgentModelConfig } from "@dartsnut/agent-runtime";
 import { withDartsnutSourceHeader } from "./dartsnutSourceHeader";
+import { fetchBufferedModelResponse } from "./bufferedModelFetch";
 
 export const DARTSNUT_LLM_MODEL_ALIAS = "dartsnut-llm";
 export const DARTSNUT_LLM_BRIDGE_API_KEY_PLACEHOLDER = "dartsnut-api-bridge";
@@ -328,7 +329,7 @@ export async function startDartsnutLlmBridgeRun(options: {
       ...requestSummary
     });
     try {
-      response = await fetchImpl(input, {
+      response = await fetchBufferedModelResponse(fetchImpl, input, {
         ...init,
         headers: buildBridgeHeaders(input, init, token, options.runId)
       });
@@ -354,7 +355,9 @@ export async function startDartsnutLlmBridgeRun(options: {
       requestId: responseRequestId(response)
     };
     options.onDiagnostic?.("bridge model response", responseMeta);
-    if (!response.ok) {
+    if (response.ok) {
+      latestFailure = null;
+    } else {
       const envelope = await readFailureEnvelope(response);
       latestFailure = mapDartsnutLlmBridgeFailure(response.status, envelope);
       options.onDiagnostic?.("bridge model rejected", {

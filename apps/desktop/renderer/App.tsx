@@ -2260,12 +2260,6 @@ export function App() {
       const result: SendPromptResponse = await api.sendPrompt(request);
       const refreshed = await api.getBootstrapState();
       setBootstrap(refreshed);
-      if (shouldGenerateTitle && refreshed.activeChatId && firstUserMessageForTitle) {
-        void api.generateChatTitle({
-          chatId: refreshed.activeChatId,
-          firstUserMessage: firstUserMessageForTitle
-        }).then(({ tree }) => setProjectTree(tree)).catch(() => undefined);
-      }
       if (!result.ok) {
         finishAgentRun("rejected", result.failureReason);
         if (result.failureReason === "auth_required") {
@@ -2276,6 +2270,12 @@ export function App() {
           postStatus(result.message);
         }
         return;
+      }
+      if (shouldGenerateTitle && refreshed.activeChatId && firstUserMessageForTitle) {
+        void api.generateChatTitle({
+          chatId: refreshed.activeChatId,
+          firstUserMessage: firstUserMessageForTitle
+        }).then(({ tree }) => setProjectTree(tree)).catch(() => undefined);
       }
       if (result.sessionRouting) {
         setSessionTemplateMode(result.sessionRouting.templateMode);

@@ -25,7 +25,7 @@ import {
   type SeedDartsnutRunContextInput
 } from "./dartsnutRunContext";
 import { DartsnutAgentsSession } from "./dartsnutAgentsSession";
-import { forwardAgentsStream } from "./agentsEventBridge";
+import { forwardAgentsStream, type AgentsStreamDiagnostics } from "./agentsEventBridge";
 import {
   createSafeCallModelInputFilter,
   EMPTY_MODEL_RESPONSE_MESSAGE
@@ -92,8 +92,24 @@ export function promptRequestsHostedTools(prompt: string): boolean {
 }
 
 function isInvalidPreviousResponseError(error: unknown): boolean {
-  const apiError = error as { code?: unknown; error?: { code?: unknown } };
-  return apiError?.code === "INVALID_PREVIOUS_RESPONSE" || apiError?.error?.code === "INVALID_PREVIOUS_RESPONSE";
+  const apiError = error as { code?: unknown; message?: unknown; error?: { code?: unknown; message?: unknown } };
+  if (apiError?.code === "INVALID_PREVIOUS_RESPONSE" || apiError?.error?.code === "INVALID_PREVIOUS_RESPONSE") {
+    return true;
+  }
+  const message = typeof apiError?.error?.message === "string"
+    ? apiError.error.message
+    : typeof apiError?.message === "string"
+      ? apiError.message
+      : "";
+  return /previous_response_id/i.test(message)
+    && /(?:only supported|not supported|unsupported|unavailable|invalid|not found)/i.test(message);
+}
+
+function hasAgentsStreamActivity(diagnostics: AgentsStreamDiagnostics | null): boolean {
+  if (!diagnostics) return true;
+  return diagnostics.rawModelEvents > 0
+    || diagnostics.runItemEvents > 0
+    || diagnostics.agentUpdatedEvents > 0;
 }
 
 export class SessionEngine {
@@ -219,8 +235,11 @@ export class SessionEngine {
 
     const cfg = this.resolveModelConfig();
     const modelProvider = configureAgentsSdk(cfg);
-    const modelChainKey = agentModelChainKey(cfg);
-    const previousResponseId = this.options.sessionPersistence?.readModelChainResponseId(modelChainKey) ?? undefined;
+    const modelChainKey = cfg.supportsResponseContinuation === false ? null : agentModelChainKey(cfg);
+    if (!modelChainKey) this.options.sessionPersistence?.clearModelChain();
+    const previousResponseId = modelChainKey
+      ? this.options.sessionPersistence?.readModelChainResponseId(modelChainKey) ?? undefined
+      : undefined;
 
     const runContext = this.buildRunContext(runOptions?.userPrompt ?? prompt);
     refreshDartsnutRunContext(runContext);
@@ -230,7 +249,8 @@ export class SessionEngine {
       model: cfg.model,
       toolsBase,
       contextSnapshot: runContext,
-      preferredUserLocale: this.options.preferredUserLocale ?? null
+      preferredUserLocale: this.options.preferredUserLocale ?? null,
+      onModelRetry: (diagnostic) => this.options.onDiagnostic?.("agent model request retry", diagnostic)
     });
     const toolNames = agent.tools.map((tool) => {
       const value = tool as { name?: unknown; type?: unknown };
@@ -323,23 +343,56 @@ export class SessionEngine {
 
       const tokenUsageBase = this.options.sessionPersistence?.readTokenUsage() ?? null;
       let streamedFallbackText = "";
-      let streamFailureDiagnostics: Record<string, unknown> | null = null;
+      let streamFailureDiagnostics: AgentsStreamDiagnostics | null = null;
       let streamResult: Awaited<ReturnType<typeof forwardAgentsStream>>;
-      try {
-        streamResult = await forwardAgentsStream(stream, onEvent, (name) => {
-            runContext.activeAgentName = name;
+      const consumeStream = async (
+        activeStream: StreamedRunResult<DartsnutRunContext, any>,
+        hadContinuation: boolean
+      ) => {
+        streamedFallbackText = "";
+        streamFailureDiagnostics = null;
+        return forwardAgentsStream(activeStream, onEvent, (name) => {
+          runContext.activeAgentName = name;
         }, (diagnostics, streamedText) => {
           streamedFallbackText = streamedText;
           streamFailureDiagnostics = diagnostics;
           this.options.onDiagnostic?.("agent stream iteration failed", {
             failure: "stream_iteration_error",
-            hadPreviousResponseId: Boolean(previousResponseId),
+            hadPreviousResponseId: hadContinuation,
             streamedTextChars: streamedText.length,
             ...diagnostics
           });
         });
+      };
+      try {
+        streamResult = await consumeStream(stream, Boolean(previousResponseId));
       } catch (error) {
         if (
+          previousResponseId
+          && !retriedWithoutContinuation
+          && isInvalidPreviousResponseError(error)
+          && !hasAgentsStreamActivity(streamFailureDiagnostics)
+        ) {
+          this.options.sessionPersistence?.clearModelChain();
+          this.options.onDiagnostic?.("agent response chain unavailable; retrying without continuation", {
+            failure: "invalid_previous_response",
+            hadPreviousResponseId: true,
+            status: typeof (error as { status?: unknown }).status === "number"
+              ? (error as { status: number }).status
+              : undefined,
+            code: "INVALID_PREVIOUS_RESPONSE"
+          });
+          retriedWithoutContinuation = true;
+          const fallbackStream = await startStream(undefined, new DartsnutAgentsSession({
+            sessionId: this.sessionId,
+            initialItems: this.options.initialItems,
+            sessionPersistence: this.options.sessionPersistence,
+            sessionTemplateMode: this.options.sessionTemplateMode,
+            sessionSection: this.options.sessionSection,
+            preferredUserLocale: this.options.preferredUserLocale ?? null
+          }));
+          streamResult = await consumeStream(fallbackStream, false);
+        } else if (
           error instanceof Error
           && error.message === EMPTY_MODEL_RESPONSE_MESSAGE
           && streamedFallbackText
@@ -352,8 +405,9 @@ export class SessionEngine {
           onEvent({ type: "final", at: Date.now(), content: streamedFallbackText });
           this.persistTranscript("assistant", streamedFallbackText);
           return streamedFallbackText;
+        } else {
+          throw error;
         }
-        throw error;
       }
 
       if (streamResult.tokenUsage) {
@@ -436,9 +490,7 @@ export class SessionEngine {
         ? [apiError.error.message, apiError.error.code].filter((value) => typeof value === "string" && value).join(" ")
         : "";
       const message = detail || (error instanceof Error ? error.message : String(error));
-      onEvent({ type: "error", at: Date.now(), message });
-      this.persistTranscript("assistant", message);
-      return message;
+      throw new Error(message, { cause: error });
     }
   }
 }

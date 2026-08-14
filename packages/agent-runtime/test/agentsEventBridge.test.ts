@@ -98,6 +98,54 @@ describe("Agents SDK stream transport", () => {
     expect(JSON.stringify(result.diagnostics)).not.toContain("private");
   });
 
+  it("emits and persists tool call timeline statuses", async () => {
+    const emitted: AgentEvent[] = [];
+    const persisted: Array<{ kind: string; text: string }> = [];
+    const toolCall = {
+      type: "run_item_stream_event",
+      name: "tool_called",
+      item: {
+        rawItem: {
+          name: "read_file",
+          callId: "call_1",
+          arguments: JSON.stringify({ path: "main.py" })
+        },
+        toJSON() { return this; }
+      }
+    } as RunStreamEvent;
+    const toolOutput = {
+      type: "run_item_stream_event",
+      name: "tool_output",
+      item: {
+        rawItem: { name: "read_file", callId: "call_1" },
+        toJSON() { return this; }
+      }
+    } as RunStreamEvent;
+
+    await forwardAgentsStream(
+      mockStream([toolCall, toolOutput], { finalOutput: "Done." }),
+      (event) => emitted.push(event),
+      undefined,
+      undefined,
+      { persistTranscript: (kind, text) => persisted.push({ kind, text }) }
+    );
+
+    const statuses = emitted.filter((event) => event.type === "status");
+    expect(statuses).toHaveLength(2);
+    expect(statuses[0]).toMatchObject({
+      type: "status",
+      message: expect.stringContaining("Reading main.py")
+    });
+    expect(statuses[1]).toMatchObject({
+      type: "status",
+      message: expect.stringContaining("Read main.py")
+    });
+    expect(persisted).toHaveLength(2);
+    expect(persisted.every((entry) => entry.kind === "tool_status")).toBe(true);
+    expect(persisted[0]?.text).toContain('"phase":"call"');
+    expect(persisted[1]?.text).toContain('"phase":"result"');
+  });
+
   it("propagates stream validation failures", async () => {
     const diagnostics: unknown[] = [];
     const stream = {

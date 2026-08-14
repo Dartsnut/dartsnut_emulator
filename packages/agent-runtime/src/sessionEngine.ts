@@ -362,6 +362,9 @@ export class SessionEngine {
             streamedTextChars: streamedText.length,
             ...diagnostics
           });
+        }, {
+          readWorkspaceFileIfExists: (relPath) => this.readWorkspaceFileIfExists(relPath),
+          persistTranscript: (kind, text) => this.persistTranscript(kind, text)
         });
       };
       try {

@@ -5,6 +5,7 @@ import {
   type ProjectType,
   type WidgetSize
 } from "@dartsnut/shared-ipc";
+import { classifyDartsnutProjectFiles } from "@dartsnut/shared-ipc/dist/projectClassification";
 
 export function parseConfWidgetSize(size: unknown): WidgetSize | undefined {
   if (!Array.isArray(size) || size.length !== 2) return undefined;
@@ -17,25 +18,19 @@ export function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
   projectType: ProjectType;
   widgetSize?: WidgetSize;
 } | null {
+  const pyprojectPath = path.join(absoluteWorkspacePath, "pyproject.toml");
   const confPath = path.join(absoluteWorkspacePath, "conf.json");
-  if (!fs.existsSync(confPath)) return null;
-  try {
-    const conf = JSON.parse(fs.readFileSync(confPath, "utf-8")) as {
-      type?: string;
-      size?: unknown;
+  const classification = classifyDartsnutProjectFiles(
+    fs.existsSync(pyprojectPath) ? fs.readFileSync(pyprojectPath, "utf-8") : null,
+    fs.existsSync(confPath) ? fs.readFileSync(confPath, "utf-8") : null
+  );
+  if (!classification.ok) return null;
+  if (classification.projectType === "widget") {
+    return {
+      templateMode: "widget-creator",
+      projectType: "widget",
+      widgetSize: parseConfWidgetSize(classification.conf?.size)
     };
-    if (conf.type === "widget") {
-      return {
-        templateMode: "widget-creator",
-        projectType: "widget",
-        widgetSize: parseConfWidgetSize(conf.size)
-      };
-    }
-    if (conf.type === "game") {
-      return { templateMode: "game-creator", projectType: "game" };
-    }
-  } catch {
-    return null;
   }
-  return null;
+  return { templateMode: "game-creator", projectType: "game" };
 }

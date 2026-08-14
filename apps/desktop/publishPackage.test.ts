@@ -90,7 +90,7 @@ test("createPublishTarball puts all non-blacklisted files under a single app id 
   const extractPath = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-publish-extract-"));
   let tarballPath = null;
   try {
-    fs.writeFileSync(path.join(workspace, "conf.json"), JSON.stringify({ id: "abc_def", type: "game" }));
+    fs.writeFileSync(path.join(workspace, "conf.json"), JSON.stringify({ size: [128, 128], fields: [] }));
     fs.writeFileSync(path.join(workspace, "main.py"), "print('ok')\n");
     fs.mkdirSync(path.join(workspace, "assets"), { recursive: true });
     fs.writeFileSync(path.join(workspace, "assets", "hero.png"), "png");

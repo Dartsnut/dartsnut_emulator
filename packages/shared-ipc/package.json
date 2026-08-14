@@ -4,6 +4,9 @@
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "dependencies": {
+    "@iarna/toml": "^2.2.5"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run"

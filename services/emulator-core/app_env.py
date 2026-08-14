@@ -3,20 +3,15 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 import subprocess
 import sys
 import time
+import tomllib
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
-_log = logging.getLogger(__name__)
-
-DEFAULTS_DIR = Path(__file__).resolve().parent / "app_defaults"
-MANAGED_PYPROJECT_HEADER = "# Dartsnut managed default app dependencies"
 PYPI_MIRRORS = [
     "https://pypi.org/simple",
     "https://mirrors.ustc.edu.cn/pypi/simple",
@@ -38,105 +33,48 @@ def _pyproject_path(workspace_dir: str) -> str:
     return os.path.join(workspace_dir, "pyproject.toml")
 
 
-def _read_conf(workspace_dir: str) -> dict[str, Any]:
+def _normalized_distribution_name(requirement: str) -> str | None:
+    match = re.match(r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)", requirement)
+    return re.sub(r"[._-]+", "", match.group(1).lower()) if match else None
+
+
+def classify_workspace_project(workspace_dir: str) -> tuple[str, dict[str, Any], str, str]:
+    """Return (project_type, widget_config, app_id, version) for a valid Dartsnut project."""
+    pyproject_path = _pyproject_path(workspace_dir)
+    if not os.path.exists(pyproject_path):
+        raise ValueError("pyproject.toml was not found")
+    try:
+        with open(pyproject_path, "rb") as f:
+            pyproject = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        raise ValueError(f"Could not parse pyproject.toml: {e}") from e
+
+    project = pyproject.get("project")
+    if not isinstance(project, dict):
+        raise ValueError("pyproject.toml must contain a [project] table")
+    app_id = str(project.get("name") or "").strip()
+    if not app_id:
+        raise ValueError("pyproject.toml [project].name must not be empty")
+    version = str(project.get("version") or "").strip()
+    if not version:
+        raise ValueError("pyproject.toml [project].version must not be empty")
+    dependencies = project.get("dependencies")
+    if not isinstance(dependencies, list) or not all(isinstance(item, str) for item in dependencies):
+        raise ValueError("pyproject.toml [project].dependencies must be an array of strings")
+    if not any(_normalized_distribution_name(item) == "pydartsnut" for item in dependencies):
+        raise ValueError("pyproject.toml must declare pydartsnut in [project].dependencies")
+
     conf_path = os.path.join(workspace_dir, "conf.json")
+    if not os.path.exists(conf_path):
+        return "game", {}, app_id, version
     try:
         with open(conf_path, encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
+            conf = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
-        _log.warning("Failed to read conf.json in %s: %s", workspace_dir, e)
-        return {}
-
-
-def _read_conf_type(workspace_dir: str) -> str:
-    app_type = _read_conf(workspace_dir).get("type")
-    return str(app_type) if app_type else "widget"
-
-
-def _template_path(app_type: str) -> Path:
-    kind = app_type if app_type in ("game", "widget") else "widget"
-    path = DEFAULTS_DIR / f"{kind}_pyproject.toml"
-    if not path.is_file():
-        raise FileNotFoundError(f"Missing default template: {path}")
-    return path
-
-
-def _is_managed_default_pyproject(path: str) -> bool:
-    try:
-        with open(path, encoding="utf-8") as f:
-            return f.readline().startswith(MANAGED_PYPROJECT_HEADER)
-    except OSError:
-        return False
-
-
-def _sync_pyproject_project_metadata(text: str, app_id: str, version: str) -> str:
-    """Apply canonical conf.json identity to only the [project] TOML section."""
-    project_match = re.search(r"(?m)^\s*\[project\]\s*(?:#.*)?$", text)
-    if not project_match:
-        separator = "" if not text or text.endswith("\n") else "\n"
-        return (
-            f"{text}{separator}\n[project]\n"
-            f"name = {json.dumps(app_id)}\nversion = {json.dumps(version)}\n"
-        )
-
-    section_start = project_match.end()
-    next_section = re.search(r"(?m)^\s*\[[^]\n]+\]\s*(?:#.*)?$", text[section_start:])
-    section_end = section_start + next_section.start() if next_section else len(text)
-    section = text[section_start:section_end]
-    missing: list[str] = []
-    for key, value in (("name", app_id), ("version", version)):
-        assignment = re.compile(rf"(?m)^(\s*){re.escape(key)}\s*=.*$")
-        if assignment.search(section):
-            section = assignment.sub(
-                lambda match, current_key=key, current_value=value: (
-                    f"{match.group(1)}{current_key} = {json.dumps(current_value)}"
-                ),
-                section,
-                count=1,
-            )
-        else:
-            missing.append(f"{key} = {json.dumps(value)}")
-    if missing:
-        leading_break = "\n" if section.startswith("\n") else ""
-        inserted = "\n".join(missing)
-        section = f"{leading_break}\n{inserted}\n{section[len(leading_break):]}"
-    return text[:section_start] + section + text[section_end:]
-
-
-def _materialize_pyproject(workspace_dir: str, app_type: str, log: LogFn | None = None) -> None:
-    dest = _pyproject_path(workspace_dir)
-    template = _template_path(app_type)
-    conf = _read_conf(workspace_dir)
-    app_id = str(conf.get("id") or "").strip()
-    version = str(conf.get("version") or "").strip()
-    if not app_id or not version:
-        raise ValueError("conf.json must contain non-empty id and version fields")
-
-    if Path(dest).is_file() and not _is_managed_default_pyproject(dest):
-        current_text = Path(dest).read_text(encoding="utf-8")
-        synced_text = _sync_pyproject_project_metadata(current_text, app_id, version)
-        if synced_text != current_text:
-            Path(dest).write_text(synced_text, encoding="utf-8")
-            if log:
-                log("Synchronized pyproject.toml name and version from conf.json", "stdout")
-        elif log:
-            log(f"Using existing pyproject.toml in {workspace_dir}", "stdout")
-        return
-
-    template_text = _sync_pyproject_project_metadata(
-        template.read_text(encoding="utf-8"), app_id, version
-    )
-    if Path(dest).is_file():
-        if Path(dest).read_text(encoding="utf-8") == template_text:
-            return
-        Path(dest).write_text(template_text, encoding="utf-8")
-        if log:
-            log(f"Refreshed default pyproject.toml (type={app_type})", "stdout")
-        return
-    Path(dest).write_text(template_text, encoding="utf-8")
-    if log:
-        log(f"Materialized default pyproject.toml (type={app_type})", "stdout")
+        raise ValueError(f"Broken widget conf.json: {e}") from e
+    if not isinstance(conf, dict) or "size" not in conf or "fields" not in conf:
+        raise ValueError("Broken widget conf.json: size and fields are required")
+    return "widget", conf, app_id, version
 
 
 _WORKSPACE_ENV_REMOVE = (
@@ -259,16 +197,12 @@ def ensure_workspace_venv(
             log(f"Workspace venv skipped: missing main.py in {workspace_dir}", "stderr")
         return False
 
-    resolved_type = app_type or _read_conf_type(workspace_dir)
     started = time.monotonic()
     try:
+        resolved_type, _, _, _ = classify_workspace_project(workspace_dir)
         if status:
             status("Preparing workspace environment…")
-        had_pyproject = os.path.isfile(_pyproject_path(workspace_dir))
-        if not had_pyproject and status:
-            status("Setting up pyproject.toml…")
-        _materialize_pyproject(workspace_dir, resolved_type, log=log)
-        if had_pyproject and log:
+        if log:
             log("Syncing workspace dependencies from pyproject.toml", "stdout")
         if status:
             status("Syncing dependencies…")

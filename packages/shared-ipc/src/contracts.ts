@@ -466,9 +466,9 @@ export type ReadPreviewResponse =
   | { ok: true; dataUrl: string }
   | { ok: false; message: string };
 
-/** Result of parsing workspace root `conf.json` for deploy-to-machine eligibility. */
+/** Result of classifying the workspace project files for deploy-to-machine eligibility. */
 export type DeployEligibility =
-  | { ok: true; appId: string; projectType: ProjectType }
+  | { ok: true; appId: string; version: string; projectType: ProjectType }
   | { ok: false; reason: string };
 
 export interface DeployConnectRequest {
@@ -487,10 +487,6 @@ export interface DeployLaunchRequest {
   widgetParamsJson?: string;
 }
 
-/**
- * Validates workspace `conf.json` content for the debug deploy module.
- * Requires parseable JSON object with non-empty `id` and `type` of widget or game.
- */
 export type CommunitySessionInfo = {
   loggedIn: boolean;
   account: string | null;
@@ -715,23 +711,3 @@ export type CommunityWithdrawAppVersionRequest = {
 export type CommunityWithdrawAppVersionResponse =
   | { ok: true; status: string }
   | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
-
-export function validateDeployWorkspaceConf(raw: unknown): DeployEligibility {
-  if (!raw || typeof raw !== "object") {
-    return { ok: false, reason: "invalid_conf" };
-  }
-  const c = raw as Record<string, unknown>;
-  const id = c.id;
-  const type = c.type;
-  if (typeof id !== "string" || !id.trim()) {
-    return { ok: false, reason: "missing_id" };
-  }
-  const trimmedId = id.trim();
-  if (!/^[a-zA-Z0-9_-]+$/.test(trimmedId)) {
-    return { ok: false, reason: "invalid_id" };
-  }
-  if (type !== "widget" && type !== "game") {
-    return { ok: false, reason: "invalid_type" };
-  }
-  return { ok: true, appId: trimmedId, projectType: type };
-}

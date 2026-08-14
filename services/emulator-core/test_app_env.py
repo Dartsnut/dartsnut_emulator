@@ -6,7 +6,6 @@ import importlib.util
 import json
 import subprocess
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -27,87 +26,42 @@ def _load_app_env_module():
 
 def _write_workspace(workspace: Path, app_type: str = "game") -> None:
     (workspace / "main.py").write_text("print('ok')\n", encoding="utf-8")
-    (workspace / "conf.json").write_text(
-        json.dumps({"id": "demo", "type": app_type, "version": "1"}),
+    (workspace / "pyproject.toml").write_text(
+        "[project]\nname = 'demo'\nversion = '1'\ndependencies = ['pydartsnut==1.2.1']\n",
         encoding="utf-8",
     )
+    if app_type == "widget":
+        (workspace / "conf.json").write_text(
+            json.dumps({"size": [128, 128], "fields": []}),
+            encoding="utf-8",
+        )
 
 
 class AppEnvTests(unittest.TestCase):
-    def test_materializes_game_pyproject_when_missing(self):
+    def test_classifies_game_without_conf(self):
         module = _load_app_env_module()
         with tempfile.TemporaryDirectory() as workspace_dir:
             workspace = Path(workspace_dir)
             _write_workspace(workspace, "game")
+            self.assertEqual(module.classify_workspace_project(str(workspace)), ("game", {}, "demo", "1"))
 
-            module._materialize_pyproject(str(workspace), "game")
-
-            pyproject = workspace / "pyproject.toml"
-            self.assertTrue(pyproject.is_file())
-            text = pyproject.read_text(encoding="utf-8")
-            self.assertTrue(text.startswith(module.MANAGED_PYPROJECT_HEADER))
-            project = tomllib.loads(text)["project"]
-            self.assertEqual(project["name"], "demo")
-            self.assertEqual(project["version"], "1")
-            self.assertIn("pygame-ce==2.5.7", text)
-
-    def test_materializes_widget_template_for_widget_type(self):
+    def test_classifies_widget_from_required_conf_keys(self):
         module = _load_app_env_module()
         with tempfile.TemporaryDirectory() as workspace_dir:
             workspace = Path(workspace_dir)
             _write_workspace(workspace, "widget")
+            app_type, conf, app_id, version = module.classify_workspace_project(str(workspace))
+            self.assertEqual((app_type, app_id, version), ("widget", "demo", "1"))
+            self.assertEqual(conf["fields"], [])
 
-            module._materialize_pyproject(str(workspace), "widget")
-
-            text = (workspace / "pyproject.toml").read_text(encoding="utf-8")
-            project = tomllib.loads(text)["project"]
-            self.assertEqual(project["name"], "demo")
-            self.assertEqual(project["version"], "1")
-            self.assertIn("aiohttp==3.13.3", text)
-            self.assertNotIn("evdev==", text)
-
-    def test_refreshes_managed_default_and_syncs_custom_project_metadata(self):
+    def test_rejects_broken_widget(self):
         module = _load_app_env_module()
         with tempfile.TemporaryDirectory() as workspace_dir:
             workspace = Path(workspace_dir)
             _write_workspace(workspace, "game")
-            pyproject = workspace / "pyproject.toml"
-            pyproject.write_text(
-                f"{module.MANAGED_PYPROJECT_HEADER}.\n[project]\nname = 'stale'\n",
-                encoding="utf-8",
-            )
-
-            module._materialize_pyproject(str(workspace), "game")
-
-            managed = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
-            self.assertEqual(managed["name"], "demo")
-            self.assertEqual(managed["version"], "1")
-
-            custom = "[project]\nname = 'custom'\nversion = '9.9.9'\ndependencies = ['example==1.0']\n"
-            pyproject.write_text(custom, encoding="utf-8")
-            module._materialize_pyproject(str(workspace), "game")
-            custom_project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
-            self.assertEqual(custom_project["name"], "demo")
-            self.assertEqual(custom_project["version"], "1")
-            self.assertEqual(custom_project["dependencies"], ["example==1.0"])
-
-    def test_syncs_missing_custom_project_metadata_fields(self):
-        module = _load_app_env_module()
-        with tempfile.TemporaryDirectory() as workspace_dir:
-            workspace = Path(workspace_dir)
-            _write_workspace(workspace, "game")
-            pyproject = workspace / "pyproject.toml"
-            pyproject.write_text(
-                "[project]\nrequires-python = '>=3.11'\n\n[tool.demo]\nversion = 'keep'\n",
-                encoding="utf-8",
-            )
-
-            module._materialize_pyproject(str(workspace), "game")
-
-            parsed = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-            self.assertEqual(parsed["project"]["name"], "demo")
-            self.assertEqual(parsed["project"]["version"], "1")
-            self.assertEqual(parsed["tool"]["demo"]["version"], "keep")
+            (workspace / "conf.json").write_text('{"size":[128,128]}', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Broken widget"):
+                module.classify_workspace_project(str(workspace))
 
     def test_existing_stamp_does_not_skip_workspace_sync(self):
         module = _load_app_env_module()
@@ -119,7 +73,6 @@ class AppEnvTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace_dir:
             workspace = Path(workspace_dir)
             _write_workspace(workspace, "game")
-            module._materialize_pyproject(str(workspace), "game")
             stamp = workspace / ".venv" / ".dartsnut_stamp"
             stamp.parent.mkdir(parents=True)
             stamp.write_text("previously-ready", encoding="utf-8")

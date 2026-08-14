@@ -1,6 +1,15 @@
 import type { AgentEvent, AgentSdkStreamEvent, AgentTokenUsage } from "@dartsnut/shared-ipc";
 import type { RunStreamEvent, StreamedRunResult } from "@openai/agents";
 import { normalizeTokenUsage } from "./tokenUsage";
+import {
+  computeReplaceDiff,
+  computeWriteDiff,
+  emitToolStatusEvent,
+  extractLatestArgumentsObject,
+  safeParseObject,
+  toRelPath,
+  type ToolStatusContext
+} from "./toolStatusHelpers";
 
 export type AgentsStreamDiagnostics = {
   rawModelEvents: number;
@@ -16,6 +25,11 @@ export type AgentsStreamResult = {
   tokenUsage?: AgentTokenUsage;
   activeAgentName?: string;
   diagnostics: AgentsStreamDiagnostics;
+};
+
+export type AgentsStreamHooks = {
+  readWorkspaceFileIfExists?: (relPath: string) => string | undefined;
+  persistTranscript?: (kind: "tool_status", text: string) => void;
 };
 
 function incrementCount(counts: Record<string, number>, key: string): void {
@@ -60,11 +74,78 @@ function finalText(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function runItemRawItem(event: Extract<RunStreamEvent, { type: "run_item_stream_event" }>): Record<string, unknown> {
+  const item = event.item as unknown as { rawItem?: unknown; toJSON?: () => unknown };
+  if (item.rawItem && typeof item.rawItem === "object") {
+    return item.rawItem as Record<string, unknown>;
+  }
+  const serialized = typeof item.toJSON === "function" ? item.toJSON() : null;
+  if (!serialized || typeof serialized !== "object") {
+    return {};
+  }
+  const rawItem = (serialized as { rawItem?: unknown }).rawItem;
+  return rawItem && typeof rawItem === "object" ? rawItem as Record<string, unknown> : {};
+}
+
+function stringField(record: Record<string, unknown>, ...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = record[name];
+    if (typeof value === "string" && value) return value;
+  }
+  return undefined;
+}
+
+function toolContextFromArgs(
+  toolName: string,
+  argsJson: string,
+  callId: string,
+  hooks: AgentsStreamHooks
+): ToolStatusContext {
+  let context: ToolStatusContext = { callId };
+  try {
+    const args = extractLatestArgumentsObject(argsJson, (candidate) => {
+      if (toolName === "write_file") {
+        return typeof candidate.path === "string" && typeof candidate.content === "string";
+      }
+      if (toolName === "replace_in_file") {
+        return typeof candidate.path === "string"
+          && typeof candidate.find === "string"
+          && typeof candidate.replace === "string";
+      }
+      return true;
+    }) ?? safeParseObject(JSON.parse(argsJson));
+    const path = toRelPath(args.path);
+    context = {
+      callId,
+      path,
+      source: toRelPath(args.source),
+      attachment_id: typeof args.attachment_id === "string" ? args.attachment_id : undefined,
+      skillId: toRelPath(args.skill_id)
+    };
+    if (toolName === "write_file") {
+      const nextContent = typeof args.content === "string" ? args.content : "";
+      context = { ...context, ...computeWriteDiff(path ? hooks.readWorkspaceFileIfExists?.(path) : undefined, nextContent) };
+    } else if (toolName === "replace_in_file") {
+      context = {
+        ...context,
+        ...computeReplaceDiff(
+          typeof args.find === "string" ? args.find : "",
+          typeof args.replace === "string" ? args.replace : ""
+        )
+      };
+    }
+  } catch {
+    // Tool status remains useful when a provider omits or partially serializes arguments.
+  }
+  return context;
+}
+
 export async function forwardAgentsStream(
   stream: StreamedRunResult<any, any>,
   emit: (event: AgentEvent) => void,
   onActiveAgentChange?: (agentName: string) => void,
-  onIterationFailure?: (diagnostics: AgentsStreamDiagnostics, streamedText: string) => void
+  onIterationFailure?: (diagnostics: AgentsStreamDiagnostics, streamedText: string) => void,
+  hooks: AgentsStreamHooks = {}
 ): Promise<AgentsStreamResult> {
   let activeAgentName: string | undefined;
   let currentResponseText = "";
@@ -74,6 +155,8 @@ export async function forwardAgentsStream(
   let agentUpdatedEvents = 0;
   const responseEventTypes: Record<string, number> = {};
   const runItemNames: Record<string, number> = {};
+  const toolContexts = new Map<string, { name: string; context: ToolStatusContext }>();
+  let lastTool: { name: string; context: ToolStatusContext } | undefined;
   const diagnostics = (): AgentsStreamDiagnostics => ({
     rawModelEvents,
     runItemEvents,
@@ -101,6 +184,31 @@ export async function forwardAgentsStream(
       } else if (event.type === "run_item_stream_event") {
         runItemEvents += 1;
         incrementCount(runItemNames, event.name);
+        const rawItem = runItemRawItem(event);
+        if (event.name === "tool_called") {
+          const name = stringField(rawItem, "name");
+          if (name) {
+            const callId = stringField(rawItem, "callId", "call_id") ?? `call_${Date.now()}`;
+            const argsJson = stringField(rawItem, "arguments") ?? "{}";
+            const context = toolContextFromArgs(name, argsJson, callId, hooks);
+            const tracked = { name, context };
+            toolContexts.set(callId, tracked);
+            lastTool = tracked;
+            emitToolStatusEvent(name, "call", emit, context, hooks.persistTranscript);
+          }
+        } else if (event.name === "tool_output") {
+          const callId = stringField(rawItem, "callId", "call_id");
+          const tracked = (callId ? toolContexts.get(callId) : undefined) ?? lastTool;
+          const name = stringField(rawItem, "name") ?? tracked?.name;
+          if (name) {
+            const resolvedCallId = callId ?? tracked?.context.callId ?? `call_${Date.now()}`;
+            const context = tracked?.context.callId === resolvedCallId
+              ? tracked.context
+              : toolContextFromArgs(name, stringField(rawItem, "arguments") ?? "{}", resolvedCallId, hooks);
+            emitToolStatusEvent(name, "result", emit, context, hooks.persistTranscript);
+            toolContexts.delete(resolvedCallId);
+          }
+        }
       } else if (event.type === "agent_updated_stream_event") {
         agentUpdatedEvents += 1;
       }

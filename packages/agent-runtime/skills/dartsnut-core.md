@@ -8,21 +8,18 @@ description: Core Dartsnut project contract, workspace workflow, display mapping
 ## Workspace
 
 - Inspect existing files before editing. Preserve unrelated code and config.
-- New projects normally need `conf.json`, `main.py`, and `pyproject.toml`.
+- New games need `main.py` and `pyproject.toml`. New widgets additionally need `conf.json`.
 - Use one `pydartsnut.Dartsnut()` instance per process.
 - Access hardware only through `pydartsnut`; do not import `bluezero`, `dbus-python`, `RPi.GPIO`, or `evdev`.
 - Declare non-stdlib dependencies in `pyproject.toml` using `[project]`, `requires-python = ">=3.11"`, `dependencies = [...]`, and `[tool.uv] package = false`.
 
-## `conf.json`
+## Widget `conf.json`
 
-Required keys: `id`, `type`, `name`, `author`, `version`, `description`, `size`, `fields`.
+`conf.json` is required only for widgets. Its only required top-level sections are `fields` and `size`.
 
-- `type`: `game` or `widget`.
 - `size`: `[width, height]` integers, never a `"128x128"` string.
 - `fields`: `[]` when unused.
-- New projects include `"preview": [""]`.
-- Reasonable missing metadata: kebab-case `id`, `"Dartsnut Team"` author, `"0.1.0"` version, one-sentence description.
-- Games normally use `[128, 160]`; widgets choose among `[128,160]`, `[128,128]`, `[128,64]`, `[64,32]` based on the requested experience.
+- Widgets choose among `[128,160]`, `[128,128]`, `[128,64]`, `[64,32]` based on the requested experience.
 
 Widget fields use `id`, `name`, `type`, `default`, with optional `desc` and `required`. Supported types:
 
@@ -40,7 +37,7 @@ Field ids must be unique. Keep `conf.json.fields` and every `dartsnut.widget_par
 ## Framebuffer and display
 
 - Push exactly one frame per main-loop iteration.
-- Widget frames are Pillow `Image` objects matching `conf.json.size`.
+- Widget frames are Pillow `Image` objects matching widget `conf.json.size`.
 - Game frames use:
 
 ```python
@@ -63,4 +60,4 @@ After material changes:
 4. `get_emulator_logs` and fix `Traceback`, `SyntaxError`, or `ModuleNotFoundError`.
 5. For games, exercise a dart or button path with emulator input tools and observe the state change.
 
-Finish only when the requested behavior runs, the frame is readable and nonblank, mapping matches `conf.json`, and logs are clean.
+Finish only when the requested behavior runs, the frame is readable and nonblank, mapping matches the configured widget size or game framebuffer, and logs are clean.

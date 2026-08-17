@@ -44,6 +44,34 @@ describe("AgentSessionPersistence", () => {
     expect(m?.templateMode).toBe("widget-creator");
   });
 
+  it("stores persona before transcript exists and preserves session identity", () => {
+    const root = path.join(mkTmp(), "ws");
+    fs.mkdirSync(root, { recursive: true });
+    const p = new AgentSessionPersistence(root);
+    p.setAgentProfileId("child-curious");
+    const first = p.readManifest();
+    expect(first?.agentProfileId).toBe("child-curious");
+    expect(first?.sessionId).toBeTruthy();
+    expect(p.readTranscriptTail(10)).toEqual([]);
+    p.setAgentProfileId("teen-builder");
+    expect(p.readManifest()?.sessionId).toBe(first?.sessionId);
+    expect(p.readAgentProfileId()).toBe("teen-builder");
+  });
+
+  it("normalizes unknown persisted persona to Export", () => {
+    const root = path.join(mkTmp(), "ws");
+    fs.mkdirSync(root, { recursive: true });
+    const p = new AgentSessionPersistence(root);
+    p.writeManifestAtomic({
+      schemaVersion: 1,
+      sessionId: "legacy",
+      createdAt: "2020-01-01T00:00:00.000Z",
+      updatedAt: "2020-01-02T00:00:00.000Z",
+      agentProfileId: "not-a-profile" as never
+    });
+    expect(p.readAgentProfileId()).toBe("export");
+  });
+
   it("appendTransaction writes one JSON object per line", async () => {
     const root = path.join(mkTmp(), "ws");
     fs.mkdirSync(root, { recursive: true });

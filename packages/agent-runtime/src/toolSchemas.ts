@@ -76,6 +76,38 @@ const DARTSNUT_MACHINE_MCP_TOOL = responseTool({
   }
 });
 
+const ASK_USER_QUESTION_TOOL = responseTool({
+  type: "function",
+  function: {
+    name: "ask_user_question",
+    description: "Ask the user one concise question through the desktop question dialog. Use 2-3 clear options when possible; allow free text only when a choice cannot cover the answer. Wait for the answer before continuing.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "One concise question for the user." },
+        options: {
+          type: "array",
+          maxItems: 3,
+          items: {
+            type: "object",
+            properties: {
+              value: { type: "string" },
+              label: { type: "string" }
+            },
+            required: ["value", "label"],
+            additionalProperties: false
+          }
+        },
+        allow_free_text: { type: "boolean", description: "Show an Other text answer path." },
+        free_text_placeholder: { type: "string", description: "Placeholder for the Other text answer." }
+      },
+      required: ["question"],
+      additionalProperties: false
+    },
+    strict: false
+  }
+});
+
 /** File + asset tools only (no host intake). */
 const AGENT_FILE_TOOL_DEFINITIONS: WrappedToolDefinition[] = [
   {
@@ -473,7 +505,8 @@ export const AGENT_TOOL_SCHEMAS: AgentToolSchema[] = [
   CONTROL_EMULATOR_INPUT_TOOL,
   RUN_EMULATOR_SCENARIO_TOOL,
   CHECK_PYTHON_TOOL,
-  DARTSNUT_MACHINE_MCP_TOOL
+  DARTSNUT_MACHINE_MCP_TOOL,
+  ASK_USER_QUESTION_TOOL
 ];
 
 export type AgentToolSchemaDefinition = {

@@ -466,6 +466,35 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     return options.hostRunEmulatorScenarioHandler(args);
   });
 
+  const askUserQuestion = defineJsonSchemaTool("ask_user_question", async (args) => {
+    const question = typeof args.question === "string" ? args.question.trim() : "";
+    if (!question) {
+      return JSON.stringify({ ok: false, error: "Question is required." });
+    }
+    if (!options.askUserQuestionHandler) {
+      return JSON.stringify({ ok: false, error: "ask_user_question handler unavailable." });
+    }
+    const rawOptions = Array.isArray(args.options) ? args.options : [];
+    const optionsList = rawOptions
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map((entry) => ({
+        value: typeof entry.value === "string" ? entry.value.trim() : "",
+        label: typeof entry.label === "string" ? entry.label.trim() : ""
+      }))
+      .filter((entry) => entry.value && entry.label)
+      .slice(0, 3);
+    const allowFreeText = args.allow_free_text === true || optionsList.length === 0;
+    const answer = await options.askUserQuestionHandler({
+      question,
+      ...(optionsList.length > 0 ? { options: optionsList } : {}),
+      ...(allowFreeText ? { allowFreeText: true } : {}),
+      ...(typeof args.free_text_placeholder === "string" && args.free_text_placeholder.trim()
+        ? { freeTextPlaceholder: args.free_text_placeholder.trim() }
+        : {})
+    });
+    return JSON.stringify(answer === null ? { ok: false, cancelled: true } : { ok: true, answer });
+  });
+
   const registry: Record<string, Tool> = {
     list_files: listFiles,
     read_file: readFile,
@@ -482,7 +511,8 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     control_emulator_input: controlEmulatorInput,
     run_emulator_scenario: runEmulatorScenario,
     check_python: checkPython,
-    dartsnut_machine_mcp: machineMcp
+    dartsnut_machine_mcp: machineMcp,
+    ask_user_question: askUserQuestion
   };
 
   const requested = new Set(

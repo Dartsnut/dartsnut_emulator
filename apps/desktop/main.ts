@@ -26,6 +26,7 @@ import {
   type ProjectTree,
   type ProjectCreateRequest,
   type ProjectSelectRequest,
+  type ChatCreateRequest,
   type ProjectSwitchProgress,
   type AppUpdateStatus,
   type AppUpdateInstallResponse,
@@ -58,6 +59,9 @@ import {
   type MachineMcpQuestionMachine,
   type MachineMcpSubmitQuestionAnswerRequest,
   type MachineMcpSubmitQuestionAnswerResponse,
+  type AgentQuestionPrompt,
+  type AgentQuestionAnswerRequest,
+  type AgentQuestionAnswerResponse,
   type CommunitySessionInfo,
   type CommunityCancelGoogleLoginResponse,
   type CommunitySetPasswordRequest,
@@ -86,6 +90,8 @@ import {
   type CommunityAppSummary,
   type CommunityWorkspaceDefaults,
   type AgentSessionWorkspaceSummary,
+  type AgentProfileId,
+  normalizeAgentProfileId,
   buildPromptWithChatMediaAttachments,
   resolveSessionUserLocale,
   type UserLocale,
@@ -1427,6 +1433,14 @@ interface MachineMcpQuestionPending {
 
 let machineMcpQuestionPending: MachineMcpQuestionPending | null = null;
 
+interface AgentQuestionPending {
+  questionId: string;
+  prompt: AgentQuestionPrompt;
+  resolve: (answer: string | null) => void;
+}
+
+let agentQuestionPending: AgentQuestionPending | null = null;
+
 type MachineMcpToolInfo = {
   name: string;
   description?: string;
@@ -1451,6 +1465,23 @@ function cancelPendingAgentInput(): void {
     agentEventEmitter?.({ type: "machine_mcp_prompt", at: Date.now(), visible: false });
     resolve(null);
   }
+  if (agentQuestionPending) {
+    const { questionId, resolve } = agentQuestionPending;
+    agentQuestionPending = null;
+    agentEventEmitter?.({ type: "agent_question", questionId, visible: false, question: "" });
+    resolve(null);
+  }
+}
+
+async function askUserQuestionForAgent(prompt: AgentQuestionPrompt): Promise<string | null> {
+  if (agentQuestionPending) {
+    return null;
+  }
+  const questionId = randomUUID();
+  agentEventEmitter?.({ type: "agent_question", questionId, visible: true, ...prompt });
+  return await new Promise((resolve) => {
+    agentQuestionPending = { questionId, prompt, resolve };
+  });
 }
 
 /**
@@ -2301,6 +2332,7 @@ async function buildSession(
     widgetSize?: WidgetSize;
     assetApplierMode?: boolean;
     agentModelConfig?: AgentModelConfig;
+    agentProfileId?: AgentProfileId | null;
   }
 ): Promise<AgentSessionRuntime> {
   const workspacePath = extras?.workspacePath ?? workspaceRoot;
@@ -2321,6 +2353,7 @@ async function buildSession(
     workspacePolicy: new WorkspacePolicy(workspacePath),
     skillLibrary,
     preferredUserLocale,
+    agentProfileId: extras?.agentProfileId ?? extras?.sessionPersistence?.readAgentProfileId() ?? "export",
     assetRoots: {
       widgetFonts: path.join(repoRoot, "assets", "fonts", "widgets"),
       chatAttachments: extras?.chatMediaAttachments
@@ -2333,6 +2366,7 @@ async function buildSession(
     hostObserveEmulatorHandler: (args) => executeHostObserveEmulatorForAgent(args),
     hostControlEmulatorInputHandler: (args) => executeHostControlEmulatorInputForAgent(args),
     hostRunEmulatorScenarioHandler: (args) => executeHostRunEmulatorScenarioForAgent(args),
+    askUserQuestionHandler: (prompt) => askUserQuestionForAgent(prompt),
     skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve,
     sessionPersistence: extras?.sessionPersistence,
     initialItems: extras?.initialItems,
@@ -2344,7 +2378,8 @@ async function buildSession(
       widgetSize: extras?.widgetSize,
       templateMode: templateMode ?? skillBundleMode ?? null,
       assetApplierMode: extras?.assetApplierMode ?? templateMode === "asset-applier",
-      originalUserPrompt: extras?.latestUserTextForLocale
+      originalUserPrompt: extras?.latestUserTextForLocale,
+      agentProfileId: extras?.agentProfileId ?? extras?.sessionPersistence?.readAgentProfileId() ?? "export"
     },
     onDiagnostic: (message, meta) => terminalAgentLifecycleLog(`[agent] ${message}`, meta)
   });
@@ -2618,7 +2653,21 @@ ipcMain.handle(IPCChannels.projectsList, () => projectTree());
 ipcMain.handle(IPCChannels.projectCreate, async (_event: unknown, request: ProjectCreateRequest) => {
   const store = getProjectStore();
   const project = store.ensureProject(request.folderPath, request.name);
-  await switchToProject(project.id);
+  const agentProfileId = request.agentProfileId ? normalizeAgentProfileId(request.agentProfileId) : null;
+  const chat = agentProfileId ? store.createChat(project.id) : null;
+  if (chat && agentProfileId) {
+    try {
+      store.sessionPersistence(chat.id).setAgentProfileId(agentProfileId);
+    } catch (error) {
+      store.archiveChat(chat.id);
+      throw error;
+    }
+  }
+  const accepted = await switchToProject(project.id, chat?.id);
+  if (!accepted) {
+    if (chat) store.archiveChat(chat.id);
+    throw new Error("Project creation was cancelled.");
+  }
   return { state: getBootstrapState(), tree: projectTree() };
 });
 ipcMain.handle(IPCChannels.projectSelect, async (_event: unknown, request: ProjectSelectRequest) => {
@@ -2628,6 +2677,23 @@ ipcMain.handle(IPCChannels.projectSelect, async (_event: unknown, request: Proje
   }
   const accepted = await switchToProject(request.projectId, request.chatId);
   return { state: getBootstrapState(), tree: projectTree(), accepted };
+});
+ipcMain.handle(IPCChannels.chatCreate, async (_event: unknown, request: ChatCreateRequest) => {
+  const store = getProjectStore();
+  const project = store.getProject(request.projectId);
+  if (!project) throw new Error("Project does not exist.");
+  if (activeProjectId !== project.id) throw new Error("Project is not active.");
+  const agentProfileId = normalizeAgentProfileId(request.agentProfileId);
+  const chat = store.createChat(project.id);
+  try {
+    store.sessionPersistence(chat.id).setAgentProfileId(agentProfileId);
+  } catch (error) {
+    store.archiveChat(chat.id);
+    throw error;
+  }
+  const accepted = await switchToProject(project.id, chat.id);
+  if (!accepted) throw new Error("Could not start chat.");
+  return { state: getBootstrapState(), tree: projectTree() };
 });
 ipcMain.handle("agent:chat-archive", (_event: unknown, chatId: string) => {
   const store = getProjectStore();
@@ -2639,11 +2705,15 @@ ipcMain.handle("agent:chat-archive", (_event: unknown, chatId: string) => {
   }
   return { state: getBootstrapState(), tree: projectTree() };
 });
-ipcMain.handle("agent:chat-generate-title", async (_event: unknown, request: { chatId: string; firstUserMessage: string }) => {
+ipcMain.handle("agent:chat-generate-title", async (_event: unknown, request: { chatId: string; firstUserMessage: string; fallbackOnly?: boolean }) => {
   const store = getProjectStore();
   const chat = store.getChat(request.chatId);
   if (!chat || chat.archivedAt || chat.title !== "New chat") {
     return { tree: projectTree(), updated: false };
+  }
+  if (request.fallbackOnly) {
+    const updated = store.updateDefaultChatTitle(request.chatId, fallbackChatTitle(request.firstUserMessage));
+    return { tree: projectTree(), updated: Boolean(updated) };
   }
   const titleLease = await chatTitleCoordinator.begin();
   let title = fallbackChatTitle(request.firstUserMessage);
@@ -2674,32 +2744,41 @@ ipcMain.handle("agent:chat-generate-title", async (_event: unknown, request: { c
 ipcMain.handle(IPCChannels.chatSelect, async (_event: unknown, chatId: string) => {
   const store = getProjectStore(); const chat = store.getChat(chatId);
   if (!chat || chat.archivedAt) throw new Error("Chat does not exist.");
-  await switchToProject(chat.projectId, chat.id);
-  return { state: getBootstrapState(), tree: projectTree() };
+  const accepted = await switchToProject(chat.projectId, chat.id);
+  return { state: getBootstrapState(), tree: projectTree(), accepted };
 });
 
-ipcMain.handle(IPCChannels.getWorkspaceSessionSummary, (): AgentSessionWorkspaceSummary => {
+ipcMain.handle(IPCChannels.getWorkspaceSessionSummary, (
+  _event: unknown,
+  requestedChatId?: unknown
+): AgentSessionWorkspaceSummary => {
   const ws = workspaceRoot;
-  if (!ws || !shouldAttachAgentSessionPersistence(ws) || !activeChatId) {
+  const summaryChatId = typeof requestedChatId === "string" ? requestedChatId : activeChatId;
+  const chat = summaryChatId ? getProjectStore().getChat(summaryChatId) : null;
+  if (!ws || !shouldAttachAgentSessionPersistence(ws) || !chat || chat.archivedAt) {
     return {
+      chatId: null,
       hasPersistedSession: false,
       sessionId: null,
       updatedAt: null,
       templateMode: null,
       transcriptTail: [],
-      tokenUsage: null
+      tokenUsage: null,
+      agentProfileId: null
     };
   }
-  const persistence = getProjectStore().sessionPersistence(activeChatId);
+  const persistence = getProjectStore().sessionPersistence(chat.id);
   persistence.readConversationItems();
   const manifest = persistence.readManifest();
   return {
+    chatId: chat.id,
     hasPersistedSession: persistence.hasPersistedSession(),
     sessionId: manifest?.sessionId ?? null,
     updatedAt: manifest?.updatedAt ?? null,
     templateMode: manifest?.templateMode ?? null,
     transcriptTail: persistence.readTranscriptTail(200),
-    tokenUsage: persistence.readTokenUsage()
+    tokenUsage: persistence.readTokenUsage(),
+    agentProfileId: persistence.readAgentProfileId()
   };
 });
 
@@ -3538,6 +3617,34 @@ ipcMain.handle(
 );
 
 ipcMain.handle(
+  IPCChannels.agentQuestionSubmitAnswer,
+  async (_event: unknown, body: AgentQuestionAnswerRequest): Promise<AgentQuestionAnswerResponse> => {
+    if (!agentQuestionPending) {
+      return { ok: false, reason: "no_pending" };
+    }
+    if (!body || typeof body.questionId !== "string" || typeof body.value !== "string") {
+      return { ok: false, reason: "invalid_value" };
+    }
+    if (body.questionId !== agentQuestionPending.questionId) {
+      return { ok: false, reason: "stale_question" };
+    }
+    const value = typeof body.value === "string" ? body.value.trim() : "";
+    if (!value || value.length > 4_000) {
+      return { ok: false, reason: "invalid_value" };
+    }
+    const pending = agentQuestionPending;
+    const matchesOption = pending.prompt.options?.some((option) => option.value === value) === true;
+    if (!matchesOption && pending.prompt.allowFreeText !== true) {
+      return { ok: false, reason: "invalid_value" };
+    }
+    agentQuestionPending = null;
+    agentEventEmitter?.({ type: "agent_question", questionId: pending.questionId, visible: false, question: "" });
+    pending.resolve(value);
+    return { ok: true };
+  }
+);
+
+ipcMain.handle(
   IPCChannels.assetsGetManifest,
   async (_event: unknown, workspacePath: string): Promise<ManifestSnapshot> => {
     return assetManager.getSnapshot(workspacePath);
@@ -3712,6 +3819,9 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
     }
     const initialItems =
       persistence && intent !== "fresh" ? persistence.readConversationItems() : [];
+    const agentProfileId = normalizeAgentProfileId(
+      request.agentProfileId ?? persistence?.readAgentProfileId() ?? "export"
+    );
     const hintedRouting =
       effectiveWorkspacePath && fs.existsSync(effectiveWorkspacePath)
         ? readWorkspaceCreatorHints(effectiveWorkspacePath)
@@ -3736,6 +3846,7 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
       sessionPersistence: persistence,
       initialItems,
       preferredUserLocale,
+      agentProfileId,
       latestUserTextForLocale: request.prompt,
       projectType: routedProjectType ?? hintedRouting?.projectType,
       widgetSize: routedWidgetSize ?? hintedRouting?.widgetSize,

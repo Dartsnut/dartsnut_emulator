@@ -55,6 +55,20 @@ describe("ProjectStore lazy chat persistence", () => {
     expect(store.archiveChat(chat.id)?.archivedAt).toBe(archived?.archivedAt);
   });
 
+  it("stores a new chat persona before any transcript exists", () => {
+    const userDataPath = makeTemporaryRoot();
+    const projectFolder = path.join(makeTemporaryRoot(), "game");
+    fs.mkdirSync(projectFolder);
+    const store = new ProjectStore(userDataPath);
+    const project = store.ensureProject(projectFolder, "Game");
+    const chat = store.createChat(project.id);
+
+    store.sessionPersistence(chat.id).setAgentProfileId("teen-builder");
+
+    expect(store.sessionPersistence(chat.id).readAgentProfileId()).toBe("teen-builder");
+    expect(store.sessionPersistence(chat.id).readTranscriptTail(10)).toEqual([]);
+  });
+
   it("only replaces a default title on an unarchived chat", () => {
     const store = new ProjectStore(makeTemporaryRoot());
     const project = store.ensureProject(makeTemporaryRoot(), "Game");

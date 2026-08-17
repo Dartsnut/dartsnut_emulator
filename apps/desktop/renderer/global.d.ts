@@ -13,12 +13,15 @@ import type {
   ProjectTree,
   ProjectCreateRequest,
   ProjectSelectRequest,
+  ChatCreateRequest,
   ProjectSwitchProgress,
   ManifestSnapshot,
   PickWorkspaceRequest,
   PickWorkspaceResponse,
   MachineMcpSubmitQuestionAnswerRequest,
   MachineMcpSubmitQuestionAnswerResponse,
+  AgentQuestionAnswerRequest,
+  AgentQuestionAnswerResponse,
   PromptRequest,
   ProviderSettings,
   PythonRuntimeProgress,
@@ -74,13 +77,14 @@ declare global {
   interface Window {
     dartsnutApi: {
       getBootstrapState: () => Promise<BootstrapState>;
-      getWorkspaceSessionSummary: () => Promise<AgentSessionWorkspaceSummary>;
+      getWorkspaceSessionSummary: (chatId?: string) => Promise<AgentSessionWorkspaceSummary>;
       listProjects: () => Promise<ProjectTree>;
       createProject: (request: ProjectCreateRequest) => Promise<{ state: BootstrapState; tree: ProjectTree }>;
       selectProject: (request: ProjectSelectRequest) => Promise<{ state: BootstrapState; tree: ProjectTree; accepted: boolean }>;
+      createChat: (request: ChatCreateRequest) => Promise<{ state: BootstrapState; tree: ProjectTree }>;
       archiveChat: (chatId: string) => Promise<{ state: BootstrapState; tree: ProjectTree }>;
-      generateChatTitle: (request: { chatId: string; firstUserMessage: string }) => Promise<{ tree: ProjectTree; updated: boolean }>;
-      selectChat: (chatId: string) => Promise<{ state: BootstrapState; tree: ProjectTree }>;
+      generateChatTitle: (request: { chatId: string; firstUserMessage: string; fallbackOnly?: boolean }) => Promise<{ tree: ProjectTree; updated: boolean }>;
+      selectChat: (chatId: string) => Promise<{ state: BootstrapState; tree: ProjectTree; accepted: boolean }>;
       onProjectSwitchProgress: (listener: (progress: ProjectSwitchProgress) => void) => () => void;
       resetWorkspaceSession: () => Promise<
         { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" }
@@ -97,6 +101,7 @@ declare global {
       machineMcpSubmitQuestionAnswer: (
         body: MachineMcpSubmitQuestionAnswerRequest
       ) => Promise<MachineMcpSubmitQuestionAnswerResponse>;
+      agentQuestionSubmitAnswer: (body: AgentQuestionAnswerRequest) => Promise<AgentQuestionAnswerResponse>;
       sendPrompt: (request: PromptRequest) => Promise<SendPromptResponse>;
       cancelAgent: () => Promise<{ ok: boolean }>;
       getProviderSettings: () => Promise<ProviderSettings>;

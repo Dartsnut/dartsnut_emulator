@@ -1,4 +1,5 @@
 import type { ChatMediaAttachment } from "./chatMediaAttachments";
+import type { AgentProfileId } from "./agentProfiles";
 
 export const IPCChannels = {
   bootstrapState: "agent:bootstrap-state",
@@ -7,6 +8,8 @@ export const IPCChannels = {
   pickWorkspace: "agent:pick-workspace",
   /** Completes a blocking machine selection/input question for MCP connection. */
   machineMcpSubmitQuestionAnswer: "agent:machine-mcp-submit-question-answer",
+  /** Completes a blocking question asked by the active agent run. */
+  agentQuestionSubmitAnswer: "agent:question-submit-answer",
   /** Main → renderer: clear chat/logs/session UI (bootstrap comes from invoke return values). */
   sessionReset: "agent:session-reset",
   sendPrompt: "agent:send-prompt",
@@ -20,6 +23,7 @@ export const IPCChannels = {
   projectSelect: "agent:project-select",
   chatArchive: "agent:chat-archive",
   chatGenerateTitle: "agent:chat-generate-title",
+  chatCreate: "agent:chat-create",
   chatSelect: "agent:chat-select",
   projectSwitchProgress: "agent:project-switch-progress",
   getProviderSettings: "agent:get-provider-settings",
@@ -164,8 +168,14 @@ export interface BootstrapState {
 export interface ProjectRecord { id: string; name: string; folderPath: string; createdAt: string; updatedAt: string; lastOpenedAt: string; migrationComplete?: boolean; }
 export interface ChatRecord { id: string; projectId: string; title: string; createdAt: string; updatedAt: string; archivedAt?: string; }
 export interface ProjectTree { projects: ProjectRecord[]; chats: ChatRecord[]; }
-export interface ProjectCreateRequest { folderPath: string; name?: string; }
+export interface ProjectCreateRequest {
+  folderPath: string;
+  name?: string;
+  /** Creates and selects a persona-bound chat as part of project creation. */
+  agentProfileId?: AgentProfileId;
+}
 export interface ProjectSelectRequest { projectId: string | null; chatId?: string; }
+export interface ChatCreateRequest { projectId: string; agentProfileId: AgentProfileId; }
 export interface ChatGenerateTitleRequest { chatId: string; firstUserMessage: string; }
 export type ProjectSwitchProgress = { active: boolean; stage: "confirming" | "stopping-deployment" | "stopping-emulator" | "switching" | "reloading" | "ready" | "error"; message?: string };
 
@@ -180,6 +190,7 @@ export interface PromptRequest {
   workspacePath?: string;
   projectId?: string;
   chatId?: string;
+  agentProfileId?: AgentProfileId;
   templateMode?: "game-creator" | "widget-creator" | "asset-applier";
   /**
    * Controls loading vs resetting on-disk workspace agent session (see `AgentSessionWorkspaceSummary`).
@@ -237,12 +248,14 @@ export interface AgentSessionTranscriptLine {
 
 /** Snapshot for agent session banner + history hydrate. */
 export interface AgentSessionWorkspaceSummary {
+  chatId: string | null;
   hasPersistedSession: boolean;
   sessionId: string | null;
   updatedAt: string | null;
   templateMode: string | null;
   transcriptTail: AgentSessionTranscriptLine[];
   tokenUsage?: AgentSessionTokenUsage | null;
+  agentProfileId: AgentProfileId | null;
 }
 
 export type ProjectType = "game" | "widget";
@@ -268,6 +281,27 @@ export type MachineMcpSubmitQuestionAnswerRequest =
 export type MachineMcpSubmitQuestionAnswerResponse =
   | { ok: true }
   | { ok: false; reason: "no_pending" | "invalid_value" };
+
+export type AgentQuestionOption = {
+  value: string;
+  label: string;
+};
+
+export type AgentQuestionPrompt = {
+  question: string;
+  options?: AgentQuestionOption[];
+  allowFreeText?: boolean;
+  freeTextPlaceholder?: string;
+};
+
+export type AgentQuestionAnswerRequest = {
+  questionId: string;
+  value: string;
+};
+
+export type AgentQuestionAnswerResponse =
+  | { ok: true }
+  | { ok: false; reason: "no_pending" | "stale_question" | "invalid_value" };
 
 const TRANSCRIPT_USER_REQUEST_SECTION = "\n\nUser request:\n";
 
@@ -362,7 +396,12 @@ export type AgentEvent =
     visible: boolean;
     machines?: MachineMcpQuestionMachine[];
     manualOnly?: boolean;
-  };
+  }
+  | ({
+    type: "agent_question";
+    questionId: string;
+    visible: boolean;
+  } & AgentQuestionPrompt);
 
 export type AssetKind = "static" | "gif" | "spritesheet";
 

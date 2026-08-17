@@ -1,5 +1,6 @@
 import type { AgentInputItem, Session } from "@openai/agents";
 import type { AgentSessionPersistence } from "./agentSessionPersistence";
+import type { AgentProfileId } from "@dartsnut/shared-ipc";
 
 export type DartsnutAgentsSessionOptions = {
   sessionId: string;
@@ -8,6 +9,7 @@ export type DartsnutAgentsSessionOptions = {
   sessionTemplateMode?: string | null;
   sessionSection?: string | null;
   preferredUserLocale?: "en" | "zh-Hans" | "zh-Hant" | null;
+  agentProfileId?: AgentProfileId | null;
 };
 
 function cloneItems(items: AgentInputItem[]): AgentInputItem[] {
@@ -29,7 +31,8 @@ export class DartsnutAgentsSession implements Session {
     this.manifestMeta = {
       sessionTemplateMode: options.sessionTemplateMode ?? null,
       sessionSection: options.sessionSection ?? null,
-      preferredUserLocale: options.preferredUserLocale ?? null
+      preferredUserLocale: options.preferredUserLocale ?? null,
+      agentProfileId: options.agentProfileId ?? null
     };
     const fromDisk = options.sessionPersistence?.readConversationItems() ?? [];
     this.items = cloneItems(options.initialItems ?? fromDisk);
@@ -92,7 +95,8 @@ export class DartsnutAgentsSession implements Session {
       updatedAt: nowIso,
       templateMode: this.manifestMeta.sessionTemplateMode ?? null,
       section: this.manifestMeta.sessionSection ?? null,
-      preferredUserLocale: this.manifestMeta.preferredUserLocale ?? null
+      preferredUserLocale: this.manifestMeta.preferredUserLocale ?? null,
+      agentProfileId: this.manifestMeta.agentProfileId ?? null
     });
     this.persistence.saveConversationItemsAtomic(this.items);
   }

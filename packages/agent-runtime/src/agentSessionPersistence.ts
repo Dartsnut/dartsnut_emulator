@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import type { AgentInputItem } from "@openai/agents";
 import type { AgentSessionTokenUsage } from "@dartsnut/shared-ipc";
 import { normalizeTokenUsage } from "./tokenUsage";
+import { normalizeAgentProfileId, type AgentProfileId } from "@dartsnut/shared-ipc";
 
 export const AGENT_SESSION_SCHEMA_VERSION = 1;
 export const AGENT_CONVERSATION_SCHEMA_VERSION = 2;
@@ -33,6 +35,7 @@ export type AgentSessionManifest = {
   section?: string | null;
   /** Sticky assistant response locale (en / zh-Hans / zh-Hant); not used for routing. */
   preferredUserLocale?: "en" | "zh-Hans" | "zh-Hant" | null;
+  agentProfileId?: AgentProfileId | null;
 };
 
 export type TranscriptRecord = {
@@ -126,6 +129,26 @@ export class AgentSessionPersistence {
     } catch {
       return null;
     }
+  }
+
+  readAgentProfileId(): AgentProfileId | null {
+    const value = this.readManifest()?.agentProfileId;
+    return value == null ? null : normalizeAgentProfileId(value);
+  }
+
+  setAgentProfileId(agentProfileId: AgentProfileId): void {
+    const existing = this.readManifest();
+    const nowIso = new Date().toISOString();
+    this.writeManifestAtomic({
+      schemaVersion: existing?.schemaVersion ?? AGENT_SESSION_SCHEMA_VERSION,
+      sessionId: existing?.sessionId ?? randomUUID(),
+      createdAt: existing?.createdAt ?? nowIso,
+      updatedAt: nowIso,
+      templateMode: existing?.templateMode ?? null,
+      section: existing?.section ?? null,
+      preferredUserLocale: existing?.preferredUserLocale ?? null,
+      agentProfileId
+    });
   }
 
   writeManifestAtomic(manifest: AgentSessionManifest): void {

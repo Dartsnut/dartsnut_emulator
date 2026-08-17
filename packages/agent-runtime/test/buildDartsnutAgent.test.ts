@@ -84,6 +84,70 @@ describe("buildDartsnutAgent", () => {
     expect(agent.instructions).toContain("project inference");
   });
 
+  it("adds selected persona behavior while preserving Export baseline", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const ctx = makeContext(workspace);
+    const child = buildDartsnutAgent({
+      model: "gpt-4.1-mini",
+      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
+      contextSnapshot: ctx,
+      agentProfileId: "child-curious"
+    });
+    const exportAgent = buildDartsnutAgent({
+      model: "gpt-4.1-mini",
+      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
+      contextSnapshot: ctx,
+      agentProfileId: "export"
+    });
+    expect(child.instructions).toContain("Speak to a child");
+    expect(child.instructions).toContain("always ask exactly one clear, child-friendly design question");
+    expect(child.instructions).toContain("call the `ask_user_question` tool");
+    expect(child.instructions).toContain("do not start building yet");
+    expect(child.instructions).toContain("two or three simple choices");
+    expect(child.instructions).toContain("include stopping here as one of the choices");
+    expect(child.instructions).toContain("pronouns: she/her");
+    expect(child.instructions).toContain("warm, expressive, colorful details");
+    expect(child.instructions).not.toContain("Otherwise proceed without intake ceremony");
+    expect(exportAgent.instructions).not.toContain("Speak to a child");
+    expect(exportAgent.instructions).toContain("Ask one concise natural-language question only");
+    expect(exportAgent.instructions).toContain("wait for the tool answer before continuing");
+  });
+
+  it("keeps creator question policies isolated by persona", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const ctx = makeContext(workspace);
+    const build = (agentProfileId: "child-curious" | "teen-builder" | "adult-vibe") =>
+      buildDartsnutAgent({
+        model: "gpt-4.1-mini",
+        toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
+        contextSnapshot: ctx,
+        agentProfileId
+      }).instructions;
+
+    expect(build("child-curious")).toContain("always ask exactly one clear, child-friendly design question");
+    expect(build("teen-builder")).toContain("Ask fewer questions, expose important implementation decisions");
+    expect(build("adult-vibe")).toContain("Ask questions only when ambiguity blocks progress");
+    expect(build("teen-builder")).not.toContain("child-friendly design question");
+    expect(build("adult-vibe")).not.toContain("child-friendly design question");
+  });
+
+  it("requires both child personas to ask before building a sparse idea", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const ctx = makeContext(workspace);
+    for (const agentProfileId of ["child-curious", "child-creator"] as const) {
+      const agent = buildDartsnutAgent({
+        model: "gpt-4.1-mini",
+        toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
+        contextSnapshot: ctx,
+        agentProfileId
+      });
+      expect(agent.instructions).toContain("This child question policy overrides");
+      expect(agent.instructions).toContain("`let's make a clock`");
+      expect(agent.instructions).toContain("wait for the child's answer");
+      expect(agent.instructions).toContain("exactly one easy next-step question");
+    }
+  });
+
   it("requires visual observation and input scenarios during emulator verification", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
     const ctx = makeContext(workspace);

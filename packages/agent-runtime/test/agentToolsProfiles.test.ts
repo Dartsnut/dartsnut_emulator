@@ -34,6 +34,7 @@ describe("buildAgentTools profiles", () => {
       "run_emulator_scenario",
       "check_python",
       "dartsnut_machine_mcp",
+      "ask_user_question",
       "web_search",
       "code_interpreter"
     ]) {
@@ -54,6 +55,7 @@ describe("buildAgentTools profiles", () => {
     expect(names).not.toContain("copy_asset_file");
     expect(names).not.toContain("copy_chat_attachment");
     expect(names).not.toContain("dartsnut_machine_mcp");
+    expect(names).not.toContain("ask_user_question");
     expect(names).not.toContain("web_search");
     expect(names).not.toContain("code_interpreter");
   });

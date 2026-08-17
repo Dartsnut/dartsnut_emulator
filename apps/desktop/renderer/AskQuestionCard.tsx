@@ -64,7 +64,7 @@ export function AskQuestionCard({
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const inputValue = input?.value ?? "";
   const inputValid = input ? (input.validate ? input.validate(inputValue) : inputValue.trim().length > 0) : false;
-  const canContinue = input ? inputValid : selectedIndex !== null;
+  const canContinue = inputValid || selectedIndex !== null;
 
   useEffect(() => {
     setSelectedIndex(null);
@@ -138,19 +138,7 @@ export function AskQuestionCard({
         <p className="ui-ask-question__prompt">
           {questionNumber}. {question}
         </p>
-        {input ? (
-          <div className="ui-ask-question__input-wrap">
-            <input
-              className={cn("ui-ask-question__input", input.error && "ui-ask-question__input--invalid")}
-              value={input.value}
-              placeholder={input.placeholder}
-              onChange={(event) => input.onChange(event.target.value)}
-              aria-invalid={Boolean(input.error)}
-              autoFocus
-            />
-            {input.error ? <p className="ui-ask-question__input-error">{input.error}</p> : null}
-          </div>
-        ) : (
+        {options.length > 0 ? (
           <ul className="ui-ask-question__options" role="listbox" aria-label={labels.answerChoicesAriaLabel}>
             {options.map((option, index) => {
               const letter = OPTION_LETTERS[index] ?? String(index + 1);
@@ -176,7 +164,20 @@ export function AskQuestionCard({
               );
             })}
           </ul>
-        )}
+        ) : null}
+        {input ? (
+          <div className="ui-ask-question__input-wrap">
+            <input
+              className={cn("ui-ask-question__input", input.error && "ui-ask-question__input--invalid")}
+              value={input.value}
+              placeholder={input.placeholder}
+              onChange={(event) => input.onChange(event.target.value)}
+              aria-invalid={Boolean(input.error)}
+              autoFocus={options.length === 0}
+            />
+            {input.error ? <p className="ui-ask-question__input-error">{input.error}</p> : null}
+          </div>
+        ) : null}
       </div>
 
       <footer className="ui-ask-question__footer">
@@ -187,15 +188,17 @@ export function AskQuestionCard({
           data-analytics-area="agent"
           disabled={!canContinue}
           onClick={() => {
+            if (selectedIndex !== null) {
+              const option = options[selectedIndex];
+              if (option) {
+                onSubmit(option.value);
+              }
+              return;
+            }
             if (input) {
               if (!inputValid) return;
               onSubmit(inputValue.trim());
               return;
-            }
-            if (selectedIndex === null) return;
-            const option = options[selectedIndex];
-            if (option) {
-              onSubmit(option.value);
             }
           }}
         >

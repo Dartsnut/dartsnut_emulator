@@ -15,12 +15,15 @@ import {
   type ProjectTree,
   type ProjectCreateRequest,
   type ProjectSelectRequest,
+  type ChatCreateRequest,
   type ProjectSwitchProgress,
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
   type MachineMcpSubmitQuestionAnswerRequest,
   type MachineMcpSubmitQuestionAnswerResponse,
+  type AgentQuestionAnswerRequest,
+  type AgentQuestionAnswerResponse,
   type PromptRequest,
   type ProviderSettings,
   type PythonRuntimeProgress,
@@ -75,8 +78,8 @@ import {
 
 const api = {
   getBootstrapState: () => ipcRenderer.invoke(IPCChannels.bootstrapState) as Promise<BootstrapState>,
-  getWorkspaceSessionSummary: () =>
-    ipcRenderer.invoke(IPCChannels.getWorkspaceSessionSummary) as Promise<AgentSessionWorkspaceSummary>,
+  getWorkspaceSessionSummary: (chatId?: string) =>
+    ipcRenderer.invoke(IPCChannels.getWorkspaceSessionSummary, chatId) as Promise<AgentSessionWorkspaceSummary>,
   resetWorkspaceSession: () =>
     ipcRenderer.invoke(IPCChannels.resetWorkspaceSession) as Promise<
       { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" }
@@ -84,9 +87,10 @@ const api = {
   listProjects: () => ipcRenderer.invoke(IPCChannels.projectsList) as Promise<ProjectTree>,
   createProject: (request: ProjectCreateRequest) => ipcRenderer.invoke(IPCChannels.projectCreate, request) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
   selectProject: (request: ProjectSelectRequest) => ipcRenderer.invoke(IPCChannels.projectSelect, request) as Promise<{ state: BootstrapState; tree: ProjectTree; accepted: boolean }>,
+  createChat: (request: ChatCreateRequest) => ipcRenderer.invoke(IPCChannels.chatCreate, request) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
   archiveChat: (chatId: string) => ipcRenderer.invoke("agent:chat-archive", chatId) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
-  generateChatTitle: (request: { chatId: string; firstUserMessage: string }) => ipcRenderer.invoke("agent:chat-generate-title", request) as Promise<{ tree: ProjectTree; updated: boolean }>,
-  selectChat: (chatId: string) => ipcRenderer.invoke(IPCChannels.chatSelect, chatId) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
+  generateChatTitle: (request: { chatId: string; firstUserMessage: string; fallbackOnly?: boolean }) => ipcRenderer.invoke("agent:chat-generate-title", request) as Promise<{ tree: ProjectTree; updated: boolean }>,
+  selectChat: (chatId: string) => ipcRenderer.invoke(IPCChannels.chatSelect, chatId) as Promise<{ state: BootstrapState; tree: ProjectTree; accepted: boolean }>,
   onProjectSwitchProgress: (listener: (progress: ProjectSwitchProgress) => void) => {
     const handler = (_: unknown, progress: ProjectSwitchProgress) => listener(progress);
     ipcRenderer.on(IPCChannels.projectSwitchProgress, handler);
@@ -114,6 +118,8 @@ const api = {
       : ipcRenderer.invoke(IPCChannels.pickWorkspace, request)) as Promise<PickWorkspaceResponse>,
   machineMcpSubmitQuestionAnswer: (body: MachineMcpSubmitQuestionAnswerRequest) =>
     ipcRenderer.invoke(IPCChannels.machineMcpSubmitQuestionAnswer, body) as Promise<MachineMcpSubmitQuestionAnswerResponse>,
+  agentQuestionSubmitAnswer: (body: AgentQuestionAnswerRequest) =>
+    ipcRenderer.invoke(IPCChannels.agentQuestionSubmitAnswer, body) as Promise<AgentQuestionAnswerResponse>,
   sendPrompt: (request: PromptRequest) =>
     ipcRenderer.invoke(IPCChannels.sendPrompt, request) as Promise<SendPromptResponse>,
   cancelAgent: () => ipcRenderer.invoke(IPCChannels.cancelAgent) as Promise<{ ok: boolean }>,

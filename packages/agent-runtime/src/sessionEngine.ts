@@ -6,8 +6,10 @@ import { Runner, run, type AgentInputItem, type StreamedRunResult } from "@opena
 import {
   type AgentEvent,
   type AgentTokenUsage,
+  type AgentQuestionPrompt,
   type ChatMediaAttachment,
-  type UserLocale
+  type UserLocale,
+  type AgentProfileId
 } from "@dartsnut/shared-ipc";
 import type { DeferredSkillId } from "./skillBundle";
 import type { AgentSessionPersistence } from "./agentSessionPersistence";
@@ -44,6 +46,7 @@ export type HostMachineMcpHandler = (args: Record<string, unknown>) => Promise<s
 export type HostObserveEmulatorHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostControlEmulatorInputHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostRunEmulatorScenarioHandler = (args: Record<string, unknown>) => Promise<string>;
+export type HostAskUserQuestionHandler = (prompt: AgentQuestionPrompt) => Promise<string | null>;
 
 export interface AgentSkillLibrary {
   skillsDir: string;
@@ -65,12 +68,14 @@ export interface SessionEngineOptions {
   hostObserveEmulatorHandler?: HostObserveEmulatorHandler;
   hostControlEmulatorInputHandler?: HostControlEmulatorInputHandler;
   hostRunEmulatorScenarioHandler?: HostRunEmulatorScenarioHandler;
+  askUserQuestionHandler?: HostAskUserQuestionHandler;
   skipInitialWorkspaceResolve?: boolean;
   sessionPersistence?: AgentSessionPersistence;
   sessionTemplateMode?: string | null;
   sessionSection?: string | null;
   initialItems?: AgentInputItem[];
   preferredUserLocale?: UserLocale | null;
+  agentProfileId?: AgentProfileId | null;
   agentModelConfig?: AgentModelConfig;
   /** Seeds shared SDK run context for orchestrator handoffs. */
   runContextSeed?: Omit<SeedDartsnutRunContextInput, "workspacePath" | "skillsDir"> & {
@@ -154,6 +159,7 @@ export class SessionEngine {
       workspacePath,
       skillsDir: this.resolveSkillsDir(),
       preferredUserLocale: this.options.preferredUserLocale ?? null,
+      agentProfileId: this.options.agentProfileId ?? null,
       projectType: seed?.projectType,
       widgetSize: seed?.widgetSize,
       templateMode: seed?.templateMode ?? (this.options.sessionTemplateMode as DartsnutTemplateMode),
@@ -175,7 +181,8 @@ export class SessionEngine {
       hostMachineMcpHandler: this.options.hostMachineMcpHandler,
       hostObserveEmulatorHandler: this.options.hostObserveEmulatorHandler,
       hostControlEmulatorInputHandler: this.options.hostControlEmulatorInputHandler,
-      hostRunEmulatorScenarioHandler: this.options.hostRunEmulatorScenarioHandler
+      hostRunEmulatorScenarioHandler: this.options.hostRunEmulatorScenarioHandler,
+      askUserQuestionHandler: this.options.askUserQuestionHandler
     };
   }
 
@@ -250,6 +257,7 @@ export class SessionEngine {
       toolsBase,
       contextSnapshot: runContext,
       preferredUserLocale: this.options.preferredUserLocale ?? null,
+      agentProfileId: this.options.agentProfileId ?? null,
       onModelRetry: (diagnostic) => this.options.onDiagnostic?.("agent model request retry", diagnostic)
     });
     const toolNames = agent.tools.map((tool) => {
@@ -332,7 +340,8 @@ export class SessionEngine {
           sessionPersistence: this.options.sessionPersistence,
           sessionTemplateMode: this.options.sessionTemplateMode,
           sessionSection: this.options.sessionSection,
-          preferredUserLocale: this.options.preferredUserLocale ?? null
+          preferredUserLocale: this.options.preferredUserLocale ?? null,
+          agentProfileId: this.options.agentProfileId ?? null
         }));
       }
       this.options.onDiagnostic?.("agent SDK stream opened", {
@@ -392,7 +401,8 @@ export class SessionEngine {
             sessionPersistence: this.options.sessionPersistence,
             sessionTemplateMode: this.options.sessionTemplateMode,
             sessionSection: this.options.sessionSection,
-            preferredUserLocale: this.options.preferredUserLocale ?? null
+            preferredUserLocale: this.options.preferredUserLocale ?? null,
+            agentProfileId: this.options.agentProfileId ?? null
           }));
           streamResult = await consumeStream(fallbackStream, false);
         } else if (

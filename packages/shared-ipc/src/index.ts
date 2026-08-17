@@ -4,3 +4,4 @@ export * from "./userLocale";
 export * from "./widgetFonts";
 export * from "./communitySubmission";
 export * from "./widgetFields";
+export * from "./agentProfiles";

@@ -25,6 +25,13 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  Code2,
+  Compass,
+  Palette,
+  Rocket,
+  Sparkles,
+  Terminal,
+  Wand2,
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
@@ -57,6 +64,7 @@ import {
   type SendPromptResponse,
   type MainProcessConsoleMirrorPayload,
   type MachineMcpQuestionMachine,
+  type AgentQuestionOption,
   type WidgetSize,
   type CommunitySessionInfo,
   type CommunityLlmQuotaStatus,
@@ -69,7 +77,11 @@ import {
   createDefaultWidgetFieldValues,
   inferChatMediaAttachmentKind,
   mergeChatMediaAttachments,
-  reconcileWidgetFieldValues
+  reconcileWidgetFieldValues,
+  AGENT_PROFILES,
+  type AgentProfileId,
+  type AgentProfileDefinition,
+  type AgentProfileGroup
 } from "@dartsnut/shared-ipc";
 import {
   getAnalyticsCollectionEnabled,
@@ -80,6 +92,8 @@ import {
   trackScreenView,
   updateAnalyticsUser
 } from "./analytics";
+import { shouldSetInitialChatTitle } from "./chatTitlePolicy";
+import { readyAgentProfileId, useChatPersonaController } from "./useChatPersonaController";
 import { AskQuestionCard } from "./AskQuestionCard";
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { cn } from "./cn";
@@ -123,6 +137,32 @@ import {
 } from "./splitPaneSizing";
 
 const AgentMarkdownRenderer = lazy(() => import("./AgentMarkdownRenderer"));
+
+const AGENT_PROFILE_ICONS: Record<AgentProfileDefinition["icon"], typeof Sparkles> = {
+  sparkle: Sparkles,
+  palette: Palette,
+  code: Code2,
+  compass: Compass,
+  wand: Wand2,
+  rocket: Rocket,
+  terminal: Terminal
+};
+
+type PersonaAgeGroup = Exclude<AgentProfileGroup, "export">;
+const PERSONA_AGE_GROUPS: readonly { id: PersonaAgeGroup; label: string }[] = [
+  { id: "child", label: "Kids" },
+  { id: "teen", label: "Teens" },
+  { id: "adult", label: "Adults" }
+];
+
+const PERSONA_CARD_SUMMARIES: Record<Exclude<AgentProfileId, "export">, string> = {
+  "child-curious": "Patient, playful, one question at a time.",
+  "child-creator": "Colorful ideas with creative momentum.",
+  "teen-builder": "Technical choices, clearly explained.",
+  "teen-explorer": "Fast exploration with practical tradeoffs.",
+  "adult-vibe": "Polished direction with creative checkpoints.",
+  "adult-shipper": "Practical decisions focused on shipping."
+};
 
 function isValidMachineHost(value: string): boolean {
   const trimmed = value.trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
@@ -482,6 +522,7 @@ export function UpdateReadyOverlay({
 type TimelineEntryViewProps = {
   entry: TimelineEntry;
   onToggleReasoning: (entryId: string) => void;
+  agentProfile: AgentProfileDefinition | null;
 };
 
 function TimelineErrorCard({ text }: { text: string }) {
@@ -508,7 +549,8 @@ function TimelineErrorCard({ text }: { text: string }) {
 
 const TimelineEntryView = memo(function TimelineEntryView({
   entry,
-  onToggleReasoning
+  onToggleReasoning,
+  agentProfile
 }: TimelineEntryViewProps) {
   return (
     <div
@@ -519,10 +561,12 @@ const TimelineEntryView = memo(function TimelineEntryView({
       )}
     >
       {entry.role === "agent" && entry.id.startsWith("greeting") ? (
-        <div className="greeting-card" role="status">
-          <p className="greeting-card__eyebrow">Neon Pit · ready</p>
-          <p className="greeting-card__title">Dartsnut Agent</p>
-          <p className="greeting-card__body">{entry.text}</p>
+        <div className={cn("greeting-card", agentProfile && `greeting-card--${agentProfile.gender}`)} role="status">
+          <p className="greeting-card__eyebrow">
+            {agentProfile?.group === "export" ? "Neon Pit · ready" : `${agentProfile?.group ?? "agent"} guide · ${agentProfile?.pronouns ?? "ready"} · ready`}
+          </p>
+          <p className="greeting-card__title">{agentProfile?.name ?? "Dartsnut Agent"}</p>
+          <p className="greeting-card__body">{agentProfile?.greeting ?? entry.text}</p>
         </div>
       ) : entry.role === "user" ? (
         <div className="entry-text">{entry.text}</div>
@@ -829,6 +873,7 @@ export function App() {
     { id: "greeting-initial", role: "agent", text: GREETING_TEXT }
   ]);
   const [prompt, setPrompt] = useState("");
+  const [personaAgeGroup, setPersonaAgeGroup] = useState<PersonaAgeGroup>("adult");
   const [chatMediaAttachments, setChatMediaAttachments] = useState<ChatMediaAttachment[]>([]);
   const [chatAttachmentError, setChatAttachmentError] = useState<string | null>(null);
   const [composerDragActive, setComposerDragActive] = useState(false);
@@ -857,6 +902,14 @@ export function App() {
   }>({ visible: false, machines: [], manualOnly: true });
   const [machineMcpManualIp, setMachineMcpManualIp] = useState("");
   const [machineMcpInputError, setMachineMcpInputError] = useState<string | null>(null);
+  const [agentQuestion, setAgentQuestion] = useState<{
+    questionId: string;
+    question: string;
+    options: AgentQuestionOption[];
+    allowFreeText: boolean;
+    freeTextPlaceholder: string;
+  } | null>(null);
+  const [agentQuestionText, setAgentQuestionText] = useState("");
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
@@ -871,9 +924,10 @@ export function App() {
   const activeAgentRunRef = useRef<{ startedAt: number; finished: boolean } | null>(null);
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
-  const lastAgentSessionHydrateKeyRef = useRef<string>("");
   const timelineRef = useRef<HTMLElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const personaController = useChatPersonaController();
+  const personaState = personaController.state;
   const [composerExpandedSticky, setComposerExpandedSticky] = useState(false);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>(DEFAULT_PROVIDER_SETTINGS);
   const [analyticsEnabled, setAnalyticsEnabled] = useState(() => getAnalyticsCollectionEnabled());
@@ -946,8 +1000,20 @@ export function App() {
   } | null>(null);
 
   const composerHasContent = prompt.trim().length > 0 || chatMediaAttachments.length > 0;
+  const personaPickerOpen = personaState.phase === "picking";
+  const agentProfileId = readyAgentProfileId(personaState, bootstrap?.activeChatId);
+  const agentProfile = AGENT_PROFILES.find((profile) => profile.id === agentProfileId) ?? null;
+  const agentProfileReady = bootstrap !== null && agentProfileId !== null;
+  const visiblePersonaProfiles = AGENT_PROFILES.filter(
+    (profile) => profile.group === personaAgeGroup
+  );
+  const exportProfile = AGENT_PROFILES.find((profile) => profile.id === "export")!;
 
   const api = window.dartsnutApi;
+
+  useEffect(() => {
+    if (bootstrap) personaController.syncBootstrap(bootstrap);
+  }, [bootstrap, personaController.syncBootstrap]);
 
   useEffect(() => {
     if (!api) return;
@@ -1644,6 +1710,22 @@ export function App() {
         });
         return;
       }
+      if (event.type === "agent_question") {
+        if (!event.visible) {
+          setAgentQuestion(null);
+          setAgentQuestionText("");
+        } else {
+          setAgentQuestion({
+            questionId: event.questionId,
+            question: event.question,
+            options: event.options ?? [],
+            allowFreeText: event.allowFreeText === true,
+            freeTextPlaceholder: event.freeTextPlaceholder ?? "Type your own answer"
+          });
+          setAgentQuestionText("");
+        }
+        return;
+      }
       if (event.type === "token_usage") {
         setTokenUsage(event.sessionUsage);
         return;
@@ -2069,94 +2151,102 @@ export function App() {
 
   useEffect(() => {
     const ws = bootstrap?.workspaceRoot;
-    if (!api || !ws || !bootstrap?.activeChatId) {
-      lastAgentSessionHydrateKeyRef.current = "";
-      return;
-    }
-    if (sending) return;
-    const hydrateKey = `${bootstrap.activeProjectId ?? ""}:${bootstrap.activeChatId}`;
-    if (lastAgentSessionHydrateKeyRef.current === hydrateKey) {
-      return;
-    }
+    if (!api || !ws || personaState.phase !== "hydrating") return;
+    const { chatId, generation } = personaState;
     let cancelled = false;
     void (async () => {
-      const summary = await api.getWorkspaceSessionSummary();
-      if (cancelled) {
-        return;
-      }
-      lastAgentSessionHydrateKeyRef.current = hydrateKey;
-      setTokenUsage(summary.tokenUsage ?? null);
-      if (!summary.hasPersistedSession || summary.transcriptTail.length === 0) {
-        setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT }]);
-        return;
-      }
-      const hydrated = summary.transcriptTail
-        .map((line, idx) => transcriptLineToTimelineEntry(line, idx))
-        .filter((entry): entry is TimelineEntry => entry != null);
-      const toolCallEntryIndexByKey = new Map<string, number>();
-      const deduped: TimelineEntry[] = [];
-      for (const entry of hydrated) {
-        if (entry.role === "status" && entry.toolStatusMeta?.toolName === "get_dartsnut_skill") {
-          const priorIdx = deduped.findIndex(
-            (candidate) =>
-              candidate.role === "status" &&
-              candidate.toolStatusMeta?.toolName === "get_dartsnut_skill"
-          );
-          if (priorIdx >= 0) {
-            deduped[priorIdx] = mergeTimelineSkillStatusEntry(deduped[priorIdx], entry);
-            continue;
-          }
-          deduped.push(
-            mergeTimelineSkillStatusEntry(
-              {
-                id: entry.id,
-                role: "status",
-                text: "Loaded Dartsnut skills.",
-                toolStatusMeta: { toolName: "get_dartsnut_skill", phase: "result" }
-              },
-              entry
-            )
-          );
-          continue;
+      try {
+        const summary = await api.getWorkspaceSessionSummary(chatId);
+        if (cancelled) return;
+        if (summary.chatId !== chatId) {
+          personaController.failHydration(chatId, generation);
+          return;
         }
-        if (entry.role === "status" && entry.toolStatusMeta) {
-          const key = toolStatusKey(entry.toolStatusMeta);
-          if (entry.toolStatusMeta.phase === "result" && key) {
-            const priorIdx = toolCallEntryIndexByKey.get(key);
-            if (typeof priorIdx === "number") {
-              deduped[priorIdx] = { ...deduped[priorIdx], ...entry };
-              toolCallEntryIndexByKey.delete(key);
+        setTokenUsage(summary.tokenUsage ?? null);
+        if (!summary.hasPersistedSession || summary.transcriptTail.length === 0) {
+          setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT }]);
+        } else {
+          const hydrated = summary.transcriptTail
+            .map((line, idx) => transcriptLineToTimelineEntry(line, idx))
+            .filter((entry): entry is TimelineEntry => entry != null);
+          const toolCallEntryIndexByKey = new Map<string, number>();
+          const deduped: TimelineEntry[] = [];
+          for (const entry of hydrated) {
+            if (entry.role === "status" && entry.toolStatusMeta?.toolName === "get_dartsnut_skill") {
+              const priorIdx = deduped.findIndex(
+                (candidate) =>
+                  candidate.role === "status" &&
+                  candidate.toolStatusMeta?.toolName === "get_dartsnut_skill"
+              );
+              if (priorIdx >= 0) {
+                deduped[priorIdx] = mergeTimelineSkillStatusEntry(deduped[priorIdx], entry);
+                continue;
+              }
+              deduped.push(
+                mergeTimelineSkillStatusEntry(
+                  {
+                    id: entry.id,
+                    role: "status",
+                    text: "Loaded Dartsnut skills.",
+                    toolStatusMeta: { toolName: "get_dartsnut_skill", phase: "result" }
+                  },
+                  entry
+                )
+              );
               continue;
             }
+            if (entry.role === "status" && entry.toolStatusMeta) {
+              const key = toolStatusKey(entry.toolStatusMeta);
+              if (entry.toolStatusMeta.phase === "result" && key) {
+                const priorIdx = toolCallEntryIndexByKey.get(key);
+                if (typeof priorIdx === "number") {
+                  deduped[priorIdx] = { ...deduped[priorIdx], ...entry };
+                  toolCallEntryIndexByKey.delete(key);
+                  continue;
+                }
+              }
+              if (entry.toolStatusMeta.phase === "call" && key) {
+                toolCallEntryIndexByKey.set(key, deduped.length);
+              }
+            }
+            const prev = deduped.length > 0 ? deduped[deduped.length - 1] : null;
+            if (
+              prev &&
+              prev.role === "agent" &&
+              entry.role === "agent" &&
+              prev.text.trim() === entry.text.trim()
+            ) {
+              continue;
+            }
+            deduped.push(entry);
           }
-          if (entry.toolStatusMeta.phase === "call" && key) {
-            toolCallEntryIndexByKey.set(key, deduped.length);
-          }
+          setEntries(deduped);
         }
-        const prev = deduped.length > 0 ? deduped[deduped.length - 1] : null;
-        if (
-          prev &&
-          prev.role === "agent" &&
-          entry.role === "agent" &&
-          prev.text.trim() === entry.text.trim()
-        ) {
-          continue;
+        personaController.completeHydration(chatId, generation, summary.agentProfileId);
+      } catch {
+        if (!cancelled) {
+          setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT }]);
+          personaController.failHydration(chatId, generation);
         }
-        deduped.push(entry);
       }
-      setEntries(deduped);
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, bootstrap?.workspaceRoot, bootstrap?.activeProjectId, bootstrap?.activeChatId, sending]);
+  }, [
+    api,
+    bootstrap?.workspaceRoot,
+    personaController.completeHydration,
+    personaController.failHydration,
+    personaState
+  ]);
 
   const chatDisabled = useMemo(() => {
     if (!bootstrap) {
       return true;
     }
-    return sending;
-  }, [bootstrap, sending]);
+    return sending || Boolean(agentQuestion) || machineMcpPicker.visible;
+  }, [agentQuestion, bootstrap, machineMcpPicker.visible, sending]);
   const greetingOnlyTimeline = entries.length > 0 && entries.every(
     (entry) => entry.role === "agent" && (entry.id === "greeting-initial" || entry.id.startsWith("greeting-"))
   );
@@ -2186,11 +2276,12 @@ export function App() {
     seenAgentToolAnalyticsRef.current.clear();
     activeAgentRunRef.current = null;
     eventSeqRef.current = 0;
-    lastAgentSessionHydrateKeyRef.current = "";
     setSessionTemplateMode(null);
     setSessionWidgetSize(null);
     setSessionProjectType(null);
     setTokenUsage(null);
+    setAgentQuestion(null);
+    setAgentQuestionText("");
     setPrompt("");
     setChatMediaAttachments([]);
     setChatAttachmentError(null);
@@ -2248,7 +2339,11 @@ export function App() {
     }
     seenAgentToolAnalyticsRef.current.clear();
     activeAgentRunRef.current = { startedAt: Date.now(), finished: false };
-    const shouldGenerateTitle = !request.chatId && Boolean(firstUserMessageForTitle?.trim());
+    const shouldGenerateTitle = shouldSetInitialChatTitle(
+      firstUserMessageForTitle,
+      request.chatId,
+      activeChat
+    );
     trackAgentEvent("agent_run_started", {
       provider: providerSettings.activeProvider,
       template_mode: request.templateMode ?? "follow_up",
@@ -2261,6 +2356,18 @@ export function App() {
       const refreshed = await api.getBootstrapState();
       setBootstrap(refreshed);
       if (!result.ok) {
+        if (shouldGenerateTitle && refreshed.activeChatId && firstUserMessageForTitle) {
+          try {
+            const { tree } = await api.generateChatTitle({
+              chatId: refreshed.activeChatId,
+              firstUserMessage: firstUserMessageForTitle,
+              fallbackOnly: true
+            });
+            setProjectTree(tree);
+          } catch {
+            // Prompt failure remains primary; title fallback is best effort.
+          }
+        }
         finishAgentRun("rejected", result.failureReason);
         if (result.failureReason === "auth_required") {
           await refreshCommunitySession();
@@ -2274,7 +2381,8 @@ export function App() {
       if (shouldGenerateTitle && refreshed.activeChatId && firstUserMessageForTitle) {
         void api.generateChatTitle({
           chatId: refreshed.activeChatId,
-          firstUserMessage: firstUserMessageForTitle
+          firstUserMessage: firstUserMessageForTitle,
+          fallbackOnly: false
         }).then(({ tree }) => setProjectTree(tree)).catch(() => undefined);
       }
       if (result.sessionRouting) {
@@ -2304,13 +2412,45 @@ export function App() {
     await handleNoProject();
   }
 
-  function handleCreateProject() {
+  async function handleSelectAgentProfile(profileId: AgentProfileId) {
+    if (!api || sending || personaState.phase !== "picking") return;
+    const projectId = personaState.projectId;
+    personaController.selectProfile(profileId);
+    if (!projectId) {
+      openCreateProjectDialog();
+      return;
+    }
+    try {
+      const result = await api.createChat({ projectId, agentProfileId: profileId });
+      setBootstrap(result.state);
+      setProjectTree(result.tree);
+      resetChatSessionUi();
+      if (!result.state.activeChatId) throw new Error("Created chat was not activated.");
+      personaController.completeCreation(result.state.activeChatId, profileId);
+    } catch {
+      personaController.failCreation();
+      postStatus("Could not start this chat. Try again.");
+    }
+  }
+
+  function openCreateProjectDialog() {
     if (sending) return;
     setProjectMenuOpen(false);
     setCreateProjectName("");
     setCreateProjectFolder(null);
     setCreateProjectError(null);
     setCreateProjectOpen(true);
+  }
+
+  function handleCreateProject() {
+    openCreateProjectDialog();
+  }
+
+  function closeCreateProjectDialog(keepPersona = false) {
+    setCreateProjectOpen(false);
+    if (!keepPersona && personaState.phase === "creating-project") {
+      personaController.cancelProjectCreation();
+    }
   }
 
   async function handlePickProjectFolder() {
@@ -2334,9 +2474,22 @@ export function App() {
     if (!api || sending || !createProjectFolder) return;
     setCreateProjectError(null);
     try {
-      const result = await api.createProject({ folderPath: createProjectFolder, name: createProjectName });
-      setCreateProjectOpen(false);
-      setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi();
+      const carriedAgentProfileId = personaState.phase === "creating-project"
+        ? personaState.profileId
+        : null;
+      const result = await api.createProject({
+        folderPath: createProjectFolder,
+        name: createProjectName,
+        agentProfileId: carriedAgentProfileId ?? undefined
+      });
+      closeCreateProjectDialog(true);
+      setBootstrap(result.state);
+      setProjectTree(result.tree);
+      resetChatSessionUi();
+      personaController.syncBootstrap(result.state);
+      if (carriedAgentProfileId && result.state.activeChatId) {
+        personaController.completeCreation(result.state.activeChatId, carriedAgentProfileId);
+      }
     } catch (error: unknown) {
       setCreateProjectError(error instanceof Error ? error.message : "Could not create project.");
     }
@@ -2345,14 +2498,24 @@ export function App() {
   async function handleSelectProject(projectId: string) {
     if (!api || sending || projectSwitchProgress.active) return;
     const result = await api.selectProject({ projectId });
-    if (result.accepted) { setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi(); }
+    if (result.accepted) {
+      setBootstrap(result.state);
+      setProjectTree(result.tree);
+      resetChatSessionUi();
+      personaController.startNewChat(projectId);
+    }
     setProjectMenuOpen(false);
   }
 
   async function handleNoProject() {
     if (!api || sending || projectSwitchProgress.active) return;
     const result = await api.selectProject({ projectId: null });
-    if (result.accepted) { setBootstrap(result.state); setProjectTree(result.tree); resetChatSessionUi(); }
+    if (result.accepted) {
+      setBootstrap(result.state);
+      setProjectTree(result.tree);
+      resetChatSessionUi();
+      personaController.startNewChat(null);
+    }
     setProjectMenuOpen(false);
   }
 
@@ -2362,7 +2525,12 @@ export function App() {
 
   async function handleSelectChat(chatId: string) {
     if (!api || sending) return;
-    const result = await api.selectChat(chatId); setBootstrap(result.state); setProjectTree(result.tree);
+    const result = await api.selectChat(chatId);
+    if (!result.accepted) return;
+    setBootstrap(result.state);
+    setProjectTree(result.tree);
+    resetChatSessionUi();
+    personaController.syncBootstrap(result.state);
   }
 
   async function handleArchiveChat(chatId: string) {
@@ -2370,7 +2538,10 @@ export function App() {
     const wasActive = bootstrap?.activeChatId === chatId;
     const result = await api.archiveChat(chatId);
     setBootstrap(result.state); setProjectTree(result.tree);
-    if (wasActive) resetChatSessionUi();
+    if (wasActive) {
+      resetChatSessionUi();
+      personaController.archiveActiveChat(result.state.activeProjectId);
+    }
   }
 
   function handleOpenSettings() {
@@ -2481,6 +2652,19 @@ export function App() {
     }
   }
 
+  async function handleAgentQuestionAnswer(value: string) {
+    if (!api || !agentQuestion) return;
+    const response = await api.agentQuestionSubmitAnswer({ questionId: agentQuestion.questionId, value });
+    trackAgentEvent("agent_question_answered", {
+      question_type: "agent",
+      answer_method: agentQuestion.options.some((option) => option.value === value) ? "option" : "free_text",
+      outcome: response.ok ? "success" : "rejected"
+    });
+    if (!response.ok) {
+      postStatus(response.reason === "stale_question" ? "That question is no longer active." : "That answer could not be used.");
+    }
+  }
+
   function resolveChatMediaAttachments(fileList: FileList): { accepted: ChatMediaAttachment[]; rejected: number } {
     const files = Array.from(fileList);
     const accepted: ChatMediaAttachment[] = [];
@@ -2539,7 +2723,12 @@ export function App() {
   }
 
   async function handleSend() {
-    if (!composerHasContent || chatDisabled) {
+    if (
+      personaState.phase !== "ready" ||
+      personaState.chatId !== bootstrap?.activeChatId ||
+      !composerHasContent ||
+      chatDisabled
+    ) {
       return;
     }
     if (bootstrap?.providerStatus !== "ready") {
@@ -2568,7 +2757,8 @@ export function App() {
       chatId: bootstrap?.activeChatId ?? undefined,
       templateMode: sessionTemplateMode ?? undefined,
       widgetSize: sessionWidgetSize ?? undefined,
-      projectType: sessionProjectType ?? undefined
+      projectType: sessionProjectType ?? undefined,
+      agentProfileId: personaState.profileId
     }, visibleUserText);
   }
 
@@ -2825,20 +3015,79 @@ export function App() {
             }}
           >
             <div className="timeline-inner">
-            {entries.map((entry) => (
+            {personaPickerOpen ? (
+              <section className="agent-profile-picker" aria-labelledby="agent-profile-picker-title">
+                <div className="agent-profile-picker__intro">
+                  <h1 id="agent-profile-picker-title">
+                    Who should help you build {
+                      projectTree.projects.find((project) => project.id === personaState.projectId)?.name ?? "your project"
+                    }?
+                  </h1>
+                  <p>Choose a pace and personality.</p>
+                </div>
+                <div className="agent-profile-stage">
+                  <div className="agent-profile-age-tabs" role="tablist" aria-label="Builder age group">
+                    {PERSONA_AGE_GROUPS.map((group) => (
+                      <button
+                        key={group.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={personaAgeGroup === group.id}
+                        className={cn("agent-profile-age-tab", personaAgeGroup === group.id && "agent-profile-age-tab--active")}
+                        onClick={() => setPersonaAgeGroup(group.id)}
+                      >
+                        {group.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="agent-profile-grid">
+                  {visiblePersonaProfiles.map((profile) => {
+                    const Icon = AGENT_PROFILE_ICONS[profile.icon];
+                    return (
+                      <button
+                        key={profile.id}
+                        type="button"
+                        className={`agent-profile-card agent-profile-card--${profile.group}`}
+                        onClick={() => void handleSelectAgentProfile(profile.id)}
+                        disabled={sending}
+                        aria-label={`${profile.name}: ${profile.description}`}
+                      >
+                        <span className="agent-profile-card__icon"><Icon size={22} aria-hidden /></span>
+                        <span className="agent-profile-card__content">
+                          <span className="agent-profile-card__identity">
+                            <span className="agent-profile-card__name">{profile.name}</span>
+                            <span className="agent-profile-card__pronouns">{profile.pronouns}</span>
+                          </span>
+                          <span className="agent-profile-card__description">
+                            {PERSONA_CARD_SUMMARIES[profile.id as Exclude<AgentProfileId, "export">]}
+                          </span>
+                        </span>
+                        <ChevronDown className="agent-profile-card__select" size={18} aria-hidden />
+                      </button>
+                    );
+                  })}
+                  </div>
+                  <button
+                    type="button"
+                    className="agent-profile-standard"
+                    onClick={() => void handleSelectAgentProfile(exportProfile.id)}
+                    disabled={sending}
+                  >
+                    <Terminal size={15} aria-hidden />
+                    <span>Use standard Dartsnut Agent</span>
+                  </button>
+                </div>
+              </section>
+            ) : agentProfileReady ? entries.map((entry) => (
               <TimelineEntryView
                 key={entry.id}
                 entry={entry}
                 onToggleReasoning={toggleReasoningEntry}
+                agentProfile={agentProfile}
               />
-            ))}
+            )) : null}
             </div>
           </section>
-
-          {activeChat ? <div className="chat-panel-chat-header" title={activeChat.title}>
-            <FolderOpen size={15} aria-hidden />
-            <span>{activeChat.title}</span>
-          </div> : null}
 
           {runtimeError || pythonRuntimeStatus ? (
             <div className="chat-rail-overlay chat-rail-overlay--top pointer-events-none absolute inset-x-0 top-0 z-10">
@@ -2880,6 +3129,18 @@ export function App() {
               </div>
             </div>
           ) : null}
+          {agentQuestion ? (
+            <AskQuestionCard
+              question={agentQuestion.question}
+              options={agentQuestion.options}
+              input={agentQuestion.allowFreeText ? {
+                value: agentQuestionText,
+                placeholder: agentQuestion.freeTextPlaceholder,
+                onChange: setAgentQuestionText
+              } : undefined}
+              onSubmit={(value) => void handleAgentQuestionAnswer(value)}
+            />
+          ) : null}
           {machineMcpPicker.visible ? (
             <AskQuestionCard
               question={
@@ -2917,7 +3178,11 @@ export function App() {
             />
           ) : null}
 
-          <section className="flex flex-col gap-3 border-0 bg-transparent p-0">
+          {agentProfileReady ? <section className="flex flex-col gap-3 border-0 bg-transparent p-0">
+            {agentProfile ? <div className="agent-profile-context" aria-label={`Current helper: ${agentProfile.name}`}>
+              <span className={`agent-profile-context__dot agent-profile-context__dot--${agentProfile.group}`} />
+              <span>{agentProfile.name}</span>
+            </div> : null}
             <div
               className={cn(
                 "ui-composer",
@@ -3030,7 +3295,7 @@ export function App() {
                 {chatAttachmentError}
               </p>
             ) : null}
-          </section>
+          </section> : null}
             </div>
           </div>
           {showEmulatorPane ? (
@@ -3345,13 +3610,13 @@ export function App() {
           aria-modal="true"
           aria-labelledby="create-project-title"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setCreateProjectOpen(false);
+            if (event.target === event.currentTarget) closeCreateProjectDialog();
           }}
         >
           <div className="create-project-popover">
             <div className="create-project-popover__header">
               <h2 id="create-project-title">Create project</h2>
-              <button type="button" className="create-project-popover__close" aria-label="Close" onClick={() => setCreateProjectOpen(false)}><X size={22} aria-hidden /></button>
+              <button type="button" className="create-project-popover__close" aria-label="Close" onClick={() => closeCreateProjectDialog()}><X size={22} aria-hidden /></button>
             </div>
             <label className="create-project-name-field">
               <Folder size={24} strokeWidth={1.7} aria-hidden />
@@ -3366,7 +3631,7 @@ export function App() {
             <p className="create-project-popover__hint">Each project uses one source folder.</p>
             {createProjectError ? <p className="create-project-popover__error" role="alert">{createProjectError}</p> : null}
             <div className="create-project-popover__actions">
-              <button type="button" className="create-project-popover__cancel" onClick={() => setCreateProjectOpen(false)}>Cancel</button>
+              <button type="button" className="create-project-popover__cancel" onClick={() => closeCreateProjectDialog()}>Cancel</button>
               <button type="button" className="create-project-popover__submit" disabled={!createProjectFolder || createProjectPicking || sending} onClick={() => void handleSubmitCreateProject()}>Create project</button>
             </div>
           </div>

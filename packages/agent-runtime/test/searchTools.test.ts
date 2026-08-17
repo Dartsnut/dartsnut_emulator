@@ -47,6 +47,57 @@ describe("file mutations without intake", () => {
   });
 });
 
+describe("agent questions", () => {
+  it("blocks tool execution until option answer arrives", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-question-"));
+    let resolveAnswer: ((answer: string | null) => void) | null = null;
+    let prompt: any;
+    const tools = buildAgentTools({
+      workspacePolicy: new WorkspacePolicy(workspace),
+      profile: "full",
+      askUserQuestionHandler: async (nextPrompt) => {
+        prompt = nextPrompt;
+        return await new Promise<string | null>((resolve) => {
+          resolveAnswer = resolve;
+        });
+      }
+    });
+    const pending = exec(findTool(tools, "ask_user_question"), {
+      question: "What color should the clock be?",
+      options: [
+        { value: "blue", label: "Blue" },
+        { value: "green", label: "Green" }
+      ]
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(prompt).toEqual({
+      question: "What color should the clock be?",
+      options: [
+        { value: "blue", label: "Blue" },
+        { value: "green", label: "Green" }
+      ]
+    });
+    resolveAnswer?.("blue");
+    await expect(pending).resolves.toEqual({ ok: true, answer: "blue" });
+  });
+
+  it("supports free-text answers and cancellation", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-question-"));
+    let resolveAnswer: ((answer: string | null) => void) | null = null;
+    const tools = buildAgentTools({
+      workspacePolicy: new WorkspacePolicy(workspace),
+      profile: "full",
+      askUserQuestionHandler: async () => await new Promise<string | null>((resolve) => {
+        resolveAnswer = resolve;
+      })
+    });
+    const pending = exec(findTool(tools, "ask_user_question"), { question: "What should we call it?" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    resolveAnswer?.(null);
+    await expect(pending).resolves.toEqual({ ok: false, cancelled: true });
+  });
+});
+
 describe("search + file tools", () => {
   async function seedWorkspace(): Promise<string> {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-search-"));

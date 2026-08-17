@@ -1,4 +1,4 @@
-import type { ChatMediaAttachment } from "@dartsnut/shared-ipc";
+import type { AgentQuestionPrompt, ChatMediaAttachment } from "@dartsnut/shared-ipc";
 import type { WorkspacePolicy } from "./workspacePolicy";
 import type { AgentSkillLibrary } from "./sessionEngine";
 import type { AgentToolSchema } from "./toolSchemas";
@@ -14,6 +14,7 @@ export type HostMachineMcpHandler = (args: Record<string, unknown>) => Promise<s
 export type HostObserveEmulatorHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostControlEmulatorInputHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostRunEmulatorScenarioHandler = (args: Record<string, unknown>) => Promise<string>;
+export type HostAskUserQuestionHandler = (prompt: AgentQuestionPrompt) => Promise<string | null>;
 
 export type AgentToolProfile = "asset-applier" | "full";
 
@@ -34,4 +35,5 @@ export type AgentToolsOptions = {
   hostObserveEmulatorHandler?: HostObserveEmulatorHandler;
   hostControlEmulatorInputHandler?: HostControlEmulatorInputHandler;
   hostRunEmulatorScenarioHandler?: HostRunEmulatorScenarioHandler;
+  askUserQuestionHandler?: HostAskUserQuestionHandler;
 };

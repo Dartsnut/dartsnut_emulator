@@ -1,4 +1,4 @@
-import type { ProjectType, UserLocale, WidgetSize } from "@dartsnut/shared-ipc";
+import type { AgentProfileId, ProjectType, UserLocale, WidgetSize } from "@dartsnut/shared-ipc";
 import type { ProjectArtifactStatus } from "./projectArtifacts";
 import { readProjectArtifactStatus } from "./projectArtifacts";
 import { readWorkspaceCreatorHints } from "./projectRouting";
@@ -19,6 +19,7 @@ export interface DartsnutRunContext {
   assetApplierMode: boolean;
   skillsDir: string;
   preferredUserLocale: UserLocale | null;
+  agentProfileId: AgentProfileId | null;
   /** Original user message for the active prompt. */
   originalUserPrompt?: string;
   /** Last active specialist agent name (updated by event bridge). */
@@ -29,6 +30,7 @@ export type SeedDartsnutRunContextInput = {
   workspacePath: string;
   skillsDir: string;
   preferredUserLocale?: UserLocale | null;
+  agentProfileId?: AgentProfileId | null;
   projectType?: ProjectType;
   widgetSize?: WidgetSize;
   templateMode?: DartsnutTemplateMode;
@@ -79,6 +81,7 @@ export function seedDartsnutRunContext(input: SeedDartsnutRunContextInput): Dart
     assetApplierMode: input.assetApplierMode ?? templateMode === "asset-applier",
     skillsDir: input.skillsDir,
     preferredUserLocale: input.preferredUserLocale ?? null,
+    agentProfileId: input.agentProfileId ?? null,
     originalUserPrompt: input.originalUserPrompt
   };
 }
@@ -101,7 +104,8 @@ export function formatRunContextSnapshot(ctx: DartsnutRunContext): string {
       templateMode: ctx.templateMode,
       artifacts: ctx.artifacts,
       assetApplierMode: ctx.assetApplierMode,
-      originalUserPrompt: ctx.originalUserPrompt ?? null
+      originalUserPrompt: ctx.originalUserPrompt ?? null,
+      agentProfileId: ctx.agentProfileId
     },
     null,
     2

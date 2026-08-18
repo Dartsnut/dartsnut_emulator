@@ -114,6 +114,7 @@ import {
   isAgentSessionPersistenceDisabledByEnv,
   AGENT_STOPPED_MESSAGE,
   readWorkspaceCreatorHints,
+  resolveCreatorRouting,
   type AgentInputItem,
   type AgentModelConfig,
   type ProviderConfig
@@ -1744,18 +1745,14 @@ function buildRoutedPrompt(request: PromptRequest): string {
   let projectType = request.projectType;
   let widgetSize = request.widgetSize;
 
-  if (
-    (!templateMode || !projectType || !widgetSize) &&
-    effectiveWorkspacePath &&
-    fs.existsSync(effectiveWorkspacePath)
-  ) {
-    const hints = readWorkspaceCreatorHints(effectiveWorkspacePath);
-    if (hints) {
-      templateMode = templateMode ?? hints.templateMode;
-      projectType = projectType ?? hints.projectType;
-      widgetSize = widgetSize ?? hints.widgetSize;
-    }
-  }
+  const hints =
+    effectiveWorkspacePath && fs.existsSync(effectiveWorkspacePath)
+      ? readWorkspaceCreatorHints(effectiveWorkspacePath)
+      : null;
+  ({ templateMode, projectType, widgetSize } = resolveCreatorRouting(
+    { templateMode, projectType, widgetSize },
+    hints
+  ));
 
   if (!templateMode) {
     return request.prompt;
@@ -3826,21 +3823,23 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
       effectiveWorkspacePath && fs.existsSync(effectiveWorkspacePath)
         ? readWorkspaceCreatorHints(effectiveWorkspacePath)
         : null;
-    const routedTemplateMode =
-      request.templateMode === "game-creator" || request.templateMode === "widget-creator"
-        ? request.templateMode
-        : hintedRouting?.templateMode;
-    const routedProjectType =
-      request.projectType ??
-      hintedRouting?.projectType ??
-      (routedTemplateMode === "widget-creator"
-        ? "widget"
-        : routedTemplateMode === "game-creator"
-          ? "game"
-          : undefined);
-    const routedWidgetSize = request.widgetSize ?? hintedRouting?.widgetSize;
+    const {
+      templateMode: routedTemplateMode,
+      projectType: routedProjectType,
+      widgetSize: routedWidgetSize
+    } = resolveCreatorRouting(
+      {
+        templateMode:
+          request.templateMode === "game-creator" || request.templateMode === "widget-creator"
+            ? request.templateMode
+            : undefined,
+        projectType: request.projectType,
+        widgetSize: request.widgetSize
+      },
+      hintedRouting
+    );
     const preferredUserLocale = resolvePreferredUserLocaleForSession(request.prompt, persistence);
-    const session = await buildSession(request.templateMode, {
+    const session = await buildSession(routedTemplateMode, {
       toolSchemas: AGENT_TOOL_SCHEMAS,
       chatMediaAttachments: request.chatMediaAttachments,
       sessionPersistence: persistence,
@@ -3848,8 +3847,8 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
       preferredUserLocale,
       agentProfileId,
       latestUserTextForLocale: request.prompt,
-      projectType: routedProjectType ?? hintedRouting?.projectType,
-      widgetSize: routedWidgetSize ?? hintedRouting?.widgetSize,
+      projectType: routedProjectType,
+      widgetSize: routedWidgetSize,
       agentModelConfig: prepared.modelConfig
     });
     if (routedTemplateMode) {
@@ -3861,7 +3860,12 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         ...(routedWidgetSize ? { widgetSize: routedWidgetSize } : {})
       };
     }
-    const prompt = buildRoutedPrompt(request);
+    const prompt = buildRoutedPrompt({
+      ...request,
+      templateMode: routedTemplateMode,
+      projectType: routedProjectType,
+      widgetSize: routedWidgetSize
+    });
     terminalAgentLifecycleLog("[agent] runPrompt start", { promptChars: prompt.length });
     await session.runPrompt(prompt, emitAgent, runAbort.signal, { userPrompt: request.prompt });
 

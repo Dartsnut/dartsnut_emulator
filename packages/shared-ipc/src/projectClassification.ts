@@ -87,6 +87,9 @@ export function classifyDartsnutProjectFiles(
   if (!isObject(conf)) {
     return { ok: false, reason: "broken_widget", message: "conf.json must contain a JSON object." };
   }
+  if (conf.type === "game") {
+    return { ok: true, appId, version, projectType: "game", conf: null };
+  }
   if (!Object.prototype.hasOwnProperty.call(conf, "size") || !Object.prototype.hasOwnProperty.call(conf, "fields")) {
     return { ok: false, reason: "broken_widget", message: "conf.json must contain size and fields." };
   }

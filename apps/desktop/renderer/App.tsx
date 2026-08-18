@@ -121,21 +121,19 @@ import {
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
 import {
-  clampChatPaneWidth,
+  chatPaneRatioFromWidth,
+  chatPaneWidthFromRatio,
   clampWorkspaceMenuWidth,
   getStoredChatPaneWidth,
+  getStoredChatPaneRatio,
   getStoredWorkspaceMenuWidth,
   getStoredWorkspaceMenuCollapsed,
   MAX_WORKSPACE_MENU_WIDTH,
-  maxChatPaneWidthForViewport,
   MIN_CHAT_PANE_WIDTH,
   MIN_EMULATOR_PANE_WIDTH,
   MIN_WORKSPACE_MENU_WIDTH,
-  nextChatPaneWidthFromDrag,
-  nextWorkspaceAndChatWidthsFromDrag,
   nextWorkspaceMenuWidthFromDrag,
-  resizeWorkspaceMenuKeepingPaneTotal,
-  setStoredChatPaneWidth,
+  setStoredChatPaneRatio,
   setStoredWorkspaceMenuWidth,
   setStoredWorkspaceMenuCollapsed
 } from "./splitPaneSizing";
@@ -1094,6 +1092,7 @@ export function App() {
   const [appUpdate, setAppUpdate] = useState<UpdatePromptState | null>(null);
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
   const [chatPaneWidth, setChatPaneWidth] = useState(getStoredChatPaneWidth);
+  const [chatPaneRatio, setChatPaneRatio] = useState<number | null>(getStoredChatPaneRatio);
   const [chatPaneResizing, setChatPaneResizing] = useState(false);
   const [workspaceMenuWidth, setWorkspaceMenuWidth] = useState(getStoredWorkspaceMenuWidth);
   const [workspaceMenuCollapsed, setWorkspaceMenuCollapsed] = useState(getStoredWorkspaceMenuCollapsed);
@@ -1102,13 +1101,14 @@ export function App() {
     pointerId: number;
     startClientX: number;
     startWidth: number;
+    panelWidth: number;
   } | null>(null);
   const workspaceMenuResizeDragRef = useRef<{
     pointerId: number;
     startClientX: number;
     startWidth: number;
-    startChatWidth: number;
   } | null>(null);
+  const mainWorkspaceBodyRef = useRef<HTMLDivElement | null>(null);
   const projectsSectionButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const composerHasContent = prompt.trim().length > 0 || chatMediaAttachments.length > 0;
@@ -1148,11 +1148,14 @@ export function App() {
     return () => document.removeEventListener("mousedown", dismiss);
   }, [projectMenuOpen]);
 
-  const splitPaneViewportWidth = useCallback(() => {
+  const mainWorkspacePanelWidth = useCallback(() => {
+    const measuredWidth = mainWorkspaceBodyRef.current?.clientWidth;
+    if (measuredWidth && measuredWidth > 0) {
+      return measuredWidth;
+    }
     const rawWidth = typeof window === "undefined" ? 1320 : window.innerWidth;
-    const menuWidth = workspaceMenuCollapsed ? 0 : workspaceMenuWidth;
-    return rawWidth - menuWidth - (showEmulatorPane ? MIN_EMULATOR_PANE_WIDTH : 0);
-  }, [showEmulatorPane, workspaceMenuCollapsed, workspaceMenuWidth]);
+    return rawWidth - (workspaceMenuCollapsed ? 0 : workspaceMenuWidth);
+  }, [workspaceMenuCollapsed, workspaceMenuWidth]);
 
   const mainGridTemplateColumns = useMemo(() => {
     const leftColumn = `${chatPaneWidth}px`;
@@ -1179,10 +1182,8 @@ export function App() {
     }) as CSSProperties,
     [mainGridTemplateColumns, mainWorkspaceGridTemplateColumns, workspaceMenuCollapsed, workspaceMenuWidth]
   );
-  const chatPaneResizeMax = maxChatPaneWidthForViewport(splitPaneViewportWidth());
-  const workspaceMenuResizeMax = showEmulatorPane
-    ? Math.min(MAX_WORKSPACE_MENU_WIDTH, workspaceMenuWidth + chatPaneWidth - MIN_CHAT_PANE_WIDTH)
-    : MAX_WORKSPACE_MENU_WIDTH;
+  const chatPaneResizeMax = Math.max(MIN_CHAT_PANE_WIDTH, mainWorkspacePanelWidth() - MIN_EMULATOR_PANE_WIDTH);
+  const workspaceMenuResizeMax = MAX_WORKSPACE_MENU_WIDTH;
 
   const finishChatPaneResize = useCallback((target?: Element) => {
     const activeDrag = chatPaneResizeDragRef.current;
@@ -1201,24 +1202,23 @@ export function App() {
     chatPaneResizeDragRef.current = {
       pointerId: event.pointerId,
       startClientX: event.clientX,
-      startWidth: chatPaneWidth
+      startWidth: chatPaneWidth,
+      panelWidth: mainWorkspacePanelWidth()
     };
     setChatPaneResizing(true);
     event.preventDefault();
-  }, [chatPaneWidth]);
+  }, [chatPaneWidth, mainWorkspacePanelWidth]);
 
   const handleChatPaneResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const activeDrag = chatPaneResizeDragRef.current;
     if (!activeDrag || activeDrag.pointerId !== event.pointerId) {
       return;
     }
-    setChatPaneWidth(nextChatPaneWidthFromDrag({
-      startClientX: activeDrag.startClientX,
-      currentClientX: event.clientX,
-      startWidth: activeDrag.startWidth,
-      viewportWidth: splitPaneViewportWidth()
-    }));
-  }, [splitPaneViewportWidth]);
+    const targetWidth = activeDrag.startWidth + event.clientX - activeDrag.startClientX;
+    const ratio = chatPaneRatioFromWidth(targetWidth, activeDrag.panelWidth);
+    setChatPaneRatio(ratio);
+    setChatPaneWidth(chatPaneWidthFromRatio(ratio, activeDrag.panelWidth));
+  }, []);
 
   const handleChatPaneResizePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (chatPaneResizeDragRef.current?.pointerId === event.pointerId) {
@@ -1228,26 +1228,32 @@ export function App() {
 
   const handleChatPaneResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = event.shiftKey ? 80 : 24;
+    const panelWidth = mainWorkspacePanelWidth();
+    const resizeTo = (targetWidth: number) => {
+      const ratio = chatPaneRatioFromWidth(targetWidth, panelWidth);
+      setChatPaneRatio(ratio);
+      setChatPaneWidth(chatPaneWidthFromRatio(ratio, panelWidth));
+    };
     if (event.key === "ArrowLeft") {
       event.preventDefault();
-      setChatPaneWidth((current) => clampChatPaneWidth(current - step, splitPaneViewportWidth()));
+      resizeTo(chatPaneWidth - step);
       return;
     }
     if (event.key === "ArrowRight") {
       event.preventDefault();
-      setChatPaneWidth((current) => clampChatPaneWidth(current + step, splitPaneViewportWidth()));
+      resizeTo(chatPaneWidth + step);
       return;
     }
     if (event.key === "Home") {
       event.preventDefault();
-      setChatPaneWidth(clampChatPaneWidth(MIN_CHAT_PANE_WIDTH, splitPaneViewportWidth()));
+      resizeTo(MIN_CHAT_PANE_WIDTH);
       return;
     }
     if (event.key === "End") {
       event.preventDefault();
-      setChatPaneWidth(maxChatPaneWidthForViewport(splitPaneViewportWidth()));
+      resizeTo(panelWidth - MIN_EMULATOR_PANE_WIDTH);
     }
-  }, [splitPaneViewportWidth]);
+  }, [chatPaneWidth, mainWorkspacePanelWidth]);
 
   const finishWorkspaceMenuResize = useCallback((target?: Element) => {
     const activeDrag = workspaceMenuResizeDragRef.current;
@@ -1264,33 +1270,21 @@ export function App() {
     workspaceMenuResizeDragRef.current = {
       pointerId: event.pointerId,
       startClientX: event.clientX,
-      startWidth: workspaceMenuWidth,
-      startChatWidth: chatPaneWidth
+      startWidth: workspaceMenuWidth
     };
     setWorkspaceMenuResizing(true);
     event.preventDefault();
-  }, [chatPaneWidth, workspaceMenuWidth]);
+  }, [workspaceMenuWidth]);
 
   const handleWorkspaceMenuResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const activeDrag = workspaceMenuResizeDragRef.current;
     if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
-    if (!showEmulatorPane) {
-      setWorkspaceMenuWidth(nextWorkspaceMenuWidthFromDrag({
-        startClientX: activeDrag.startClientX,
-        currentClientX: event.clientX,
-        startWidth: activeDrag.startWidth
-      }));
-      return;
-    }
-    const widths = nextWorkspaceAndChatWidthsFromDrag({
+    setWorkspaceMenuWidth(nextWorkspaceMenuWidthFromDrag({
       startClientX: activeDrag.startClientX,
       currentClientX: event.clientX,
-      startMenuWidth: activeDrag.startWidth,
-      startChatWidth: activeDrag.startChatWidth
-    });
-    setWorkspaceMenuWidth(widths.menuWidth);
-    setChatPaneWidth(widths.chatWidth);
-  }, [showEmulatorPane]);
+      startWidth: activeDrag.startWidth
+    }));
+  }, []);
 
   const handleWorkspaceMenuResizePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (workspaceMenuResizeDragRef.current?.pointerId === event.pointerId) {
@@ -1300,19 +1294,7 @@ export function App() {
 
   const handleWorkspaceMenuResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = event.shiftKey ? 40 : 16;
-    const resizeTo = (targetMenuWidth: number) => {
-      if (!showEmulatorPane) {
-        setWorkspaceMenuWidth(clampWorkspaceMenuWidth(targetMenuWidth));
-        return;
-      }
-      const widths = resizeWorkspaceMenuKeepingPaneTotal({
-        targetMenuWidth,
-        menuWidth: workspaceMenuWidth,
-        chatWidth: chatPaneWidth
-      });
-      setWorkspaceMenuWidth(widths.menuWidth);
-      setChatPaneWidth(widths.chatWidth);
-    };
+    const resizeTo = (targetMenuWidth: number) => setWorkspaceMenuWidth(clampWorkspaceMenuWidth(targetMenuWidth));
     if (event.key === "ArrowLeft") {
       event.preventDefault();
       resizeTo(workspaceMenuWidth - step);
@@ -1326,7 +1308,7 @@ export function App() {
       event.preventDefault();
       resizeTo(workspaceMenuResizeMax);
     }
-  }, [chatPaneWidth, showEmulatorPane, workspaceMenuResizeMax, workspaceMenuWidth]);
+  }, [workspaceMenuResizeMax, workspaceMenuWidth]);
 
   const handleCommunitySubmitProgress = useCallback((progress: CommunitySubmitProgress | null) => {
     if (!progress) {
@@ -1773,21 +1755,44 @@ export function App() {
     syncComposerPromptHeight();
   }, [prompt]);
 
+  useLayoutEffect(() => {
+    if (!showEmulatorPane || !mainWorkspaceBodyRef.current || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const body = mainWorkspaceBodyRef.current;
+    const syncPaneRatio = () => {
+      const panelWidth = body.clientWidth;
+      if (panelWidth <= 0) {
+        return;
+      }
+      const ratio = chatPaneRatio ?? chatPaneRatioFromWidth(chatPaneWidth, panelWidth);
+      if (chatPaneRatio === null) {
+        setChatPaneRatio(ratio);
+      }
+      setChatPaneWidth(chatPaneWidthFromRatio(ratio, panelWidth));
+    };
+    const observer = new ResizeObserver(syncPaneRatio);
+    observer.observe(body);
+    syncPaneRatio();
+    return () => observer.disconnect();
+  }, [chatPaneRatio, chatPaneWidth, showEmulatorPane]);
+
   useEffect(() => {
     const onResize = () => {
       syncComposerPromptHeight();
-      setChatPaneWidth((current) => clampChatPaneWidth(current, splitPaneViewportWidth()));
     };
     window.addEventListener("resize", onResize);
     onResize();
     return () => {
       window.removeEventListener("resize", onResize);
     };
-  }, [splitPaneViewportWidth]);
+  }, []);
 
   useEffect(() => {
-    setStoredChatPaneWidth(chatPaneWidth);
-  }, [chatPaneWidth]);
+    if (chatPaneRatio !== null) {
+      setStoredChatPaneRatio(chatPaneRatio);
+    }
+  }, [chatPaneRatio]);
 
   useEffect(() => {
     setStoredWorkspaceMenuWidth(workspaceMenuWidth);
@@ -3154,7 +3159,7 @@ export function App() {
             ) : null}
           </div>
         </div>
-        <div className="main-workspace-panel__body">
+        <div className="main-workspace-panel__body" ref={mainWorkspaceBodyRef}>
       {screen === "main" && showRuntimeSetup ? (
         <section
           className="runtime-config-main col-span-full min-h-0 h-full overflow-auto bg-[var(--gradient-rail)]"

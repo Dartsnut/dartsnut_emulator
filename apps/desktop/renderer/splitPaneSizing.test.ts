@@ -3,6 +3,7 @@ const test = require("node:test");
 
 const {
   CHAT_PANE_WIDTH_STORAGE_KEY,
+  CHAT_PANE_RATIO_STORAGE_KEY,
   DEFAULT_CHAT_PANE_WIDTH,
   DEFAULT_WORKSPACE_MENU_WIDTH,
   MAX_WORKSPACE_MENU_WIDTH,
@@ -10,16 +11,19 @@ const {
   MIN_WORKSPACE_MENU_WIDTH,
   WORKSPACE_MENU_WIDTH_STORAGE_KEY,
   WORKSPACE_MENU_COLLAPSED_STORAGE_KEY,
+  chatPaneRatioFromWidth,
+  chatPaneWidthFromRatio,
+  clampChatPaneRatio,
   clampChatPaneWidth,
   clampWorkspaceMenuWidth,
   getStoredChatPaneWidth,
+  getStoredChatPaneRatio,
   getStoredWorkspaceMenuWidth,
   getStoredWorkspaceMenuCollapsed,
   nextChatPaneWidthFromDrag,
-  nextWorkspaceAndChatWidthsFromDrag,
   nextWorkspaceMenuWidthFromDrag,
-  resizeWorkspaceMenuKeepingPaneTotal,
   setStoredChatPaneWidth,
+  setStoredChatPaneRatio,
   setStoredWorkspaceMenuWidth,
   setStoredWorkspaceMenuCollapsed
 } = require("./splitPaneSizing.ts");
@@ -84,27 +88,32 @@ test("workspace menu width clamps and follows pointer movement", () => {
   }), DEFAULT_WORKSPACE_MENU_WIDTH + 60);
 });
 
-test("workspace menu resizing preserves emulator width by taking space from chat", () => {
-  assert.deepEqual(nextWorkspaceAndChatWidthsFromDrag({
-    startClientX: 280,
-    currentClientX: 340,
-    startMenuWidth: 280,
-    startChatWidth: 680
-  }), {
-    menuWidth: 340,
-    chatWidth: 620
-  });
+test("chat and emulator panes preserve ratio as panel width changes", () => {
+  const ratio = chatPaneRatioFromWidth(680, 1280);
+  assert.equal(chatPaneWidthFromRatio(ratio, 960), 510);
+  assert.equal(chatPaneWidthFromRatio(ratio, 1440), 765);
 });
 
-test("workspace menu stops growing when chat reaches its minimum width", () => {
-  assert.deepEqual(resizeWorkspaceMenuKeepingPaneTotal({
-    targetMenuWidth: MAX_WORKSPACE_MENU_WIDTH,
-    menuWidth: 280,
-    chatWidth: 360
-  }), {
-    menuWidth: 320,
-    chatWidth: MIN_CHAT_PANE_WIDTH
-  });
+test("chat ratio keeps both pane minimums", () => {
+  assert.equal(chatPaneWidthFromRatio(0, 1000), MIN_CHAT_PANE_WIDTH);
+  assert.equal(chatPaneWidthFromRatio(1, 1000), 640);
+  assert.equal(clampChatPaneRatio(0.5, 500), 0.64);
+});
+
+test("chat pane ratio round-trips through local storage", () => {
+  const values = new Map();
+  global.window = {
+    localStorage: {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value)
+    }
+  };
+
+  setStoredChatPaneRatio(0.53125);
+
+  assert.equal(values.get(CHAT_PANE_RATIO_STORAGE_KEY), "0.53125");
+  assert.equal(getStoredChatPaneRatio(), 0.53125);
+  delete global.window;
 });
 
 test("workspace menu width round-trips through local storage", () => {

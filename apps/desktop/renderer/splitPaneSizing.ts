@@ -2,6 +2,7 @@ export const DEFAULT_CHAT_PANE_WIDTH = 680;
 export const MIN_CHAT_PANE_WIDTH = 320;
 export const MIN_EMULATOR_PANE_WIDTH = 360;
 export const CHAT_PANE_WIDTH_STORAGE_KEY = "dartsnut-chat-pane-width";
+export const CHAT_PANE_RATIO_STORAGE_KEY = "dartsnut-chat-pane-ratio";
 export const DEFAULT_WORKSPACE_MENU_WIDTH = 280;
 export const MIN_WORKSPACE_MENU_WIDTH = 190;
 export const MAX_WORKSPACE_MENU_WIDTH = 420;
@@ -47,6 +48,29 @@ export function setStoredChatPaneWidth(width: number): void {
   }
   try {
     window.localStorage.setItem(CHAT_PANE_WIDTH_STORAGE_KEY, String(Math.round(width)));
+  } catch {
+    // Storage is optional and may be unavailable in restricted renderer contexts.
+  }
+}
+
+export function getStoredChatPaneRatio(): number | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const ratio = Number(window.localStorage.getItem(CHAT_PANE_RATIO_STORAGE_KEY));
+    return Number.isFinite(ratio) && ratio > 0 && ratio < 1 ? ratio : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredChatPaneRatio(ratio: number): void {
+  if (typeof window === "undefined" || !Number.isFinite(ratio)) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(CHAT_PANE_RATIO_STORAGE_KEY, String(ratio));
   } catch {
     // Storage is optional and may be unavailable in restricted renderer contexts.
   }
@@ -101,38 +125,21 @@ export function nextWorkspaceMenuWidthFromDrag(input: {
   return clampWorkspaceMenuWidth(finiteNumber(input.startWidth, DEFAULT_WORKSPACE_MENU_WIDTH) + delta);
 }
 
-export function resizeWorkspaceMenuKeepingPaneTotal(input: {
-  targetMenuWidth: number;
-  menuWidth: number;
-  chatWidth: number;
-}): { menuWidth: number; chatWidth: number } {
-  const currentMenuWidth = clampWorkspaceMenuWidth(input.menuWidth);
-  const currentChatWidth = Math.max(
-    MIN_CHAT_PANE_WIDTH,
-    Math.round(finiteNumber(input.chatWidth, DEFAULT_CHAT_PANE_WIDTH))
-  );
-  const combinedWidth = currentMenuWidth + currentChatWidth;
-  const maxMenuWidth = Math.min(MAX_WORKSPACE_MENU_WIDTH, combinedWidth - MIN_CHAT_PANE_WIDTH);
-  const targetMenuWidth = Math.round(finiteNumber(input.targetMenuWidth, currentMenuWidth));
-  const menuWidth = Math.min(Math.max(targetMenuWidth, MIN_WORKSPACE_MENU_WIDTH), maxMenuWidth);
-  return {
-    menuWidth,
-    chatWidth: combinedWidth - menuWidth
-  };
+export function clampChatPaneRatio(ratio: number, panelWidth: number): number {
+  const width = Math.max(1, Math.round(finiteNumber(panelWidth, DEFAULT_CHAT_PANE_WIDTH + MIN_EMULATOR_PANE_WIDTH)));
+  const minRatio = MIN_CHAT_PANE_WIDTH / width;
+  const maxRatio = Math.max(minRatio, (width - MIN_EMULATOR_PANE_WIDTH) / width);
+  return Math.min(Math.max(finiteNumber(ratio, DEFAULT_CHAT_PANE_WIDTH / width), minRatio), maxRatio);
 }
 
-export function nextWorkspaceAndChatWidthsFromDrag(input: {
-  startClientX: number;
-  currentClientX: number;
-  startMenuWidth: number;
-  startChatWidth: number;
-}): { menuWidth: number; chatWidth: number } {
-  const delta = finiteNumber(input.currentClientX, input.startClientX) - finiteNumber(input.startClientX, 0);
-  return resizeWorkspaceMenuKeepingPaneTotal({
-    targetMenuWidth: finiteNumber(input.startMenuWidth, DEFAULT_WORKSPACE_MENU_WIDTH) + delta,
-    menuWidth: input.startMenuWidth,
-    chatWidth: input.startChatWidth
-  });
+export function chatPaneWidthFromRatio(ratio: number, panelWidth: number): number {
+  const width = Math.max(1, Math.round(finiteNumber(panelWidth, DEFAULT_CHAT_PANE_WIDTH + MIN_EMULATOR_PANE_WIDTH)));
+  return Math.round(clampChatPaneRatio(ratio, width) * width);
+}
+
+export function chatPaneRatioFromWidth(chatWidth: number, panelWidth: number): number {
+  const width = Math.max(1, Math.round(finiteNumber(panelWidth, DEFAULT_CHAT_PANE_WIDTH + MIN_EMULATOR_PANE_WIDTH)));
+  return clampChatPaneRatio(finiteNumber(chatWidth, DEFAULT_CHAT_PANE_WIDTH) / width, width);
 }
 
 export function getStoredWorkspaceMenuCollapsed(): boolean {

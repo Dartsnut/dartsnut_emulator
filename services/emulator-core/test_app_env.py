@@ -54,6 +54,17 @@ class AppEnvTests(unittest.TestCase):
             self.assertEqual((app_type, app_id, version), ("widget", "demo", "1"))
             self.assertEqual(conf["fields"], [])
 
+    def test_classifies_legacy_game_conf_as_game(self):
+        module = _load_app_env_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            _write_workspace(workspace, "game")
+            (workspace / "conf.json").write_text(
+                json.dumps({"type": "game", "size": [128, 160], "fields": []}),
+                encoding="utf-8",
+            )
+            self.assertEqual(module.classify_workspace_project(str(workspace)), ("game", {}, "demo", "1"))
+
     def test_rejects_broken_widget(self):
         module = _load_app_env_module()
         with tempfile.TemporaryDirectory() as workspace_dir:

@@ -43,6 +43,12 @@ test("readWidgetConfigSnapshot handles missing, invalid, non-widget, and ready c
     assert.equal(ready.status, "ready");
     assert.deepEqual(ready.errors, []);
     assert.equal(ready.fields[0].id, "title");
+    fs.writeFileSync(path.join(root, "conf.json"), JSON.stringify({
+      type: "game",
+      size: [128, 160],
+      fields: [],
+    }));
+    assert.equal(readWidgetConfigSnapshot("workspace", root, null).status, "not_widget");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

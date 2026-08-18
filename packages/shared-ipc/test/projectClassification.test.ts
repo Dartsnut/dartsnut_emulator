@@ -41,6 +41,21 @@ describe("classifyDartsnutProjectFiles", () => {
     });
   });
 
+  it("classifies a legacy type=game conf.json as a game", () => {
+    expect(
+      classifyDartsnutProjectFiles(
+        pyproject(),
+        '{"type":"game","size":[128,160],"fields":[]}'
+      )
+    ).toMatchObject({
+      ok: true,
+      appId: "demo",
+      version: "1.2.3",
+      projectType: "game",
+      conf: null
+    });
+  });
+
   it("classifies conf.json by size and fields key presence", () => {
     expect(classifyDartsnutProjectFiles(pyproject(), '{"size":null,"fields":null}')).toMatchObject({
       ok: true,

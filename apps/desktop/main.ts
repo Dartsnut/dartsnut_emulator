@@ -891,6 +891,9 @@ const emulatorState: EmulatorStateSnapshot = {
   status: "Idle",
   audioMuted: false,
   lastCapturePath: null,
+  gifRecording: false,
+  gifSaving: false,
+  gifElapsedMs: 0,
 };
 let emulatorSwitchGate: EmulatorSwitchGate | null = null;
 let pendingEmulatorPathForReload: string | null = null;
@@ -1292,6 +1295,9 @@ async function gracefulStopEmulatorBridge(
   bridgeProcess = null;
   bridgeRuntimeKey = null;
   emulatorState.running = false;
+  emulatorState.gifRecording = false;
+  emulatorState.gifSaving = false;
+  emulatorState.gifElapsedMs = 0;
   emulatorState.status = "Bridge stopped";
   if (options?.permanent) {
     emulatorBridgeTeardownDone = true;
@@ -2067,6 +2073,9 @@ function applyIdleEmulatorMainState(): void {
   emulatorState.widgetId = null;
   emulatorState.widgetType = null;
   emulatorState.running = false;
+  emulatorState.gifRecording = false;
+  emulatorState.gifSaving = false;
+  emulatorState.gifElapsedMs = 0;
   emulatorState.lastError = undefined;
   emulatorState.status = "Idle";
   clearEmulatorLogRing();
@@ -2250,6 +2259,18 @@ function spawnBridgeAfterStop() {
             typeof payload.lastCapturePath !== "undefined"
               ? payload.lastCapturePath ?? null
               : emulatorState.lastCapturePath,
+          gifRecording:
+            typeof payload.gifRecording === "boolean"
+              ? payload.gifRecording
+              : emulatorState.gifRecording ?? false,
+          gifSaving:
+            typeof payload.gifSaving === "boolean"
+              ? payload.gifSaving
+              : emulatorState.gifSaving ?? false,
+          gifElapsedMs:
+            typeof payload.gifElapsedMs === "number"
+              ? payload.gifElapsedMs
+              : emulatorState.gifElapsedMs ?? 0,
         };
         const gated = handleEmulatorSwitchState(emulatorSwitchGate, incomingState, emulatorState);
         emulatorSwitchGate = gated.gate;

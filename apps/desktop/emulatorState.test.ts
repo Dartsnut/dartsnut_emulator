@@ -10,7 +10,10 @@ test("copyEmulatorStateSnapshot copies audio muted state", () => {
     fps: 0,
     status: "Idle",
     audioMuted: false,
-    lastCapturePath: null
+    lastCapturePath: null,
+    gifRecording: false,
+    gifSaving: false,
+    gifElapsedMs: 0
   };
   const nextState = {
     widgetPath: "/workspace/game",
@@ -21,7 +24,10 @@ test("copyEmulatorStateSnapshot copies audio muted state", () => {
     status: "Audio muted",
     audioMuted: true,
     lastError: undefined,
-    lastCapturePath: null
+    lastCapturePath: null,
+    gifRecording: true,
+    gifSaving: false,
+    gifElapsedMs: 1250
   };
 
   copyEmulatorStateSnapshot(target, nextState);
@@ -29,4 +35,6 @@ test("copyEmulatorStateSnapshot copies audio muted state", () => {
   assert.equal(target.audioMuted, true);
   assert.equal(target.status, "Audio muted");
   assert.equal(target.widgetPath, "/workspace/game");
+  assert.equal(target.gifRecording, true);
+  assert.equal(target.gifElapsedMs, 1250);
 });

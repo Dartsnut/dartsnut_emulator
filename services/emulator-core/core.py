@@ -1,6 +1,7 @@
 import base64
 import importlib.util
 import json
+import math
 import os
 import queue
 import signal
@@ -111,9 +112,17 @@ class EmulatorState:
     audioMuted: bool = False
     lastError: str | None = None
     lastCapturePath: str | None = None
+    gifRecording: bool = False
+    gifSaving: bool = False
+    gifElapsedMs: int = 0
 
 
 class EmulatorCore:
+    GIF_FPS = 24
+    GIF_MAX_SECONDS = 30
+    GIF_MAX_FRAMES = GIF_FPS * GIF_MAX_SECONDS
+    CAPTURE_ZOOMS = (1, 2, 4)
+
     def __init__(self, workspace_root: str):
         self.workspace_root = workspace_root
         self.widget_process: subprocess.Popen[Any] | None = None
@@ -136,6 +145,13 @@ class EmulatorCore:
         self._last_frame_w = 128
         self._last_frame_h = 160
         self.capture_base_name = "capture"
+        self._gif_started_at: float | None = None
+        self._gif_zoom = 4
+        self._gif_frames: list[bytes] = []
+        self._gif_frame_w = 0
+        self._gif_frame_h = 0
+        self._gif_save_thread: threading.Thread | None = None
+        self._gif_save_results: queue.Queue[tuple[list[str] | None, str | None]] = queue.Queue()
         self._button_state = 0
         self._darts: list[list[int]] = [[-1, -1] for _ in range(12)]
         self._last_launch_argv_chars = -1
@@ -260,6 +276,9 @@ class EmulatorCore:
         self.state.status = ""
 
     def stop_widget_process(self) -> None:
+        if self.state.gifRecording:
+            self.update_gif_recording()
+            self._finish_gif_recording()
         if self.widget_process is None:
             self._invalidate_framebuffer()
             return
@@ -449,6 +468,9 @@ class EmulatorCore:
         action = command.get("type")
         try:
             if action == "set_path":
+                if self.state.gifRecording:
+                    self.update_gif_recording()
+                    self._finish_gif_recording()
                 path = command.get("path")
                 if not isinstance(path, str):
                     raise ValueError("set_path requires string path")
@@ -496,11 +518,19 @@ class EmulatorCore:
                 else:
                     self.state.status = "Audio muted" if muted else "Audio unmuted"
             elif action == "capture_screenshot":
-                filepaths = self._capture_screenshot_png()
+                zoom = self._capture_zoom(command.get("zoom", 1))
+                filepaths = self._capture_screenshot_png(zoom=zoom)
                 basenames = ", ".join(os.path.basename(path) for path in filepaths)
                 self.state.status = f"Screenshot captured: {basenames}"
                 # Store the directory path (parent of first file) so UI can open it
                 self.state.lastCapturePath = os.path.dirname(filepaths[0]) if filepaths else None
+            elif action == "start_gif_recording":
+                self._start_gif_recording(self._capture_zoom(command.get("zoom", 4)))
+            elif action == "stop_gif_recording":
+                if not self.state.gifRecording:
+                    raise ValueError("No GIF recording is active")
+                self.update_gif_recording()
+                self._finish_gif_recording()
             elif action == "set_button":
                 mapping = {
                     "A": 0x01,
@@ -554,6 +584,190 @@ class EmulatorCore:
             self.state.status = "Command failed"
         return self.snapshot()
 
+    def _capture_zoom(self, value: Any) -> int:
+        zoom = int(value)
+        if zoom not in self.CAPTURE_ZOOMS:
+            raise ValueError("Capture zoom must be 1, 2, or 4")
+        return zoom
+
+    def _start_gif_recording(self, zoom: int, *, now: float | None = None) -> None:
+        if self.state.gifRecording:
+            raise ValueError("A GIF recording is already active")
+        if self.state.gifSaving:
+            raise ValueError("Wait for the current GIF to finish saving")
+        if self._last_frame_bytes is None:
+            raise ValueError("No frame available yet for GIF recording")
+        frame_w = int(self._last_frame_w)
+        frame_h = int(self._last_frame_h)
+        if frame_w <= 0 or frame_h <= 0:
+            raise ValueError("Invalid frame dimensions for GIF recording")
+        self._gif_started_at = time.monotonic() if now is None else now
+        self._gif_zoom = zoom
+        self._gif_frames = [self._last_frame_bytes]
+        self._gif_frame_w = frame_w
+        self._gif_frame_h = frame_h
+        self.state.gifRecording = True
+        self.state.gifSaving = False
+        self.state.gifElapsedMs = 0
+        self.state.lastError = None
+        self.state.status = "Recording GIF"
+
+    def update_gif_recording(self, now: float | None = None) -> bool:
+        if not self.state.gifRecording or self._gif_started_at is None:
+            return False
+        current = time.monotonic() if now is None else now
+        elapsed = max(0.0, current - self._gif_started_at)
+        capped_elapsed = min(float(self.GIF_MAX_SECONDS), elapsed)
+        target_count = max(1, math.ceil(capped_elapsed * self.GIF_FPS - 1e-9))
+        target_count = min(self.GIF_MAX_FRAMES, target_count)
+        latest = self._last_frame_bytes
+        if latest is not None:
+            while len(self._gif_frames) < target_count:
+                self._gif_frames.append(latest)
+        self.state.gifElapsedMs = min(self.GIF_MAX_SECONDS * 1000, int(round(elapsed * 1000)))
+        if elapsed >= self.GIF_MAX_SECONDS:
+            self._finish_gif_recording()
+        return True
+
+    @classmethod
+    def _gif_frame_durations(cls, frame_count: int) -> list[int]:
+        durations: list[int] = []
+        previous_cs = 0
+        for index in range(frame_count):
+            next_cs = ((index + 1) * 100 + cls.GIF_FPS // 2) // cls.GIF_FPS
+            durations.append((next_cs - previous_cs) * 10)
+            previous_cs = next_cs
+        return durations
+
+    @staticmethod
+    def _gif_panel_specs(width: int, height: int) -> list[tuple[str | None, tuple[int, int, int, int]]]:
+        if width == 128 and height == 160:
+            return [
+                ("main", (0, 0, 128, 128)),
+                ("bottom", (0, 128, 64, 160)),
+            ]
+        return [(None, (0, 0, width, height))]
+
+    @staticmethod
+    def _gif_panel_image(
+        frame: bytes,
+        frame_w: int,
+        frame_h: int,
+        crop: tuple[int, int, int, int],
+        zoom: int,
+    ) -> Image.Image:
+        image = Image.frombytes("RGB", (frame_w, frame_h), frame).crop(crop)
+        if zoom != 1:
+            image = image.resize((image.width * zoom, image.height * zoom), Image.NEAREST)
+        return image.quantize(colors=256, method=Image.Quantize.MEDIANCUT)
+
+    def _save_gif_files(
+        self,
+        frames: list[bytes],
+        frame_w: int,
+        frame_h: int,
+        zoom: int,
+        base_name: str,
+        timestamp: str,
+    ) -> list[str]:
+        if not frames:
+            raise ValueError("Cannot save an empty GIF recording")
+        filenames = [
+            f"{base_name}_{suffix}_{timestamp}.gif" if suffix else f"{base_name}_{timestamp}.gif"
+            for suffix, _crop in self._gif_panel_specs(frame_w, frame_h)
+        ]
+        destinations = [Path.home() / "Downloads" / "Dartsnut", Path(self.workspace_root) / "capture"]
+        last_error: Exception | None = None
+        for capture_dir in destinations:
+            written: list[Path] = []
+            attempted: Path | None = None
+            try:
+                capture_dir.mkdir(parents=True, exist_ok=True)
+                for filename, (_suffix, crop) in zip(
+                    filenames,
+                    self._gif_panel_specs(frame_w, frame_h),
+                    strict=True,
+                ):
+                    filepath = capture_dir / filename
+                    attempted = filepath
+                    first = self._gif_panel_image(frames[0], frame_w, frame_h, crop, zoom)
+                    remaining = (
+                        self._gif_panel_image(frame, frame_w, frame_h, crop, zoom)
+                        for frame in frames[1:]
+                    )
+                    first.save(
+                        filepath,
+                        format="GIF",
+                        save_all=True,
+                        append_images=remaining,
+                        duration=self._gif_frame_durations(len(frames)),
+                        loop=0,
+                        disposal=2,
+                        optimize=False,
+                    )
+                    written.append(filepath)
+                return [str(path) for path in written]
+            except (OSError, PermissionError, ValueError) as exc:
+                last_error = exc
+                for path in written:
+                    path.unlink(missing_ok=True)
+                if attempted is not None:
+                    attempted.unlink(missing_ok=True)
+                if capture_dir == destinations[0]:
+                    self._queue_bridge_log(
+                        f"Failed to save GIF to Downloads: {exc}. Using workspace fallback.",
+                        source="stderr",
+                    )
+        if last_error is not None:
+            raise last_error
+        raise OSError("No capture destination is available")
+
+    def _finish_gif_recording(self) -> None:
+        if not self.state.gifRecording:
+            return
+        frames = self._gif_frames
+        frame_w = self._gif_frame_w
+        frame_h = self._gif_frame_h
+        zoom = self._gif_zoom
+        base_name = self.capture_base_name
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self._gif_frames = []
+        self._gif_started_at = None
+        self.state.gifRecording = False
+        self.state.gifSaving = True
+        self.state.status = "Saving GIF"
+
+        def save() -> None:
+            try:
+                paths = self._save_gif_files(frames, frame_w, frame_h, zoom, base_name, timestamp)
+                self._gif_save_results.put((paths, None))
+            except Exception as exc:  # noqa: BLE001 - surface encoder/filesystem failures to UI
+                self._gif_save_results.put((None, str(exc)))
+
+        self._gif_save_thread = threading.Thread(target=save, name="gif-encoder", daemon=True)
+        self._gif_save_thread.start()
+
+    def poll_gif_save_result(self) -> bool:
+        changed = False
+        while True:
+            try:
+                filepaths, error = self._gif_save_results.get_nowait()
+            except queue.Empty:
+                break
+            changed = True
+            self.state.gifSaving = False
+            if error is not None:
+                self.state.lastError = error
+                self.state.status = "GIF save failed"
+                self._queue_bridge_log(f"GIF save failed: {error}", source="stderr")
+            else:
+                paths = filepaths or []
+                basenames = ", ".join(os.path.basename(path) for path in paths)
+                self.state.lastError = None
+                self.state.lastCapturePath = os.path.dirname(paths[0]) if paths else None
+                self.state.status = f"GIF recorded: {basenames}"
+        return changed
+
     def _write_capture_png(
         self,
         img: Image.Image,
@@ -602,7 +816,7 @@ class EmulatorCore:
 
         return filepath
 
-    def _capture_screenshot_png(self) -> list[str]:
+    def _capture_screenshot_png(self, zoom: int = 1) -> list[str]:
         if self._last_frame_bytes is None:
             raise ValueError("No frame available yet for screenshot capture")
         frame_w = int(self._last_frame_w)
@@ -616,7 +830,7 @@ class EmulatorCore:
         canvas = self._build_capture_canvas(frame_img, frame_w, frame_h)
         filepaths.append(self._write_capture_png(canvas, timestamp=timestamp))
         if (self.state.widgetType or "").lower() in ("game", "widget"):
-            surface_scale = 4
+            surface_scale = self._capture_zoom(zoom)
             surface_img = frame_img.resize(
                 (frame_w * surface_scale, frame_h * surface_scale),
                 Image.NEAREST,
@@ -754,6 +968,9 @@ class EmulatorCore:
 
     def shutdown(self) -> None:
         self.stop_widget_process()
+        if self._gif_save_thread is not None and self._gif_save_thread.is_alive():
+            self._gif_save_thread.join()
+        self.poll_gif_save_result()
         if self.shm_pdo is not None:
             try:
                 self.shm_pdo.close()

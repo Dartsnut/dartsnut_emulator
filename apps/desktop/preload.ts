@@ -86,6 +86,7 @@ const api = {
     >,
   listProjects: () => ipcRenderer.invoke(IPCChannels.projectsList) as Promise<ProjectTree>,
   createProject: (request: ProjectCreateRequest) => ipcRenderer.invoke(IPCChannels.projectCreate, request) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
+  removeProject: (projectId: string) => ipcRenderer.invoke(IPCChannels.projectRemove, projectId) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
   selectProject: (request: ProjectSelectRequest) => ipcRenderer.invoke(IPCChannels.projectSelect, request) as Promise<{ state: BootstrapState; tree: ProjectTree; accepted: boolean }>,
   createChat: (request: ChatCreateRequest) => ipcRenderer.invoke(IPCChannels.chatCreate, request) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
   archiveChat: (chatId: string) => ipcRenderer.invoke("agent:chat-archive", chatId) as Promise<{ state: BootstrapState; tree: ProjectTree }>,

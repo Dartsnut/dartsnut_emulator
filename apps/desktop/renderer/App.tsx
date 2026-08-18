@@ -41,6 +41,7 @@ import {
   Settings,
   Square,
   SquarePen,
+  Trash2,
   UserRound,
   X
 } from "lucide-react";
@@ -51,6 +52,7 @@ import {
   type AppUpdateStatus,
   type AssetManifest,
   type BootstrapState,
+  type ProjectRecord,
   type ProjectTree,
   type ProjectSwitchProgress,
   type DeployEligibility,
@@ -519,6 +521,109 @@ export function UpdateReadyOverlay({
   );
 }
 
+type RemoveProjectDialogProps = {
+  project: ProjectRecord;
+  removing: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+};
+
+export function RemoveProjectDialog({
+  project,
+  removing,
+  error,
+  onCancel,
+  onConfirm
+}: RemoveProjectDialogProps) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    cancelButtonRef.current?.focus();
+    return () => {
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (!removing) onCancel();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = Array.from(
+      panelRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []
+    );
+    if (controls.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  return (
+    <div
+      className="remove-project-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="remove-project-title"
+      aria-describedby="remove-project-description"
+      onMouseDown={(event) => {
+        if (!removing && event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div ref={panelRef} className="remove-project-dialog" onKeyDown={handleKeyDown}>
+        <div className="remove-project-dialog__header">
+          <h2 id="remove-project-title">Remove {project.name}?</h2>
+          <button
+            type="button"
+            className="remove-project-dialog__close"
+            aria-label="Close"
+            disabled={removing}
+            onClick={onCancel}
+          >
+            <X size={22} aria-hidden />
+          </button>
+        </div>
+        <p id="remove-project-description" className="remove-project-dialog__description">
+          This removes the local project and all of its chats from Dartsnut Agent. Files on your computer won't be deleted.
+        </p>
+        {error ? <p className="remove-project-dialog__error" role="alert">{error}</p> : null}
+        <div className="remove-project-dialog__actions">
+          <button
+            ref={cancelButtonRef}
+            type="button"
+            className="remove-project-dialog__cancel"
+            disabled={removing}
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="remove-project-dialog__confirm"
+            disabled={removing}
+            onClick={onConfirm}
+          >
+            {removing ? "Removing…" : "Remove local project"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type TimelineEntryViewProps = {
   entry: TimelineEntry;
   onToggleReasoning: (entryId: string) => void;
@@ -869,6 +974,9 @@ export function App() {
   const [createProjectFolder, setCreateProjectFolder] = useState<string | null>(null);
   const [createProjectError, setCreateProjectError] = useState<string | null>(null);
   const [createProjectPicking, setCreateProjectPicking] = useState(false);
+  const [removeProjectTarget, setRemoveProjectTarget] = useState<ProjectRecord | null>(null);
+  const [removingProject, setRemovingProject] = useState(false);
+  const [removeProjectError, setRemoveProjectError] = useState<string | null>(null);
   const [entries, setEntries] = useState<TimelineEntry[]>([
     { id: "greeting-initial", role: "agent", text: GREETING_TEXT }
   ]);
@@ -998,6 +1106,7 @@ export function App() {
     startClientX: number;
     startWidth: number;
   } | null>(null);
+  const projectsSectionButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const composerHasContent = prompt.trim().length > 0 || chatMediaAttachments.length > 0;
   const personaPickerOpen = personaState.phase === "picking";
@@ -2507,6 +2616,41 @@ export function App() {
     setProjectMenuOpen(false);
   }
 
+  function handleOpenRemoveProject(project: ProjectRecord) {
+    if (sending || projectSwitchProgress.active) return;
+    setRemoveProjectError(null);
+    setRemoveProjectTarget(project);
+  }
+
+  function handleCloseRemoveProject() {
+    if (removingProject) return;
+    setRemoveProjectError(null);
+    setRemoveProjectTarget(null);
+  }
+
+  async function handleConfirmRemoveProject() {
+    if (!api || !removeProjectTarget || removingProject) return;
+    const projectId = removeProjectTarget.id;
+    const wasActive = bootstrap?.activeProjectId === projectId;
+    setRemovingProject(true);
+    setRemoveProjectError(null);
+    try {
+      const result = await api.removeProject(projectId);
+      setBootstrap(result.state);
+      setProjectTree(result.tree);
+      setRemoveProjectTarget(null);
+      if (wasActive) {
+        resetChatSessionUi();
+        personaController.startNewChat(null);
+      }
+      window.requestAnimationFrame(() => projectsSectionButtonRef.current?.focus());
+    } catch (error: unknown) {
+      setRemoveProjectError(error instanceof Error ? error.message : "Could not remove the local project.");
+    } finally {
+      setRemovingProject(false);
+    }
+  }
+
   async function handleNoProject() {
     if (!api || sending || projectSwitchProgress.active) return;
     const result = await api.selectProject({ projectId: null });
@@ -2866,6 +3010,7 @@ export function App() {
         </div>
         <div className="workspace-menu__projects">
           <button
+            ref={projectsSectionButtonRef}
             type="button"
             className="workspace-menu__section"
             aria-expanded={expandedProjects.__all ?? true}
@@ -2893,6 +3038,18 @@ export function App() {
                   data-analytics-area="project"
                 >
                   <SquarePen size={14} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  className="workspace-menu__project-remove"
+                  onClick={(event) => { event.stopPropagation(); handleOpenRemoveProject(project); }}
+                  disabled={sending || projectSwitchProgress.active}
+                  aria-label={`Remove local project ${project.name}`}
+                  title="Remove local project"
+                  data-analytics-id="project_remove_local"
+                  data-analytics-area="project"
+                >
+                  <Trash2 size={14} aria-hidden />
                 </button>
               </div>
               {open && projectChats.length === 0 ? (
@@ -3088,6 +3245,11 @@ export function App() {
             )) : null}
             </div>
           </section>
+
+          {activeChat ? <div className="chat-panel-chat-header" title={activeChat.title}>
+            <FolderOpen size={15} aria-hidden />
+            <span>{activeChat.title}</span>
+          </div> : null}
 
           {runtimeError || pythonRuntimeStatus ? (
             <div className="chat-rail-overlay chat-rail-overlay--top pointer-events-none absolute inset-x-0 top-0 z-10">
@@ -3603,6 +3765,15 @@ export function App() {
         </div>
       ) : null}
       {projectSwitchProgress.active ? <div className="project-switch-overlay" role="status" aria-live="polite"><div><h2>Switching project</h2><p>{projectSwitchProgress.message ?? "Preparing…"}</p></div></div> : null}
+      {removeProjectTarget ? (
+        <RemoveProjectDialog
+          project={removeProjectTarget}
+          removing={removingProject}
+          error={removeProjectError}
+          onCancel={handleCloseRemoveProject}
+          onConfirm={() => void handleConfirmRemoveProject()}
+        />
+      ) : null}
       {createProjectOpen ? (
         <div
           className="create-project-overlay"

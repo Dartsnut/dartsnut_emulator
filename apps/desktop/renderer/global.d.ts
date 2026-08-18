@@ -80,6 +80,7 @@ declare global {
       getWorkspaceSessionSummary: (chatId?: string) => Promise<AgentSessionWorkspaceSummary>;
       listProjects: () => Promise<ProjectTree>;
       createProject: (request: ProjectCreateRequest) => Promise<{ state: BootstrapState; tree: ProjectTree }>;
+      removeProject: (projectId: string) => Promise<{ state: BootstrapState; tree: ProjectTree }>;
       selectProject: (request: ProjectSelectRequest) => Promise<{ state: BootstrapState; tree: ProjectTree; accepted: boolean }>;
       createChat: (request: ChatCreateRequest) => Promise<{ state: BootstrapState; tree: ProjectTree }>;
       archiveChat: (chatId: string) => Promise<{ state: BootstrapState; tree: ProjectTree }>;

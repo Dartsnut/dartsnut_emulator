@@ -1921,12 +1921,12 @@ const WINDOWS_SHELL_UI: Record<
   dark: {
     titleBarColor: "#00000000",
     symbolColor: "#e0e0e0",
-    windowBackground: "#121212"
+    windowBackground: "#161210"
   },
   light: {
     titleBarColor: "#00000000",
     symbolColor: "#1a2332",
-    windowBackground: "#eef1f8"
+    windowBackground: "#ffffff"
   }
 };
 

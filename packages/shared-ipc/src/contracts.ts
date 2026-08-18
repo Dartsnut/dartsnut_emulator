@@ -20,6 +20,7 @@ export const IPCChannels = {
   resetWorkspaceSession: "agent:reset-workspace-session",
   projectsList: "agent:projects-list",
   projectCreate: "agent:project-create",
+  projectRemove: "agent:project-remove",
   projectSelect: "agent:project-select",
   chatArchive: "agent:chat-archive",
   chatGenerateTitle: "agent:chat-generate-title",

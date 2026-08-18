@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { AgentSessionPersistence, resolveAgentSessionDir } from "@dartsnut/agent-runtime";
@@ -56,7 +55,15 @@ export class ProjectStore {
     } catch { /* first run */ }
   }
   private save(): void { atomicWrite(this.file, `${JSON.stringify(this.data, null, 2)}\n`); }
-  private chatDir(id: string): string { return path.join(this.root, "chats", id); }
+  private chatDir(id: string): string {
+    const chatsRoot = path.resolve(this.root, "chats");
+    const directory = path.resolve(chatsRoot, id);
+    const relative = path.relative(chatsRoot, directory);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error("Chat cache path is outside the app cache directory.");
+    }
+    return directory;
+  }
 
   list(): { projects: ProjectRecord[]; chats: ChatRecord[] } {
     return { projects: [...this.data.projects].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt)), chats: this.data.chats.filter((chat) => !chat.archivedAt) };
@@ -85,6 +92,28 @@ export class ProjectStore {
     this.data.projects.push(project); this.save(); return project;
   }
   touchProject(id: string): ProjectRecord | null { const p = this.getProject(id); if (!p) return null; const stamp = now(); p.lastOpenedAt = stamp; p.updatedAt = stamp; this.save(); return p; }
+  removeProject(projectId: string): ProjectRecord | null {
+    const project = this.getProject(projectId);
+    if (!project) return null;
+    const removedChats = this.data.chats.filter((chat) => chat.projectId === projectId);
+    const cacheDirectories = removedChats.map((chat) => this.chatDir(chat.id));
+    for (const directory of cacheDirectories) {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+    const removedChatIds = new Set(removedChats.map((chat) => chat.id));
+    const nextData: StoreFile = {
+      ...this.data,
+      projects: this.data.projects.filter((candidate) => candidate.id !== projectId),
+      chats: this.data.chats.filter((chat) => chat.projectId !== projectId),
+      lastOpenedChatId:
+        this.data.lastOpenedChatId && removedChatIds.has(this.data.lastOpenedChatId)
+          ? null
+          : this.data.lastOpenedChatId
+    };
+    atomicWrite(this.file, `${JSON.stringify(nextData, null, 2)}\n`);
+    this.data = nextData;
+    return project;
+  }
   createChat(projectId: string, title = "New chat"): ChatRecord {
     if (!this.getProject(projectId)) throw new Error("Project does not exist.");
     const stamp = now(); const chat: ChatRecord = { id: randomUUID(), projectId, title, createdAt: stamp, updatedAt: stamp };

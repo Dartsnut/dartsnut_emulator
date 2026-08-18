@@ -1161,11 +1161,20 @@ export function App() {
     return `${menuColumn} ${leftColumn} ${emulatorColumn}`;
   }, [chatPaneWidth, showEmulatorPane, workspaceMenuCollapsed, workspaceMenuWidth]);
 
+  const mainWorkspaceGridTemplateColumns = useMemo(() => {
+    if (!showEmulatorPane) {
+      return "minmax(0,1fr)";
+    }
+    return `${chatPaneWidth}px minmax(${MIN_EMULATOR_PANE_WIDTH}px,1fr)`;
+  }, [chatPaneWidth, showEmulatorPane]);
+
   const mainGridStyle = useMemo(
     () => ({
-      "--app-main-grid-cols": mainGridTemplateColumns
+      "--app-main-grid-cols": mainGridTemplateColumns,
+      "--main-workspace-grid-cols": mainWorkspaceGridTemplateColumns,
+      "--workspace-menu-rendered-width": `${workspaceMenuCollapsed ? 0 : workspaceMenuWidth}px`
     }) as CSSProperties,
-    [mainGridTemplateColumns]
+    [mainGridTemplateColumns, mainWorkspaceGridTemplateColumns, workspaceMenuCollapsed, workspaceMenuWidth]
   );
   const chatPaneResizeMax = maxChatPaneWidthForViewport(splitPaneViewportWidth());
 
@@ -2935,11 +2944,11 @@ export function App() {
       style={mainGridStyle}
       aria-busy={submissionLock.active}
     >
+      <div className="window-chrome-drag-strip" aria-hidden />
       <header
-        className="app-header col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),40px)] items-center gap-2 [app-region:no-drag] [-webkit-app-region:no-drag]"
+        className="workspace-header flex min-h-10 items-center gap-2 [app-region:drag] [-webkit-app-region:drag]"
         style={{
           paddingLeft: "calc(6px + var(--chrome-margin-inline-start))",
-          paddingRight: "calc(6px + var(--chrome-margin-inline-end))",
           paddingTop: "5px",
           paddingBottom: "5px"
         }}
@@ -2956,24 +2965,6 @@ export function App() {
           {workspaceMenuCollapsed ? <PanelLeftOpen size={18} aria-hidden /> : <PanelLeftClose size={18} aria-hidden />}
         </button>
         {workspaceMenuCollapsed ? <span className="header-menu-toggle-divider" aria-hidden /> : null}
-        <div className="min-h-0 min-w-0 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]" aria-hidden />
-        {screen === "main" ? (
-            <div className="inline-flex shrink-0 items-center justify-end gap-3 overflow-visible">
-              <UpdateDownloadPill status={appUpdate} />
-              {showDeployDrawer ? (
-                <button
-                  type="button"
-                  className="header-deploy-toggle max-[1100px]:hidden"
-                  aria-label={deployDrawerOpen ? "Collapse Deploy and Community panel" : "Open Deploy and Community panel"}
-                  aria-expanded={deployDrawerOpen}
-                  title={deployDrawerOpen ? "Collapse right panel" : "Open right panel"}
-                  onClick={() => setDeployDrawerOpen((open) => !open)}
-                >
-                  {deployDrawerOpen ? <PanelRightClose size={18} aria-hidden /> : <PanelRightOpen size={18} aria-hidden />}
-                </button>
-              ) : null}
-            </div>
-        ) : null}
       </header>
       <aside className={cn("workspace-menu col-start-1 row-start-2", workspaceMenuCollapsed && "workspace-menu--hidden", screen === "settings" && "workspace-menu--settings")} aria-label={screen === "settings" ? "Settings menu" : "Workspace menu"}>
         {screen === "settings" ? <>
@@ -3113,12 +3104,29 @@ export function App() {
           onKeyDown={handleWorkspaceMenuResizeKeyDown}
         />
       </aside>
+      <section className="main-workspace-panel col-start-2 col-end-4 row-start-2 min-h-0 max-[1100px]:col-end-3">
+        <div className="main-workspace-panel__chrome">
+          <div className="main-workspace-panel__drag-region" aria-hidden />
+          <div className="main-workspace-panel__controls">
+            <UpdateDownloadPill status={appUpdate} />
+            {screen === "main" && showDeployDrawer ? (
+              <button
+                type="button"
+                className="header-deploy-toggle max-[1100px]:hidden"
+                aria-label={deployDrawerOpen ? "Collapse Deploy and Community panel" : "Open Deploy and Community panel"}
+                aria-expanded={deployDrawerOpen}
+                title={deployDrawerOpen ? "Collapse right panel" : "Open right panel"}
+                onClick={() => setDeployDrawerOpen((open) => !open)}
+              >
+                {deployDrawerOpen ? <PanelRightClose size={18} aria-hidden /> : <PanelRightOpen size={18} aria-hidden />}
+              </button>
+            ) : null}
+          </div>
+        </div>
+        <div className="main-workspace-panel__body">
       {screen === "main" && showRuntimeSetup ? (
         <section
-          className={cn(
-            "runtime-config-main col-start-2 row-start-2 min-h-0 h-full overflow-auto bg-[var(--gradient-rail)] max-[1100px]:col-end-3",
-            showEmulatorPane ? "col-end-4" : "col-end-3"
-          )}
+          className="runtime-config-main col-span-full min-h-0 h-full overflow-auto bg-[var(--gradient-rail)]"
           aria-live="polite"
         >
           <div className="runtime-config-main__inner">
@@ -3148,8 +3156,8 @@ export function App() {
       ) : screen === "main" ? (
         <section
           className={cn(
-            "left-rail left-rail--chat col-start-2 row-start-2 relative min-w-0 min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
-            "max-[1100px]:col-start-2 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]"
+            "left-rail left-rail--chat col-start-1 relative min-w-0 min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
+            "max-[1100px]:max-w-[760px]"
           )}
         >
           <section
@@ -3480,7 +3488,7 @@ export function App() {
           ) : null}
         </section>
       ) : (
-        <section className="settings-page col-start-2 col-end-4 row-start-2 min-h-0 overflow-auto">
+        <section className="settings-page col-span-full min-h-0 overflow-auto">
           <div className="settings-page__content">
           <div className="settings-page__body">
               {settingsSection === "provider" ? (
@@ -3616,15 +3624,15 @@ export function App() {
       )}
       {showEmulatorPane ? <aside
         className={cn(
-          "right-pane col-start-3 row-start-2 flex min-h-0 h-full min-w-[360px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+          "right-pane col-start-2 flex min-h-0 h-full min-w-[360px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
           showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
         )}
       >
         {assetManifest ? (
-            <div className="flex gap-0.5 border-b border-edge px-3 pb-0 pt-2" role="tablist" aria-label="Right pane view">
+            <div className="right-pane-tabs" role="tablist" aria-label="Right pane view">
               <button
                 type="button"
-                className={cn("ui-tab", rightPaneTab === "emulator" && "ui-tab--active")}
+                className={cn("ui-tab right-pane-tab", rightPaneTab === "emulator" && "ui-tab--active")}
                 role="tab"
                 aria-selected={rightPaneTab === "emulator"}
                 onClick={() => setRightPaneTab("emulator")}
@@ -3636,7 +3644,7 @@ export function App() {
               {assetManifest ? (
                 <button
                   type="button"
-                  className={cn("ui-tab", rightPaneTab === "assets" && "ui-tab--active")}
+                  className={cn("ui-tab right-pane-tab", rightPaneTab === "assets" && "ui-tab--active")}
                   role="tab"
                   aria-selected={rightPaneTab === "assets"}
                   onClick={() => setRightPaneTab("assets")}
@@ -3683,6 +3691,7 @@ export function App() {
             ) : null}
         </div>
       </aside> : null}
+        </div>
       {showDeployDrawer ? (
         <div
           className={cn(
@@ -3758,6 +3767,7 @@ export function App() {
         </aside>
         </div>
       ) : null}
+      </section>
       {providerSettingsError || providerSettingsNotice ? (
         <div className="global-toast-stack" aria-live="polite">
           {providerSettingsError ? <div className="global-toast global-toast--error" role="alert">{providerSettingsError}</div> : null}

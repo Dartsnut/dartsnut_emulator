@@ -24,6 +24,8 @@ body {
   --workspace-menu-background:
     linear-gradient(180deg, var(--color-surface-elevated), var(--color-bg-page) 38%),
     var(--color-bg-page);
+  --splitter-highlight-hover: color-mix(in srgb, var(--color-text-primary) 18%, transparent);
+  --splitter-highlight-active: color-mix(in srgb, var(--color-text-primary) 30%, transparent);
   background: var(--workspace-menu-background);
   transition: grid-template-columns 220ms var(--ease-out);
 }
@@ -264,22 +266,22 @@ body {
   bottom: 0;
   left: 6px;
   width: 2px;
-  background: color-mix(in srgb, var(--color-border) 68%, transparent);
-  opacity: 0.55;
+  background: transparent;
+  opacity: 0;
   transition: background-color 120ms ease, opacity 120ms ease, width 120ms ease;
 }
 
-.workspace-menu-splitter:hover::before,
-.workspace-menu-splitter:focus-visible::before,
-.workspace-menu-splitter--active::before {
-  left: 5px;
-  width: 4px;
-  background: color-mix(in srgb, var(--color-neon-mint) 62%, var(--color-border));
+.workspace-menu-splitter:hover::before {
+  background: var(--splitter-highlight-hover);
   opacity: 1;
 }
 
-.workspace-menu-splitter:focus-visible {
-  box-shadow: var(--shadow-focus-ring);
+.workspace-menu-splitter:focus-visible::before,
+.workspace-menu-splitter--active::before {
+  left: 5.5px;
+  width: 3px;
+  background: var(--splitter-highlight-active);
+  opacity: 1;
 }
 
 .workspace-menu--hidden {
@@ -3119,25 +3121,25 @@ kbd,
   bottom: 0;
   left: 6px;
   width: 2px;
-  background: color-mix(in srgb, var(--color-border) 68%, transparent);
-  opacity: 0.55;
+  background: transparent;
+  opacity: 0;
   transition:
     background-color 120ms ease,
     opacity 120ms ease,
     width 120ms ease;
 }
 
-.chat-emulator-splitter:hover::before,
-.chat-emulator-splitter:focus-visible::before,
-.chat-emulator-splitter--active::before {
-  left: 5px;
-  width: 4px;
-  background: color-mix(in srgb, var(--color-neon-mint) 62%, var(--color-border));
+.chat-emulator-splitter:hover::before {
+  background: var(--splitter-highlight-hover);
   opacity: 1;
 }
 
-.chat-emulator-splitter:focus-visible {
-  box-shadow: var(--shadow-focus-ring);
+.chat-emulator-splitter:focus-visible::before,
+.chat-emulator-splitter--active::before {
+  left: 5.5px;
+  width: 3px;
+  background: var(--splitter-highlight-active);
+  opacity: 1;
 }
 
 .app-shell--column-resizing,

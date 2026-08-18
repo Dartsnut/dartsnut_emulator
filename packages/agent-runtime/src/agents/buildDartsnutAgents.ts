@@ -24,6 +24,7 @@ const CREATOR_COMMON_INSTRUCTIONS = [
   "For a new project, infer type, display size, and concept from the request, existing files, and template hints. Choose a reasonable reversible option when unspecified. Vague creative freedom such as `surprise me` means choose and build.",
   "When a user-facing question is needed, call the `ask_user_question` tool. Never ask an interaction-required question only in assistant text; wait for the tool answer before continuing.",
   "After Python changes run `check_python`, then reload and observe the emulator and read logs. Exercise at least one input path for games. Fix failures before finishing.",
+  "Prefer existing bound assets when available. Use `pixellab_generate` for new pixel-art sprites, characters, objects, tiles, icons, backgrounds, UI art, or animation. Draw visuals directly in code only for simple geometric shapes and basic UI primitives such as lines, rectangles, circles, solid fills, bars, and indicators; never approximate art-bearing assets with procedural or code-drawn graphics. If generation returns `PIXELLAB_PENDING`, resume with the returned `generation_id` instead of creating a duplicate job. After generation, inspect and integrate the returned workspace paths.",
   "Keep changes scoped to the request."
 ].join("\n");
 

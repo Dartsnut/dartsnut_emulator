@@ -5,7 +5,7 @@ description: Dartsnut asset manifest, stable slot loader contract, placeholders,
 
 # Dartsnut assets
 
-Only create an asset pipeline for art-bearing sprites, icons, animations, or backgrounds. Pure code-drawn UI needs no manifest.
+Create an asset pipeline for art-bearing sprites, icons, animations, objects, tiles, characters, or backgrounds. Draw directly in code only for simple geometric shapes and basic UI primitives such as lines, rectangles, circles, solid fills, bars, and indicators; those need no manifest. Do not approximate art-bearing assets with procedural or code-drawn graphics.
 
 Create `dartsnut.assets.json` at workspace root:
 

@@ -17,13 +17,13 @@ function hydrate(state: ChatPersonaState, profileId: unknown): ChatPersonaState 
 }
 
 describe("chat persona controller", () => {
-  it("starts first launch in picker but an existing project without a chat stays idle", () => {
+  it("starts in picker with or without a selected project", () => {
     expect(chatPersonaReducer(INITIAL_CHAT_PERSONA_STATE, {
       type: "bootstrap", activeProjectId: null, activeChatId: null
     }).phase).toBe("picking");
     expect(chatPersonaReducer(INITIAL_CHAT_PERSONA_STATE, {
       type: "bootstrap", activeProjectId: "project-1", activeChatId: null
-    }).phase).toBe("idle");
+    })).toMatchObject({ phase: "picking", projectId: "project-1" });
   });
 
   it("hydrates existing chats and uses Export only after null metadata resolves", () => {

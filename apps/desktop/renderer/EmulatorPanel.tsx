@@ -15,6 +15,7 @@ import {
 } from "@dartsnut/emulator-protocol";
 import { cn } from "./cn";
 import { DART_LEGEND_INDEXES, resolveDartShortcut } from "./emulatorDarts";
+import { shouldShowWidgetParams } from "./emulatorProjectUi";
 import { applyWidgetParamsAndReload, type WidgetValueStore } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
@@ -118,7 +119,7 @@ export function EmulatorPanel({
   const stateRef = useRef<EmulatorStateSnapshot>(defaultState);
   const normalizedWidgetType = state.widgetType?.toLowerCase() ?? null;
   const hasResolvedWorkspaceType = Boolean(state.widgetPath && normalizedWidgetType);
-  const showParamsPanel = normalizedWidgetType === "widget" || widgetConfig.status === "ready";
+  const showParamsPanel = shouldShowWidgetParams(normalizedWidgetType, widgetConfig.status);
   const showDartLegend = hasResolvedWorkspaceType && normalizedWidgetType === "game";
   const projectKindLabel =
     normalizedWidgetType === "widget" ? "Widget" : normalizedWidgetType === "game" ? "Game" : "Unknown";

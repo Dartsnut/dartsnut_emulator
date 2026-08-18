@@ -7,6 +7,12 @@ import {
 } from "@dartsnut/shared-ipc";
 import { classifyDartsnutProjectFiles } from "@dartsnut/shared-ipc/dist/projectClassification";
 
+export type CreatorRouting = {
+  templateMode?: "widget-creator" | "game-creator";
+  projectType?: ProjectType;
+  widgetSize?: WidgetSize;
+};
+
 export function parseConfWidgetSize(size: unknown): WidgetSize | undefined {
   if (!Array.isArray(size) || size.length !== 2) return undefined;
   const key = `${Number(size[0])}x${Number(size[1])}` as WidgetSize;
@@ -33,4 +39,23 @@ export function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
     };
   }
   return { templateMode: "game-creator", projectType: "game" };
+}
+
+export function resolveCreatorRouting(
+  requested: CreatorRouting,
+  workspace: ReturnType<typeof readWorkspaceCreatorHints>
+): CreatorRouting {
+  if (workspace) return workspace;
+  const templateMode = requested.templateMode;
+  return {
+    templateMode,
+    projectType:
+      requested.projectType ??
+      (templateMode === "widget-creator"
+        ? "widget"
+        : templateMode === "game-creator"
+          ? "game"
+          : undefined),
+    widgetSize: requested.widgetSize
+  };
 }

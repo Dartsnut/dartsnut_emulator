@@ -1,5 +1,5 @@
 import { Agent } from "@openai/agents";
-import { AGENT_PROFILES, buildLanguageSystemPrompt, normalizeAgentProfileId, type AgentProfileId, type UserLocale } from "@dartsnut/shared-ipc";
+import { AGENT_PROFILES, buildLanguageSystemPrompt, normalizeAgentProfileId, type AgentProfileId } from "@dartsnut/shared-ipc";
 import { buildAgentTools } from "../agentTools";
 import type { AgentToolsOptions } from "../agentToolsTypes";
 import type { DartsnutRunContext } from "../dartsnutRunContext";
@@ -11,7 +11,6 @@ export type BuildDartsnutAgentsOptions = {
   model: string;
   toolsBase: Omit<AgentToolsOptions, "profile">;
   contextSnapshot: DartsnutRunContext;
-  preferredUserLocale?: UserLocale | null;
   agentProfileId?: AgentProfileId | null;
   onModelRetry?: (diagnostic: ModelRetryDiagnostic) => void;
 };
@@ -56,7 +55,7 @@ const PROFILE_INSTRUCTIONS: Record<AgentProfileId, string> = {
 };
 
 export function buildDartsnutAgent(options: BuildDartsnutAgentsOptions): Agent<DartsnutRunContext> {
-  const { model, toolsBase, contextSnapshot, preferredUserLocale = null } = options;
+  const { model, toolsBase, contextSnapshot } = options;
   const profileId = normalizeAgentProfileId(options.agentProfileId ?? contextSnapshot.agentProfileId);
   const profile = AGENT_PROFILES.find((candidate) => candidate.id === profileId)!;
   const assetMode = contextSnapshot.assetApplierMode || contextSnapshot.templateMode === "asset-applier";
@@ -64,7 +63,7 @@ export function buildDartsnutAgent(options: BuildDartsnutAgentsOptions): Agent<D
     assetMode ? ASSET_INSTRUCTIONS : CREATOR_COMMON_INSTRUCTIONS,
     PROFILE_INSTRUCTIONS[profileId],
     `Persona identity: ${profile.name}; pronouns: ${profile.pronouns}. When the user leaves visual direction open, favor this persona's visual preference (${profile.visualPreference}); always follow explicit user preferences and avoid stereotyping.`,
-    buildLanguageSystemPrompt(preferredUserLocale),
+    buildLanguageSystemPrompt(),
     resolveSkillRouterPrompt(contextSnapshot.skillsDir, assetMode ? "asset-applier" : null),
     "Runtime context:",
     formatRunContextSnapshot(contextSnapshot)

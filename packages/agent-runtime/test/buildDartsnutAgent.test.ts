@@ -48,6 +48,7 @@ describe("buildDartsnutAgent", () => {
     expect(toolNames).toContain("observe_emulator");
     expect(toolNames).toContain("control_emulator_input");
     expect(toolNames).toContain("run_emulator_scenario");
+    expect(toolNames).toContain("pixellab_generate");
     expect(toolNames).toContain("web_search");
     expect(toolNames).toContain("code_interpreter");
   });
@@ -65,6 +66,7 @@ describe("buildDartsnutAgent", () => {
     expect(toolNames).not.toContain("copy_asset_file");
     expect(toolNames).not.toContain("web_search");
     expect(toolNames).not.toContain("code_interpreter");
+    expect(toolNames).not.toContain("pixellab_generate");
   });
 
   it("includes selected session locale and behavior-invariance policy in instructions", () => {
@@ -159,6 +161,22 @@ describe("buildDartsnutAgent", () => {
     expect(agent.instructions).toContain("check_python");
     expect(agent.instructions).toContain("reload and observe the emulator");
     expect(agent.instructions).toContain("Exercise at least one input path");
+  });
+
+  it("teaches creator agent when to use PixelLab", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
+    const agent = buildDartsnutAgent({
+      model: "gpt-4.1-mini",
+      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
+      contextSnapshot: makeContext(workspace)
+    });
+    expect(agent.instructions).toContain("pixellab_generate");
+    expect(agent.instructions).toContain("sprites, characters, objects, tiles, icons, backgrounds, UI art");
+    expect(agent.instructions).toContain("Draw visuals directly in code only for simple geometric shapes and basic UI primitives");
+    expect(agent.instructions).toContain("never approximate art-bearing assets with procedural or code-drawn graphics");
+    expect(agent.instructions).toContain("PIXELLAB_PENDING");
+    expect(agent.instructions).toContain("generation_id");
+    expect(agent.instructions).not.toContain("Prefer existing bound assets or code-drawn graphics");
   });
 
   it("routes game work to the game domain skill", () => {

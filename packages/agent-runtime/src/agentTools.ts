@@ -495,6 +495,13 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     return JSON.stringify(answer === null ? { ok: false, cancelled: true } : { ok: true, answer });
   });
 
+  const pixelLabGenerate = defineJsonSchemaTool("pixellab_generate", async (args) => {
+    if (!options.hostPixelLabGenerateHandler) {
+      return JSON.stringify({ ok: false, error: "PixelLab bridge is unavailable." });
+    }
+    return options.hostPixelLabGenerateHandler(args);
+  });
+
   const registry: Record<string, Tool> = {
     list_files: listFiles,
     read_file: readFile,
@@ -511,6 +518,7 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
     control_emulator_input: controlEmulatorInput,
     run_emulator_scenario: runEmulatorScenario,
     check_python: checkPython,
+    pixellab_generate: pixelLabGenerate,
     dartsnut_machine_mcp: machineMcp,
     ask_user_question: askUserQuestion
   };

@@ -152,6 +152,7 @@ import {
   summarizeScenarioRequest
 } from "./emulatorAgentTools";
 import { copyEmulatorStateSnapshot } from "./emulatorState";
+import { executePixelLabGenerationForAgent } from "./pixellabAgentTool";
 import { AssetManager } from "./assetManager";
 import { ProjectStore } from "./projectStore";
 import { DeployMachineSession } from "./deployMachine";
@@ -2365,6 +2366,23 @@ async function buildSession(
     hostObserveEmulatorHandler: (args) => executeHostObserveEmulatorForAgent(args),
     hostControlEmulatorInputHandler: (args) => executeHostControlEmulatorInputForAgent(args),
     hostRunEmulatorScenarioHandler: (args) => executeHostRunEmulatorScenarioForAgent(args),
+    hostPixelLabGenerateHandler: (args) => {
+      const auth = readCommunityAuth(getCommunityUserDataPath());
+      if (!auth?.token) {
+        return Promise.resolve(JSON.stringify({
+          ok: false,
+          code: "AUTH_REQUIRED",
+          error: "Sign in to your Dartsnut account to use PixelLab generation."
+        }));
+      }
+      return executePixelLabGenerationForAgent({
+        args,
+        workspacePath,
+        baseApi: getCommunityClient().getConfig().baseApi,
+        token: auth.token,
+        fetchImpl: cloudFetch()
+      });
+    },
     askUserQuestionHandler: (prompt) => askUserQuestionForAgent(prompt),
     skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve,
     sessionPersistence: extras?.sessionPersistence,

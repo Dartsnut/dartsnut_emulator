@@ -87,7 +87,7 @@ body {
   border-top: 1px solid var(--color-border);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: var(--color-bg-page);
-  box-shadow: var(--shadow-inset-subtle);
+  box-shadow: -8px 0 28px rgba(0, 0, 0, 0.18), var(--shadow-inset-subtle);
 }
 
 :root[data-platform="win32"] .main-workspace-panel {

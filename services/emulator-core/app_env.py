@@ -72,6 +72,8 @@ def classify_workspace_project(workspace_dir: str) -> tuple[str, dict[str, Any],
             conf = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         raise ValueError(f"Broken widget conf.json: {e}") from e
+    if isinstance(conf, dict) and conf.get("type") == "game":
+        return "game", {}, app_id, version
     if not isinstance(conf, dict) or "size" not in conf or "fields" not in conf:
         raise ValueError("Broken widget conf.json: size and fields are required")
     return "widget", conf, app_id, version

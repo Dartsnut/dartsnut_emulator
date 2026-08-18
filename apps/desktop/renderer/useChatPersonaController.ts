@@ -63,9 +63,11 @@ export function chatPersonaReducer(
       }
 
       if (state.phase === "booting") {
-        return action.activeProjectId
-          ? { phase: "idle", generation: 1, projectId: action.activeProjectId }
-          : { phase: "picking", generation: 1, projectId: null };
+        return {
+          phase: "picking",
+          generation: 1,
+          projectId: action.activeProjectId
+        };
       }
       if (
         state.phase === "picking" ||

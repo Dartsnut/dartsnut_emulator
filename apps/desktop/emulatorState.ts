@@ -13,4 +13,7 @@ export function copyEmulatorStateSnapshot(
   target.audioMuted = nextState.audioMuted;
   target.lastError = nextState.lastError;
   target.lastCapturePath = nextState.lastCapturePath;
+  target.gifRecording = nextState.gifRecording ?? false;
+  target.gifSaving = nextState.gifSaving ?? false;
+  target.gifElapsedMs = nextState.gifElapsedMs ?? 0;
 }

@@ -22,7 +22,9 @@ export type EmulatorCommand =
   | { type: "throw_dart"; index: number; x: number; y: number }
   | { type: "remove_dart_at"; x: number; y: number }
   | { type: "clear_darts" }
-  | { type: "capture_screenshot" };
+  | { type: "capture_screenshot"; zoom: 1 | 2 | 4 }
+  | { type: "start_gif_recording"; zoom: 1 | 2 | 4 }
+  | { type: "stop_gif_recording" };
 
 /** Bridge sets `status` to `venv:<message>` while `uv sync` prepares the workspace `.venv`. */
 export const VENV_PREP_STATUS_PREFIX = "venv:";
@@ -87,6 +89,9 @@ export type EmulatorStateSnapshot = {
   audioMuted: boolean;
   lastError?: string;
   lastCapturePath?: string | null;
+  gifRecording?: boolean;
+  gifSaving?: boolean;
+  gifElapsedMs?: number;
 };
 
 export type EmulatorFrame = {
@@ -124,6 +129,9 @@ export function beginEmulatorSwitch(
       audioMuted: currentState.audioMuted,
       lastError: undefined,
       lastCapturePath: currentState.lastCapturePath ?? null,
+      gifRecording: currentState.gifRecording ?? false,
+      gifSaving: currentState.gifSaving ?? false,
+      gifElapsedMs: currentState.gifElapsedMs ?? 0,
     },
   };
 }

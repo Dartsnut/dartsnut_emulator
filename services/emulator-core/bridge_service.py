@@ -98,6 +98,12 @@ def main() -> None:
                         )
                 else:
                     rgb_stall_started_ms = None
+            recording_changed = core.update_gif_recording()
+            save_changed = core.poll_gif_save_result()
+            if recording_changed and not core.state.gifRecording:
+                emit("state", core.snapshot())
+            elif save_changed:
+                emit("state", core.snapshot())
             for entry in core.poll_widget_logs():
                 emit("log", entry)
             if now_ms - last_heartbeat_ms >= 500:

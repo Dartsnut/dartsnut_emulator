@@ -16,7 +16,9 @@ const {
   getStoredWorkspaceMenuWidth,
   getStoredWorkspaceMenuCollapsed,
   nextChatPaneWidthFromDrag,
+  nextWorkspaceAndChatWidthsFromDrag,
   nextWorkspaceMenuWidthFromDrag,
+  resizeWorkspaceMenuKeepingPaneTotal,
   setStoredChatPaneWidth,
   setStoredWorkspaceMenuWidth,
   setStoredWorkspaceMenuCollapsed
@@ -80,6 +82,29 @@ test("workspace menu width clamps and follows pointer movement", () => {
     currentClientX: 340,
     startWidth: DEFAULT_WORKSPACE_MENU_WIDTH
   }), DEFAULT_WORKSPACE_MENU_WIDTH + 60);
+});
+
+test("workspace menu resizing preserves emulator width by taking space from chat", () => {
+  assert.deepEqual(nextWorkspaceAndChatWidthsFromDrag({
+    startClientX: 280,
+    currentClientX: 340,
+    startMenuWidth: 280,
+    startChatWidth: 680
+  }), {
+    menuWidth: 340,
+    chatWidth: 620
+  });
+});
+
+test("workspace menu stops growing when chat reaches its minimum width", () => {
+  assert.deepEqual(resizeWorkspaceMenuKeepingPaneTotal({
+    targetMenuWidth: MAX_WORKSPACE_MENU_WIDTH,
+    menuWidth: 280,
+    chatWidth: 360
+  }), {
+    menuWidth: 320,
+    chatWidth: MIN_CHAT_PANE_WIDTH
+  });
 });
 
 test("workspace menu width round-trips through local storage", () => {

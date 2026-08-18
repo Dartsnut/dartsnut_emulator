@@ -101,6 +101,40 @@ export function nextWorkspaceMenuWidthFromDrag(input: {
   return clampWorkspaceMenuWidth(finiteNumber(input.startWidth, DEFAULT_WORKSPACE_MENU_WIDTH) + delta);
 }
 
+export function resizeWorkspaceMenuKeepingPaneTotal(input: {
+  targetMenuWidth: number;
+  menuWidth: number;
+  chatWidth: number;
+}): { menuWidth: number; chatWidth: number } {
+  const currentMenuWidth = clampWorkspaceMenuWidth(input.menuWidth);
+  const currentChatWidth = Math.max(
+    MIN_CHAT_PANE_WIDTH,
+    Math.round(finiteNumber(input.chatWidth, DEFAULT_CHAT_PANE_WIDTH))
+  );
+  const combinedWidth = currentMenuWidth + currentChatWidth;
+  const maxMenuWidth = Math.min(MAX_WORKSPACE_MENU_WIDTH, combinedWidth - MIN_CHAT_PANE_WIDTH);
+  const targetMenuWidth = Math.round(finiteNumber(input.targetMenuWidth, currentMenuWidth));
+  const menuWidth = Math.min(Math.max(targetMenuWidth, MIN_WORKSPACE_MENU_WIDTH), maxMenuWidth);
+  return {
+    menuWidth,
+    chatWidth: combinedWidth - menuWidth
+  };
+}
+
+export function nextWorkspaceAndChatWidthsFromDrag(input: {
+  startClientX: number;
+  currentClientX: number;
+  startMenuWidth: number;
+  startChatWidth: number;
+}): { menuWidth: number; chatWidth: number } {
+  const delta = finiteNumber(input.currentClientX, input.startClientX) - finiteNumber(input.startClientX, 0);
+  return resizeWorkspaceMenuKeepingPaneTotal({
+    targetMenuWidth: finiteNumber(input.startMenuWidth, DEFAULT_WORKSPACE_MENU_WIDTH) + delta,
+    menuWidth: input.startMenuWidth,
+    chatWidth: input.startChatWidth
+  });
+}
+
 export function getStoredWorkspaceMenuCollapsed(): boolean {
   if (typeof window === "undefined") return false;
   try {

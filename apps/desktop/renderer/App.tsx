@@ -132,7 +132,9 @@ import {
   MIN_EMULATOR_PANE_WIDTH,
   MIN_WORKSPACE_MENU_WIDTH,
   nextChatPaneWidthFromDrag,
+  nextWorkspaceAndChatWidthsFromDrag,
   nextWorkspaceMenuWidthFromDrag,
+  resizeWorkspaceMenuKeepingPaneTotal,
   setStoredChatPaneWidth,
   setStoredWorkspaceMenuWidth,
   setStoredWorkspaceMenuCollapsed
@@ -1105,6 +1107,7 @@ export function App() {
     pointerId: number;
     startClientX: number;
     startWidth: number;
+    startChatWidth: number;
   } | null>(null);
   const projectsSectionButtonRef = useRef<HTMLButtonElement | null>(null);
 
@@ -1177,6 +1180,9 @@ export function App() {
     [mainGridTemplateColumns, mainWorkspaceGridTemplateColumns, workspaceMenuCollapsed, workspaceMenuWidth]
   );
   const chatPaneResizeMax = maxChatPaneWidthForViewport(splitPaneViewportWidth());
+  const workspaceMenuResizeMax = showEmulatorPane
+    ? Math.min(MAX_WORKSPACE_MENU_WIDTH, workspaceMenuWidth + chatPaneWidth - MIN_CHAT_PANE_WIDTH)
+    : MAX_WORKSPACE_MENU_WIDTH;
 
   const finishChatPaneResize = useCallback((target?: Element) => {
     const activeDrag = chatPaneResizeDragRef.current;
@@ -1258,21 +1264,33 @@ export function App() {
     workspaceMenuResizeDragRef.current = {
       pointerId: event.pointerId,
       startClientX: event.clientX,
-      startWidth: workspaceMenuWidth
+      startWidth: workspaceMenuWidth,
+      startChatWidth: chatPaneWidth
     };
     setWorkspaceMenuResizing(true);
     event.preventDefault();
-  }, [workspaceMenuWidth]);
+  }, [chatPaneWidth, workspaceMenuWidth]);
 
   const handleWorkspaceMenuResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const activeDrag = workspaceMenuResizeDragRef.current;
     if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
-    setWorkspaceMenuWidth(nextWorkspaceMenuWidthFromDrag({
+    if (!showEmulatorPane) {
+      setWorkspaceMenuWidth(nextWorkspaceMenuWidthFromDrag({
+        startClientX: activeDrag.startClientX,
+        currentClientX: event.clientX,
+        startWidth: activeDrag.startWidth
+      }));
+      return;
+    }
+    const widths = nextWorkspaceAndChatWidthsFromDrag({
       startClientX: activeDrag.startClientX,
       currentClientX: event.clientX,
-      startWidth: activeDrag.startWidth
-    }));
-  }, []);
+      startMenuWidth: activeDrag.startWidth,
+      startChatWidth: activeDrag.startChatWidth
+    });
+    setWorkspaceMenuWidth(widths.menuWidth);
+    setChatPaneWidth(widths.chatWidth);
+  }, [showEmulatorPane]);
 
   const handleWorkspaceMenuResizePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (workspaceMenuResizeDragRef.current?.pointerId === event.pointerId) {
@@ -1282,20 +1300,33 @@ export function App() {
 
   const handleWorkspaceMenuResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = event.shiftKey ? 40 : 16;
+    const resizeTo = (targetMenuWidth: number) => {
+      if (!showEmulatorPane) {
+        setWorkspaceMenuWidth(clampWorkspaceMenuWidth(targetMenuWidth));
+        return;
+      }
+      const widths = resizeWorkspaceMenuKeepingPaneTotal({
+        targetMenuWidth,
+        menuWidth: workspaceMenuWidth,
+        chatWidth: chatPaneWidth
+      });
+      setWorkspaceMenuWidth(widths.menuWidth);
+      setChatPaneWidth(widths.chatWidth);
+    };
     if (event.key === "ArrowLeft") {
       event.preventDefault();
-      setWorkspaceMenuWidth((current) => clampWorkspaceMenuWidth(current - step));
+      resizeTo(workspaceMenuWidth - step);
     } else if (event.key === "ArrowRight") {
       event.preventDefault();
-      setWorkspaceMenuWidth((current) => clampWorkspaceMenuWidth(current + step));
+      resizeTo(workspaceMenuWidth + step);
     } else if (event.key === "Home") {
       event.preventDefault();
-      setWorkspaceMenuWidth(MIN_WORKSPACE_MENU_WIDTH);
+      resizeTo(MIN_WORKSPACE_MENU_WIDTH);
     } else if (event.key === "End") {
       event.preventDefault();
-      setWorkspaceMenuWidth(MAX_WORKSPACE_MENU_WIDTH);
+      resizeTo(workspaceMenuResizeMax);
     }
-  }, []);
+  }, [chatPaneWidth, showEmulatorPane, workspaceMenuResizeMax, workspaceMenuWidth]);
 
   const handleCommunitySubmitProgress = useCallback((progress: CommunitySubmitProgress | null) => {
     if (!progress) {
@@ -3094,7 +3125,7 @@ export function App() {
           aria-label="Resize side menu"
           aria-orientation="vertical"
           aria-valuemin={MIN_WORKSPACE_MENU_WIDTH}
-          aria-valuemax={MAX_WORKSPACE_MENU_WIDTH}
+          aria-valuemax={workspaceMenuResizeMax}
           aria-valuenow={workspaceMenuWidth}
           title="Drag to resize side menu"
           onPointerDown={handleWorkspaceMenuResizePointerDown}

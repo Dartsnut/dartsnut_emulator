@@ -1344,11 +1344,13 @@ function emitProjectSwitchProgress(progress: ProjectSwitchProgress): void {
   sendToRenderer(IPCChannels.projectSwitchProgress, progress);
 }
 
-async function stopRuntimeForProjectTransition(): Promise<"ready" | "stopped" | "cancelled"> {
+async function stopRuntimeForProjectTransition(confirmStop = true): Promise<"ready" | "stopped" | "cancelled"> {
   const runtimeActive = Boolean(emulatorState.running || deployMachineSession?.connected);
   if (!runtimeActive) return "ready";
-  const { response } = await showAppMessageBox({ type: "question", buttons: ["Switch project", "Cancel"], defaultId: 1, cancelId: 1, title: "Switch project", message: "Emulator or remote deployment is active. Stop it and switch project?" });
-  if (response !== 0) return "cancelled";
+  if (confirmStop) {
+    const { response } = await showAppMessageBox({ type: "question", buttons: ["Switch project", "Cancel"], defaultId: 1, cancelId: 1, title: "Switch project", message: "Emulator or remote deployment is active. Stop it and switch project?" });
+    if (response !== 0) return "cancelled";
+  }
   emitProjectSwitchProgress({ active: true, stage: "stopping-deployment", message: "Stopping remote deployment…" });
   if (deployMachineSession?.connected) await disconnectDeployMachine();
   emitProjectSwitchProgress({ active: true, stage: "stopping-emulator", message: "Stopping emulator…" });
@@ -1391,17 +1393,17 @@ async function switchToProject(projectId: string, chatId?: string): Promise<bool
   return projectSwitchInFlight;
 }
 
-async function clearActiveProject(): Promise<boolean> {
+async function clearActiveProject(options: { confirmRuntimeStop?: boolean; progressMessage?: string } = {}): Promise<boolean> {
   if (!activeProjectId) {
     activeChatId = null;
     return true;
   }
   if (projectSwitchInFlight) return projectSwitchInFlight;
   projectSwitchInFlight = (async () => {
-    const runtimeTransition = await stopRuntimeForProjectTransition();
+    const runtimeTransition = await stopRuntimeForProjectTransition(options.confirmRuntimeStop ?? true);
     if (runtimeTransition === "cancelled") return false;
     if (runtimeTransition === "stopped") {
-      emitProjectSwitchProgress({ active: true, stage: "switching", message: "Starting a new chat…" });
+      emitProjectSwitchProgress({ active: true, stage: "switching", message: options.progressMessage ?? "Starting a new chat…" });
     }
     performSessionCleanup({ clearWorkspace: true });
     activeProjectId = null;
@@ -2665,6 +2667,23 @@ ipcMain.handle(IPCChannels.projectCreate, async (_event: unknown, request: Proje
     if (chat) store.archiveChat(chat.id);
     throw new Error("Project creation was cancelled.");
   }
+  return { state: getBootstrapState(), tree: projectTree() };
+});
+ipcMain.handle(IPCChannels.projectRemove, async (_event: unknown, projectId: string) => {
+  const store = getProjectStore();
+  const project = store.getProject(projectId);
+  if (!project) throw new Error("Project does not exist.");
+  if (sendPromptCoordinator.hasActiveRun()) throw new Error("Wait for the active agent request to finish.");
+  if (projectSwitchInFlight) throw new Error("Wait for the current project switch to finish.");
+  if (activeProjectId === project.id) {
+    const cleared = await clearActiveProject({
+      confirmRuntimeStop: false,
+      progressMessage: "Removing local project…"
+    });
+    if (!cleared) throw new Error("Could not stop the active project.");
+  }
+  if (!store.removeProject(project.id)) throw new Error("Project does not exist.");
+  emitBootstrapStateToRenderer();
   return { state: getBootstrapState(), tree: projectTree() };
 });
 ipcMain.handle(IPCChannels.projectSelect, async (_event: unknown, request: ProjectSelectRequest) => {

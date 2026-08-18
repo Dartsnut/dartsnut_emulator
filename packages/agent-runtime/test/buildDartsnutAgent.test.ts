@@ -69,21 +69,20 @@ describe("buildDartsnutAgent", () => {
     expect(toolNames).not.toContain("pixellab_generate");
   });
 
-  it("includes selected session locale and behavior-invariance policy in instructions", () => {
+  it("includes static current-message language guidance", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agent-"));
-    const ctx = makeContext(workspace, { preferredUserLocale: "zh-Hant" });
+    const ctx = makeContext(workspace);
     const agent = buildDartsnutAgent({
       model: "gpt-4.1-mini",
       toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
-      contextSnapshot: ctx,
-      preferredUserLocale: "zh-Hant"
+      contextSnapshot: ctx
     });
-    expect(agent.instructions).toContain("Session locale: zh-Hant");
-    expect(agent.instructions).toContain("output-only");
-    expect(agent.instructions).toContain("must not change behavior");
-    expect(agent.instructions).toContain("routing");
-    expect(agent.instructions).toContain("tool choice");
-    expect(agent.instructions).toContain("project inference");
+    expect(agent.instructions).toContain(
+      "Respond in the language used by the user in their current message when possible."
+    );
+    expect(agent.instructions).not.toContain("Session locale");
+    expect(agent.instructions).not.toContain("zh-Hans");
+    expect(agent.instructions).not.toContain("zh-Hant");
   });
 
   it("adds selected persona behavior while preserving Export baseline", () => {

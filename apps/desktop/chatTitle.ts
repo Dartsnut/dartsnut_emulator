@@ -36,7 +36,7 @@ export function sanitizeGeneratedChatTitle(output: string, firstUserMessage: str
 export function buildChatTitlePrompt(firstUserMessage: string): string {
   const message = firstUserMessage.trim().slice(0, MAX_TITLE_INPUT_CHARS);
   return [
-    "Return only a title of 3 to 7 words in the user's language, without quotes or trailing punctuation.",
+    "Return only a title of 3 to 7 words, without quotes or trailing punctuation.",
     "",
     "First user message:",
     message

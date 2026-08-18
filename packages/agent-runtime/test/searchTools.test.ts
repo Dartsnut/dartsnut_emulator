@@ -15,7 +15,6 @@ function ctx(partial: Partial<DartsnutRunContext>, workspacePath: string): Darts
     artifacts: partial.artifacts ?? { confJson: false, mainPy: false, initialPassComplete: false },
     assetApplierMode: partial.assetApplierMode ?? false,
     skillsDir: partial.skillsDir ?? path.join(process.cwd(), "skills"),
-    preferredUserLocale: partial.preferredUserLocale ?? null,
     projectType: partial.projectType,
     widgetSize: partial.widgetSize
   };

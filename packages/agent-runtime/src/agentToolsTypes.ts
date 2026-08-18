@@ -14,6 +14,7 @@ export type HostMachineMcpHandler = (args: Record<string, unknown>) => Promise<s
 export type HostObserveEmulatorHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostControlEmulatorInputHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostRunEmulatorScenarioHandler = (args: Record<string, unknown>) => Promise<string>;
+export type HostPixelLabGenerateHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostAskUserQuestionHandler = (prompt: AgentQuestionPrompt) => Promise<string | null>;
 
 export type AgentToolProfile = "asset-applier" | "full";
@@ -35,5 +36,6 @@ export type AgentToolsOptions = {
   hostObserveEmulatorHandler?: HostObserveEmulatorHandler;
   hostControlEmulatorInputHandler?: HostControlEmulatorInputHandler;
   hostRunEmulatorScenarioHandler?: HostRunEmulatorScenarioHandler;
+  hostPixelLabGenerateHandler?: HostPixelLabGenerateHandler;
   askUserQuestionHandler?: HostAskUserQuestionHandler;
 };

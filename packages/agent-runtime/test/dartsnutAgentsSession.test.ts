@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import type { AgentInputItem } from "@openai/agents";
 import { DartsnutAgentsSession } from "../src/dartsnutAgentsSession";
 import { AgentSessionPersistence } from "../src/agentSessionPersistence";
-import { resolveSessionUserLocale } from "@dartsnut/shared-ipc";
 
 describe("DartsnutAgentsSession", () => {
   it("round-trips native AgentInputItem conversation", async () => {
@@ -45,24 +44,17 @@ describe("DartsnutAgentsSession", () => {
     expect(hasNextTurn).toBe(true);
   });
 
-  it("persists resolved locale so short follow-ups can reuse it", async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-session-locale-"));
+  it("does not write locale metadata to the session manifest", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-session-"));
     const persistence = new AgentSessionPersistence(workspace);
-    const firstLocale = resolveSessionUserLocale(null, "我想要一个时钟小组件");
     const session = new DartsnutAgentsSession({
-      sessionId: "sess-locale",
-      sessionPersistence: persistence,
-      preferredUserLocale: firstLocale
+      sessionId: "sess-no-locale",
+      sessionPersistence: persistence
     });
 
-    await session.addItems([{ type: "message", role: "user", content: "我想要一个时钟小组件" }]);
+    await session.addItems([{ type: "message", role: "user", content: "build a clock widget" }]);
     await persistence.flushWrites();
 
-    expect(persistence.readManifest()?.preferredUserLocale).toBe("zh-Hans");
-    const followUpLocale = resolveSessionUserLocale(
-      persistence.readManifest()?.preferredUserLocale ?? null,
-      "ok"
-    );
-    expect(followUpLocale).toBe("zh-Hans");
+    expect(persistence.readManifest()).not.toHaveProperty("preferredUserLocale");
   });
 });

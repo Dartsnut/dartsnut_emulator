@@ -33,8 +33,6 @@ export type AgentSessionManifest = {
   updatedAt: string;
   templateMode?: string | null;
   section?: string | null;
-  /** Sticky assistant response locale (en / zh-Hans / zh-Hant); not used for routing. */
-  preferredUserLocale?: "en" | "zh-Hans" | "zh-Hant" | null;
   agentProfileId?: AgentProfileId | null;
 };
 
@@ -146,7 +144,6 @@ export class AgentSessionPersistence {
       updatedAt: nowIso,
       templateMode: existing?.templateMode ?? null,
       section: existing?.section ?? null,
-      preferredUserLocale: existing?.preferredUserLocale ?? null,
       agentProfileId
     });
   }

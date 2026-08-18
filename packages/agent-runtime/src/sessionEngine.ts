@@ -8,7 +8,6 @@ import {
   type AgentTokenUsage,
   type AgentQuestionPrompt,
   type ChatMediaAttachment,
-  type UserLocale,
   type AgentProfileId
 } from "@dartsnut/shared-ipc";
 import type { DeferredSkillId } from "./skillBundle";
@@ -76,7 +75,6 @@ export interface SessionEngineOptions {
   sessionTemplateMode?: string | null;
   sessionSection?: string | null;
   initialItems?: AgentInputItem[];
-  preferredUserLocale?: UserLocale | null;
   agentProfileId?: AgentProfileId | null;
   agentModelConfig?: AgentModelConfig;
   /** Seeds shared SDK run context for orchestrator handoffs. */
@@ -160,7 +158,6 @@ export class SessionEngine {
     return seedDartsnutRunContext({
       workspacePath,
       skillsDir: this.resolveSkillsDir(),
-      preferredUserLocale: this.options.preferredUserLocale ?? null,
       agentProfileId: this.options.agentProfileId ?? null,
       projectType: seed?.projectType,
       widgetSize: seed?.widgetSize,
@@ -259,7 +256,6 @@ export class SessionEngine {
       model: cfg.model,
       toolsBase,
       contextSnapshot: runContext,
-      preferredUserLocale: this.options.preferredUserLocale ?? null,
       agentProfileId: this.options.agentProfileId ?? null,
       onModelRetry: (diagnostic) => this.options.onDiagnostic?.("agent model request retry", diagnostic)
     });
@@ -286,7 +282,7 @@ export class SessionEngine {
       sessionPersistence: this.options.sessionPersistence,
       sessionTemplateMode: this.options.sessionTemplateMode,
       sessionSection: this.options.sessionSection,
-      preferredUserLocale: this.options.preferredUserLocale ?? null
+      agentProfileId: this.options.agentProfileId ?? null
     });
 
     this.persistTranscript("user", prompt);
@@ -343,7 +339,6 @@ export class SessionEngine {
           sessionPersistence: this.options.sessionPersistence,
           sessionTemplateMode: this.options.sessionTemplateMode,
           sessionSection: this.options.sessionSection,
-          preferredUserLocale: this.options.preferredUserLocale ?? null,
           agentProfileId: this.options.agentProfileId ?? null
         }));
       }
@@ -404,7 +399,6 @@ export class SessionEngine {
             sessionPersistence: this.options.sessionPersistence,
             sessionTemplateMode: this.options.sessionTemplateMode,
             sessionSection: this.options.sessionSection,
-            preferredUserLocale: this.options.preferredUserLocale ?? null,
             agentProfileId: this.options.agentProfileId ?? null
           }));
           streamResult = await consumeStream(fallbackStream, false);

@@ -21,6 +21,10 @@ body {
   overflow-y: visible;
   --main-panel-chrome-height: 40px;
   --workspace-header-clearance: max(var(--window-control-inset-top), 40px);
+  --workspace-menu-background:
+    linear-gradient(180deg, var(--color-surface-elevated), var(--color-bg-page) 38%),
+    var(--color-bg-page);
+  background: var(--workspace-menu-background);
   transition: grid-template-columns 220ms var(--ease-out);
 }
 
@@ -232,9 +236,7 @@ body {
   align-items: stretch;
   border-right: 1px solid var(--color-border);
   padding: calc(var(--workspace-header-clearance) + 10px) 7px 10px;
-  background:
-    linear-gradient(180deg, var(--color-surface-elevated), var(--color-bg-page) 38%),
-    var(--color-bg-page);
+  background: var(--workspace-menu-background);
   box-shadow: var(--shadow-inset-subtle);
   -webkit-app-region: no-drag;
   app-region: no-drag;

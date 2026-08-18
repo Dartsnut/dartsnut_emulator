@@ -76,6 +76,63 @@ const DARTSNUT_MACHINE_MCP_TOOL = responseTool({
   }
 });
 
+const PIXELLAB_GENERATE_TOOL = responseTool({
+  type: "function",
+  function: {
+    name: "pixellab_generate",
+    description: [
+      "Generate game-ready pixel art through the Dartsnut-hosted PixelLab bridge; PixelLab credentials never enter the workspace or model context.",
+      "Use operation `image` for sprites, objects, backgrounds, tiles, UI art, and character concepts.",
+      "Use operation `animation` to animate an existing PNG/JPEG workspace asset from an action description.",
+      "The host submits quickly, polls Dartsnut for up to 10 minutes, then writes returned PNG/JPEG/GIF/WebP assets inside the workspace.",
+      "If the result is PIXELLAB_PENDING, call this tool again with its generation_id to resume instead of starting another job."
+    ].join(" "),
+    parameters: {
+      type: "object",
+      properties: {
+        generation_id: {
+          type: "string",
+          description: "Resume an existing pending generation. When set, generation parameters are ignored."
+        },
+        operation: { type: "string", enum: ["image", "animation"] },
+        prompt: {
+          type: "string",
+          description: "Image description, or action description for animation."
+        },
+        width: { type: "number", description: "Output width. Images: 16-792; animations: 32-256." },
+        height: { type: "number", description: "Output height. Images: 16-688; animations: 32-256." },
+        reference_path: {
+          type: "string",
+          description: "Required for animation: workspace-relative PNG/JPEG file to animate."
+        },
+        output_path: {
+          type: "string",
+          description: "Optional workspace-relative destination file or directory. Defaults under assets/pixellab/."
+        },
+        seed: { type: "number", description: "Optional non-negative deterministic seed." },
+        no_background: { type: "boolean", description: "Request transparent background. Defaults true." },
+        view: {
+          type: "string",
+          enum: ["none", "low top-down", "high top-down", "side"],
+          description: "Animation camera perspective."
+        },
+        direction: {
+          type: "string",
+          enum: ["none", "south", "east", "west", "north", "south-east", "south-west", "north-east", "north-west"],
+          description: "Animation facing direction."
+        },
+        overwrite: { type: "boolean", description: "Replace existing destination files when true. Defaults false." }
+      },
+      anyOf: [
+        { required: ["generation_id"] },
+        { required: ["operation", "prompt", "width", "height"] }
+      ],
+      additionalProperties: false
+    },
+    strict: false
+  }
+});
+
 const ASK_USER_QUESTION_TOOL = responseTool({
   type: "function",
   function: {
@@ -505,6 +562,7 @@ export const AGENT_TOOL_SCHEMAS: AgentToolSchema[] = [
   CONTROL_EMULATOR_INPUT_TOOL,
   RUN_EMULATOR_SCENARIO_TOOL,
   CHECK_PYTHON_TOOL,
+  PIXELLAB_GENERATE_TOOL,
   DARTSNUT_MACHINE_MCP_TOOL,
   ASK_USER_QUESTION_TOOL
 ];

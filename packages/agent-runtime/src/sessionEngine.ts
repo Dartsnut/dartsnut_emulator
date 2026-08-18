@@ -46,6 +46,7 @@ export type HostMachineMcpHandler = (args: Record<string, unknown>) => Promise<s
 export type HostObserveEmulatorHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostControlEmulatorInputHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostRunEmulatorScenarioHandler = (args: Record<string, unknown>) => Promise<string>;
+export type HostPixelLabGenerateHandler = (args: Record<string, unknown>) => Promise<string>;
 export type HostAskUserQuestionHandler = (prompt: AgentQuestionPrompt) => Promise<string | null>;
 
 export interface AgentSkillLibrary {
@@ -68,6 +69,7 @@ export interface SessionEngineOptions {
   hostObserveEmulatorHandler?: HostObserveEmulatorHandler;
   hostControlEmulatorInputHandler?: HostControlEmulatorInputHandler;
   hostRunEmulatorScenarioHandler?: HostRunEmulatorScenarioHandler;
+  hostPixelLabGenerateHandler?: HostPixelLabGenerateHandler;
   askUserQuestionHandler?: HostAskUserQuestionHandler;
   skipInitialWorkspaceResolve?: boolean;
   sessionPersistence?: AgentSessionPersistence;
@@ -182,6 +184,7 @@ export class SessionEngine {
       hostObserveEmulatorHandler: this.options.hostObserveEmulatorHandler,
       hostControlEmulatorInputHandler: this.options.hostControlEmulatorInputHandler,
       hostRunEmulatorScenarioHandler: this.options.hostRunEmulatorScenarioHandler,
+      hostPixelLabGenerateHandler: this.options.hostPixelLabGenerateHandler,
       askUserQuestionHandler: this.options.askUserQuestionHandler
     };
   }

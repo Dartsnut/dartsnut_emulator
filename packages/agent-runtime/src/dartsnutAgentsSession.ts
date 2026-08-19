@@ -8,7 +8,6 @@ export type DartsnutAgentsSessionOptions = {
   sessionPersistence?: AgentSessionPersistence;
   sessionTemplateMode?: string | null;
   sessionSection?: string | null;
-  preferredUserLocale?: "en" | "zh-Hans" | "zh-Hant" | null;
   agentProfileId?: AgentProfileId | null;
 };
 
@@ -31,7 +30,6 @@ export class DartsnutAgentsSession implements Session {
     this.manifestMeta = {
       sessionTemplateMode: options.sessionTemplateMode ?? null,
       sessionSection: options.sessionSection ?? null,
-      preferredUserLocale: options.preferredUserLocale ?? null,
       agentProfileId: options.agentProfileId ?? null
     };
     const fromDisk = options.sessionPersistence?.readConversationItems() ?? [];
@@ -95,7 +93,6 @@ export class DartsnutAgentsSession implements Session {
       updatedAt: nowIso,
       templateMode: this.manifestMeta.sessionTemplateMode ?? null,
       section: this.manifestMeta.sessionSection ?? null,
-      preferredUserLocale: this.manifestMeta.preferredUserLocale ?? null,
       agentProfileId: this.manifestMeta.agentProfileId ?? null
     });
     this.persistence.saveConversationItemsAtomic(this.items);

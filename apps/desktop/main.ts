@@ -93,8 +93,6 @@ import {
   type AgentProfileId,
   normalizeAgentProfileId,
   buildPromptWithChatMediaAttachments,
-  resolveSessionUserLocale,
-  type UserLocale,
   parseWidgetFontCatalogFromManifest,
   type WidgetFontCatalogEntry,
   type WidgetConfigScope,
@@ -893,6 +891,9 @@ const emulatorState: EmulatorStateSnapshot = {
   status: "Idle",
   audioMuted: false,
   lastCapturePath: null,
+  gifRecording: false,
+  gifSaving: false,
+  gifElapsedMs: 0,
 };
 let emulatorSwitchGate: EmulatorSwitchGate | null = null;
 let pendingEmulatorPathForReload: string | null = null;
@@ -1294,6 +1295,9 @@ async function gracefulStopEmulatorBridge(
   bridgeProcess = null;
   bridgeRuntimeKey = null;
   emulatorState.running = false;
+  emulatorState.gifRecording = false;
+  emulatorState.gifSaving = false;
+  emulatorState.gifElapsedMs = 0;
   emulatorState.status = "Bridge stopped";
   if (options?.permanent) {
     emulatorBridgeTeardownDone = true;
@@ -2088,6 +2092,9 @@ function applyIdleEmulatorMainState(): void {
   emulatorState.widgetId = null;
   emulatorState.widgetType = null;
   emulatorState.running = false;
+  emulatorState.gifRecording = false;
+  emulatorState.gifSaving = false;
+  emulatorState.gifElapsedMs = 0;
   emulatorState.lastError = undefined;
   emulatorState.status = "Idle";
   clearEmulatorLogRing();
@@ -2271,6 +2278,18 @@ function spawnBridgeAfterStop() {
             typeof payload.lastCapturePath !== "undefined"
               ? payload.lastCapturePath ?? null
               : emulatorState.lastCapturePath,
+          gifRecording:
+            typeof payload.gifRecording === "boolean"
+              ? payload.gifRecording
+              : emulatorState.gifRecording ?? false,
+          gifSaving:
+            typeof payload.gifSaving === "boolean"
+              ? payload.gifSaving
+              : emulatorState.gifSaving ?? false,
+          gifElapsedMs:
+            typeof payload.gifElapsedMs === "number"
+              ? payload.gifElapsedMs
+              : emulatorState.gifElapsedMs ?? 0,
         };
         const gated = handleEmulatorSwitchState(emulatorSwitchGate, incomingState, emulatorState);
         emulatorSwitchGate = gated.gate;
@@ -2327,14 +2346,6 @@ function buildWorkspaceSessionPersistence(
   return getProjectStore().sessionPersistence(activeChatId);
 }
 
-function resolvePreferredUserLocaleForSession(
-  latestUserText: string,
-  persistence?: AgentSessionPersistence
-): UserLocale {
-  const persisted = persistence?.readManifest()?.preferredUserLocale ?? null;
-  return resolveSessionUserLocale(persisted, latestUserText);
-}
-
 async function buildSession(
   templateMode: PromptRequest["templateMode"] | undefined,
   extras?: {
@@ -2345,8 +2356,7 @@ async function buildSession(
     skillBundleMode?: PromptRequest["templateMode"] | null;
     sessionPersistence?: AgentSessionPersistence;
     initialItems?: AgentInputItem[];
-    preferredUserLocale?: UserLocale | null;
-    latestUserTextForLocale?: string;
+    originalUserPrompt?: string;
     projectType?: ProjectType;
     widgetSize?: WidgetSize;
     assetApplierMode?: boolean;
@@ -2362,16 +2372,10 @@ async function buildSession(
   const skillBundleMode =
     extras?.skillBundleMode !== undefined ? extras.skillBundleMode : templateMode ?? null;
   const { skillLibrary } = resolveSkillSessionContext(skillBundleMode);
-  const preferredUserLocale =
-    extras?.preferredUserLocale ??
-    (extras?.latestUserTextForLocale != null
-      ? resolvePreferredUserLocaleForSession(extras.latestUserTextForLocale, extras.sessionPersistence)
-      : null);
   const engine = new SessionEngine({
     agentModelConfig,
     workspacePolicy: new WorkspacePolicy(workspacePath),
     skillLibrary,
-    preferredUserLocale,
     agentProfileId: extras?.agentProfileId ?? extras?.sessionPersistence?.readAgentProfileId() ?? "export",
     assetRoots: {
       widgetFonts: path.join(repoRoot, "assets", "fonts", "widgets"),
@@ -2414,7 +2418,7 @@ async function buildSession(
       widgetSize: extras?.widgetSize,
       templateMode: templateMode ?? skillBundleMode ?? null,
       assetApplierMode: extras?.assetApplierMode ?? templateMode === "asset-applier",
-      originalUserPrompt: extras?.latestUserTextForLocale,
+      originalUserPrompt: extras?.originalUserPrompt,
       agentProfileId: extras?.agentProfileId ?? extras?.sessionPersistence?.readAgentProfileId() ?? "export"
     },
     onDiagnostic: (message, meta) => terminalAgentLifecycleLog(`[agent] ${message}`, meta)
@@ -3894,15 +3898,13 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
       },
       hintedRouting
     );
-    const preferredUserLocale = resolvePreferredUserLocaleForSession(request.prompt, persistence);
     const session = await buildSession(routedTemplateMode, {
       toolSchemas: AGENT_TOOL_SCHEMAS,
       chatMediaAttachments: request.chatMediaAttachments,
       sessionPersistence: persistence,
       initialItems,
-      preferredUserLocale,
       agentProfileId,
-      latestUserTextForLocale: request.prompt,
+      originalUserPrompt: request.prompt,
       projectType: routedProjectType,
       widgetSize: routedWidgetSize,
       agentModelConfig: prepared.modelConfig

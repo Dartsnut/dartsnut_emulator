@@ -13,6 +13,7 @@ describe("chat title generation", () => {
     const prompt = buildChatTitlePrompt("Fix project switching");
     expect(prompt).toContain("Fix project switching");
     expect(prompt).toContain("3 to 7 words");
+    expect(prompt).not.toContain("user's language");
     expect(prompt).not.toContain("workspace context");
     expect(buildChatTitlePrompt(`start-${"x".repeat(5_000)}-end`)).not.toContain("-end");
   });

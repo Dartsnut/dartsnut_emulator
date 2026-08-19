@@ -3650,7 +3650,7 @@ export function App() {
       )}
       {showEmulatorPane ? <aside
         className={cn(
-          "right-pane col-start-2 flex min-h-0 h-full min-w-[360px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+          "right-pane col-start-2 flex min-h-0 h-full min-w-[360px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-emulator-bg)]",
           showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
         )}
       >

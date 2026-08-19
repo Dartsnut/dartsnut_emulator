@@ -1091,8 +1091,9 @@ export function App() {
   });
   const [appUpdate, setAppUpdate] = useState<UpdatePromptState | null>(null);
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
-  const [chatPaneWidth, setChatPaneWidth] = useState(getStoredChatPaneWidth);
+  const [legacyChatPaneWidth] = useState(getStoredChatPaneWidth);
   const [chatPaneRatio, setChatPaneRatio] = useState<number | null>(getStoredChatPaneRatio);
+  const [mainWorkspacePanelWidth, setMainWorkspacePanelWidth] = useState(0);
   const [chatPaneResizing, setChatPaneResizing] = useState(false);
   const [workspaceMenuWidth, setWorkspaceMenuWidth] = useState(getStoredWorkspaceMenuWidth);
   const [workspaceMenuCollapsed, setWorkspaceMenuCollapsed] = useState(getStoredWorkspaceMenuCollapsed);
@@ -1148,24 +1149,17 @@ export function App() {
     return () => document.removeEventListener("mousedown", dismiss);
   }, [projectMenuOpen]);
 
-  const mainWorkspacePanelWidth = useCallback(() => {
-    const measuredWidth = mainWorkspaceBodyRef.current?.clientWidth;
-    if (measuredWidth && measuredWidth > 0) {
-      return measuredWidth;
-    }
-    const rawWidth = typeof window === "undefined" ? 1320 : window.innerWidth;
-    return rawWidth - (workspaceMenuCollapsed ? 0 : workspaceMenuWidth);
+  const mainGridTemplateColumns = useMemo(() => {
+    const menuColumn = `${workspaceMenuCollapsed ? 0 : workspaceMenuWidth}px`;
+    return `${menuColumn} minmax(0,1fr)`;
   }, [workspaceMenuCollapsed, workspaceMenuWidth]);
 
-  const mainGridTemplateColumns = useMemo(() => {
-    const leftColumn = `${chatPaneWidth}px`;
-    const menuColumn = `${workspaceMenuCollapsed ? 0 : workspaceMenuWidth}px`;
-    const emulatorColumn = `minmax(${MIN_EMULATOR_PANE_WIDTH}px,1fr)`;
-    if (!showEmulatorPane) {
-      return `${menuColumn} minmax(0,1fr)`;
-    }
-    return `${menuColumn} ${leftColumn} ${emulatorColumn}`;
-  }, [chatPaneWidth, showEmulatorPane, workspaceMenuCollapsed, workspaceMenuWidth]);
+  const paneLayoutWidth = mainWorkspacePanelWidth > 0
+    ? mainWorkspacePanelWidth
+    : legacyChatPaneWidth + MIN_EMULATOR_PANE_WIDTH;
+  const preferredChatPaneRatio = chatPaneRatio
+    ?? chatPaneRatioFromWidth(legacyChatPaneWidth, paneLayoutWidth);
+  const chatPaneWidth = chatPaneWidthFromRatio(preferredChatPaneRatio, paneLayoutWidth);
 
   const mainWorkspaceGridTemplateColumns = useMemo(() => {
     if (!showEmulatorPane) {
@@ -1182,7 +1176,7 @@ export function App() {
     }) as CSSProperties,
     [mainGridTemplateColumns, mainWorkspaceGridTemplateColumns, workspaceMenuCollapsed, workspaceMenuWidth]
   );
-  const chatPaneResizeMax = Math.max(MIN_CHAT_PANE_WIDTH, mainWorkspacePanelWidth() - MIN_EMULATOR_PANE_WIDTH);
+  const chatPaneResizeMax = Math.max(MIN_CHAT_PANE_WIDTH, paneLayoutWidth - MIN_EMULATOR_PANE_WIDTH);
   const workspaceMenuResizeMax = MAX_WORKSPACE_MENU_WIDTH;
 
   const finishChatPaneResize = useCallback((target?: Element) => {
@@ -1203,11 +1197,11 @@ export function App() {
       pointerId: event.pointerId,
       startClientX: event.clientX,
       startWidth: chatPaneWidth,
-      panelWidth: mainWorkspacePanelWidth()
+      panelWidth: paneLayoutWidth
     };
     setChatPaneResizing(true);
     event.preventDefault();
-  }, [chatPaneWidth, mainWorkspacePanelWidth]);
+  }, [chatPaneWidth, paneLayoutWidth]);
 
   const handleChatPaneResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const activeDrag = chatPaneResizeDragRef.current;
@@ -1217,7 +1211,6 @@ export function App() {
     const targetWidth = activeDrag.startWidth + event.clientX - activeDrag.startClientX;
     const ratio = chatPaneRatioFromWidth(targetWidth, activeDrag.panelWidth);
     setChatPaneRatio(ratio);
-    setChatPaneWidth(chatPaneWidthFromRatio(ratio, activeDrag.panelWidth));
   }, []);
 
   const handleChatPaneResizePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1228,11 +1221,9 @@ export function App() {
 
   const handleChatPaneResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = event.shiftKey ? 80 : 24;
-    const panelWidth = mainWorkspacePanelWidth();
+    const panelWidth = paneLayoutWidth;
     const resizeTo = (targetWidth: number) => {
-      const ratio = chatPaneRatioFromWidth(targetWidth, panelWidth);
-      setChatPaneRatio(ratio);
-      setChatPaneWidth(chatPaneWidthFromRatio(ratio, panelWidth));
+      setChatPaneRatio(chatPaneRatioFromWidth(targetWidth, panelWidth));
     };
     if (event.key === "ArrowLeft") {
       event.preventDefault();
@@ -1253,7 +1244,7 @@ export function App() {
       event.preventDefault();
       resizeTo(panelWidth - MIN_EMULATOR_PANE_WIDTH);
     }
-  }, [chatPaneWidth, mainWorkspacePanelWidth]);
+  }, [chatPaneWidth, paneLayoutWidth]);
 
   const finishWorkspaceMenuResize = useCallback((target?: Element) => {
     const activeDrag = workspaceMenuResizeDragRef.current;
@@ -1756,26 +1747,27 @@ export function App() {
   }, [prompt]);
 
   useLayoutEffect(() => {
-    if (!showEmulatorPane || !mainWorkspaceBodyRef.current || typeof ResizeObserver === "undefined") {
+    if (!mainWorkspaceBodyRef.current || typeof ResizeObserver === "undefined") {
       return;
     }
     const body = mainWorkspaceBodyRef.current;
-    const syncPaneRatio = () => {
+    const syncPanelWidth = () => {
       const panelWidth = body.clientWidth;
-      if (panelWidth <= 0) {
-        return;
+      if (panelWidth > 0) {
+        setMainWorkspacePanelWidth(panelWidth);
       }
-      const ratio = chatPaneRatio ?? chatPaneRatioFromWidth(chatPaneWidth, panelWidth);
-      if (chatPaneRatio === null) {
-        setChatPaneRatio(ratio);
-      }
-      setChatPaneWidth(chatPaneWidthFromRatio(ratio, panelWidth));
     };
-    const observer = new ResizeObserver(syncPaneRatio);
+    const observer = new ResizeObserver(syncPanelWidth);
     observer.observe(body);
-    syncPaneRatio();
+    syncPanelWidth();
     return () => observer.disconnect();
-  }, [chatPaneRatio, chatPaneWidth, showEmulatorPane]);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (chatPaneRatio === null && mainWorkspacePanelWidth > 0) {
+      setChatPaneRatio(chatPaneRatioFromWidth(legacyChatPaneWidth, mainWorkspacePanelWidth));
+    }
+  }, [chatPaneRatio, legacyChatPaneWidth, mainWorkspacePanelWidth]);
 
   useEffect(() => {
     const onResize = () => {
@@ -3140,7 +3132,7 @@ export function App() {
           onKeyDown={handleWorkspaceMenuResizeKeyDown}
         />
       </aside>
-      <section className="main-workspace-panel col-start-2 col-end-4 row-start-2 min-h-0 max-[1100px]:col-end-3">
+      <section className="main-workspace-panel col-start-2 col-end-3 row-start-2 min-h-0 min-w-0">
         <div className="main-workspace-panel__chrome">
           <div className="main-workspace-panel__drag-region" aria-hidden />
           <div className="main-workspace-panel__controls">

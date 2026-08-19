@@ -2,7 +2,6 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
-  CHAT_PANE_WIDTH_STORAGE_KEY,
   CHAT_PANE_RATIO_STORAGE_KEY,
   DEFAULT_CHAT_PANE_WIDTH,
   DEFAULT_WORKSPACE_MENU_WIDTH,
@@ -14,68 +13,42 @@ const {
   chatPaneRatioFromWidth,
   chatPaneWidthFromRatio,
   clampChatPaneRatio,
-  clampChatPaneWidth,
   clampWorkspaceMenuWidth,
   getStoredChatPaneWidth,
   getStoredChatPaneRatio,
   getStoredWorkspaceMenuWidth,
   getStoredWorkspaceMenuCollapsed,
-  nextChatPaneWidthFromDrag,
   nextWorkspaceMenuWidthFromDrag,
-  setStoredChatPaneWidth,
   setStoredChatPaneRatio,
   setStoredWorkspaceMenuWidth,
   setStoredWorkspaceMenuCollapsed
 } = require("./splitPaneSizing.ts");
 
-test("clampChatPaneWidth keeps the chat pane inside desktop layout bounds", () => {
-  assert.equal(clampChatPaneWidth(120, 1280), MIN_CHAT_PANE_WIDTH);
-  assert.equal(clampChatPaneWidth(520, 1280), 520);
-  assert.equal(clampChatPaneWidth(1200, 1280), 900);
-});
-
-test("clampChatPaneWidth leaves a compact usable area for the emulator pane", () => {
-  assert.equal(clampChatPaneWidth(620, 900), 520);
-});
-
-test("nextChatPaneWidthFromDrag applies pointer delta from the drag start", () => {
-  assert.equal(nextChatPaneWidthFromDrag({
-    startClientX: 400,
-    currentClientX: 470,
-    startWidth: DEFAULT_CHAT_PANE_WIDTH,
-    viewportWidth: 1280
-  }), DEFAULT_CHAT_PANE_WIDTH + 70);
-});
-
-test("chat pane width round-trips through local storage", () => {
-  const values = new Map();
+test("legacy chat pane width remains readable for ratio migration", () => {
+  const values = new Map<string, string>();
   global.window = {
     localStorage: {
-      getItem: (key) => values.get(key) ?? null,
-      setItem: (key, value) => values.set(key, value)
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value)
     }
-  };
+  } as unknown as Window & typeof globalThis;
 
-  setStoredChatPaneWidth(731.6);
+  values.set("dartsnut-chat-pane-width", "732");
 
-  assert.equal(values.get(CHAT_PANE_WIDTH_STORAGE_KEY), "732");
   assert.equal(getStoredChatPaneWidth(), 732);
-  delete global.window;
+  Reflect.deleteProperty(global, "window");
 });
 
 test("invalid or unavailable stored widths use the default", () => {
   global.window = {
     localStorage: {
       getItem: () => "not-a-width",
-      setItem: () => {
-        throw new Error("storage unavailable");
-      }
+      setItem: () => undefined
     }
-  };
+  } as unknown as Window & typeof globalThis;
 
   assert.equal(getStoredChatPaneWidth(), DEFAULT_CHAT_PANE_WIDTH);
-  assert.doesNotThrow(() => setStoredChatPaneWidth(720));
-  delete global.window;
+  Reflect.deleteProperty(global, "window");
 });
 
 test("workspace menu width clamps and follows pointer movement", () => {
@@ -94,6 +67,12 @@ test("chat and emulator panes preserve ratio as panel width changes", () => {
   assert.equal(chatPaneWidthFromRatio(ratio, 1440), 765);
 });
 
+test("temporary minimum clamp does not replace the preferred ratio", () => {
+  const preferredRatio = 0.55;
+  assert.equal(chatPaneWidthFromRatio(preferredRatio, 700), 340);
+  assert.equal(chatPaneWidthFromRatio(preferredRatio, 1000), 550);
+});
+
 test("chat ratio keeps both pane minimums", () => {
   assert.equal(chatPaneWidthFromRatio(0, 1000), MIN_CHAT_PANE_WIDTH);
   assert.equal(chatPaneWidthFromRatio(1, 1000), 640);
@@ -101,49 +80,49 @@ test("chat ratio keeps both pane minimums", () => {
 });
 
 test("chat pane ratio round-trips through local storage", () => {
-  const values = new Map();
+  const values = new Map<string, string>();
   global.window = {
     localStorage: {
-      getItem: (key) => values.get(key) ?? null,
-      setItem: (key, value) => values.set(key, value)
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value)
     }
-  };
+  } as unknown as Window & typeof globalThis;
 
   setStoredChatPaneRatio(0.53125);
 
   assert.equal(values.get(CHAT_PANE_RATIO_STORAGE_KEY), "0.53125");
   assert.equal(getStoredChatPaneRatio(), 0.53125);
-  delete global.window;
+  Reflect.deleteProperty(global, "window");
 });
 
 test("workspace menu width round-trips through local storage", () => {
-  const values = new Map();
+  const values = new Map<string, string>();
   global.window = {
     localStorage: {
-      getItem: (key) => values.get(key) ?? null,
-      setItem: (key, value) => values.set(key, value)
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value)
     }
-  };
+  } as unknown as Window & typeof globalThis;
 
   setStoredWorkspaceMenuWidth(311.6);
 
   assert.equal(values.get(WORKSPACE_MENU_WIDTH_STORAGE_KEY), "312");
   assert.equal(getStoredWorkspaceMenuWidth(), 312);
-  delete global.window;
+  Reflect.deleteProperty(global, "window");
 });
 
 test("workspace menu collapsed state round-trips through local storage", () => {
-  const values = new Map();
+  const values = new Map<string, string>();
   global.window = {
     localStorage: {
-      getItem: (key) => values.get(key) ?? null,
-      setItem: (key, value) => values.set(key, value)
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value)
     }
-  };
+  } as unknown as Window & typeof globalThis;
 
   setStoredWorkspaceMenuCollapsed(true);
 
   assert.equal(values.get(WORKSPACE_MENU_COLLAPSED_STORAGE_KEY), "true");
   assert.equal(getStoredWorkspaceMenuCollapsed(), true);
-  delete global.window;
+  Reflect.deleteProperty(global, "window");
 });

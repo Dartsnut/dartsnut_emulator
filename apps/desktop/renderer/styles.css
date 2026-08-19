@@ -19,7 +19,14 @@ body {
   isolation: isolate;
   overflow-x: clip;
   overflow-y: visible;
-  --app-header-clearance: max(var(--window-control-inset-top), 40px);
+  --main-panel-chrome-height: 40px;
+  --workspace-header-clearance: max(var(--window-control-inset-top), 40px);
+  --workspace-menu-background:
+    linear-gradient(180deg, var(--color-surface-elevated), var(--color-bg-page) 38%),
+    var(--color-bg-page);
+  --splitter-highlight-hover: color-mix(in srgb, var(--color-text-primary) 18%, transparent);
+  --splitter-highlight-active: color-mix(in srgb, var(--color-text-primary) 30%, transparent);
+  background: var(--workspace-menu-background);
   transition: grid-template-columns 220ms var(--ease-out);
 }
 
@@ -47,19 +54,88 @@ body {
       rgba(45, 32, 24, 0.06) 6px);
 }
 
-.app-header {
+.window-chrome-drag-strip {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: var(--workspace-header-clearance);
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.workspace-header {
+  position: absolute;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max(44px, var(--workspace-menu-rendered-width));
+  background: transparent;
+  pointer-events: none;
+}
+
+.workspace-header > * {
+  pointer-events: auto;
+}
+
+.main-workspace-panel {
+  position: relative;
+  z-index: 10;
+  isolation: isolate;
+  overflow: hidden;
+  border-top: 1px solid var(--color-border);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--color-bg-page);
+  box-shadow: -8px 0 28px rgba(0, 0, 0, 0.18), var(--shadow-inset-subtle);
+}
+
+:root[data-platform="win32"] .main-workspace-panel {
+  margin-top: var(--window-control-inset-top);
+}
+
+.main-workspace-panel__chrome {
   position: absolute;
   z-index: 40;
   top: 0;
   right: 0;
   left: 0;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
+  display: flex;
+  height: var(--main-panel-chrome-height);
+  align-items: center;
+  padding: 5px 6px 5px 14px;
+  pointer-events: none;
 }
 
-.app-header::after {
-  display: none;
+.main-workspace-panel__drag-region {
+  min-width: 0;
+  flex: 1 1 auto;
+  align-self: stretch;
+  pointer-events: auto;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.main-workspace-panel__controls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  overflow: visible;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.main-workspace-panel__body {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: var(--main-workspace-grid-cols);
+  overflow: hidden;
 }
 
 .header-deploy-toggle {
@@ -115,17 +191,13 @@ body {
   outline: none;
 }
 
-:root[data-platform="win32"] .header-deploy-toggle {
-  transform: translateY(var(--window-control-inset-top));
-}
-
 .deploy-drawer-viewport {
   position: absolute;
   z-index: 32;
   top: 0;
-  right: var(--window-control-inset-right);
-  bottom: var(--window-control-inset-bottom);
-  width: min(420px, calc(100% - 54px));
+  right: 0;
+  bottom: 0;
+  width: min(420px, 100%);
   min-width: 360px;
   overflow: hidden;
 }
@@ -137,7 +209,7 @@ body {
 .deploy-drawer {
   width: 100%;
   height: 100%;
-  padding-top: var(--app-header-clearance);
+  padding-top: var(--main-panel-chrome-height);
   box-shadow: -18px 0 48px rgba(0, 0, 0, 0.28);
   transition: transform 220ms var(--ease-out), visibility 0s linear 0s;
   will-change: transform;
@@ -163,11 +235,8 @@ body {
   min-height: 0;
   flex-direction: column;
   align-items: stretch;
-  border-right: 1px solid var(--color-border);
-  padding: calc(var(--app-header-clearance) + 10px) 7px 10px;
-  background:
-    linear-gradient(180deg, var(--color-surface-elevated), var(--color-bg-page) 38%),
-    var(--color-bg-page);
+  padding: calc(var(--workspace-header-clearance) + 10px) 7px 10px;
+  background: var(--workspace-menu-background);
   box-shadow: var(--shadow-inset-subtle);
   -webkit-app-region: no-drag;
   app-region: no-drag;
@@ -195,22 +264,22 @@ body {
   bottom: 0;
   left: 6px;
   width: 2px;
-  background: color-mix(in srgb, var(--color-border) 68%, transparent);
-  opacity: 0.55;
+  background: transparent;
+  opacity: 0;
   transition: background-color 120ms ease, opacity 120ms ease, width 120ms ease;
 }
 
-.workspace-menu-splitter:hover::before,
-.workspace-menu-splitter:focus-visible::before,
-.workspace-menu-splitter--active::before {
-  left: 5px;
-  width: 4px;
-  background: color-mix(in srgb, var(--color-neon-mint) 62%, var(--color-border));
+.workspace-menu-splitter:hover::before {
+  background: var(--splitter-highlight-hover);
   opacity: 1;
 }
 
-.workspace-menu-splitter:focus-visible {
-  box-shadow: var(--shadow-focus-ring);
+.workspace-menu-splitter:focus-visible::before,
+.workspace-menu-splitter--active::before {
+  left: 5.5px;
+  width: 3px;
+  background: var(--splitter-highlight-active);
+  opacity: 1;
 }
 
 .workspace-menu--hidden {
@@ -518,7 +587,7 @@ body {
   width: min(820px, calc(100% - 64px));
   min-height: 100%;
   margin: 0 auto;
-  padding: calc(var(--app-header-clearance) + 22px) 0 48px;
+  padding: calc(var(--main-panel-chrome-height) + 22px) 0 48px;
 }
 .settings-page__body {
   display: flex;
@@ -2165,6 +2234,10 @@ kbd,
   box-shadow: inset 0 -2px 0 var(--color-neon-coral);
 }
 
+.main-workspace-panel__body > .right-pane {
+  padding-top: var(--main-panel-chrome-height);
+}
+
 .ui-chip {
   cursor: pointer;
   border-radius: var(--radius-pill);
@@ -2920,11 +2993,11 @@ kbd,
 }
 
 .left-rail--chat .timeline {
-  top: var(--app-header-clearance);
+  top: var(--main-panel-chrome-height);
 }
 
 .left-rail--chat .chat-rail-overlay--top {
-  top: var(--app-header-clearance);
+  top: var(--main-panel-chrome-height);
   padding: var(--rail-inset-top) var(--rail-inset-x) 0;
 }
 
@@ -2962,11 +3035,11 @@ kbd,
 }
 
 .left-rail:not(.left-rail--chat) {
-  padding-top: calc(var(--app-header-clearance) + 14px);
+  padding-top: calc(var(--main-panel-chrome-height) + 14px);
 }
 
 .runtime-config-main {
-  padding-top: var(--app-header-clearance);
+  padding-top: var(--main-panel-chrome-height);
 }
 
 .left-rail .timeline {
@@ -3033,25 +3106,25 @@ kbd,
   bottom: 0;
   left: 6px;
   width: 2px;
-  background: color-mix(in srgb, var(--color-border) 68%, transparent);
-  opacity: 0.55;
+  background: transparent;
+  opacity: 0;
   transition:
     background-color 120ms ease,
     opacity 120ms ease,
     width 120ms ease;
 }
 
-.chat-emulator-splitter:hover::before,
-.chat-emulator-splitter:focus-visible::before,
-.chat-emulator-splitter--active::before {
-  left: 5px;
-  width: 4px;
-  background: color-mix(in srgb, var(--color-neon-mint) 62%, var(--color-border));
+.chat-emulator-splitter:hover::before {
+  background: var(--splitter-highlight-hover);
   opacity: 1;
 }
 
-.chat-emulator-splitter:focus-visible {
-  box-shadow: var(--shadow-focus-ring);
+.chat-emulator-splitter:focus-visible::before,
+.chat-emulator-splitter--active::before {
+  left: 5.5px;
+  width: 3px;
+  background: var(--splitter-highlight-active);
+  opacity: 1;
 }
 
 .app-shell--column-resizing,
@@ -3061,6 +3134,10 @@ kbd,
 }
 
 @media (max-width: 1100px) {
+  .main-workspace-panel__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .header-menu-toggle,
   .workspace-menu-splitter,
   .chat-emulator-splitter {

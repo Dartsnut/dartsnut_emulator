@@ -117,7 +117,7 @@ export interface WindowChromeInsets {
 }
 
 /** Matches renderer `ThemeId`; used to style Windows `titleBarOverlay` and `nativeTheme`. */
-export type ShellUiTheme = "dark" | "light";
+export type ShellUiTheme = "system" | "dark" | "light";
 
 export type AppUpdateStatusKind =
   | "idle"

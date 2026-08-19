@@ -1916,26 +1916,26 @@ function logAgentEventToConsole(event: AgentEvent, mirrorToDevtools: boolean): v
 
 /** Logical px; must match `titleBarOverlay.height` on Windows when overlay is enabled. */
 const WINDOWS_TITLE_BAR_OVERLAY_HEIGHT = 32;
+type ResolvedShellUiTheme = Exclude<ShellUiTheme, "system">;
 
 /** Keep Windows caption controls readable over the renderer's transparent floating header. */
 const WINDOWS_SHELL_UI: Record<
-  ShellUiTheme,
+  ResolvedShellUiTheme,
   { titleBarColor: string; symbolColor: string; windowBackground: string }
 > = {
   dark: {
     titleBarColor: "#00000000",
     symbolColor: "#e0e0e0",
-    windowBackground: "#121212"
+    windowBackground: "#161210"
   },
   light: {
     titleBarColor: "#00000000",
     symbolColor: "#1a2332",
-    windowBackground: "#eef1f8"
+    windowBackground: "#ffffff"
   }
 };
 
-function applyShellUiTheme(theme: ShellUiTheme): void {
-  nativeTheme.themeSource = theme;
+function applyWindowsShellUiTheme(theme: ResolvedShellUiTheme): void {
   if (!win || win.isDestroyed()) {
     return;
   }
@@ -1955,18 +1955,37 @@ function applyShellUiTheme(theme: ShellUiTheme): void {
   win.setBackgroundColor(colors.windowBackground);
 }
 
+function applyShellUiTheme(theme: ShellUiTheme): void {
+  nativeTheme.themeSource = theme;
+  applyWindowsShellUiTheme(nativeTheme.shouldUseDarkColors ? "dark" : "light");
+}
+
+nativeTheme.on("updated", () => {
+  applyWindowsShellUiTheme(nativeTheme.shouldUseDarkColors ? "dark" : "light");
+});
+
 async function syncShellUiThemeFromDomSnapshot(): Promise<void> {
   if (!win || win.isDestroyed()) {
     return;
   }
   try {
-    const resolved = await win.webContents.executeJavaScript(
-      `document.documentElement.dataset.theme === "light" ? "light" : "dark"`,
+    const preference = await win.webContents.executeJavaScript(
+      `(function () {
+        try {
+          var stored = localStorage.getItem("dartsnut-theme");
+          if (stored === "system" || stored === "light" || stored === "dark") return stored;
+        } catch (e) {}
+        return "system";
+      })()`,
       true
     );
-    applyShellUiTheme(resolved === "light" ? "light" : "dark");
+    applyShellUiTheme(
+      preference === "light" || preference === "dark" || preference === "system"
+        ? preference
+        : "system"
+    );
   } catch {
-    applyShellUiTheme("dark");
+    applyShellUiTheme("system");
   }
 }
 
@@ -2644,7 +2663,7 @@ ipcMain.handle(IPCChannels.windowChromeInsets, (): WindowChromeInsets => {
 });
 
 ipcMain.handle(IPCChannels.shellUiTheme, (_event: unknown, theme: unknown): void => {
-  if (theme === "light" || theme === "dark") {
+  if (theme === "system" || theme === "light" || theme === "dark") {
     applyShellUiTheme(theme);
   }
 });

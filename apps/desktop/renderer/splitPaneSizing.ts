@@ -2,29 +2,15 @@ export const DEFAULT_CHAT_PANE_WIDTH = 680;
 export const MIN_CHAT_PANE_WIDTH = 320;
 export const MIN_EMULATOR_PANE_WIDTH = 360;
 export const CHAT_PANE_WIDTH_STORAGE_KEY = "dartsnut-chat-pane-width";
+export const CHAT_PANE_RATIO_STORAGE_KEY = "dartsnut-chat-pane-ratio";
 export const DEFAULT_WORKSPACE_MENU_WIDTH = 280;
 export const MIN_WORKSPACE_MENU_WIDTH = 190;
 export const MAX_WORKSPACE_MENU_WIDTH = 420;
 export const WORKSPACE_MENU_WIDTH_STORAGE_KEY = "dartsnut-workspace-menu-width";
 export const WORKSPACE_MENU_COLLAPSED_STORAGE_KEY = "dartsnut-workspace-menu-collapsed";
-const SPLIT_LAYOUT_GUTTER_PX = 20;
 
 function finiteNumber(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
-}
-
-export function maxChatPaneWidthForViewport(viewportWidth: number): number {
-  const availableWidth =
-    finiteNumber(viewportWidth, DEFAULT_CHAT_PANE_WIDTH + MIN_EMULATOR_PANE_WIDTH + SPLIT_LAYOUT_GUTTER_PX) -
-    MIN_EMULATOR_PANE_WIDTH -
-    SPLIT_LAYOUT_GUTTER_PX;
-  return Math.max(MIN_CHAT_PANE_WIDTH, availableWidth);
-}
-
-export function clampChatPaneWidth(width: number, viewportWidth: number): number {
-  const rounded = Math.round(finiteNumber(width, DEFAULT_CHAT_PANE_WIDTH));
-  const maxWidth = maxChatPaneWidthForViewport(viewportWidth);
-  return Math.min(Math.max(rounded, MIN_CHAT_PANE_WIDTH), maxWidth);
 }
 
 export function getStoredChatPaneWidth(): number {
@@ -41,25 +27,27 @@ export function getStoredChatPaneWidth(): number {
   }
 }
 
-export function setStoredChatPaneWidth(width: number): void {
-  if (typeof window === "undefined" || !Number.isFinite(width)) {
-    return;
+export function getStoredChatPaneRatio(): number | null {
+  if (typeof window === "undefined") {
+    return null;
   }
   try {
-    window.localStorage.setItem(CHAT_PANE_WIDTH_STORAGE_KEY, String(Math.round(width)));
+    const ratio = Number(window.localStorage.getItem(CHAT_PANE_RATIO_STORAGE_KEY));
+    return Number.isFinite(ratio) && ratio > 0 && ratio < 1 ? ratio : null;
   } catch {
-    // Storage is optional and may be unavailable in restricted renderer contexts.
+    return null;
   }
 }
 
-export function nextChatPaneWidthFromDrag(input: {
-  startClientX: number;
-  currentClientX: number;
-  startWidth: number;
-  viewportWidth: number;
-}): number {
-  const delta = finiteNumber(input.currentClientX, input.startClientX) - finiteNumber(input.startClientX, 0);
-  return clampChatPaneWidth(finiteNumber(input.startWidth, DEFAULT_CHAT_PANE_WIDTH) + delta, input.viewportWidth);
+export function setStoredChatPaneRatio(ratio: number): void {
+  if (typeof window === "undefined" || !Number.isFinite(ratio)) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(CHAT_PANE_RATIO_STORAGE_KEY, String(ratio));
+  } catch {
+    // Storage is optional and may be unavailable in restricted renderer contexts.
+  }
 }
 
 export function clampWorkspaceMenuWidth(width: number): number {
@@ -99,6 +87,23 @@ export function nextWorkspaceMenuWidthFromDrag(input: {
 }): number {
   const delta = finiteNumber(input.currentClientX, input.startClientX) - finiteNumber(input.startClientX, 0);
   return clampWorkspaceMenuWidth(finiteNumber(input.startWidth, DEFAULT_WORKSPACE_MENU_WIDTH) + delta);
+}
+
+export function clampChatPaneRatio(ratio: number, panelWidth: number): number {
+  const width = Math.max(1, Math.round(finiteNumber(panelWidth, DEFAULT_CHAT_PANE_WIDTH + MIN_EMULATOR_PANE_WIDTH)));
+  const minRatio = MIN_CHAT_PANE_WIDTH / width;
+  const maxRatio = Math.max(minRatio, (width - MIN_EMULATOR_PANE_WIDTH) / width);
+  return Math.min(Math.max(finiteNumber(ratio, DEFAULT_CHAT_PANE_WIDTH / width), minRatio), maxRatio);
+}
+
+export function chatPaneWidthFromRatio(ratio: number, panelWidth: number): number {
+  const width = Math.max(1, Math.round(finiteNumber(panelWidth, DEFAULT_CHAT_PANE_WIDTH + MIN_EMULATOR_PANE_WIDTH)));
+  return Math.round(clampChatPaneRatio(ratio, width) * width);
+}
+
+export function chatPaneRatioFromWidth(chatWidth: number, panelWidth: number): number {
+  const width = Math.max(1, Math.round(finiteNumber(panelWidth, DEFAULT_CHAT_PANE_WIDTH + MIN_EMULATOR_PANE_WIDTH)));
+  return clampChatPaneRatio(finiteNumber(chatWidth, DEFAULT_CHAT_PANE_WIDTH) / width, width);
 }
 
 export function getStoredWorkspaceMenuCollapsed(): boolean {

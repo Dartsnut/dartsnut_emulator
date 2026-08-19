@@ -89,6 +89,6 @@ export function applyTheme(theme: ThemeId): void {
   document.documentElement.dataset.theme = resolved;
   setStoredTheme(theme);
   if (typeof window !== "undefined" && window.dartsnutApi?.setShellUiTheme) {
-    void window.dartsnutApi.setShellUiTheme(resolved);
+    void window.dartsnutApi.setShellUiTheme(theme);
   }
 }

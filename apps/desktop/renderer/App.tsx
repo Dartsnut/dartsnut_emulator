@@ -177,8 +177,7 @@ function machineOptionLabel(machine: MachineMcpQuestionMachine): string {
   return details ? `${name}  ${details}` : name;
 }
 
-type RightPaneTab = "emulator" | "assets";
-type DeployPaneTab = "deploy" | "games";
+type DeployPaneTab = "deploy" | "games" | "assets";
 type CommunityAuthIntent = "deploy-devices" | "my-games" | "llm-use";
 
 const EMPTY_WIDGET_CONFIGS: Record<WidgetConfigScope, WidgetConfigSnapshot> = {
@@ -1044,7 +1043,6 @@ export function App() {
   const [savingProviderSettings, setSavingProviderSettings] = useState(false);
   const [assetManifest, setAssetManifest] = useState<AssetManifest | null>(null);
   const [pendingChangeSlotIds, setPendingChangeSlotIds] = useState<string[]>([]);
-  const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>("emulator");
   const [deployPaneTab, setDeployPaneTab] = useState<DeployPaneTab>("deploy");
   const [deployDrawerOpen, setDeployDrawerOpen] = useState(false);
   const [deployEligibility, setDeployEligibility] = useState<DeployEligibility>({
@@ -1489,22 +1487,25 @@ export function App() {
 
   useEffect(() => {
     trackScreenView(screen);
-    setAnalyticsViewContext(screen, screen === "settings" ? null : rightPaneTab);
-  }, [screen, rightPaneTab]);
+    const activePanel = deployDrawerOpen
+      ? deployPaneTab === "games" ? "community" : deployPaneTab
+      : "emulator";
+    setAnalyticsViewContext(screen, screen === "settings" ? null : activePanel);
+  }, [deployDrawerOpen, deployPaneTab, screen]);
 
   useEffect(() => {
     if (screen !== "main") {
       return;
     }
-    trackPanelView(rightPaneTab, "right_pane");
-  }, [rightPaneTab, screen]);
+    trackPanelView("emulator", "right_pane");
+  }, [screen]);
 
   useEffect(() => {
-    if (screen !== "main" || !deployEligible) {
+    if (screen !== "main" || !deployEligible || !deployDrawerOpen) {
       return;
     }
-    trackPanelView(deployPaneTab === "games" ? "community" : "deploy", "deploy_pane");
-  }, [deployEligible, deployPaneTab, screen]);
+    trackPanelView(deployPaneTab === "games" ? "community" : deployPaneTab, "deploy_pane");
+  }, [deployDrawerOpen, deployEligible, deployPaneTab, screen]);
 
 
   const requestCommunityAuth = useCallback((intent: CommunityAuthIntent, force = false) => {
@@ -2278,22 +2279,19 @@ export function App() {
       ? appUpdate
       : null;
 
-  // Reset to Emulator tab when the active tab is no longer available.
-  useEffect(() => {
-    if (!assetManifest && rightPaneTab === "assets") {
-      setRightPaneTab("emulator");
-    }
-  }, [assetManifest, deployEligible, rightPaneTab]);
-
   useEffect(() => {
     setDeployDrawerOpen(false);
   }, [bootstrap?.activeProjectId]);
 
   useEffect(() => {
-    if (!deployEligible || (gamesTabDisabled && deployPaneTab === "games")) {
+    if (
+      !deployEligible ||
+      (gamesTabDisabled && deployPaneTab === "games") ||
+      (!assetManifest && deployPaneTab === "assets")
+    ) {
       setDeployPaneTab("deploy");
     }
-  }, [deployEligible, deployPaneTab, gamesTabDisabled]);
+  }, [assetManifest, deployEligible, deployPaneTab, gamesTabDisabled]);
 
   useEffect(() => {
     const ws = bootstrap?.workspaceRoot;
@@ -3656,67 +3654,14 @@ export function App() {
           showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
         )}
       >
-        {assetManifest ? (
-            <div className="right-pane-tabs" role="tablist" aria-label="Right pane view">
-              <button
-                type="button"
-                className={cn("ui-tab right-pane-tab", rightPaneTab === "emulator" && "ui-tab--active")}
-                role="tab"
-                aria-selected={rightPaneTab === "emulator"}
-                onClick={() => setRightPaneTab("emulator")}
-                data-analytics-id="panel_emulator"
-                data-analytics-area="navigation"
-              >
-                Emulator
-              </button>
-              {assetManifest ? (
-                <button
-                  type="button"
-                  className={cn("ui-tab right-pane-tab", rightPaneTab === "assets" && "ui-tab--active")}
-                  role="tab"
-                  aria-selected={rightPaneTab === "assets"}
-                  onClick={() => setRightPaneTab("assets")}
-                  data-analytics-id="panel_assets"
-                  data-analytics-area="navigation"
-                >
-                  Assets
-                  {pendingChangeSlotIds.length > 0 ? (
-                    <span
-                      className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-badge-bg)] px-1.5 text-[11px] font-semibold text-[var(--color-badge-text)]"
-                      aria-label={`${pendingChangeSlotIds.length} pending`}
-                    >
-                      {pendingChangeSlotIds.length}
-                    </span>
-                  ) : null}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
         <div className="flex min-h-0 flex-1 flex-col">
-            <div
-              className={cn(
-                "flex min-h-0 flex-1 flex-col",
-                Boolean(assetManifest) && rightPaneTab !== "emulator" && "hidden"
-              )}
-            >
+            <div className="flex min-h-0 flex-1 flex-col">
               <EmulatorPanel
                 widgetConfig={widgetConfigs.emulator}
                 widgetValuesByConfig={widgetValuesByConfig}
                 onWidgetValuesChange={updateWidgetValues}
               />
             </div>
-          {assetManifest && bootstrap?.workspaceRoot ? (
-              <div className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "assets" && "hidden")}>
-                <AssetManagerPanel
-                  workspacePath={bootstrap.workspaceRoot}
-                  manifest={assetManifest}
-                  pendingChangeSlotIds={pendingChangeSlotIds}
-                  onAllowAgentIngress={() => {
-                    discardAgentEventsRef.current = false;
-                  }}
-                />
-              </div>
-            ) : null}
         </div>
       </aside> : null}
         </div>
@@ -3765,6 +3710,27 @@ export function App() {
             >
               Community
             </button>
+            {assetManifest ? (
+              <button
+                type="button"
+                className={cn("ui-tab", deployPaneTab === "assets" && "ui-tab--active")}
+                role="tab"
+                aria-selected={deployPaneTab === "assets"}
+                onClick={() => setDeployPaneTab("assets")}
+                data-analytics-id="panel_assets"
+                data-analytics-area="navigation"
+              >
+                Assets
+                {pendingChangeSlotIds.length > 0 ? (
+                  <span
+                    className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-badge-bg)] px-1.5 text-[11px] font-semibold text-[var(--color-badge-text)]"
+                    aria-label={`${pendingChangeSlotIds.length} pending`}
+                  >
+                    {pendingChangeSlotIds.length}
+                  </span>
+                ) : null}
+              </button>
+            ) : null}
           </div>
           <div className="flex min-h-0 flex-1 flex-col">
             <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "deploy" && "hidden")}>
@@ -3791,6 +3757,18 @@ export function App() {
                 onSubmitProgress={handleCommunitySubmitProgress}
               />
             </div>
+            {assetManifest && bootstrap?.workspaceRoot ? (
+              <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "assets" && "hidden")}>
+                <AssetManagerPanel
+                  workspacePath={bootstrap.workspaceRoot}
+                  manifest={assetManifest}
+                  pendingChangeSlotIds={pendingChangeSlotIds}
+                  onAllowAgentIngress={() => {
+                    discardAgentEventsRef.current = false;
+                  }}
+                />
+              </div>
+            ) : null}
           </div>
         </aside>
         </div>

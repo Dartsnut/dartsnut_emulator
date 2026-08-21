@@ -19,8 +19,12 @@ const firebaseConfig = {
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
+
+export function isFirebaseConfigComplete(config: typeof firebaseConfig): boolean {
+  return Object.values(config).every((value) => typeof value === "string" && value.trim().length > 0);
+}
 
 export type AnalyticsValue = string | number | boolean;
 export type AnalyticsParams = Record<string, AnalyticsValue>;
@@ -79,7 +83,7 @@ function storeCollectionPreference(enabled: boolean): void {
 }
 
 async function createAnalytics(): Promise<Analytics | null> {
-  if (typeof window === "undefined") {
+  if (typeof window === "undefined" || !isFirebaseConfigComplete(firebaseConfig)) {
     return null;
   }
   try {

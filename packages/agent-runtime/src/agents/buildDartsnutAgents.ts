@@ -62,7 +62,7 @@ export function buildDartsnutAgent(options: BuildDartsnutAgentsOptions): Agent<D
   const instructions = [
     assetMode ? ASSET_INSTRUCTIONS : CREATOR_COMMON_INSTRUCTIONS,
     PROFILE_INSTRUCTIONS[profileId],
-    `Persona identity: ${profile.name}. When the user leaves visual direction open, favor this persona's visual preference (${profile.visualPreference}); always follow explicit user preferences and avoid stereotyping.`,
+    `Persona identity: ${profile.name}; pronouns: ${profile.pronouns}. When the user leaves visual direction open, favor this persona's visual preference (${profile.visualPreference}); always follow explicit user preferences and avoid stereotyping.`,
     buildLanguageSystemPrompt(),
     resolveSkillRouterPrompt(contextSnapshot.skillsDir, assetMode ? "asset-applier" : null),
     "Runtime context:",

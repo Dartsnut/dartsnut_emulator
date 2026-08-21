@@ -1,13 +1,18 @@
 import path from "node:path";
 import fs from "node:fs";
-import os from "node:os";
+import { randomUUID } from "node:crypto";
 import dotenv from "dotenv";
 import { spawn, spawnSync } from "node:child_process";
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
-import type { MessageBoxOptions, OpenDialogOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, session, shell } from "electron";
+import type { MessageBoxOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
-import { devLog, isDevLoggingEnabled } from "./devOnlyLog";
+import { AgentRunCoordinator } from "./agentRunCoordinator";
+import { appendDevFileLog, devLog, getDevLogPath, isDevLoggingEnabled } from "./devOnlyLog";
 import { createPublishTarball } from "./publishPackage";
+import {
+  readWorkspaceProjectClassification,
+  syncWorkspaceProjectMetadata
+} from "./workspaceProjectMetadata";
 import { buildPythonScriptLaunch, pythonRuntimeDir, runtimeDir, uvBinaryPath, venvPythonPath } from "./pythonRuntime";
 import { ensureRuntime, type DownloadProgress } from "./pythonRuntimeDownloader";
 import {
@@ -18,12 +23,15 @@ import {
   type BindSlotRequest,
   type BindSlotResponse,
   type BootstrapState,
+  type ProjectTree,
+  type ProjectCreateRequest,
+  type ProjectSelectRequest,
+  type ChatCreateRequest,
+  type ProjectSwitchProgress,
   type AppUpdateStatus,
   type AppUpdateInstallResponse,
-  type SaveTempWorkspaceResponse,
-  isTemporaryWorkspaceForBootstrap,
-  normalizeFsPathComparable,
-  workspaceNeedsCreationIntake,
+  type AppUpdateDownloadResponse,
+  type AppUpdateCheckResponse,
   type DeployActionResponse,
   type DeployConnectRequest,
   type DeployConnectResponse,
@@ -40,47 +48,55 @@ import {
   type ReadPreviewRequest,
   type ReadPreviewResponse,
   type SaveProviderSettingsRequest,
-  type UserDefineProviderSettings,
+  type CustomProviderSettings,
   type UnbindSlotRequest,
   type UnbindSlotResponse,
-  validateDeployWorkspaceConf,
-  WIDGET_DISPLAY_SIZES,
   type WidgetSize,
   type ShellUiTheme,
   type WindowChromeInsets,
   type SendPromptResponse,
   type MainProcessConsoleMirrorPayload,
-  type IntakeSubmitQuestionAnswerRequest,
-  type IntakeSubmitQuestionAnswerResponse,
   type MachineMcpQuestionMachine,
   type MachineMcpSubmitQuestionAnswerRequest,
   type MachineMcpSubmitQuestionAnswerResponse,
+  type AgentQuestionPrompt,
+  type AgentQuestionAnswerRequest,
+  type AgentQuestionAnswerResponse,
   type CommunitySessionInfo,
+  type CommunityCancelGoogleLoginResponse,
+  type CommunitySetPasswordRequest,
+  type CommunitySetPasswordResponse,
   type CommunityLoginRequest,
   type CommunityLoginResponse,
   type CommunityLogoutResponse,
+  type CommunityGetLlmQuotaResponse,
   type CommunityListDeployDevicesResponse,
   type CommunityListMyGamesResponse,
   type CommunityGetPublishOptionsResponse,
+  type CommunityListAppVersionsRequest,
+  type CommunityListAppVersionsResponse,
   type CommunityCreateAppRequest,
   type CommunityCreateAppResponse,
   type CommunityUploadNativeImageRequest,
   type CommunityUploadNativeImageResponse,
   type CommunitySubmitAppVersionRequest,
   type CommunitySubmitAppVersionResponse,
+  type CommunityUpdateWorkspaceVersionRequest,
+  type CommunityUpdateWorkspaceVersionResponse,
   type CommunitySubmitProgress,
   type CommunitySubmitProgressStage,
   type CommunityWithdrawAppVersionRequest,
   type CommunityWithdrawAppVersionResponse,
   type CommunityAppSummary,
-  type CommunityVersionSummary,
   type CommunityWorkspaceDefaults,
   type AgentSessionWorkspaceSummary,
-  resolveSessionUserLocale,
-  type UserLocale,
-  buildCreationIntakeUserPrompt,
+  type AgentProfileId,
+  normalizeAgentProfileId,
+  buildPromptWithChatMediaAttachments,
   parseWidgetFontCatalogFromManifest,
-  type WidgetFontCatalogEntry
+  type WidgetFontCatalogEntry,
+  type WidgetConfigScope,
+  type WidgetConfigSnapshot
 } from "@dartsnut/shared-ipc";
 import {
   loadProviderConfig,
@@ -90,44 +106,63 @@ import {
   SessionEngine,
   AgentSessionRuntime,
   WorkspacePolicy,
-  bundleForTemplateMode,
-  resolveSkillRouterPrompt,
   allowedDeferredSkillIdsForMode,
   AGENT_TOOL_SCHEMAS,
   AgentSessionPersistence,
   isAgentSessionPersistenceDisabledByEnv,
   AGENT_STOPPED_MESSAGE,
-  executeIntakeHostTool,
-  nextAfterProjectType,
-  parseConfWidgetSize,
-  precheckAskQuestion,
-  isIntakeStateReady,
-  type IntakeToolState,
-  type ChatMessage
+  readWorkspaceCreatorHints,
+  resolveCreatorRouting,
+  type AgentInputItem,
+  type AgentModelConfig,
+  type ProviderConfig
 } from "@dartsnut/agent-runtime";
 import { formatAgentEventForConsole } from "./agentEventConsole";
+import { fallbackChatTitle, generateChatTitle } from "./chatTitle";
 import { PACKAGED_ENV } from "./packagedEnv.generated";
 import {
-  ensureRuntimeDartsnutLlmConfig,
-  primeRuntimeDartsnutLlmConfig,
-  readCachedRuntimeDartsnutLlmConfig
-} from "./dartsnutLlmConfig";
+  DARTSNUT_LLM_BRIDGE_API_KEY_PLACEHOLDER,
+  DARTSNUT_LLM_MODEL_ALIAS,
+  dartsnutLlmBridgeModelBaseUrl,
+  startDartsnutLlmBridgeRun,
+  type DartsnutLlmBridgeFailure,
+  type DartsnutLlmBridgeRun
+} from "./dartsnutLlmBridge";
 import {
   EMULATOR_IPC_CHANNELS,
   beginEmulatorSwitch,
+  buildEmulatorObservationFromFrame,
   handleEmulatorSwitchFrame,
   handleEmulatorSwitchState,
   type EmulatorCommand,
   type EmulatorFrame,
+  type EmulatorInputAction,
   type EmulatorLogEntry,
+  type EmulatorScenarioStep,
   type EmulatorStateSnapshot,
   type EmulatorSwitchGate,
 } from "@dartsnut/emulator-protocol";
+import {
+  encodeHardwareMockupPngBase64,
+  encodePanelPngsBase64,
+  encodeRgbPngBase64,
+  normalizeEmulatorInputAction,
+  summarizeScenarioRequest
+} from "./emulatorAgentTools";
+import { copyEmulatorStateSnapshot } from "./emulatorState";
+import { executePixelLabGenerationForAgent } from "./pixellabAgentTool";
 import { AssetManager } from "./assetManager";
+import { ProjectStore } from "./projectStore";
 import { DeployMachineSession } from "./deployMachine";
 import { createCommunityClient, type CommunityClient } from "./communityClient";
 import { clearCommunityAuth, readCommunityAuth, writeCommunityAuth } from "./communityAuth";
+import { readWidgetConfigSnapshot, watchWidgetConfigFile, widgetConfigPathForScope } from "./widgetConfig";
 import { signInWithGoogleOAuth } from "./googleOAuth";
+import {
+  configureSystemProxySession,
+  initializeDesktopNetwork,
+  type DesktopNetwork
+} from "./desktopNetwork";
 import {
   DEFAULT_WINDOW_HEIGHT,
   DEFAULT_WINDOW_WIDTH,
@@ -137,39 +172,114 @@ import {
   type PersistedWindowState
 } from "./windowState";
 import {
-  decideBeforeQuitBridgeAction,
-  decideBeforeQuitDeployAction,
-  shouldAllocateTempWorkspaceAfterDiscard,
-  type TempWorkspaceGuardReason
+  createShutdownCleanupRunner
 } from "./quitFlow";
 import {
   getAppUpdateStatus,
+  getAutoUpdateEnabled,
+  setAutoUpdateEnabled,
+  downloadAvailableAppUpdate,
+  checkForAppUpdate,
   installDownloadedAppUpdate,
   isDownloadedAppUpdateReady,
   startAppUpdateCheck
 } from "./appUpdater";
+import { normalizePoloAiResponse } from "./responsesCompatibility";
+import { fetchBufferedModelResponse } from "./bufferedModelFetch";
 
 let win: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
-/** Persisted unsaved temp workspace directory (under OS temp), or null. */
-let trackedTempWorkspacePath: string | null = null;
-/** When true, the next window close can continue without showing the temp-workspace prompt again. */
-let allowWindowCloseWithoutTempPrompt = false;
-/** Set once app quit has been requested so the guarded close can resume quitting after save/discard. */
-let appQuitRequested = false;
-/** Temp dir to remove on `will-quit` after the bridge is killed (quit-time discard). */
-let pendingTempDirRemovalOnQuit: string | null = null;
+let activeProjectId: string | null = null;
+let activeChatId: string | null = null;
+let projectStore: ProjectStore | null = null;
+let projectSwitchInFlight: Promise<boolean> | null = null;
 let firstRunComplete = false;
 let bridgeProcess: ReturnType<typeof spawn> | null = null;
 /** Launch config key for the current bridge (restart bridge when this changes). */
 let bridgeRuntimeKey: string | null = null;
 /** True after graceful bridge teardown so quit does not orphan pygame/SDL audio. */
 let emulatorBridgeTeardownDone = false;
-let emulatorBridgeTeardownInFlight: Promise<void> | null = null;
-/** True after quit-time remote deploy cleanup has restored the connected machine. */
-let deployMachineRestoreDone = false;
-let deployMachineRestoreInFlight: Promise<void> | null = null;
-let quitCleanupRequitScheduled = false;
+/** Current backend-backed LLM run, closed immediately when a user stops or quits the app. */
+let activeDartsnutLlmBridgeRun: DartsnutLlmBridgeRun | null = null;
+let desktopNetwork: DesktopNetwork | null = null;
+
+function cloudFetch(): typeof fetch {
+  return desktopNetwork?.fetch ?? fetch;
+}
+
+function customProviderFetch(): typeof fetch {
+  const fetchImpl = cloudFetch();
+  return async (input, init) => {
+    const startedAt = Date.now();
+    const requestUrl = input instanceof Request ? input.url : String(input);
+    let parsedBody: Record<string, unknown> | null = null;
+    const body = typeof init?.body === "string" ? init.body : undefined;
+    if (body) {
+      try {
+        const value = JSON.parse(body) as unknown;
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+          parsedBody = value as Record<string, unknown>;
+        }
+      } catch {
+        // Keep diagnostics structural when request body is not JSON.
+      }
+    }
+    let url: URL | null = null;
+    try {
+      url = new URL(requestUrl);
+    } catch {
+      // URL validation happens before run; retain safe fallback below.
+    }
+    const inputValue = parsedBody?.input;
+    const inputItems = Array.isArray(inputValue) ? inputValue.length : inputValue == null ? undefined : 1;
+    const tools = Array.isArray(parsedBody?.tools) ? parsedBody.tools : [];
+    terminalAgentLifecycleLog("[agent] custom model request", {
+      method: init?.method ?? (input instanceof Request ? input.method : "GET"),
+      host: url?.host,
+      path: url?.pathname,
+      model: typeof parsedBody?.model === "string" ? parsedBody.model : undefined,
+      stream: parsedBody?.stream === true,
+      inputItems,
+      toolCount: tools.length,
+      bodyBytes: body ? Buffer.byteLength(body, "utf8") : undefined
+    });
+    try {
+      const response = normalizePoloAiResponse(await fetchBufferedModelResponse(fetchImpl, input, init), requestUrl);
+      const meta = {
+        host: url?.host,
+        path: url?.pathname,
+        status: response.status,
+        ok: response.ok,
+        contentType: response.headers.get("content-type") ?? undefined,
+        requestId: response.headers.get("x-request-id") ?? response.headers.get("request-id") ?? undefined,
+        elapsedMs: Date.now() - startedAt
+      };
+      if (!response.ok) {
+        let errorBody: string | undefined;
+        try {
+          errorBody = (await response.clone().text()).slice(0, 2000);
+        } catch {
+          // Some streaming responses cannot be cloned/read after failure.
+        }
+        terminalAgentLifecycleLog("[agent] custom model rejected", {
+          ...meta,
+          ...(errorBody ? { errorBody } : {})
+        });
+      } else {
+        terminalAgentLifecycleLog("[agent] custom model response", meta);
+      }
+      return response;
+    } catch (error) {
+      terminalAgentLifecycleLog("[agent] custom model request failed", {
+        host: url?.host,
+        path: url?.pathname,
+        elapsedMs: Date.now() - startedAt,
+        error: error instanceof Error ? `${error.name} ${error.message}` : String(error)
+      });
+      throw error;
+    }
+  };
+}
 
 // Ensure consistent app name for getPath('userData') in both dev and packaged modes
 if (!app.isPackaged) {
@@ -179,8 +289,21 @@ if (!app.isPackaged) {
 // Bypass system proxy/VPN for localhost in development to prevent SSL interception
 // of the Vite dev server connection by tools like Surge Enhanced Mode
 if (!app.isPackaged && process.env.VITE_DEV_SERVER_URL) {
-  app.commandLine.appendSwitch('proxy-bypass-list', '127.0.0.1,localhost');
+  app.commandLine.appendSwitch("proxy-bypass-list", "<local>;127.0.0.1;localhost");
 }
+
+app.on("login", (event, _webContents, _details, authInfo, callback) => {
+  if (!authInfo.isProxy) {
+    return;
+  }
+  event.preventDefault();
+  console.warn("[network] authenticated system proxies are unsupported", {
+    scheme: authInfo.scheme,
+    host: authInfo.host,
+    port: authInfo.port
+  });
+  callback();
+});
 
 const repoRoot = app.isPackaged
   ? process.resourcesPath
@@ -191,20 +314,12 @@ const repoEnvPath = path.join(repoRoot, ".env");
 if (app.isPackaged) {
   for (const [key, value] of Object.entries(PACKAGED_ENV)) {
     if (!process.env[key]) {
-      process.env[key] = value;
+      process.env[key] = String(value);
     }
   }
 } else if (fs.existsSync(repoEnvPath)) {
   dotenv.config({ path: repoEnvPath });
 }
-void primeRuntimeDartsnutLlmConfig()
-  .catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    devLog.warn(`[provider] Dartsnut LLM config load failed: ${message}`);
-  })
-  .finally(() => {
-    emitBootstrapStateToRenderer();
-  });
 let pythonExec: string | null = null;
 let pythonRuntimeStatus: string | null = null;
 let pythonRuntimeProgress: PythonRuntimeProgress = {
@@ -232,36 +347,84 @@ const widgetFontManifestRelativePath = "assets/fonts/widgets/font_manifest.json"
 
 let deployMachineSession: DeployMachineSession | null = null;
 
-/** Set while `sendPrompt` is running; used to abort the provider + tool loop from the renderer Stop control. */
-let sendPromptAbortController: AbortController | null = null;
+/** Serializes prompt replacement/cancellation through provider and backend run cleanup. */
+const sendPromptCoordinator = new AgentRunCoordinator();
+/** Background title runs yield immediately when a real agent prompt starts. */
+const chatTitleCoordinator = new AgentRunCoordinator();
 
-/** Poll `conf.json` like `AssetManager` does for the manifest — survives atomic writes; works before the file exists. */
-const DEPLOY_CONF_POLL_MS = 600;
-let deployConfWatch: { watchedPath: string; workspacePath: string } | null = null;
+/** Set while desktop Google OAuth is waiting for the browser callback or login API. */
+let communityGoogleLoginAbortController: AbortController | null = null;
+
+/** Poll project metadata files; survives atomic writes and works before either file exists. */
+const PROJECT_FILE_POLL_MS = 600;
+let deployConfWatch: { watchedPaths: string[]; workspacePath: string } | null = null;
+const widgetConfigWatches = new Map<WidgetConfigScope, () => void>();
+
+function currentWidgetConfigSnapshot(scope: WidgetConfigScope): WidgetConfigSnapshot {
+  return readWidgetConfigSnapshot(scope, workspaceRoot, lastWidgetDir);
+}
+
+function emitWidgetConfigSnapshot(scope: WidgetConfigScope): void {
+  sendToRenderer(IPCChannels.widgetConfigChanged, currentWidgetConfigSnapshot(scope));
+}
+
+function stopWidgetConfigWatchers(): void {
+  for (const stopWatching of widgetConfigWatches.values()) {
+    try {
+      stopWatching();
+    } catch {
+      // ignore
+    }
+  }
+  widgetConfigWatches.clear();
+}
+
+function startWidgetConfigWatchers(): void {
+  stopWidgetConfigWatchers();
+  for (const scope of ["workspace", "emulator"] as const) {
+    const watchedPath = widgetConfigPathForScope(scope, workspaceRoot, lastWidgetDir);
+    if (watchedPath) {
+      const pyprojectPath = path.join(path.dirname(watchedPath), "pyproject.toml");
+      const stopConfWatch = watchWidgetConfigFile(watchedPath, () => emitWidgetConfigSnapshot(scope), PROJECT_FILE_POLL_MS);
+      const stopPyprojectWatch = watchWidgetConfigFile(pyprojectPath, () => emitWidgetConfigSnapshot(scope), PROJECT_FILE_POLL_MS);
+      widgetConfigWatches.set(
+        scope,
+        () => {
+          stopConfWatch();
+          stopPyprojectWatch();
+        },
+      );
+    }
+    emitWidgetConfigSnapshot(scope);
+  }
+}
 
 function stopDeployConfWatcher(): void {
-  if (!deployConfWatch) {
-    return;
+  if (deployConfWatch) {
+    for (const watchedPath of deployConfWatch.watchedPaths) {
+      try {
+        fs.unwatchFile(watchedPath);
+      } catch {
+        // ignore
+      }
+    }
+    deployConfWatch = null;
   }
-  try {
-    fs.unwatchFile(deployConfWatch.watchedPath);
-  } catch {
-    // ignore
-  }
-  deployConfWatch = null;
+  stopWidgetConfigWatchers();
 }
 
 function startDeployConfWatcher(workspacePath: string): void {
   stopDeployConfWatcher();
-  const watchedPath = path.join(workspacePath, "conf.json");
-  fs.watchFile(watchedPath, { interval: DEPLOY_CONF_POLL_MS }, () => {
-    if (!deployConfWatch || deployConfWatch.workspacePath !== workspaceRoot) {
-      return;
-    }
-    sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
-  });
-  deployConfWatch = { watchedPath, workspacePath };
+  const watchedPaths = [path.join(workspacePath, "pyproject.toml"), path.join(workspacePath, "conf.json")];
+  for (const watchedPath of watchedPaths) {
+    fs.watchFile(watchedPath, { interval: PROJECT_FILE_POLL_MS }, () => {
+      if (!deployConfWatch || deployConfWatch.workspacePath !== workspaceRoot) return;
+      sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
+    });
+  }
+  deployConfWatch = { watchedPaths, workspacePath };
   sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
+  startWidgetConfigWatchers();
 }
 
 function emitDeployLog(line: string): void {
@@ -309,35 +472,21 @@ async function disconnectDeployMachine(): Promise<void> {
 async function restoreDeployMachineForQuit(): Promise<void> {
   const session = deployMachineSession;
   if (!session || !session.connected) {
-    deployMachineRestoreDone = true;
     await disconnectDeployMachine();
     return;
   }
   try {
     emitDeployLog("[deploy] Quit — restore machine, stop debug apps, restart dartsnut_python.service…");
-    session.stopLogTail();
     const elig = readDeployEligibilityFromWorkspace();
-    if (elig.ok) {
-      await session.stopDebugApp(elig.appId).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        emitDeployLog(`[deploy] Quit current app cleanup failed: ${message}`);
-      });
-      await session.removeRemoteAppFolder(elig.appId).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        emitDeployLog(`[deploy] Quit app folder cleanup failed: ${message}`);
-      });
+    const failures = await session.cleanupForQuit(elig.ok ? elig.appId : undefined);
+    for (const failure of failures) {
+      emitDeployLog(`[deploy] Quit cleanup failed: ${failure}`);
     }
-    await session.killAppMainPyProcesses().catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      emitDeployLog(`[deploy] Quit broad process cleanup failed: ${message}`);
-    });
-    await session.restartSystemdService().catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      emitDeployLog(`[deploy] Quit service restart failed: ${message}`);
-    });
+    if (failures.length > 0) {
+      throw new Error(failures.join(", "));
+    }
   } finally {
     await disconnectDeployMachine();
-    deployMachineRestoreDone = true;
   }
 }
 
@@ -345,20 +494,21 @@ function readDeployEligibilityFromWorkspace(): DeployEligibility {
   if (!workspaceRoot) {
     return { ok: false, reason: "no_workspace" };
   }
-  const confPath = path.join(workspaceRoot, "conf.json");
-  if (!fs.existsSync(confPath)) {
-    return { ok: false, reason: "missing_conf" };
-  }
   try {
-    const raw = JSON.parse(fs.readFileSync(confPath, "utf-8"));
-    return validateDeployWorkspaceConf(raw);
+    const classification = readWorkspaceProjectClassification(workspaceRoot);
+    if (!classification.ok) return { ok: false, reason: classification.reason };
+    return {
+      ok: true,
+      appId: classification.appId,
+      version: classification.version,
+      projectType: classification.projectType
+    };
   } catch {
-    return { ok: false, reason: "invalid_conf" };
+    return { ok: false, reason: "invalid_project" };
   }
 }
 
 function readCommunityWorkspaceDefaults(): CommunityWorkspaceDefaults {
-  const elig = readDeployEligibilityFromWorkspace();
   const fallback = {
     eligible: false,
     appId: "",
@@ -368,24 +518,25 @@ function readCommunityWorkspaceDefaults(): CommunityWorkspaceDefaults {
     description: "",
     widgetSize: ""
   };
-  if (!workspaceRoot || !elig.ok) {
+  let classification: ReturnType<typeof readWorkspaceProjectClassification> | null;
+  try {
+    classification = workspaceRoot ? readWorkspaceProjectClassification(workspaceRoot) : null;
+  } catch {
     return fallback;
   }
-  const confPath = path.join(workspaceRoot, "conf.json");
-  try {
-    const conf = JSON.parse(fs.readFileSync(confPath, "utf-8")) as Record<string, unknown>;
-    return {
-      eligible: elig.projectType === "game" || elig.projectType === "widget",
-      appId: elig.appId,
-      projectType: elig.projectType,
-      appName: String(conf.name || elig.appId).trim(),
-      version: String(conf.version || "1.0.0").trim(),
-      description: String(conf.description || "").trim(),
-      widgetSize: String(conf.size || "").trim()
-    };
-  } catch {
-    return { ...fallback, appId: elig.appId, projectType: elig.projectType };
+  if (!workspaceRoot || !classification?.ok) {
+    return fallback;
   }
+  const conf = classification.conf;
+  return {
+    eligible: true,
+    appId: classification.appId,
+    projectType: classification.projectType,
+    appName: String(conf?.name || classification.appId).trim(),
+    version: classification.version,
+    description: String(conf?.description || "").trim(),
+    widgetSize: String(conf?.size || "").trim()
+  };
 }
 
 function fileBlobFromPath(filePath: string, mimeType = "application/octet-stream"): Blob {
@@ -457,39 +608,233 @@ function executeHostGetEmulatorLogsForAgent(args?: { max_lines?: number }): stri
   });
 }
 
-/** Agent tool `reload_emulator`: sync bridge path, reload widget (Python re-reads conf.json), refresh deploy UI. */
-async function executeHostReloadEmulatorForAgent(): Promise<string> {
-  if (!workspaceRoot) {
-    return JSON.stringify({
-      ok: false,
-      error: "No workspace is selected — finish intake or pick a project folder first."
-    });
-  }
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function recentEmulatorLogs(maxLines?: number): EmulatorLogEntry[] {
+  const requested =
+    typeof maxLines === "number" && Number.isFinite(maxLines)
+      ? Math.min(EMULATOR_LOG_MAX_REQUEST, Math.max(1, Math.floor(maxLines)))
+      : EMULATOR_LOG_DEFAULT_TAIL;
+  return emulatorLogRing.slice(-requested);
+}
+
+function ensureBridgeReady(): { ok: true } | { ok: false; error: string } {
   if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
     startPythonBridge();
   }
   if (!bridgeProcess?.stdin || bridgeProcess.stdin.destroyed) {
-    return JSON.stringify({ ok: false, error: "Emulator bridge is not available." });
+    return { ok: false, error: "Emulator bridge is not available." };
+  }
+  return { ok: true };
+}
+
+function sendBridgeCommand(command: EmulatorCommand): void {
+  const ready = ensureBridgeReady();
+  if (!ready.ok || !bridgeProcess?.stdin || bridgeProcess.stdin.destroyed) {
+    throw new Error(ready.ok ? "Emulator bridge is not available." : ready.error);
+  }
+  bridgeProcess.stdin.write(`${JSON.stringify({ command })}\n`);
+}
+
+async function waitForEmulatorFrame(timeoutMs: number, afterTimestampMs = 0): Promise<EmulatorFrame | null> {
+  const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
+  while (Date.now() <= deadline) {
+    if (latestEmulatorFrame && latestEmulatorFrame.timestampMs >= afterTimestampMs) {
+      return latestEmulatorFrame;
+    }
+    await sleep(25);
+  }
+  return latestEmulatorFrame && latestEmulatorFrame.timestampMs >= afterTimestampMs ? latestEmulatorFrame : null;
+}
+
+async function executeHostObserveEmulatorForAgent(args?: Record<string, unknown>): Promise<string> {
+  const waitMs =
+    typeof args?.wait_for_frame_ms === "number" && Number.isFinite(args.wait_for_frame_ms)
+      ? Math.min(10_000, Math.max(0, Math.floor(args.wait_for_frame_ms)))
+      : 1000;
+  const observeStartedAt = Date.now();
+  const freshFrame = waitMs > 0 ? await waitForEmulatorFrame(waitMs, observeStartedAt) : null;
+  const frame = freshFrame ?? latestEmulatorFrame;
+  if (!frame) {
+    return JSON.stringify({
+      ok: false,
+      error: "No emulator frame is available yet. Call reload_emulator with wait_for_frame_ms, then observe again.",
+      emulator: emulatorState,
+      logs: recentEmulatorLogs(typeof args?.max_log_lines === "number" ? args.max_log_lines : undefined)
+    });
+  }
+  const includePng = args?.include_png === true;
+  const includeHardwareMockup = includePng && args?.include_hardware_mockup === true;
+  const surfacePngBase64 = includePng ? encodeRgbPngBase64(frame) : undefined;
+  const panelPngBase64 = includePng ? encodePanelPngsBase64(frame) : undefined;
+  const hardwarePngBase64 = includeHardwareMockup ? encodeHardwareMockupPngBase64(frame) : undefined;
+  const observation = buildEmulatorObservationFromFrame({
+    frame,
+    state: { ...emulatorState },
+    logs: recentEmulatorLogs(typeof args?.max_log_lines === "number" ? args.max_log_lines : undefined),
+    previousSurfaceHash: previousAgentObservationSurfaceHash,
+    includePngBase64: includePng,
+    surfacePngBase64,
+    panelPngBase64,
+    hardwarePngBase64
+  });
+  if (observation.frame?.surfaceHash) {
+    previousAgentObservationSurfaceHash = observation.frame.surfaceHash;
+  }
+  return JSON.stringify(observation);
+}
+
+async function executeHostControlEmulatorInputForAgent(args?: Record<string, unknown>): Promise<string> {
+  try {
+    const normalized = normalizeEmulatorInputAction(args?.action, agentDartSlots);
+    const applied: unknown[] = [];
+    for (const command of normalized.commands) {
+      if (command.type === "delay") {
+        await sleep(command.ms);
+        applied.push(command);
+        continue;
+      }
+      sendBridgeCommand(command);
+      applied.push(command);
+      if (command.type === "clear_darts") {
+        agentDartSlots = Array.from({ length: 12 }, () => [-1, -1]);
+      } else if (command.type === "throw_dart") {
+        agentDartSlots[command.index] = [command.x, command.y];
+      } else if (command.type === "remove_dart_at") {
+        agentDartSlots = agentDartSlots.map((slot) =>
+          slot[0] === command.x && slot[1] === command.y ? [-1, -1] : slot
+        );
+      }
+    }
+    return JSON.stringify({ ok: true, applied, darts: agentDartSlots });
+  } catch (error) {
+    return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/** Agent tool `reload_emulator`: sync bridge path, reload widget (Python re-reads conf.json), refresh deploy UI. */
+async function executeHostReloadEmulatorForAgent(args?: {
+  params?: Record<string, unknown>;
+  clear_inputs?: boolean;
+  wait_for_frame_ms?: number;
+}): Promise<string> {
+  if (!workspaceRoot) {
+    return JSON.stringify({
+      ok: false,
+      error: "No workspace is selected. Pick a project folder first."
+    });
+  }
+  const ready = ensureBridgeReady();
+  if (!ready.ok) {
+    return JSON.stringify({ ok: false, error: ready.error });
   }
   const baseRoot = getEmulatorWorkspaceRoot();
   let selectedPath = path.isAbsolute(workspaceRoot) ? workspaceRoot : path.join(baseRoot, workspaceRoot);
   if (!isWithinDirectory(workspaceRoot, selectedPath)) {
     selectedPath = workspaceRoot;
   }
+  if (args?.clear_inputs) {
+    sendBridgeCommand({ type: "clear_darts" });
+    agentDartSlots = Array.from({ length: 12 }, () => [-1, -1]);
+    for (const button of ["A", "B", "UP", "DOWN", "LEFT", "RIGHT"] as const) {
+      sendBridgeCommand({ type: "set_button", button, pressed: false });
+    }
+  }
+  if (args?.params && typeof args.params === "object" && !Array.isArray(args.params)) {
+    sendBridgeCommand({ type: "set_params", params: args.params });
+  }
   const setPath: EmulatorCommand = { type: "set_path", path: selectedPath };
   const reload: EmulatorCommand = { type: "reload_widget" };
-  bridgeProcess.stdin.write(`${JSON.stringify({ command: setPath })}\n`);
+  sendBridgeCommand(setPath);
   clearEmulatorLogsForReload();
   beginPendingEmulatorSwitch(selectedPath);
-  bridgeProcess.stdin.write(`${JSON.stringify({ command: reload })}\n`);
+  const reloadStartedAt = Date.now();
+  sendBridgeCommand(reload);
   lastWidgetDir = selectedPath;
   writeEmulatorState();
   startDeployConfWatcher(workspaceRoot);
+  let observedFrame: EmulatorFrame | null = null;
+  if (typeof args?.wait_for_frame_ms === "number" && args.wait_for_frame_ms > 0) {
+    observedFrame = await waitForEmulatorFrame(Math.min(10_000, Math.floor(args.wait_for_frame_ms)), reloadStartedAt);
+  }
   return JSON.stringify({
     ok: true,
+    observedFrame: observedFrame
+      ? { width: observedFrame.width, height: observedFrame.height, timestampMs: observedFrame.timestampMs }
+      : null,
     message:
-      "Emulator path re-applied and reload_widget sent; conf.json re-read on the Python side and deploy eligibility refreshed. Call get_emulator_logs next to confirm the widget starts without errors."
+      "Emulator path re-applied and reload_widget sent; conf.json re-read on the Python side and deploy eligibility refreshed. Call observe_emulator and get_emulator_logs next to confirm the widget starts without errors and renders a nonblank frame."
   });
+}
+
+async function executeHostRunEmulatorScenarioForAgent(args?: Record<string, unknown>): Promise<string> {
+  const summary = summarizeScenarioRequest({
+    steps: Array.isArray(args?.steps) ? (args.steps as EmulatorScenarioStep[]) : [],
+    timeout_ms: typeof args?.timeout_ms === "number" ? args.timeout_ms : undefined
+  });
+  const startedAt = Date.now();
+  const trace: unknown[] = [];
+  let observations = 0;
+  const observeStepIndices = summary.steps
+    .map((step, index) => (step.type === "observe" ? index : -1))
+    .filter((index) => index >= 0)
+    .slice(0, summary.observationLimit);
+  const finalObserveStepIndex = observeStepIndices.length > 0 ? observeStepIndices[observeStepIndices.length - 1] : undefined;
+  for (let i = 0; i < summary.steps.length; i += 1) {
+    if (Date.now() - startedAt > summary.timeoutMs) {
+      return JSON.stringify({ ok: false, error: "Scenario timed out.", summary, trace });
+    }
+    const step = summary.steps[i] as EmulatorScenarioStep;
+    try {
+      if (step.type === "reload") {
+        const result = JSON.parse(await executeHostReloadEmulatorForAgent({
+          params: step.params,
+          clear_inputs: step.clear_inputs,
+          wait_for_frame_ms: step.wait_for_frame_ms
+        }));
+        trace.push({ step: i, type: step.type, result });
+      } else if (step.type === "wait_frame") {
+        const waitStartedAt = Date.now();
+        const frame = await waitForEmulatorFrame(Math.min(10_000, Math.max(0, step.timeout_ms ?? 1000)), waitStartedAt);
+        trace.push({ step: i, type: step.type, frame: frame ? { width: frame.width, height: frame.height, timestampMs: frame.timestampMs } : null });
+      } else if (step.type === "observe") {
+        if (observations >= summary.observationLimit) {
+          trace.push({ step: i, type: step.type, skipped: "observation_limit" });
+          continue;
+        }
+        const includePng = step.include_png === true && (observations === 0 || i === finalObserveStepIndex);
+        const result = JSON.parse(await executeHostObserveEmulatorForAgent({
+          include_png: includePng,
+          include_hardware_mockup: includePng,
+          wait_for_frame_ms: 1000,
+          max_log_lines: step.max_log_lines
+        }));
+        trace.push({ step: i, type: step.type, result });
+        observations += 1;
+      } else if (step.type === "input") {
+        const result = JSON.parse(await executeHostControlEmulatorInputForAgent({ action: step.action as EmulatorInputAction }));
+        trace.push({ step: i, type: step.type, result });
+      } else if (step.type === "delay") {
+        const ms = Math.min(5000, Math.max(0, Math.floor(step.ms)));
+        await sleep(ms);
+        trace.push({ step: i, type: step.type, ms });
+      } else if (step.type === "logs") {
+        trace.push({ step: i, type: step.type, result: JSON.parse(executeHostGetEmulatorLogsForAgent({ max_lines: step.max_lines })) });
+      } else {
+        trace.push({ step: i, type: "unknown", error: `Unsupported scenario step: ${(step as { type?: unknown }).type}` });
+      }
+    } catch (error) {
+      return JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        summary,
+        trace
+      });
+    }
+  }
+  return JSON.stringify({ ok: true, summary, trace });
 }
 
 /** Agent tool `check_python`: `python -m py_compile` syntax check (no execution) on workspace files. */
@@ -544,13 +889,19 @@ const emulatorState: EmulatorStateSnapshot = {
   running: false,
   fps: 0,
   status: "Idle",
+  audioMuted: false,
   lastCapturePath: null,
+  gifRecording: false,
+  gifSaving: false,
+  gifElapsedMs: 0,
 };
 let emulatorSwitchGate: EmulatorSwitchGate | null = null;
 let pendingEmulatorPathForReload: string | null = null;
+let latestEmulatorFrame: EmulatorFrame | null = null;
+let previousAgentObservationSurfaceHash: string | null = null;
+let agentDartSlots: [number, number][] = Array.from({ length: 12 }, () => [-1, -1]);
 
 const proofStatePath = () => path.join(app.getPath("userData"), "first-run-proof.json");
-const tempWorkspaceRecordPath = () => path.join(app.getPath("userData"), "temp-workspace.json");
 const emulatorStatePath = () => path.join(app.getPath("userData"), "emulator-state.json");
 const providerSettingsPath = () => path.join(app.getPath("userData"), "provider-settings.json");
 const windowStatePath = () => path.join(app.getPath("userData"), "window-state.json");
@@ -608,7 +959,7 @@ function writeWindowState(state: PersistedWindowState): void {
   );
 }
 
-function normalizeUserDefineSettings(input?: Partial<UserDefineProviderSettings> | null): UserDefineProviderSettings {
+function normalizeCustomProviderSettings(input?: Partial<CustomProviderSettings> | null): CustomProviderSettings {
   return {
     baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl.trim() : "",
     apiKey: typeof input?.apiKey === "string" ? input.apiKey.trim() : "",
@@ -618,7 +969,8 @@ function normalizeUserDefineSettings(input?: Partial<UserDefineProviderSettings>
 
 type LegacyProviderSettingsFile = Omit<Partial<ProviderSettings>, "activeProvider" | "custom"> & {
   activeProvider?: string;
-  custom?: Partial<UserDefineProviderSettings>;
+  custom?: Partial<CustomProviderSettings>;
+  userDefine?: Partial<CustomProviderSettings>;
   baseUrl?: string;
   apiKey?: string;
   model?: string;
@@ -628,7 +980,7 @@ function normalizeProviderId(value: unknown): ProviderId {
   return value === "custom" ? "custom" : "dartsnut-llm";
 }
 
-function providerSettingsForDisk(settings: ProviderSettings): Omit<ProviderSettings, "userDefine"> {
+function providerSettingsForDisk(settings: ProviderSettings): ProviderSettings {
   return {
     activeProvider: settings.activeProvider,
     custom: settings.custom
@@ -640,10 +992,6 @@ function persistProviderSettings(settings: ProviderSettings): void {
   fs.writeFileSync(providerSettingsPath(), JSON.stringify(providerSettingsForDisk(settings), null, 2));
 }
 
-function sameProviderSettings(a: UserDefineProviderSettings, b: UserDefineProviderSettings): boolean {
-  return a.baseUrl === b.baseUrl && a.apiKey === b.apiKey && a.model === b.model;
-}
-
 function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): ProviderSettings {
   const legacyFlat =
     input != null &&
@@ -653,25 +1001,20 @@ function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): P
     input.userDefine == null;
 
   if (legacyFlat) {
-    const custom = normalizeUserDefineSettings({
+    const custom = normalizeCustomProviderSettings({
       baseUrl: input.baseUrl,
       apiKey: input.apiKey,
       model: input.model
     });
     return {
       activeProvider: "custom",
-      custom,
-      userDefine: custom
+      custom
     };
   }
 
-  const legacyUserDefine = normalizeUserDefineSettings(input?.userDefine);
+  const legacyUserDefine = normalizeCustomProviderSettings(input?.userDefine);
   const customSource = input?.custom ?? input?.userDefine;
-  let custom = normalizeUserDefineSettings(customSource);
-  const builtin = normalizeUserDefineSettings(readCachedRuntimeDartsnutLlmConfig());
-  if (custom.apiKey && sameProviderSettings(custom, builtin)) {
-    custom = normalizeUserDefineSettings();
-  }
+  const custom = normalizeCustomProviderSettings(customSource);
   const activeProvider =
     input == null
       ? "dartsnut-llm"
@@ -687,17 +1030,14 @@ function normalizeProviderSettings(input?: LegacyProviderSettingsFile | null): P
     !legacyUserDefine.model &&
     !legacyUserDefine.baseUrl;
   if (legacyBuiltinProvider) {
-    const envCustom = normalizeUserDefineSettings();
     return {
       activeProvider: "dartsnut-llm",
-      custom: envCustom,
-      userDefine: envCustom
+      custom: normalizeCustomProviderSettings()
     };
   }
   return {
     activeProvider,
-    custom,
-    userDefine: custom
+    custom
   };
 }
 
@@ -730,29 +1070,23 @@ function readProviderSettings(): ProviderSettings {
 
 async function validateProviderSettingsInput(input: SaveProviderSettingsRequest): Promise<{ ok: true } | { ok: false; error: string }> {
   const normalized = normalizeProviderSettings(input);
-  let ud: UserDefineProviderSettings;
   if (normalized.activeProvider === "dartsnut-llm") {
-    try {
-      ud = await ensureRuntimeDartsnutLlmConfig();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, error: `Dartsnut LLM configuration could not be loaded. ${message}` };
-    }
-  } else {
-    ud = normalized.custom;
+    return { ok: true };
   }
-  if (!ud.apiKey) {
+  const custom = normalized.custom;
+  if (!custom.baseUrl) {
+    return { ok: false, error: "Endpoint is required." };
+  }
+  if (!custom.apiKey) {
     return { ok: false, error: "API key is required." };
   }
-  if (!ud.model) {
+  if (!custom.model) {
     return { ok: false, error: "Model is required." };
   }
-  if (ud.baseUrl) {
-    try {
-      new URL(ud.baseUrl);
-    } catch {
-      return { ok: false, error: "Endpoint must be a valid URL." };
-    }
+  try {
+    new URL(custom.baseUrl);
+  } catch {
+    return { ok: false, error: "Endpoint must be a valid URL." };
   }
   return { ok: true };
 }
@@ -767,40 +1101,98 @@ async function writeProviderSettings(input: SaveProviderSettingsRequest): Promis
   return normalized;
 }
 
-async function resolveProviderConfigForDesktop(providerSettings: ProviderSettings) {
-  if (providerSettings.activeProvider === "dartsnut-llm") {
-    try {
-      return await ensureRuntimeDartsnutLlmConfig();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Dartsnut LLM configuration could not be loaded. ${message}`);
-    }
-  }
-  return loadProviderConfig({ providerSettings });
+function resolveDartsnutBridgeProviderConfig(): ProviderConfig {
+  const baseApi = getCommunityClient().getConfig().baseApi;
+  return {
+    baseUrl: dartsnutLlmBridgeModelBaseUrl(baseApi),
+    apiKey: DARTSNUT_LLM_BRIDGE_API_KEY_PLACEHOLDER,
+    model: DARTSNUT_LLM_MODEL_ALIAS
+  };
 }
 
-function resolveCachedProviderConfigForDesktop(providerSettings: ProviderSettings) {
+function resolveProviderConfigForDesktop(providerSettings: ProviderSettings): ProviderConfig {
   if (providerSettings.activeProvider === "dartsnut-llm") {
-    const config = readCachedRuntimeDartsnutLlmConfig();
-    if (!config) {
-      return null;
-    }
-    return config;
+    return resolveDartsnutBridgeProviderConfig();
   }
-  return loadProviderConfig({ providerSettings });
+  return loadProviderConfig({ providerSettings, fetchImpl: customProviderFetch() });
 }
 
-async function buildAgentModelConfigFromProviderSettings(providerSettings: ProviderSettings) {
-  const config = await resolveProviderConfigForDesktop(providerSettings);
+function resolveCachedProviderConfigForDesktop(providerSettings: ProviderSettings): ProviderConfig {
+  return resolveProviderConfigForDesktop(providerSettings);
+}
+
+function buildAgentModelConfigFromProviderSettings(providerSettings: ProviderSettings) {
+  const config = resolveProviderConfigForDesktop(providerSettings);
   return buildAgentModelConfig({
     model: config.model,
     baseUrl: config.baseUrl,
-    apiKey: config.apiKey
+    apiKey: config.apiKey,
+    fetchImpl: config.fetchImpl
   });
 }
 
-async function reconfigureAgentsSdkFromProviderSettings(providerSettings: ProviderSettings): Promise<void> {
-  configureAgentsSdk(await buildAgentModelConfigFromProviderSettings(providerSettings), { force: true });
+function reconfigureAgentsSdkFromProviderSettings(providerSettings: ProviderSettings): void {
+  if (providerSettings.activeProvider === "dartsnut-llm") {
+    return;
+  }
+  configureAgentsSdk(buildAgentModelConfigFromProviderSettings(providerSettings), { force: true });
+}
+
+type PreparedAgentProvider =
+  | { ok: true; modelConfig: AgentModelConfig; bridgeRun: DartsnutLlmBridgeRun | null }
+  | { ok: false; failure: DartsnutLlmBridgeFailure };
+
+async function prepareAgentProvider(providerSettings: ProviderSettings): Promise<PreparedAgentProvider> {
+  if (providerSettings.activeProvider === "custom") {
+    const config = resolveProviderConfigForDesktop(providerSettings);
+    const validation = validateProviderConfig(config);
+    if (!validation.ok) {
+      return {
+        ok: false,
+        failure: { reason: "service_unavailable", message: validation.error || "Custom provider is not configured." }
+      };
+    }
+    return {
+      ok: true,
+      bridgeRun: null,
+      modelConfig: buildAgentModelConfig({
+        model: config.model,
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        fetchImpl: config.fetchImpl
+      })
+    };
+  }
+
+  const auth = readCommunityAuth(getCommunityUserDataPath());
+  if (!auth?.token) {
+    return {
+      ok: false,
+      failure: {
+        reason: "auth_required",
+        message: "Sign in to your Dartsnut account to use Dartsnut LLM."
+      }
+    };
+  }
+  const started = await startDartsnutLlmBridgeRun({
+    baseApi: getCommunityClient().getConfig().baseApi,
+    token: auth.token,
+    accountScope: auth.account,
+    runId: randomUUID(),
+    fetchImpl: cloudFetch(),
+    onDiagnostic: (message, meta) => terminalAgentLifecycleLog(`[agent] ${message}`, meta)
+  });
+  if (!started.ok) {
+    if (started.failure.reason === "auth_required") {
+      clearCommunityAuth(getCommunityUserDataPath());
+    }
+    return started;
+  }
+  return {
+    ok: true,
+    modelConfig: started.run.modelConfig,
+    bridgeRun: started.run
+  };
 }
 
 function readProofState() {
@@ -835,37 +1227,6 @@ function writeEmulatorState() {
   fs.writeFileSync(emulatorStatePath(), JSON.stringify({ lastWidgetDir }, null, 2));
 }
 
-function readTempWorkspaceJsonFromDisk(): string | null {
-  const file = tempWorkspaceRecordPath();
-  if (!fs.existsSync(file)) {
-    return null;
-  }
-  try {
-    const content = JSON.parse(fs.readFileSync(file, "utf-8")) as { temporaryPath?: unknown };
-    if (typeof content.temporaryPath === "string" && content.temporaryPath.trim()) {
-      return path.resolve(content.temporaryPath.trim());
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function writeTempWorkspaceRecordToDisk(next: string | null): void {
-  trackedTempWorkspacePath = next;
-  const file = tempWorkspaceRecordPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ temporaryPath: next }, null, 2));
-}
-
-function loadTrackedTempWorkspaceFromDisk(): void {
-  trackedTempWorkspacePath = readTempWorkspaceJsonFromDisk();
-}
-
-function isTemporaryWorkspaceActiveNow(): boolean {
-  return isTemporaryWorkspaceForBootstrap(workspaceRoot, trackedTempWorkspacePath);
-}
-
 function getDialogParent(): BrowserWindow | undefined {
   return win && !win.isDestroyed() ? win : undefined;
 }
@@ -873,95 +1234,6 @@ function getDialogParent(): BrowserWindow | undefined {
 async function showAppMessageBox(options: MessageBoxOptions) {
   const parent = getDialogParent();
   return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
-}
-
-async function showAppOpenDialog(options: OpenDialogOptions) {
-  const parent = getDialogParent();
-  return parent ? dialog.showOpenDialog(parent, options) : dialog.showOpenDialog(options);
-}
-
-function removeDirectoryBestEffort(dir: string): void {
-  try {
-    fs.rmSync(dir, { recursive: true, force: true });
-  } catch {
-    // ignore
-  }
-}
-
-function removeDirectoryDeferredOnQuit(dir: string): void {
-  try {
-    if (process.platform === "win32") {
-      const escaped = dir.replace(/"/g, "\"\"");
-      const child = spawn("cmd.exe", ["/d", "/s", "/c", `rmdir /s /q "${escaped}"`], {
-        detached: true,
-        stdio: "ignore",
-      });
-      child.unref();
-      return;
-    }
-    const child = spawn("/bin/rm", ["-rf", "--", dir], {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
-  } catch {
-    // Fall back to best-effort sync removal if detached cleanup cannot be started.
-    removeDirectoryBestEffort(dir);
-  }
-}
-
-function isProbableAllocatedTempDir(absPath: string): boolean {
-  const base = path.basename(absPath);
-  if (!base.startsWith("dartsnut-chat-")) {
-    return false;
-  }
-  const abs = path.resolve(absPath);
-  const tmp = path.resolve(os.tmpdir());
-  const rel = path.relative(tmp, abs);
-  return rel !== "" && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
-}
-
-function markNewTemporaryWorkspaceAllocated(root: string): void {
-  const absRoot = path.resolve(root);
-  const previous = trackedTempWorkspacePath;
-  if (
-    previous &&
-    normalizeFsPathComparable(previous) !== normalizeFsPathComparable(absRoot) &&
-    fs.existsSync(previous) &&
-    isProbableAllocatedTempDir(previous)
-  ) {
-    removeDirectoryBestEffort(previous);
-  }
-  writeTempWorkspaceRecordToDisk(absRoot);
-}
-
-function tempGuardDialogMessage(reason: TempWorkspaceGuardReason): string {
-  switch (reason) {
-    case "quit":
-      return "You have an unsaved project in a temporary folder. Save it to a permanent folder, discard it, or cancel.";
-    case "open_workspace":
-      return "Opening another workspace will leave your temporary project. Save it, discard it, or cancel.";
-    case "new_project":
-      return "Starting a new project will clear the current session. Save the temporary project, discard it, or cancel to stay.";
-  }
-}
-
-async function promptSaveDiscardCancel(reason: TempWorkspaceGuardReason): Promise<"save" | "discard" | "cancel"> {
-  const { response } = await showAppMessageBox({
-    type: "question",
-    buttons: ["Save", "Discard", "Cancel"],
-    defaultId: 2,
-    cancelId: 2,
-    title: "Unsaved temporary project",
-    message: tempGuardDialogMessage(reason)
-  });
-  if (response === 0) {
-    return "save";
-  }
-  if (response === 1) {
-    return "discard";
-  }
-  return "cancel";
 }
 
 function sleepMs(ms: number): Promise<void> {
@@ -1023,6 +1295,9 @@ async function gracefulStopEmulatorBridge(
   bridgeProcess = null;
   bridgeRuntimeKey = null;
   emulatorState.running = false;
+  emulatorState.gifRecording = false;
+  emulatorState.gifSaving = false;
+  emulatorState.gifElapsedMs = 0;
   emulatorState.status = "Bridge stopped";
   if (options?.permanent) {
     emulatorBridgeTeardownDone = true;
@@ -1043,138 +1318,6 @@ function stopPythonBridgeProcess(): void {
   emulatorBridgeTeardownDone = true;
 }
 
-async function discardTrackedTemporaryProject(reason?: TempWorkspaceGuardReason): Promise<void> {
-  const tracked = trackedTempWorkspacePath;
-  if (!tracked) {
-    return;
-  }
-  const toRemove = path.resolve(tracked);
-  const discardingOnQuit = reason === "quit";
-  if (discardingOnQuit) {
-    pendingTempDirRemovalOnQuit = toRemove;
-    clearSessionStateForQuitDiscard(toRemove);
-    return;
-  }
-  if (workspaceRoot && path.resolve(workspaceRoot) === toRemove) {
-    performSessionCleanup({ clearWorkspace: true });
-  } else {
-    writeTempWorkspaceRecordToDisk(null);
-  }
-  removeDirectoryBestEffort(toRemove);
-  if (shouldAllocateTempWorkspaceAfterDiscard(reason)) {
-    ensureTemporaryWorkspaceRootAllocated();
-  }
-}
-
-async function runInteractiveSaveTemporaryWorkspace(): Promise<boolean> {
-  const tracked = trackedTempWorkspacePath;
-  if (!tracked || !isTemporaryWorkspaceActiveNow()) {
-    return false;
-  }
-  if (!fs.existsSync(tracked)) {
-    return false;
-  }
-  const pick = await showAppOpenDialog({
-    title: "Save project — choose an empty folder",
-    properties: ["openDirectory", "createDirectory"]
-  });
-  if (pick.canceled || !pick.filePaths[0]) {
-    return false;
-  }
-  const dest = pick.filePaths[0];
-  if (!isDirectoryEmpty(dest)) {
-    await showAppMessageBox({
-      type: "warning",
-      title: "Cannot save",
-      message: "The destination folder must be empty."
-    });
-    return false;
-  }
-  try {
-    fs.cpSync(tracked, dest, { recursive: true });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await showAppMessageBox({
-      type: "error",
-      title: "Save failed",
-      message: `Could not copy the project: ${message}`
-    });
-    return false;
-  }
-  const toRemove = path.resolve(tracked);
-  writeTempWorkspaceRecordToDisk(null);
-  applyWorkspaceRoot(dest);
-  removeDirectoryBestEffort(toRemove);
-  return true;
-}
-
-async function ensureTemporaryWorkspaceResolvedForGuard(reason: TempWorkspaceGuardReason): Promise<boolean> {
-  if (!isTemporaryWorkspaceActiveNow()) {
-    return true;
-  }
-  const ws = workspaceRoot;
-  if (
-    ws &&
-    fs.existsSync(ws) &&
-    fs.statSync(ws).isDirectory() &&
-    isDirectoryEmpty(ws)
-  ) {
-    await discardTrackedTemporaryProject(reason);
-    return true;
-  }
-  for (; ;) {
-    const choice = await promptSaveDiscardCancel(reason);
-    if (choice === "cancel") {
-      return false;
-    }
-    if (choice === "discard") {
-      await discardTrackedTemporaryProject(reason);
-      return true;
-    }
-    const saved = await runInteractiveSaveTemporaryWorkspace();
-    if (saved) {
-      return true;
-    }
-  }
-}
-
-async function maybeRecoverTrackedTempWorkspaceAtLaunch(): Promise<void> {
-  loadTrackedTempWorkspaceFromDisk();
-  const tp = trackedTempWorkspacePath;
-  if (!tp) {
-    return;
-  }
-  if (!fs.existsSync(tp) || !fs.statSync(tp).isDirectory()) {
-    writeTempWorkspaceRecordToDisk(null);
-    return;
-  }
-  if (isDirectoryEmpty(tp)) {
-    const resolved = path.resolve(tp);
-    writeTempWorkspaceRecordToDisk(resolved);
-    applyWorkspaceRoot(resolved);
-    return;
-  }
-  const { response } = await showAppMessageBox({
-    type: "question",
-    buttons: ["Resume", "Discard"],
-    defaultId: 0,
-    cancelId: 1,
-    title: "Temporary project",
-    message:
-      "A project folder from your last session is still in temporary storage.\n\nResume to continue editing, or Discard to delete it.",
-    detail: tp
-  });
-  if (response === 1) {
-    const toRemove = path.resolve(tp);
-    writeTempWorkspaceRecordToDisk(null);
-    removeDirectoryBestEffort(toRemove);
-    return;
-  }
-  const resolved = path.resolve(tp);
-  writeTempWorkspaceRecordToDisk(resolved);
-  applyWorkspaceRoot(resolved);
-}
-
 function providerStatus(): BootstrapState["providerStatus"] {
   const stored = readProviderSettings();
   const config = resolveCachedProviderConfigForDesktop(stored);
@@ -1188,11 +1331,96 @@ function providerStatus(): BootstrapState["providerStatus"] {
 function getBootstrapState(): BootstrapState {
   return {
     workspaceRoot,
+    activeProjectId,
+    activeChatId,
     providerStatus: providerStatus(),
-    firstRunComplete,
-    isTemporaryWorkspace: isTemporaryWorkspaceActiveNow(),
-    needsCreationIntake: computeNeedsCreationIntake()
+    firstRunComplete
   };
+}
+
+function getProjectStore(): ProjectStore {
+  if (!projectStore) projectStore = new ProjectStore(app.getPath("userData"));
+  return projectStore;
+}
+
+function projectTree(): ProjectTree { return getProjectStore().list(); }
+
+function emitProjectSwitchProgress(progress: ProjectSwitchProgress): void {
+  sendToRenderer(IPCChannels.projectSwitchProgress, progress);
+}
+
+async function stopRuntimeForProjectTransition(confirmStop = true): Promise<"ready" | "stopped" | "cancelled"> {
+  const runtimeActive = Boolean(emulatorState.running || deployMachineSession?.connected);
+  if (!runtimeActive) return "ready";
+  if (confirmStop) {
+    const { response } = await showAppMessageBox({ type: "question", buttons: ["Switch project", "Cancel"], defaultId: 1, cancelId: 1, title: "Switch project", message: "Emulator or remote deployment is active. Stop it and switch project?" });
+    if (response !== 0) return "cancelled";
+  }
+  emitProjectSwitchProgress({ active: true, stage: "stopping-deployment", message: "Stopping remote deployment…" });
+  if (deployMachineSession?.connected) await disconnectDeployMachine();
+  emitProjectSwitchProgress({ active: true, stage: "stopping-emulator", message: "Stopping emulator…" });
+  if (emulatorState.running) await gracefulStopEmulatorBridge();
+  return "stopped";
+}
+
+async function switchToProject(projectId: string, chatId?: string): Promise<boolean> {
+  const store = getProjectStore();
+  const project = store.getProject(projectId);
+  if (!project) return false;
+  store.migrateLegacy(project);
+  if (chatId) {
+    const chat = store.getChat(chatId);
+    if (!chat || chat.projectId !== project.id) return false;
+  }
+  if (activeProjectId === project.id) {
+    activeChatId = chatId ?? null;
+    if (activeChatId) store.markChatOpened(activeChatId);
+    store.touchProject(project.id);
+    emitBootstrapStateToRenderer();
+    return true;
+  }
+  if (projectSwitchInFlight) return projectSwitchInFlight;
+  projectSwitchInFlight = (async () => {
+    if (await stopRuntimeForProjectTransition() === "cancelled") return false;
+    emitProjectSwitchProgress({ active: true, stage: "switching", message: "Switching project…" });
+    performSessionCleanup({ clearWorkspace: false });
+    activeProjectId = project.id;
+    activeChatId = chatId ?? null;
+    if (activeChatId) store.markChatOpened(activeChatId);
+    store.touchProject(project.id);
+    applyWorkspaceRoot(project.folderPath);
+    emitProjectSwitchProgress({ active: true, stage: "reloading", message: "Reloading emulator…" });
+    if (bridgeProcess?.stdin && !bridgeProcess.stdin.destroyed) bridgeProcess.stdin.write(`${JSON.stringify({ command: { type: "set_path", path: project.folderPath } })}\n${JSON.stringify({ command: { type: "reload_widget" } })}\n`);
+    emitBootstrapStateToRenderer();
+    emitProjectSwitchProgress({ active: false, stage: "ready" });
+    return true;
+  })().catch((error) => { emitProjectSwitchProgress({ active: false, stage: "error", message: error instanceof Error ? error.message : String(error) }); return false; }).finally(() => { projectSwitchInFlight = null; });
+  return projectSwitchInFlight;
+}
+
+async function clearActiveProject(options: { confirmRuntimeStop?: boolean; progressMessage?: string } = {}): Promise<boolean> {
+  if (!activeProjectId) {
+    activeChatId = null;
+    return true;
+  }
+  if (projectSwitchInFlight) return projectSwitchInFlight;
+  projectSwitchInFlight = (async () => {
+    const runtimeTransition = await stopRuntimeForProjectTransition(options.confirmRuntimeStop ?? true);
+    if (runtimeTransition === "cancelled") return false;
+    if (runtimeTransition === "stopped") {
+      emitProjectSwitchProgress({ active: true, stage: "switching", message: options.progressMessage ?? "Starting a new chat…" });
+    }
+    performSessionCleanup({ clearWorkspace: true });
+    activeProjectId = null;
+    activeChatId = null;
+    workspaceRoot = null;
+    emitBootstrapStateToRenderer();
+    if (runtimeTransition === "stopped") {
+      emitProjectSwitchProgress({ active: false, stage: "ready" });
+    }
+    return true;
+  })().catch((error) => { emitProjectSwitchProgress({ active: false, stage: "error", message: error instanceof Error ? error.message : String(error) }); return false; }).finally(() => { projectSwitchInFlight = null; });
+  return projectSwitchInFlight;
 }
 
 function emitBootstrapStateToRenderer(): void {
@@ -1204,51 +1432,7 @@ function isDirectoryEmpty(directoryPath: string): boolean {
   return entries.length === 0;
 }
 
-type CreatorTemplateMode = "game-creator" | "widget-creator";
-
-function readWorkspaceCreatorHints(absoluteWorkspacePath: string): {
-  templateMode: CreatorTemplateMode;
-  projectType: ProjectType;
-  widgetSize?: WidgetSize;
-} | null {
-  const confPath = path.join(absoluteWorkspacePath, "conf.json");
-  if (!fs.existsSync(confPath)) {
-    return null;
-  }
-  try {
-    const conf = JSON.parse(fs.readFileSync(confPath, "utf-8")) as {
-      type?: string;
-      size?: unknown;
-    };
-    if (conf.type === "widget") {
-      return {
-        templateMode: "widget-creator",
-        projectType: "widget",
-        widgetSize: parseConfWidgetSize(conf.size)
-      };
-    }
-    if (conf.type === "game") {
-      return {
-        templateMode: "game-creator",
-        projectType: "game"
-      };
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-/** Cleared in `sendPrompt` finally so an in-flight deferred chip question cannot strand the agent. */
 let agentEventEmitter: ((event: AgentEvent) => void) | null = null;
-
-interface IntakeChipQuestionPending {
-  kind: "project_type" | "widget_size";
-  resolve: (json: string) => void;
-  state: IntakeToolState;
-}
-
-let intakeChipQuestionPending: IntakeChipQuestionPending | null = null;
 
 interface MachineMcpQuestionPending {
   resolve: (answer: { host: string; deviceId?: string } | null) => void;
@@ -1256,6 +1440,14 @@ interface MachineMcpQuestionPending {
 }
 
 let machineMcpQuestionPending: MachineMcpQuestionPending | null = null;
+
+interface AgentQuestionPending {
+  questionId: string;
+  prompt: AgentQuestionPrompt;
+  resolve: (answer: string | null) => void;
+}
+
+let agentQuestionPending: AgentQuestionPending | null = null;
 
 type MachineMcpToolInfo = {
   name: string;
@@ -1274,61 +1466,47 @@ type MachineMcpSession = {
 let machineMcpSession: MachineMcpSession | null = null;
 let machineMcpRequestId = 1;
 
-function cancelAllIntakeUserInputPending(): void {
-  if (intakeChipQuestionPending) {
-    const { resolve, kind } = intakeChipQuestionPending;
-    intakeChipQuestionPending = null;
-    if (agentEventEmitter) {
-      if (kind === "project_type") {
-        agentEventEmitter({ type: "intake_project_type_prompt", at: Date.now(), visible: false });
-      } else {
-        agentEventEmitter({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
-      }
-    }
-    resolve(
-      JSON.stringify({
-        ok: false,
-        cancelled: true,
-        message: "Choice was interrupted."
-      })
-    );
-  }
+function cancelPendingAgentInput(): void {
   if (machineMcpQuestionPending) {
     const { resolve } = machineMcpQuestionPending;
     machineMcpQuestionPending = null;
     agentEventEmitter?.({ type: "machine_mcp_prompt", at: Date.now(), visible: false });
     resolve(null);
   }
-}
-
-function allocateTemporaryWorkspaceRoot(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-chat-"));
-}
-
-/** Allocate and select a temp workspace when none is active (eager allocation). */
-function ensureTemporaryWorkspaceRootAllocated(): string {
-  if (workspaceRoot) {
-    return workspaceRoot;
+  if (agentQuestionPending) {
+    const { questionId, resolve } = agentQuestionPending;
+    agentQuestionPending = null;
+    agentEventEmitter?.({ type: "agent_question", questionId, visible: false, question: "" });
+    resolve(null);
   }
-  const root = allocateTemporaryWorkspaceRoot();
-  applyWorkspaceRoot(root);
-  markNewTemporaryWorkspaceAllocated(root);
-  return root;
 }
 
-function readWorkspaceConfJsonExists(absoluteWorkspacePath: string): boolean {
-  return fs.existsSync(path.join(absoluteWorkspacePath, "conf.json"));
-}
-
-function computeNeedsCreationIntake(): boolean {
-  // No active workspace yet (early-startup race before ensureTemporaryWorkspaceRootAllocated
-  // runs, or right after a cleanup): the next prompt will eagerly allocate a fresh temp dir
-  // which by definition has no conf.json, so intake is required. Reporting `true` here keeps
-  // the renderer's chip gate correct against a stale bootstrap snapshot.
-  if (!workspaceRoot) {
-    return true;
+async function askUserQuestionForAgent(prompt: AgentQuestionPrompt): Promise<string | null> {
+  if (agentQuestionPending) {
+    return null;
   }
-  return workspaceNeedsCreationIntake(workspaceRoot, readWorkspaceConfJsonExists(workspaceRoot));
+  const questionId = randomUUID();
+  agentEventEmitter?.({ type: "agent_question", questionId, visible: true, ...prompt });
+  return await new Promise((resolve) => {
+    agentQuestionPending = { questionId, prompt, resolve };
+  });
+}
+
+/**
+ * Waits for the prompt handler's finalizer, which finishes the backend Dartsnut LLM run
+ * before settling the coordinator lease. Used by both the Stop control and app shutdown.
+ */
+async function stopActiveAgentRun(reason: "user_stop" | "app_quit"): Promise<boolean> {
+  cancelPendingAgentInput();
+  terminalAgentLifecycleLog("[agent] cancellation requested", {
+    reason,
+    hasActiveRun: sendPromptCoordinator.hasActiveRun(),
+    hasBridgeRun: Boolean(activeDartsnutLlmBridgeRun)
+  });
+  // Prompt finalizer closes backend run after SDK fetch has observed abort. Finishing in
+  // parallel races the still-active Responses request and can make backend cleanup return 503.
+  const cancelled = await sendPromptCoordinator.cancelAndWait(reason);
+  return cancelled;
 }
 
 function applyWorkspaceRoot(selectedPath: string): void {
@@ -1336,12 +1514,6 @@ function applyWorkspaceRoot(selectedPath: string): void {
     performSessionCleanup({ clearWorkspace: false });
   }
   workspaceRoot = selectedPath;
-  if (
-    trackedTempWorkspacePath &&
-    path.resolve(trackedTempWorkspacePath) !== path.resolve(selectedPath)
-  ) {
-    writeTempWorkspaceRecordToDisk(null);
-  }
   if (!bridgeProcess || bridgeProcess.stdin?.destroyed) {
     startPythonBridge();
   }
@@ -1360,61 +1532,6 @@ function applyWorkspaceRoot(selectedPath: string): void {
   assetManager.watch(selectedPath);
   startDeployConfWatcher(selectedPath);
   emitBootstrapStateToRenderer();
-}
-
-async function intakeHostToolExecute(
-  args: Record<string, unknown>,
-  state: IntakeToolState,
-  lastUserPrompt?: string
-): Promise<string> {
-  const root = workspaceRoot;
-  if (!root) {
-    return JSON.stringify({ ok: false, error: "No workspace is active." });
-  }
-  return executeIntakeHostTool(args, state, root, { lastUserPrompt });
-}
-
-async function askQuestionHostExecute(
-  args: Record<string, unknown>,
-  state: IntakeToolState
-): Promise<string> {
-  const precheck = precheckAskQuestion(args, state);
-  if (precheck.handled && precheck.response !== undefined) {
-    return precheck.response;
-  }
-  const questionId = args.question_id;
-  if (typeof questionId !== "string") {
-    return JSON.stringify({ ok: false, error: "question_id is required" });
-  }
-  if (intakeChipQuestionPending) {
-    return JSON.stringify({
-      ok: false,
-      error: "Another intake question is already waiting for the user."
-    });
-  }
-  if (questionId === "project_type") {
-    agentEventEmitter?.({
-      type: "intake_project_type_prompt",
-      at: Date.now(),
-      visible: true,
-      options: ["game", "widget"]
-    });
-    return await new Promise<string>((resolve) => {
-      intakeChipQuestionPending = { kind: "project_type", resolve, state };
-    });
-  }
-  if (questionId === "widget_display_size") {
-    agentEventEmitter?.({
-      type: "intake_widget_size_prompt",
-      at: Date.now(),
-      visible: true,
-      sizes: [...WIDGET_DISPLAY_SIZES]
-    });
-    return await new Promise<string>((resolve) => {
-      intakeChipQuestionPending = { kind: "widget_size", resolve, state };
-    });
-  }
-  return JSON.stringify({ ok: false, error: `Unknown question_id: ${questionId}` });
 }
 
 function normalizeMachineHost(value: string): string | null {
@@ -1610,14 +1727,8 @@ function buildAssetApplierPrompt(request: PromptRequest): string {
   const slotIds = Array.isArray(apply.slotIds) ? apply.slotIds : [];
   const workspacePath = request.workspacePath ?? workspaceRoot ?? "";
   const directives = [
-    "You are running in **asset-applier** mode (see `asset-pipeline` skill, Apply mode section).",
-    `Project type: ${apply.projectType}.`,
-    `Workspace path: ${workspacePath}.`,
-    `Slot ids that just changed: ${slotIds.length > 0 ? slotIds.join(", ") : "(none)"}.`,
-    "",
-    "Allowed actions: read `dartsnut.assets.json`, ensure `assets_loader.py` matches the backend snippet for the project type, and switch placeholder draws to `slot.draw(...)` only for the named slot ids.",
-    "Do not scaffold, rename, or restructure files. Do not change layout, fonts, gameplay, or any code unrelated to the named slot ids.",
-    "If the loader is already up-to-date and named slot ids already render through `slot.draw(...)`, return an empty `actions` array and a one-sentence response."
+    `Asset apply context: ${apply.projectType} project at ${workspacePath}.`,
+    `Changed slot ids: ${slotIds.length > 0 ? slotIds.join(", ") : "(none)"}.`
   ].join("\n");
   const userPrompt = request.prompt && request.prompt.trim().length > 0
     ? request.prompt
@@ -1625,7 +1736,7 @@ function buildAssetApplierPrompt(request: PromptRequest): string {
   return [directives, "", "User request:", userPrompt].join("\n");
 }
 
-function buildRoutedPrompt(request: PromptRequest, intakeState?: IntakeToolState): string {
+function buildRoutedPrompt(request: PromptRequest): string {
   if (request.templateMode === "asset-applier") {
     return buildAssetApplierPrompt(request);
   }
@@ -1634,47 +1745,21 @@ function buildRoutedPrompt(request: PromptRequest, intakeState?: IntakeToolState
     typeof request.workspacePath === "string" && request.workspacePath
       ? request.workspacePath
       : workspaceRoot;
-  const confPath =
-    effectiveWorkspacePath && effectiveWorkspacePath.length > 0
-      ? path.join(effectiveWorkspacePath, "conf.json")
-      : "";
-  const confJsonExists = confPath.length > 0 && fs.existsSync(confPath);
-  const intakeReady = intakeState != null && isIntakeStateReady(intakeState);
-  const needsCreationIntake =
-    Boolean(effectiveWorkspacePath) &&
-    effectiveWorkspacePath!.length > 0 &&
-    !confJsonExists &&
-    !intakeReady;
-
-  if (needsCreationIntake) {
-    return buildCreationIntakeUserPrompt(request.prompt, {
-      projectTypeFromPicker:
-        request.projectType === "game" || request.projectType === "widget"
-          ? request.projectType
-          : undefined,
-      widgetSizeFromPicker: request.widgetSize
-    });
-  }
-
-  let templateMode: CreatorTemplateMode | undefined =
+  let templateMode: "game-creator" | "widget-creator" | undefined =
     request.templateMode === "game-creator" || request.templateMode === "widget-creator"
       ? request.templateMode
       : undefined;
   let projectType = request.projectType;
   let widgetSize = request.widgetSize;
 
-  if (
-    (!templateMode || !projectType || !widgetSize) &&
-    effectiveWorkspacePath &&
-    fs.existsSync(effectiveWorkspacePath)
-  ) {
-    const hints = readWorkspaceCreatorHints(effectiveWorkspacePath);
-    if (hints) {
-      templateMode = templateMode ?? hints.templateMode;
-      projectType = projectType ?? hints.projectType;
-      widgetSize = widgetSize ?? hints.widgetSize;
-    }
-  }
+  const hints =
+    effectiveWorkspacePath && fs.existsSync(effectiveWorkspacePath)
+      ? readWorkspaceCreatorHints(effectiveWorkspacePath)
+      : null;
+  ({ templateMode, projectType, widgetSize } = resolveCreatorRouting(
+    { templateMode, projectType, widgetSize },
+    hints
+  ));
 
   if (!templateMode) {
     return request.prompt;
@@ -1698,8 +1783,6 @@ function buildRoutedPrompt(request: PromptRequest, intakeState?: IntakeToolState
     widgetFontManifestPath: templateMode === "widget-creator" ? widgetFontManifestPath : undefined,
     availableWidgetFonts: templateMode === "widget-creator" ? availableWidgetFonts : undefined
   };
-  const resolvedProjectType: ProjectType =
-    projectType === "game" || projectType === "widget" ? projectType : templateMode === "widget-creator" ? "widget" : "game";
   return [
     "Creation context:",
     JSON.stringify(context, null, 2),
@@ -1717,27 +1800,20 @@ function resolveAgentRuntimeSkillsDir(): string {
     path.resolve(process.cwd(), "../packages/agent-runtime/skills"),
     path.resolve(__dirname, "../../../packages/agent-runtime/skills")
   ];
-  const existing = candidates.find((dir) => fs.existsSync(path.join(dir, "dartsnut-skill.md")));
+  const existing = candidates.find((dir) => fs.existsSync(path.join(dir, "dartsnut-core.md")));
   if (!existing) {
-    throw new Error(`Skill directory not found (expected dartsnut-skill.md); tried: ${candidates.join(", ")}`);
+    throw new Error(`Skill directory not found (expected dartsnut-core.md); tried: ${candidates.join(", ")}`);
   }
   return existing;
 }
 
 function resolveSkillSessionContext(
-  templateMode?: PromptRequest["templateMode"] | "creation-intake" | null
+  templateMode?: PromptRequest["templateMode"] | null
 ): {
-  skillPrompt: string;
-  skillLibrary?: { skillsDir: string; allowedIds: ReturnType<typeof allowedDeferredSkillIdsForMode> };
+  skillLibrary: { skillsDir: string; allowedIds: ReturnType<typeof allowedDeferredSkillIdsForMode> };
 } {
   const skillsDir = resolveAgentRuntimeSkillsDir();
-  if (templateMode === "creation-intake") {
-    return {
-      skillPrompt: bundleForTemplateMode(skillsDir, "creation-intake")
-    };
-  }
   return {
-    skillPrompt: resolveSkillRouterPrompt(skillsDir, templateMode ?? null),
     skillLibrary: {
       skillsDir,
       allowedIds: allowedDeferredSkillIdsForMode(templateMode ?? null)
@@ -1767,10 +1843,18 @@ function isWithinDirectory(rootPath: string, targetPath: string): boolean {
 }
 
 function sendToRenderer(channel: string, ...args: unknown[]) {
-  if (!win || win.isDestroyed()) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
     return;
   }
-  win.webContents.send(channel, ...(args as [unknown, ...unknown[]]));
+  try {
+    win.webContents.send(channel, ...(args as [unknown, ...unknown[]]));
+  } catch (error) {
+    // Window teardown can race with async startup/runtime events.
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
+      return;
+    }
+    throw error;
+  }
 }
 
 function mirrorMainProcessConsole(payload: MainProcessConsoleMirrorPayload): void {
@@ -1787,6 +1871,7 @@ function terminalAgentLifecycleLog(message: string, meta?: Record<string, unknow
   }
   const line = meta ? `${message} ${JSON.stringify(meta)}` : message;
   devLog.log(line);
+  appendDevFileLog("log", message, meta ?? {});
   mirrorMainProcessConsole({ level: "log", prefix: "", message: line });
 }
 
@@ -1794,7 +1879,7 @@ function logAgentEventToConsole(event: AgentEvent, mirrorToDevtools: boolean): v
   if (!isDevLoggingEnabled()) {
     return;
   }
-  if (event.type === "stream" || event.type === "reasoning_stream") {
+  if (event.type === "raw_model_stream_event") {
     return;
   }
   const formatted = formatAgentEventForConsole(event);
@@ -1831,26 +1916,26 @@ function logAgentEventToConsole(event: AgentEvent, mirrorToDevtools: boolean): v
 
 /** Logical px; must match `titleBarOverlay.height` on Windows when overlay is enabled. */
 const WINDOWS_TITLE_BAR_OVERLAY_HEIGHT = 32;
+type ResolvedShellUiTheme = Exclude<ShellUiTheme, "system">;
 
-/** Match renderer `themes.css` `--color-bg-page` and caption contrast per theme. */
+/** Keep Windows caption controls readable over the renderer's transparent floating header. */
 const WINDOWS_SHELL_UI: Record<
-  ShellUiTheme,
+  ResolvedShellUiTheme,
   { titleBarColor: string; symbolColor: string; windowBackground: string }
 > = {
   dark: {
-    titleBarColor: "#121212",
+    titleBarColor: "#00000000",
     symbolColor: "#e0e0e0",
-    windowBackground: "#121212"
+    windowBackground: "#161210"
   },
   light: {
-    titleBarColor: "#eef1f8",
+    titleBarColor: "#00000000",
     symbolColor: "#1a2332",
-    windowBackground: "#eef1f8"
+    windowBackground: "#ffffff"
   }
 };
 
-function applyShellUiTheme(theme: ShellUiTheme): void {
-  nativeTheme.themeSource = theme;
+function applyWindowsShellUiTheme(theme: ResolvedShellUiTheme): void {
   if (!win || win.isDestroyed()) {
     return;
   }
@@ -1870,18 +1955,37 @@ function applyShellUiTheme(theme: ShellUiTheme): void {
   win.setBackgroundColor(colors.windowBackground);
 }
 
+function applyShellUiTheme(theme: ShellUiTheme): void {
+  nativeTheme.themeSource = theme;
+  applyWindowsShellUiTheme(nativeTheme.shouldUseDarkColors ? "dark" : "light");
+}
+
+nativeTheme.on("updated", () => {
+  applyWindowsShellUiTheme(nativeTheme.shouldUseDarkColors ? "dark" : "light");
+});
+
 async function syncShellUiThemeFromDomSnapshot(): Promise<void> {
   if (!win || win.isDestroyed()) {
     return;
   }
   try {
-    const resolved = await win.webContents.executeJavaScript(
-      `document.documentElement.dataset.theme === "light" ? "light" : "dark"`,
+    const preference = await win.webContents.executeJavaScript(
+      `(function () {
+        try {
+          var stored = localStorage.getItem("dartsnut-theme");
+          if (stored === "system" || stored === "light" || stored === "dark") return stored;
+        } catch (e) {}
+        return "system";
+      })()`,
       true
     );
-    applyShellUiTheme(resolved === "light" ? "light" : "dark");
+    applyShellUiTheme(
+      preference === "light" || preference === "dark" || preference === "system"
+        ? preference
+        : "system"
+    );
   } catch {
-    applyShellUiTheme("dark");
+    applyShellUiTheme("system");
   }
 }
 
@@ -1981,10 +2085,16 @@ function sendBridgeCommandSafe(command: EmulatorCommand): void {
 function applyIdleEmulatorMainState(): void {
   emulatorSwitchGate = null;
   pendingEmulatorPathForReload = null;
+  latestEmulatorFrame = null;
+  previousAgentObservationSurfaceHash = null;
+  agentDartSlots = Array.from({ length: 12 }, () => [-1, -1]);
   emulatorState.widgetPath = null;
   emulatorState.widgetId = null;
   emulatorState.widgetType = null;
   emulatorState.running = false;
+  emulatorState.gifRecording = false;
+  emulatorState.gifSaving = false;
+  emulatorState.gifElapsedMs = 0;
   emulatorState.lastError = undefined;
   emulatorState.status = "Idle";
   clearEmulatorLogRing();
@@ -1999,23 +2109,10 @@ function performSessionCleanup(options: { clearWorkspace: boolean }): void {
     assetManager.stop();
     stopDeployConfWatcher();
     lastWidgetDir = null;
-    writeTempWorkspaceRecordToDisk(null);
     writeEmulatorState();
   }
   sendToRenderer(IPCChannels.sessionReset);
   emitEmulatorState();
-}
-
-function clearSessionStateForQuitDiscard(toRemove: string): void {
-  // During quit, avoid renderer reset churn to prevent visible timeline flicker.
-  if (workspaceRoot && path.resolve(workspaceRoot) === toRemove) {
-    workspaceRoot = null;
-  }
-  assetManager.stop();
-  stopDeployConfWatcher();
-  lastWidgetDir = null;
-  writeTempWorkspaceRecordToDisk(null);
-  writeEmulatorState();
 }
 
 function emitEmulatorState() {
@@ -2023,14 +2120,7 @@ function emitEmulatorState() {
 }
 
 function applyEmulatorStateSnapshot(nextState: EmulatorStateSnapshot): void {
-  emulatorState.widgetPath = nextState.widgetPath;
-  emulatorState.widgetId = nextState.widgetId;
-  emulatorState.widgetType = nextState.widgetType;
-  emulatorState.running = nextState.running;
-  emulatorState.fps = nextState.fps;
-  emulatorState.status = nextState.status;
-  emulatorState.lastError = nextState.lastError;
-  emulatorState.lastCapturePath = nextState.lastCapturePath;
+  copyEmulatorStateSnapshot(emulatorState, nextState);
 }
 
 function beginPendingEmulatorSwitch(targetWidgetPath: string): void {
@@ -2044,6 +2134,7 @@ function beginPendingEmulatorSwitch(targetWidgetPath: string): void {
 }
 
 function emitEmulatorFrame(frame: EmulatorFrame) {
+  latestEmulatorFrame = frame;
   const gated = handleEmulatorSwitchFrame(emulatorSwitchGate, frame);
   emulatorSwitchGate = gated.gate;
   if (gated.state) {
@@ -2178,6 +2269,7 @@ function spawnBridgeAfterStop() {
           running: typeof payload.running === "boolean" ? payload.running : emulatorState.running,
           fps: typeof payload.fps === "number" ? payload.fps : emulatorState.fps,
           status: typeof payload.status === "string" ? payload.status : emulatorState.status,
+          audioMuted: typeof payload.audioMuted === "boolean" ? payload.audioMuted : emulatorState.audioMuted,
           lastError:
             typeof payload.lastError !== "undefined"
               ? payload.lastError
@@ -2186,6 +2278,18 @@ function spawnBridgeAfterStop() {
             typeof payload.lastCapturePath !== "undefined"
               ? payload.lastCapturePath ?? null
               : emulatorState.lastCapturePath,
+          gifRecording:
+            typeof payload.gifRecording === "boolean"
+              ? payload.gifRecording
+              : emulatorState.gifRecording ?? false,
+          gifSaving:
+            typeof payload.gifSaving === "boolean"
+              ? payload.gifSaving
+              : emulatorState.gifSaving ?? false,
+          gifElapsedMs:
+            typeof payload.gifElapsedMs === "number"
+              ? payload.gifElapsedMs
+              : emulatorState.gifElapsedMs ?? 0,
         };
         const gated = handleEmulatorSwitchState(emulatorSwitchGate, incomingState, emulatorState);
         emulatorSwitchGate = gated.gate;
@@ -2236,83 +2340,76 @@ function shouldAttachAgentSessionPersistence(workspaceForSession: string | null 
 function buildWorkspaceSessionPersistence(
   workspaceForSession: string | null | undefined
 ): AgentSessionPersistence | undefined {
-  if (!shouldAttachAgentSessionPersistence(workspaceForSession)) {
+  if (!shouldAttachAgentSessionPersistence(workspaceForSession) || !activeChatId) {
     return undefined;
   }
-  return new AgentSessionPersistence(workspaceForSession!);
-}
-
-function resolvePreferredUserLocaleForSession(
-  latestUserText: string,
-  persistence?: AgentSessionPersistence
-): UserLocale {
-  const persisted = persistence?.readManifest()?.preferredUserLocale ?? null;
-  return resolveSessionUserLocale(persisted, latestUserText);
+  return getProjectStore().sessionPersistence(activeChatId);
 }
 
 async function buildSession(
   templateMode: PromptRequest["templateMode"] | undefined,
   extras?: {
     workspacePath?: string;
-    completionTools?: typeof AGENT_TOOL_SCHEMAS;
-    hostIntakeToolHandler?: (args: Record<string, unknown>) => Promise<string>;
-    hostAskQuestionHandler?: (args: Record<string, unknown>) => Promise<string>;
-    hostIntakeReadyToFinish?: () => boolean;
+    toolSchemas?: typeof AGENT_TOOL_SCHEMAS;
+    chatMediaAttachments?: PromptRequest["chatMediaAttachments"];
     skipInitialWorkspaceResolve?: boolean;
-    skillBundleMode?: PromptRequest["templateMode"] | "creation-intake" | null;
+    skillBundleMode?: PromptRequest["templateMode"] | null;
     sessionPersistence?: AgentSessionPersistence;
-    initialConversation?: ChatMessage[];
-    preferredUserLocale?: UserLocale | null;
-    latestUserTextForLocale?: string;
-    intakeState?: IntakeToolState;
-    getIntakeState?: () => IntakeToolState;
+    initialItems?: AgentInputItem[];
+    originalUserPrompt?: string;
     projectType?: ProjectType;
     widgetSize?: WidgetSize;
     assetApplierMode?: boolean;
+    agentModelConfig?: AgentModelConfig;
+    agentProfileId?: AgentProfileId | null;
   }
 ): Promise<AgentSessionRuntime> {
   const workspacePath = extras?.workspacePath ?? workspaceRoot;
   if (!workspacePath) {
     throw new Error("Workspace is not selected.");
   }
-  const providerSettings = readProviderSettings();
-  const config = await resolveProviderConfigForDesktop(providerSettings);
-  const validation = validateProviderConfig(config);
-  if (!validation.ok) {
-    throw new Error(validation.error);
-  }
+  const agentModelConfig = extras?.agentModelConfig ?? buildAgentModelConfigFromProviderSettings(readProviderSettings());
   const skillBundleMode =
     extras?.skillBundleMode !== undefined ? extras.skillBundleMode : templateMode ?? null;
-  const { skillPrompt, skillLibrary } = resolveSkillSessionContext(skillBundleMode);
-  const preferredUserLocale =
-    extras?.preferredUserLocale ??
-    (extras?.latestUserTextForLocale != null
-      ? resolvePreferredUserLocaleForSession(extras.latestUserTextForLocale, extras.sessionPersistence)
-      : null);
+  const { skillLibrary } = resolveSkillSessionContext(skillBundleMode);
   const engine = new SessionEngine({
-    agentModelConfig: buildAgentModelConfig({
-      model: config.model,
-      baseUrl: config.baseUrl,
-      apiKey: config.apiKey
-    }),
+    agentModelConfig,
     workspacePolicy: new WorkspacePolicy(workspacePath),
-    skillPrompt,
     skillLibrary,
-    preferredUserLocale,
+    agentProfileId: extras?.agentProfileId ?? extras?.sessionPersistence?.readAgentProfileId() ?? "export",
     assetRoots: {
-      widgetFonts: path.join(repoRoot, "assets", "fonts", "widgets")
+      widgetFonts: path.join(repoRoot, "assets", "fonts", "widgets"),
+      chatAttachments: extras?.chatMediaAttachments
     },
-    completionTools: extras?.completionTools,
-    hostIntakeToolHandler: extras?.hostIntakeToolHandler,
-    hostAskQuestionHandler: extras?.hostAskQuestionHandler,
-    hostIntakeReadyToFinish: extras?.hostIntakeReadyToFinish,
-    hostReloadEmulatorHandler: () => executeHostReloadEmulatorForAgent(),
+    toolSchemas: extras?.toolSchemas,
+    hostReloadEmulatorHandler: (args) => executeHostReloadEmulatorForAgent(args),
     hostGetEmulatorLogsHandler: (args) => Promise.resolve(executeHostGetEmulatorLogsForAgent(args)),
     hostCheckPythonHandler: (args) => Promise.resolve(executeHostCheckPythonForAgent(args)),
     hostMachineMcpHandler: (args) => executeMachineMcpForAgent(args),
+    hostObserveEmulatorHandler: (args) => executeHostObserveEmulatorForAgent(args),
+    hostControlEmulatorInputHandler: (args) => executeHostControlEmulatorInputForAgent(args),
+    hostRunEmulatorScenarioHandler: (args) => executeHostRunEmulatorScenarioForAgent(args),
+    hostPixelLabGenerateHandler: (args) => {
+      const auth = readCommunityAuth(getCommunityUserDataPath());
+      if (!auth?.token) {
+        return Promise.resolve(JSON.stringify({
+          ok: false,
+          code: "AUTH_REQUIRED",
+          error: "Sign in to your Dartsnut account to use PixelLab generation."
+        }));
+      }
+      return executePixelLabGenerationForAgent({
+        args,
+        workspacePath,
+        baseApi: getCommunityClient().getConfig().baseApi,
+        token: auth.token,
+        fetchImpl: cloudFetch()
+      });
+    },
+    askUserQuestionHandler: (prompt) => askUserQuestionForAgent(prompt),
     skipInitialWorkspaceResolve: extras?.skipInitialWorkspaceResolve,
     sessionPersistence: extras?.sessionPersistence,
-    initialConversation: extras?.initialConversation,
+    initialItems: extras?.initialItems,
     sessionTemplateMode: templateMode ?? null,
     sessionSection: skillBundleMode === null ? null : String(skillBundleMode),
     runContextSeed: {
@@ -2321,10 +2418,10 @@ async function buildSession(
       widgetSize: extras?.widgetSize,
       templateMode: templateMode ?? skillBundleMode ?? null,
       assetApplierMode: extras?.assetApplierMode ?? templateMode === "asset-applier",
-      intakeState: extras?.intakeState,
-      originalUserPrompt: extras?.latestUserTextForLocale
+      originalUserPrompt: extras?.originalUserPrompt,
+      agentProfileId: extras?.agentProfileId ?? extras?.sessionPersistence?.readAgentProfileId() ?? "export"
     },
-    getIntakeState: extras?.getIntakeState
+    onDiagnostic: (message, meta) => terminalAgentLifecycleLog(`[agent] ${message}`, meta)
   });
   return new AgentSessionRuntime({
     workspacePath,
@@ -2383,6 +2480,14 @@ async function createWindow() {
     }
     writeWindowState(captureWindowState(win));
   };
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (isMainFrame) {
+      console.error("[renderer] navigation failed", { errorCode, errorDescription, validatedURL });
+    }
+  });
+  win.webContents.on("render-process-gone", (_event, details) => {
+    console.error("[renderer] process gone", details);
+  });
   win.webContents.on("did-finish-load", () => {
     void syncShellUiThemeFromDomSnapshot().catch(() => {
       /* Theme sync uses executeJavaScript; failures are non-fatal. */
@@ -2396,40 +2501,12 @@ async function createWindow() {
   } else {
     await win.loadFile(path.join(__dirname, "../dist/index.html"));
   }
-  // Guard quit here while the window is still alive; async native dialogs during `before-quit`
-  // caused unstable macOS teardown behavior.
-  win.on("close", (event) => {
-    devLog.info("[quit] win.close fired", {
-      t: Date.now(),
-      allowWithoutPrompt: allowWindowCloseWithoutTempPrompt,
-      isTempWorkspace: isTemporaryWorkspaceActiveNow(),
-      appQuitRequested,
-    });
+  win.on("close", () => {
+    devLog.info("[quit] win.close fired", { t: Date.now() });
     persistWindowState();
-    if (allowWindowCloseWithoutTempPrompt || !isTemporaryWorkspaceActiveNow()) {
-      allowWindowCloseWithoutTempPrompt = false;
-      devLog.info("[quit] win.close → allowing close immediately");
-      return;
-    }
-    event.preventDefault();
-    devLog.info("[quit] win.close → prevented; running temp-workspace guard");
-    // `close` can run before `before-quit` on macOS; mark quit intent now so one Cmd+Q finishes after the guard.
-    appQuitRequested = true;
-    void (async () => {
-      const proceed = await ensureTemporaryWorkspaceResolvedForGuard("quit");
-      devLog.info("[quit] win.close → guard resolved", { proceed });
-      if (!proceed) {
-        appQuitRequested = false;
-        return;
-      }
-      allowWindowCloseWithoutTempPrompt = true;
-      // Resume the original quit request immediately after the guard succeeds.
-      app.quit();
-    })();
   });
   win.on("closed", () => {
     devLog.info("[quit] win.closed fired", { t: Date.now() });
-    allowWindowCloseWithoutTempPrompt = false;
     chromeInsetInsertedCssKey = undefined;
     win = null;
   });
@@ -2449,6 +2526,24 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   try {
+    terminalAgentLifecycleLog("[dev-log] writing agent diagnostics", { path: getDevLogPath() });
+    desktopNetwork = await initializeDesktopNetwork(session.defaultSession, {
+      onDiagnostic: (diagnostic) => {
+        console.info("[network] system proxy", diagnostic);
+      },
+      onError: (error) => {
+        console.warn("[network] system proxy initialization or resolution failed", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    });
+    try {
+      await configureSystemProxySession(session.fromPartition("electron-updater", { cache: false }));
+    } catch (error) {
+      console.warn("[network] updater system proxy initialization failed", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
     await createWindow();
     startAppUpdateCheck(sendToRenderer);
     setPythonRuntimeProgress({
@@ -2464,7 +2559,8 @@ app.whenReady().then(async () => {
       (progress) => {
         setPythonRuntimeProgressFromDownload(progress);
         devLog.info("[runtime] Progress", { stage: progress.stage, percent: progress.percent });
-      }
+      },
+      { fetchImpl: cloudFetch() }
     );
 
     pythonExec = runtime.pythonPath;
@@ -2478,13 +2574,17 @@ app.whenReady().then(async () => {
       message: "Runtime ready"
     });
 
-    // Workspace recovery dialogs now have the main window as a proper parent.
-    await maybeRecoverTrackedTempWorkspaceAtLaunch();
-    ensureTemporaryWorkspaceRootAllocated();
-    startPythonBridge();
+    projectStore = new ProjectStore(app.getPath("userData"));
+    const previousChat = projectStore.lastOpenedChat();
+    const previousProject = previousChat ? projectStore.getProject(previousChat.projectId) : null;
+    if (previousProject) {
+      await switchToProject(previousProject.id);
+    }
+    if (workspaceRoot) startPythonBridge();
     emitBootstrapStateToRenderer();
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error("[startup] initialization failed", error);
     setPythonRuntimeStatus(errorMessage);
     setPythonRuntimeProgress({
       running: false,
@@ -2506,92 +2606,44 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
+let quitCleanupComplete = false;
+let quitCleanupRequitScheduled = false;
+const runQuitCleanup = createShutdownCleanupRunner(
+  () => [
+    { name: "agent", run: () => stopActiveAgentRun("app_quit") },
+    { name: "emulator", run: () => gracefulStopEmulatorBridge(3000, { permanent: true }) },
+    { name: "deploy", run: () => restoreDeployMachineForQuit() },
+  ],
+  ({ name, reason }) => {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    devLog.warn(`[quit] ${name} cleanup failed`, message);
+  },
+);
+
 app.on("before-quit", (event) => {
-  appQuitRequested = true;
-  const winState = win && !win.isDestroyed()
-    ? { visible: win.isVisible(), isTempWorkspace: isTemporaryWorkspaceActiveNow() }
-    : { visible: false, isTempWorkspace: isTemporaryWorkspaceActiveNow() };
-  devLog.info("[quit] before-quit fired", { t: Date.now(), ...winState });
-  // Hide immediately so quit feels responsive. Only keep the window visible if the
-  // temp-workspace guard will actually need to show a save/discard dialog — i.e. the
-  // workspace exists and is non-empty. An empty workspace auto-discards without any
-  // dialog (mirrors the condition in ensureTemporaryWorkspaceResolvedForGuard).
-  const needsTempWorkspaceDialog = isTemporaryWorkspaceActiveNow() && !(
-    workspaceRoot != null &&
-    fs.existsSync(workspaceRoot) &&
-    fs.statSync(workspaceRoot).isDirectory() &&
-    isDirectoryEmpty(workspaceRoot)
-  );
-  if (win && !win.isDestroyed() && win.isVisible() && !needsTempWorkspaceDialog) {
-    devLog.info("[quit] before-quit → hiding window now", { needsTempWorkspaceDialog });
+  devLog.info("[quit] before-quit fired", { t: Date.now(), cleanupComplete: quitCleanupComplete });
+  if (win && !win.isDestroyed() && win.isVisible()) {
     win.hide();
-  } else {
-    devLog.info("[quit] before-quit → skipping hide", {
-      winNull: !win,
-      destroyed: win ? win.isDestroyed() : true,
-      visible: win && !win.isDestroyed() ? win.isVisible() : false,
-      needsTempWorkspaceDialog,
-    });
   }
-  const action = decideBeforeQuitBridgeAction({
-    teardownDone: emulatorBridgeTeardownDone,
-    hasBridgeProcess: !!bridgeProcess,
-    teardownInFlight: !!emulatorBridgeTeardownInFlight
-  });
-  const deployAction = decideBeforeQuitDeployAction({
-    restoreDone: deployMachineRestoreDone,
-    connected: !!deployMachineSession?.connected,
-    restoreInFlight: !!deployMachineRestoreInFlight
-  });
-  devLog.info("[quit] before-quit → teardown actions", { bridge: action, deploy: deployAction });
-  if (action === "proceed" && deployAction === "proceed") {
+  assetManager.stop();
+  stopDeployConfWatcher();
+  if (quitCleanupComplete) {
     return;
   }
-  if (action === "mark_teardown_done") {
-    emulatorBridgeTeardownDone = true;
-  }
-  if (deployAction === "mark_restore_done") {
-    deployMachineRestoreDone = true;
-  }
-  if (
-    (action === "proceed" || action === "mark_teardown_done") &&
-    (deployAction === "proceed" || deployAction === "mark_restore_done")
-  ) {
+  const hasAsyncCleanup = sendPromptCoordinator.hasActiveRun() || !!bridgeProcess || !!deployMachineSession?.connected;
+  if (!hasAsyncCleanup) {
+    quitCleanupComplete = true;
     return;
   }
   event.preventDefault();
-  devLog.info("[quit] before-quit → prevented; starting quit cleanup");
-  if (action === "start_teardown") {
-    emulatorBridgeTeardownInFlight = gracefulStopEmulatorBridge(3000, { permanent: true })
-      .catch(() => undefined);
-  }
-  if (deployAction === "start_restore") {
-    deployMachineRestoreInFlight = restoreDeployMachineForQuit()
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        devLog.warn("[quit] deploy restore failed", message);
-        emitDeployLog(`[deploy] Quit restore failed: ${message}`);
-      });
-  }
-  if (
-    (action === "wait_for_inflight_teardown" || action === "start_teardown") ||
-    (deployAction === "wait_for_inflight_restore" || deployAction === "start_restore")
-  ) {
-    if (!quitCleanupRequitScheduled) {
-      quitCleanupRequitScheduled = true;
-      Promise.all([
-        emulatorBridgeTeardownInFlight ?? Promise.resolve(),
-        deployMachineRestoreInFlight ?? Promise.resolve(),
-      ])
-        .finally(() => {
-          devLog.info("[quit] before-quit → cleanup complete, re-quitting", { t: Date.now() });
-          emulatorBridgeTeardownInFlight = null;
-          deployMachineRestoreInFlight = null;
-          quitCleanupRequitScheduled = false;
-          app.quit();
-        });
-    }
-    return;
+  if (!quitCleanupRequitScheduled) {
+    quitCleanupRequitScheduled = true;
+    devLog.info("[quit] starting concurrent cleanup", { t: Date.now() });
+    void runQuitCleanup().finally(() => {
+      quitCleanupComplete = true;
+      devLog.info("[quit] cleanup complete, re-quitting", { t: Date.now() });
+      app.quit();
+    });
   }
 });
 
@@ -2599,12 +2651,8 @@ app.on("will-quit", () => {
   devLog.info("[quit] will-quit fired", { t: Date.now() });
   stopPythonBridgeProcess();
   assetManager.stop();
+  stopDeployConfWatcher();
   void disconnectDeployMachine();
-  const pending = pendingTempDirRemovalOnQuit;
-  pendingTempDirRemovalOnQuit = null;
-  if (pending) {
-    removeDirectoryDeferredOnQuit(pending);
-  }
 });
 
 ipcMain.handle(IPCChannels.windowChromeInsets, (): WindowChromeInsets => {
@@ -2615,48 +2663,179 @@ ipcMain.handle(IPCChannels.windowChromeInsets, (): WindowChromeInsets => {
 });
 
 ipcMain.handle(IPCChannels.shellUiTheme, (_event: unknown, theme: unknown): void => {
-  if (theme === "light" || theme === "dark") {
+  if (theme === "system" || theme === "light" || theme === "dark") {
     applyShellUiTheme(theme);
   }
 });
 
 ipcMain.handle(IPCChannels.appUpdateStatus, (): AppUpdateStatus => getAppUpdateStatus());
+ipcMain.handle(IPCChannels.appUpdateAutoDownload, (): boolean => getAutoUpdateEnabled());
+ipcMain.handle(IPCChannels.appUpdateSetAutoDownload, (_event: unknown, enabled: unknown): boolean =>
+  setAutoUpdateEnabled(enabled === true)
+);
+ipcMain.handle(IPCChannels.appUpdateDownload, (): Promise<AppUpdateDownloadResponse> =>
+  downloadAvailableAppUpdate()
+);
+ipcMain.handle(IPCChannels.appUpdateCheck, (): Promise<AppUpdateCheckResponse> =>
+  checkForAppUpdate()
+);
 ipcMain.handle(IPCChannels.appUpdateInstallNow, async (): Promise<AppUpdateInstallResponse> => {
   if (!isDownloadedAppUpdateReady()) {
     return { ok: false, reason: "not_ready" };
   }
-  const proceed = await ensureTemporaryWorkspaceResolvedForGuard("quit");
-  if (!proceed) {
-    return { ok: false, reason: "cancelled" };
-  }
-  allowWindowCloseWithoutTempPrompt = true;
   installDownloadedAppUpdate();
   return { ok: true };
 });
 
 ipcMain.handle(IPCChannels.bootstrapState, () => getBootstrapState());
 
-ipcMain.handle(IPCChannels.getWorkspaceSessionSummary, (): AgentSessionWorkspaceSummary => {
+ipcMain.handle(IPCChannels.projectsList, () => projectTree());
+ipcMain.handle(IPCChannels.projectCreate, async (_event: unknown, request: ProjectCreateRequest) => {
+  const store = getProjectStore();
+  const project = store.ensureProject(request.folderPath, request.name);
+  const agentProfileId = request.agentProfileId ? normalizeAgentProfileId(request.agentProfileId) : null;
+  const chat = agentProfileId ? store.createChat(project.id) : null;
+  if (chat && agentProfileId) {
+    try {
+      store.sessionPersistence(chat.id).setAgentProfileId(agentProfileId);
+    } catch (error) {
+      store.archiveChat(chat.id);
+      throw error;
+    }
+  }
+  const accepted = await switchToProject(project.id, chat?.id);
+  if (!accepted) {
+    if (chat) store.archiveChat(chat.id);
+    throw new Error("Project creation was cancelled.");
+  }
+  return { state: getBootstrapState(), tree: projectTree() };
+});
+ipcMain.handle(IPCChannels.projectRemove, async (_event: unknown, projectId: string) => {
+  const store = getProjectStore();
+  const project = store.getProject(projectId);
+  if (!project) throw new Error("Project does not exist.");
+  if (sendPromptCoordinator.hasActiveRun()) throw new Error("Wait for the active agent request to finish.");
+  if (projectSwitchInFlight) throw new Error("Wait for the current project switch to finish.");
+  if (activeProjectId === project.id) {
+    const cleared = await clearActiveProject({
+      confirmRuntimeStop: false,
+      progressMessage: "Removing local project…"
+    });
+    if (!cleared) throw new Error("Could not stop the active project.");
+  }
+  if (!store.removeProject(project.id)) throw new Error("Project does not exist.");
+  emitBootstrapStateToRenderer();
+  return { state: getBootstrapState(), tree: projectTree() };
+});
+ipcMain.handle(IPCChannels.projectSelect, async (_event: unknown, request: ProjectSelectRequest) => {
+  if (request.projectId === null) {
+    const accepted = await clearActiveProject();
+    return { state: getBootstrapState(), tree: projectTree(), accepted };
+  }
+  const accepted = await switchToProject(request.projectId, request.chatId);
+  return { state: getBootstrapState(), tree: projectTree(), accepted };
+});
+ipcMain.handle(IPCChannels.chatCreate, async (_event: unknown, request: ChatCreateRequest) => {
+  const store = getProjectStore();
+  const project = store.getProject(request.projectId);
+  if (!project) throw new Error("Project does not exist.");
+  if (activeProjectId !== project.id) throw new Error("Project is not active.");
+  const agentProfileId = normalizeAgentProfileId(request.agentProfileId);
+  const chat = store.createChat(project.id);
+  try {
+    store.sessionPersistence(chat.id).setAgentProfileId(agentProfileId);
+  } catch (error) {
+    store.archiveChat(chat.id);
+    throw error;
+  }
+  const accepted = await switchToProject(project.id, chat.id);
+  if (!accepted) throw new Error("Could not start chat.");
+  return { state: getBootstrapState(), tree: projectTree() };
+});
+ipcMain.handle("agent:chat-archive", (_event: unknown, chatId: string) => {
+  const store = getProjectStore();
+  const chat = store.archiveChat(chatId);
+  if (!chat) throw new Error("Chat does not exist.");
+  if (activeChatId === chat.id) {
+    activeChatId = null;
+    emitBootstrapStateToRenderer();
+  }
+  return { state: getBootstrapState(), tree: projectTree() };
+});
+ipcMain.handle("agent:chat-generate-title", async (_event: unknown, request: { chatId: string; firstUserMessage: string; fallbackOnly?: boolean }) => {
+  const store = getProjectStore();
+  const chat = store.getChat(request.chatId);
+  if (!chat || chat.archivedAt || chat.title !== "New chat") {
+    return { tree: projectTree(), updated: false };
+  }
+  if (request.fallbackOnly) {
+    const updated = store.updateDefaultChatTitle(request.chatId, fallbackChatTitle(request.firstUserMessage));
+    return { tree: projectTree(), updated: Boolean(updated) };
+  }
+  const titleLease = await chatTitleCoordinator.begin();
+  let title = fallbackChatTitle(request.firstUserMessage);
+  let bridgeRun: DartsnutLlmBridgeRun | null = null;
+  try {
+    const prepared = await prepareAgentProvider(readProviderSettings());
+    if (prepared.ok) {
+      bridgeRun = prepared.bridgeRun;
+      try {
+        title = await generateChatTitle(prepared.modelConfig, request.firstUserMessage, titleLease.abortController.signal);
+      } catch {
+        // Deterministic fallback already selected.
+      }
+    }
+  } catch {
+    // Title generation must not affect the completed agent request.
+  } finally {
+    try {
+      await bridgeRun?.finish("title_finalizer");
+    } catch {
+      // Keep deterministic fallback available even when bridge cleanup fails.
+    }
+    titleLease.settle();
+  }
+  const updated = store.updateDefaultChatTitle(request.chatId, title);
+  return { tree: projectTree(), updated: Boolean(updated) };
+});
+ipcMain.handle(IPCChannels.chatSelect, async (_event: unknown, chatId: string) => {
+  const store = getProjectStore(); const chat = store.getChat(chatId);
+  if (!chat || chat.archivedAt) throw new Error("Chat does not exist.");
+  const accepted = await switchToProject(chat.projectId, chat.id);
+  return { state: getBootstrapState(), tree: projectTree(), accepted };
+});
+
+ipcMain.handle(IPCChannels.getWorkspaceSessionSummary, (
+  _event: unknown,
+  requestedChatId?: unknown
+): AgentSessionWorkspaceSummary => {
   const ws = workspaceRoot;
-  if (!ws || !shouldAttachAgentSessionPersistence(ws)) {
+  const summaryChatId = typeof requestedChatId === "string" ? requestedChatId : activeChatId;
+  const chat = summaryChatId ? getProjectStore().getChat(summaryChatId) : null;
+  if (!ws || !shouldAttachAgentSessionPersistence(ws) || !chat || chat.archivedAt) {
     return {
+      chatId: null,
       hasPersistedSession: false,
       sessionId: null,
       updatedAt: null,
       templateMode: null,
       transcriptTail: [],
-      tokenUsage: null
+      tokenUsage: null,
+      agentProfileId: null
     };
   }
-  const persistence = new AgentSessionPersistence(ws);
+  const persistence = getProjectStore().sessionPersistence(chat.id);
+  persistence.readConversationItems();
   const manifest = persistence.readManifest();
   return {
+    chatId: chat.id,
     hasPersistedSession: persistence.hasPersistedSession(),
     sessionId: manifest?.sessionId ?? null,
     updatedAt: manifest?.updatedAt ?? null,
     templateMode: manifest?.templateMode ?? null,
     transcriptTail: persistence.readTranscriptTail(200),
-    tokenUsage: persistence.readTokenUsage()
+    tokenUsage: persistence.readTokenUsage(),
+    agentProfileId: persistence.readAgentProfileId()
   };
 });
 
@@ -2667,7 +2846,7 @@ ipcMain.handle(
     if (!ws) {
       return { ok: false, reason: "no_workspace" };
     }
-    const persistence = buildWorkspaceSessionPersistence(ws);
+    const persistence = activeChatId ? getProjectStore().sessionPersistence(activeChatId) : buildWorkspaceSessionPersistence(ws);
     if (!persistence) {
       return { ok: false, reason: "persistence_disabled" };
     }
@@ -2680,7 +2859,7 @@ let communityClientSingleton: CommunityClient | null = null;
 
 function getCommunityClient(): CommunityClient {
   if (!communityClientSingleton) {
-    communityClientSingleton = createCommunityClient();
+    communityClientSingleton = createCommunityClient(process.env, cloudFetch());
   }
   return communityClientSingleton;
 }
@@ -2695,6 +2874,8 @@ ipcMain.handle(IPCChannels.communityGetSession, (): CommunitySessionInfo => {
   return {
     loggedIn: Boolean(auth?.token),
     account: auth?.account ?? null,
+    analyticsUserId: auth?.analyticsUserId ?? null,
+    authMethod: auth?.authMethod ?? null,
     hasSupabase: config.hasSupabase,
     googleClientId: config.googleClientId,
     googleDesktopClientId: config.googleDesktopClientId,
@@ -2716,25 +2897,49 @@ ipcMain.handle(
       if (!result.ok) {
         return { ok: false, code: result.code, message: result.message };
       }
-      writeCommunityAuth(getCommunityUserDataPath(), { token: result.token, account: result.account });
-      return { ok: true, account: result.account };
+      writeCommunityAuth(getCommunityUserDataPath(), {
+        token: result.token,
+        account: result.account,
+        analyticsUserId: result.analyticsUserId,
+        authMethod: "password"
+      });
+      return { ok: true, account: result.account, needsPasswordSetup: false };
     }
     if (request.method === "googleOAuth") {
       const config = client.getConfig();
-      const oauthResult = await signInWithGoogleOAuth({
-        clientId: config.googleDesktopClientId,
-        clientSecret: config.googleDesktopClientSecret,
-        openExternal: (url) => shell.openExternal(url)
-      });
-      if (!oauthResult.ok) {
-        return { ok: false, code: oauthResult.code, message: oauthResult.message };
+      communityGoogleLoginAbortController?.abort();
+      const loginAbort = new AbortController();
+      communityGoogleLoginAbortController = loginAbort;
+      try {
+        const oauthResult = await signInWithGoogleOAuth({
+          clientId: config.googleDesktopClientId,
+          clientSecret: config.googleDesktopClientSecret,
+          openExternal: (url) => shell.openExternal(url),
+          fetchImpl: cloudFetch(),
+          signal: loginAbort.signal
+        });
+        if (!oauthResult.ok) {
+          return { ok: false, code: oauthResult.code, message: oauthResult.message };
+        }
+        const result = await client.loginWithGoogleIdToken(oauthResult.idToken, loginAbort.signal);
+        if (loginAbort.signal.aborted) {
+          return { ok: false, code: "cancelled", message: "Google sign-in was cancelled." };
+        }
+        if (!result.ok) {
+          return { ok: false, code: result.code, message: result.message };
+        }
+        writeCommunityAuth(getCommunityUserDataPath(), {
+          token: result.token,
+          account: result.account,
+          analyticsUserId: result.analyticsUserId,
+          authMethod: "google"
+        });
+        return { ok: true, account: result.account, needsPasswordSetup: result.needsPasswordSetup };
+      } finally {
+        if (communityGoogleLoginAbortController === loginAbort) {
+          communityGoogleLoginAbortController = null;
+        }
       }
-      const result = await client.loginWithGoogleIdToken(oauthResult.idToken);
-      if (!result.ok) {
-        return { ok: false, code: result.code, message: result.message };
-      }
-      writeCommunityAuth(getCommunityUserDataPath(), { token: result.token, account: result.account });
-      return { ok: true, account: result.account };
     }
     const idToken = String(request.idToken || "").trim();
     if (!idToken) {
@@ -2744,15 +2949,68 @@ ipcMain.handle(
     if (!result.ok) {
       return { ok: false, code: result.code, message: result.message };
     }
-    writeCommunityAuth(getCommunityUserDataPath(), { token: result.token, account: result.account });
-    return { ok: true, account: result.account };
+    writeCommunityAuth(getCommunityUserDataPath(), {
+      token: result.token,
+      account: result.account,
+      analyticsUserId: result.analyticsUserId,
+      authMethod: "google"
+    });
+    return { ok: true, account: result.account, needsPasswordSetup: result.needsPasswordSetup };
   }
 );
+
+ipcMain.handle(
+  IPCChannels.communitySetPassword,
+  async (_event: unknown, request: CommunitySetPasswordRequest): Promise<CommunitySetPasswordResponse> => {
+    const password = String(request.password || "");
+    if (!password) {
+      return { ok: false, code: "invalid_credentials", message: "Please enter a password." };
+    }
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    const result = await getCommunityClient().setPassword(auth.token, password);
+    if (!result.ok) {
+      return { ok: false, code: result.code, message: result.message };
+    }
+    return { ok: true, account: result.account || auth.account };
+  }
+);
+
+ipcMain.handle(IPCChannels.communityCancelGoogleLogin, (): CommunityCancelGoogleLoginResponse => {
+  communityGoogleLoginAbortController?.abort();
+  return { ok: true };
+});
 
 ipcMain.handle(IPCChannels.communityLogout, (): CommunityLogoutResponse => {
   clearCommunityAuth(getCommunityUserDataPath());
   return { ok: true };
 });
+
+ipcMain.handle(
+  IPCChannels.communityGetLlmQuota,
+  async (): Promise<CommunityGetLlmQuotaResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const result = await getCommunityClient().getLlmQuota(auth.token);
+    if (!result.ok) {
+      if (result.code === "session_expired") {
+        clearCommunityAuth(getCommunityUserDataPath());
+      }
+      return {
+        ok: false,
+        code: result.code,
+        message: result.message,
+        serverMessage: result.serverMessage,
+        authRequired: result.code === "session_expired"
+      };
+    }
+    return { ok: true, quota: result.quota };
+  }
+);
 
 ipcMain.handle(
   IPCChannels.communityListDeployDevices,
@@ -2855,20 +3113,6 @@ ipcMain.handle(
       status: game.status,
       createdAt: game.createdAt
     }));
-    const currentApp = workspace.projectType
-      ? [...normalizedGames, ...widgets.widgets].find(
-          (appRow) => appRow.projectType === workspace.projectType && appRow.appId === workspace.appId
-        ) || null
-      : null;
-    let currentVersions: CommunityVersionSummary[] = [];
-    if (currentApp && hasResolvableCommunityAppSystemId(currentApp.id)) {
-      const versions = await client.listAppVersions(auth.token, currentApp.projectType, currentApp.id);
-      if (!versions.ok) {
-        clearAuthIfExpired(versions.code);
-        return authRequiredResponse(versions.code, versions.message, versions.serverMessage);
-      }
-      currentVersions = versions.versions;
-    }
     return {
       ok: true,
       games: normalizedGames,
@@ -2878,9 +3122,28 @@ ipcMain.handle(
       gameControls: gameControls.controls,
       widgetControls: widgetStatus.controls,
       widgetSizes: widgetStatus.sizes,
-      currentVersions,
       workspace
     };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.communityListAppVersions,
+  async (_event, request: CommunityListAppVersionsRequest): Promise<CommunityListAppVersionsResponse> => {
+    const auth = readCommunityAuth(getCommunityUserDataPath());
+    if (!auth?.token) {
+      return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
+    }
+    const projectType = request?.projectType === "widget" ? "widget" : "game";
+    if (!hasResolvableCommunityAppSystemId(request?.appSystemId)) {
+      return { ok: false, code: "api_error", message: `Could not resolve backend ${projectType} id.` };
+    }
+    const result = await getCommunityClient().listAppVersions(auth.token, projectType, request.appSystemId);
+    if (!result.ok) {
+      clearAuthIfExpired(result.code);
+      return authRequiredResponse(result.code, result.message, result.serverMessage);
+    }
+    return { ok: true, versions: result.versions, total: result.total };
   }
 );
 
@@ -2993,6 +3256,37 @@ ipcMain.handle(
 );
 
 ipcMain.handle(
+  IPCChannels.communityUpdateWorkspaceVersion,
+  async (
+    _event,
+    request: CommunityUpdateWorkspaceVersionRequest
+  ): Promise<CommunityUpdateWorkspaceVersionResponse> => {
+    if (!workspaceRoot) {
+      return { ok: false, code: "no_workspace", message: "Open a workspace before changing its version." };
+    }
+    const version = String(request?.version || "").trim();
+    if (!version) {
+      return { ok: false, code: "invalid_version", message: "Enter a new version." };
+    }
+    try {
+      syncWorkspaceProjectMetadata(workspaceRoot, version);
+      const workspace = readCommunityWorkspaceDefaults();
+      if (!workspace.eligible) {
+        return { ok: false, code: "invalid_workspace", message: "The current workspace configuration is invalid." };
+      }
+      sendToRenderer(IPCChannels.deployEligibilityChanged, readDeployEligibilityFromWorkspace());
+      return { ok: true, workspace };
+    } catch (error) {
+      return {
+        ok: false,
+        code: "write_failed",
+        message: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+);
+
+ipcMain.handle(
   IPCChannels.communitySubmitAppVersion,
   async (_event, request: CommunitySubmitAppVersionRequest): Promise<CommunitySubmitAppVersionResponse> => {
     const auth = readCommunityAuth(getCommunityUserDataPath());
@@ -3013,14 +3307,33 @@ ipcMain.handle(
     }
     let tarballPath: string | null = null;
     try {
+      const metadata = syncWorkspaceProjectMetadata(workspaceRoot);
+      if (metadata.appId !== elig.appId) {
+        return { ok: false, code: "api_error", message: "Workspace identity changed. Refresh Community and try again." };
+      }
+      if (String(request.version || "").trim() !== metadata.version) {
+        return { ok: false, code: "api_error", message: "Submission version must match pyproject.toml." };
+      }
       emitCommunitySubmitProgress("packaging", "Packaging workspace and running tar...");
       tarballPath = await createPublishTarball(workspaceRoot, elig.appId);
       const client = getCommunityClient();
       emitCommunitySubmitProgress("uploading", "Uploading packaged workspace...");
       const packageUpload =
         projectType === "widget"
-          ? await client.uploadWidgetZip(auth.token, fileBlobFromPath(tarballPath, "application/gzip"), `${elig.appId}.tar.gz`)
-          : await client.uploadGameZip(auth.token, fileBlobFromPath(tarballPath, "application/gzip"), `${elig.appId}.tar.gz`);
+          ? await client.uploadWidgetZip(
+              auth.token,
+              fileBlobFromPath(tarballPath, "application/gzip"),
+              `${elig.appId}.tar.gz`,
+              request.appSystemId,
+              metadata.appId
+            )
+          : await client.uploadGameZip(
+              auth.token,
+              fileBlobFromPath(tarballPath, "application/gzip"),
+              `${elig.appId}.tar.gz`,
+              request.appSystemId,
+              metadata.appId
+            );
       if (!packageUpload.ok) {
         clearAuthIfExpired(packageUpload.code);
         return authRequiredResponse(packageUpload.code, packageUpload.message, packageUpload.serverMessage);
@@ -3029,6 +3342,7 @@ ipcMain.handle(
       const submit = await client.submitAppVersion(auth.token, {
         projectType,
         appSystemId: request.appSystemId,
+        appId: metadata.appId,
         version: String(request.version || "").trim(),
         description: String(request.description || "").trim(),
         fields: String(request.fields || "").trim(),
@@ -3067,9 +3381,6 @@ ipcMain.handle(
       return { ok: false, code: "session_expired", message: "Please sign in first.", authRequired: true };
     }
     const projectType = request?.projectType === "widget" ? "widget" : "game";
-    if (!hasResolvableCommunityAppSystemId(request.appSystemId)) {
-      return { ok: false, code: "api_error", message: `Could not resolve backend ${projectType} id for this app.` };
-    }
     const versionId =
       typeof request.versionId === "number" ? request.versionId : String(request.versionId || "").trim();
     if (!versionId) {
@@ -3077,8 +3388,7 @@ ipcMain.handle(
     }
     const result = await getCommunityClient().withdrawAppVersion(auth.token, {
       projectType,
-      versionId,
-      appSystemId: request.appSystemId
+      versionId
     });
     if (!result.ok) {
       clearAuthIfExpired(result.code);
@@ -3089,6 +3399,18 @@ ipcMain.handle(
 );
 
 ipcMain.handle(IPCChannels.deployGetEligibility, (): DeployEligibility => readDeployEligibilityFromWorkspace());
+ipcMain.handle(IPCChannels.widgetConfigGet, (_event, scope: WidgetConfigScope): WidgetConfigSnapshot => {
+  if (scope !== "workspace" && scope !== "emulator") {
+    return {
+      scope: "workspace",
+      status: "unavailable",
+      configKey: null,
+      confPath: null,
+      message: "Unknown widget configuration scope.",
+    };
+  }
+  return currentWidgetConfigSnapshot(scope);
+});
 
 ipcMain.handle(IPCChannels.deployOpenLocalNetworkSettings, async (): Promise<DeployActionResponse> => {
   if (process.platform !== "darwin") {
@@ -3282,42 +3604,12 @@ ipcMain.handle(IPCChannels.getPythonRuntimeStatus, () => pythonRuntimeStatus);
 ipcMain.handle(IPCChannels.getPythonRuntimeProgress, () => pythonRuntimeProgress);
 ipcMain.handle(IPCChannels.saveProviderSettings, async (_event: unknown, request: SaveProviderSettingsRequest) => {
   const saved = await writeProviderSettings(request);
-  await reconfigureAgentsSdkFromProviderSettings(saved);
+  reconfigureAgentsSdkFromProviderSettings(saved);
   emitBootstrapStateToRenderer();
   return saved;
 });
 
-ipcMain.handle(IPCChannels.startNewProject, async () => {
-  const ws = workspaceRoot;
-  if (
-    isTemporaryWorkspaceActiveNow() &&
-    ws &&
-    fs.existsSync(ws) &&
-    fs.statSync(ws).isDirectory() &&
-    isDirectoryEmpty(ws)
-  ) {
-    performSessionCleanup({ clearWorkspace: false });
-    return getBootstrapState();
-  }
-  const proceed = await ensureTemporaryWorkspaceResolvedForGuard("new_project");
-  if (!proceed) {
-    return getBootstrapState();
-  }
-  performSessionCleanup({ clearWorkspace: true });
-  ensureTemporaryWorkspaceRootAllocated();
-  return getBootstrapState();
-});
-
 ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: PickWorkspaceRequest) => {
-  const proceed = await ensureTemporaryWorkspaceResolvedForGuard("open_workspace");
-  if (!proceed) {
-    return {
-      state: getBootstrapState(),
-      selectedPath: null,
-      accepted: false,
-      reason: "cancelled"
-    } satisfies PickWorkspaceResponse;
-  }
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory", "createDirectory"]
   });
@@ -3338,82 +3630,12 @@ ipcMain.handle(IPCChannels.pickWorkspace, async (_event: unknown, request?: Pick
       reason: "non_empty"
     } satisfies PickWorkspaceResponse;
   }
-  applyWorkspaceRoot(selectedPath);
   return {
     state: getBootstrapState(),
     selectedPath,
     accepted: true
   } satisfies PickWorkspaceResponse;
 });
-
-ipcMain.handle(IPCChannels.saveTempWorkspace, async (): Promise<SaveTempWorkspaceResponse> => {
-  if (!workspaceRoot) {
-    return { ok: false, reason: "missing_workspace" };
-  }
-  if (!isTemporaryWorkspaceActiveNow()) {
-    return { ok: false, reason: "not_temporary" };
-  }
-  const saved = await runInteractiveSaveTemporaryWorkspace();
-  if (!saved) {
-    return { ok: false, reason: "cancelled" };
-  }
-  return { ok: true, state: getBootstrapState() };
-});
-
-ipcMain.handle(
-  IPCChannels.intakeSubmitQuestionAnswer,
-  async (_event: unknown, body: IntakeSubmitQuestionAnswerRequest): Promise<IntakeSubmitQuestionAnswerResponse> => {
-    if (!intakeChipQuestionPending) {
-      return { ok: false, reason: "no_pending" };
-    }
-    if (body.kind === "project_type") {
-      if (intakeChipQuestionPending.kind !== "project_type") {
-        return { ok: false, reason: "kind_mismatch" };
-      }
-      if (body.value !== "game" && body.value !== "widget") {
-        return { ok: false, reason: "invalid_value" };
-      }
-      const { resolve, state } = intakeChipQuestionPending;
-      intakeChipQuestionPending = null;
-      state.projectType = body.value;
-      state.projectTypeUserConfirmed = true;
-      if (body.value === "game") {
-        state.widgetSize = undefined;
-      }
-      agentEventEmitter?.({ type: "intake_project_type_prompt", at: Date.now(), visible: false });
-      resolve(
-        JSON.stringify({
-          ok: true,
-          recorded: { projectType: body.value },
-          next: nextAfterProjectType(body.value)
-        })
-      );
-      return { ok: true };
-    }
-    if (body.kind === "widget_size") {
-      if (intakeChipQuestionPending.kind !== "widget_size") {
-        return { ok: false, reason: "kind_mismatch" };
-      }
-      if (!WIDGET_DISPLAY_SIZES.includes(body.value)) {
-        return { ok: false, reason: "invalid_value" };
-      }
-      const { resolve, state } = intakeChipQuestionPending;
-      intakeChipQuestionPending = null;
-      state.widgetSize = body.value;
-      state.widgetSizeUserConfirmed = true;
-      agentEventEmitter?.({ type: "intake_widget_size_prompt", at: Date.now(), visible: false });
-      resolve(
-        JSON.stringify({
-          ok: true,
-          recorded: { widgetSize: body.value },
-          next: "Call **read_workspace_conf** — returns `conf.json` status for the active workspace."
-        })
-      );
-      return { ok: true };
-    }
-    return { ok: false, reason: "invalid_value" };
-  }
-);
 
 ipcMain.handle(
   IPCChannels.machineMcpSubmitQuestionAnswer,
@@ -3448,6 +3670,34 @@ ipcMain.handle(
       return { ok: true };
     }
     return { ok: false, reason: "invalid_value" };
+  }
+);
+
+ipcMain.handle(
+  IPCChannels.agentQuestionSubmitAnswer,
+  async (_event: unknown, body: AgentQuestionAnswerRequest): Promise<AgentQuestionAnswerResponse> => {
+    if (!agentQuestionPending) {
+      return { ok: false, reason: "no_pending" };
+    }
+    if (!body || typeof body.questionId !== "string" || typeof body.value !== "string") {
+      return { ok: false, reason: "invalid_value" };
+    }
+    if (body.questionId !== agentQuestionPending.questionId) {
+      return { ok: false, reason: "stale_question" };
+    }
+    const value = typeof body.value === "string" ? body.value.trim() : "";
+    if (!value || value.length > 4_000) {
+      return { ok: false, reason: "invalid_value" };
+    }
+    const pending = agentQuestionPending;
+    const matchesOption = pending.prompt.options?.some((option) => option.value === value) === true;
+    if (!matchesOption && pending.prompt.allowFreeText !== true) {
+      return { ok: false, reason: "invalid_value" };
+    }
+    agentQuestionPending = null;
+    agentEventEmitter?.({ type: "agent_question", questionId: pending.questionId, visible: false, question: "" });
+    pending.resolve(value);
+    return { ok: true };
   }
 );
 
@@ -3514,22 +3764,22 @@ ipcMain.handle(
     if (requestedSlots.length === 0) {
       return { ok: false, reason: "no_pending_changes" };
     }
-    const confPath = path.join(targetWorkspace, "conf.json");
-    if (!fs.existsSync(confPath)) {
-      return { ok: false, reason: "missing_conf", message: `no conf.json at ${targetWorkspace}` };
+    const classification = readWorkspaceProjectClassification(targetWorkspace);
+    if (!classification.ok) {
+      return { ok: false, reason: "unknown", message: classification.message };
     }
-    let projectType: ProjectType;
+    const projectType = classification.projectType;
+    let bridgeRun: DartsnutLlmBridgeRun | null = null;
     try {
-      const conf = JSON.parse(fs.readFileSync(confPath, "utf-8")) as { type?: string };
-      projectType = conf.type === "widget" ? "widget" : "game";
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "failed to parse conf.json";
-      return { ok: false, reason: "missing_conf", message };
-    }
-    try {
+      const prepared = await prepareAgentProvider(readProviderSettings());
+      if (!prepared.ok) {
+        return { ok: false, reason: "unknown", message: prepared.failure.message };
+      }
+      bridgeRun = prepared.bridgeRun;
       const session = await buildSession("asset-applier", {
         workspacePath: targetWorkspace,
-        assetApplierMode: true
+        assetApplierMode: true,
+        agentModelConfig: prepared.modelConfig
       });
       const prompt = buildRoutedPrompt({
         prompt: "",
@@ -3548,6 +3798,10 @@ ipcMain.handle(
       } finally {
         assetEmit.flush();
       }
+      const bridgeFailure = bridgeRun?.readFailure();
+      if (bridgeFailure) {
+        return { ok: false, reason: "unknown", message: bridgeFailure.message };
+      }
       assetManager.clearPending(targetWorkspace, requestedSlots);
       // Re-emit a snapshot so the UI clears the pending badge.
       sendToRenderer(IPCChannels.assetsSubscribeManifest, assetManager.getSnapshot(targetWorkspace));
@@ -3557,6 +3811,8 @@ ipcMain.handle(
       const event: AgentEvent = { type: "error", message, at: Date.now() };
       sendToRenderer(IPCChannels.subscribeEvents, event);
       return { ok: false, reason: "unknown", message };
+    } finally {
+      await bridgeRun?.finish("asset_finalizer");
     }
   }
 );
@@ -3575,58 +3831,83 @@ function createEmitAgentToRenderer(): AgentEventBatcher & { dispose: () => void 
 }
 
 ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptRequest): Promise<SendPromptResponse> => {
-  sendPromptAbortController?.abort();
-  const runAbort = new AbortController();
-  sendPromptAbortController = runAbort;
+  await chatTitleCoordinator.cancelAndWait("agent_prompt_started");
+  const runLease = await sendPromptCoordinator.begin("replacement_prompt");
+  const runAbort = runLease.abortController;
   const emitAgentSink = createEmitAgentToRenderer();
   const emitAgent = (agentEvent: AgentEvent) => emitAgentSink.emit(agentEvent);
+  let bridgeRun: DartsnutLlmBridgeRun | null = null;
   try {
-    ensureTemporaryWorkspaceRootAllocated();
+    if (!activeProjectId || !workspaceRoot) {
+      return { ok: false, message: "Select a project before sending." };
+    }
     agentEventEmitter = emitAgent;
+    const prepared = await prepareAgentProvider(readProviderSettings());
+    if (!prepared.ok) {
+      emitAgent({ type: "error", message: prepared.failure.message, at: Date.now() });
+      return {
+        ok: false,
+        failureReason: prepared.failure.reason,
+        message: prepared.failure.message
+      };
+    }
+    bridgeRun = prepared.bridgeRun;
+    activeDartsnutLlmBridgeRun = bridgeRun;
+    if (!activeChatId) {
+      const store = getProjectStore();
+      const chat = store.createChat(activeProjectId);
+      activeChatId = chat.id;
+      store.markChatOpened(chat.id);
+      store.touchProject(activeProjectId);
+      emitBootstrapStateToRenderer();
+    }
     let sessionRouting: SendPromptResponse["sessionRouting"];
-    const hostState: IntakeToolState = {};
-    const lastIntakeUserPrompt = req.prompt;
-    const sharedIntakeHandler = async (args: Record<string, unknown>) =>
-      intakeHostToolExecute(args, hostState, lastIntakeUserPrompt);
-
-    const intent = req.agentSession?.intent ?? "auto";
+    const effectiveWorkspacePath =
+      typeof req.workspacePath === "string" && req.workspacePath.length > 0 ? req.workspacePath : workspaceRoot;
+    const request: PromptRequest = {
+      ...req,
+      chatId: activeChatId,
+      prompt: buildPromptWithChatMediaAttachments(req.prompt, req.chatMediaAttachments ?? [])
+    };
+    const intent = request.agentSession?.intent ?? "auto";
     const persistence = buildWorkspaceSessionPersistence(workspaceRoot);
     if (intent === "fresh" && persistence) {
       persistence.archiveOrResetSession("renderer-fresh");
     }
-    const initialConversation =
-      persistence && intent !== "fresh" ? persistence.readConversation() : [];
-    const effectiveWorkspacePath =
-      typeof req.workspacePath === "string" && req.workspacePath.length > 0 ? req.workspacePath : workspaceRoot;
+    const initialItems =
+      persistence && intent !== "fresh" ? persistence.readConversationItems() : [];
+    const agentProfileId = normalizeAgentProfileId(
+      request.agentProfileId ?? persistence?.readAgentProfileId() ?? "export"
+    );
     const hintedRouting =
       effectiveWorkspacePath && fs.existsSync(effectiveWorkspacePath)
         ? readWorkspaceCreatorHints(effectiveWorkspacePath)
         : null;
-    const routedTemplateMode =
-      req.templateMode === "game-creator" || req.templateMode === "widget-creator"
-        ? req.templateMode
-        : hintedRouting?.templateMode;
-    const routedProjectType =
-      req.projectType ??
-      hintedRouting?.projectType ??
-      (routedTemplateMode === "widget-creator"
-        ? "widget"
-        : routedTemplateMode === "game-creator"
-          ? "game"
-          : undefined);
-    const routedWidgetSize = req.widgetSize ?? hintedRouting?.widgetSize;
-    const session = await buildSession(req.templateMode, {
-      completionTools: AGENT_TOOL_SCHEMAS,
-      hostIntakeToolHandler: sharedIntakeHandler,
-      hostAskQuestionHandler: (args) => askQuestionHostExecute(args, hostState),
-      hostIntakeReadyToFinish: () => isIntakeStateReady(hostState),
+    const {
+      templateMode: routedTemplateMode,
+      projectType: routedProjectType,
+      widgetSize: routedWidgetSize
+    } = resolveCreatorRouting(
+      {
+        templateMode:
+          request.templateMode === "game-creator" || request.templateMode === "widget-creator"
+            ? request.templateMode
+            : undefined,
+        projectType: request.projectType,
+        widgetSize: request.widgetSize
+      },
+      hintedRouting
+    );
+    const session = await buildSession(routedTemplateMode, {
+      toolSchemas: AGENT_TOOL_SCHEMAS,
+      chatMediaAttachments: request.chatMediaAttachments,
       sessionPersistence: persistence,
-      initialConversation,
-      latestUserTextForLocale: req.prompt,
-      intakeState: hostState,
-      projectType: routedProjectType ?? hintedRouting?.projectType,
-      widgetSize: routedWidgetSize ?? hintedRouting?.widgetSize,
-      getIntakeState: () => hostState
+      initialItems,
+      agentProfileId,
+      originalUserPrompt: request.prompt,
+      projectType: routedProjectType,
+      widgetSize: routedWidgetSize,
+      agentModelConfig: prepared.modelConfig
     });
     if (routedTemplateMode) {
       sessionRouting = {
@@ -3637,45 +3918,66 @@ ipcMain.handle(IPCChannels.sendPrompt, async (_event: unknown, req: PromptReques
         ...(routedWidgetSize ? { widgetSize: routedWidgetSize } : {})
       };
     }
-    const prompt = buildRoutedPrompt(req, hostState);
+    const prompt = buildRoutedPrompt({
+      ...request,
+      templateMode: routedTemplateMode,
+      projectType: routedProjectType,
+      widgetSize: routedWidgetSize
+    });
     terminalAgentLifecycleLog("[agent] runPrompt start", { promptChars: prompt.length });
-    await session.runPrompt(prompt, emitAgent, runAbort.signal, { userPrompt: req.prompt });
+    await session.runPrompt(prompt, emitAgent, runAbort.signal, { userPrompt: request.prompt });
+
+    const bridgeFailure = bridgeRun?.readFailure();
+    if (bridgeFailure) {
+      if (bridgeFailure.reason === "auth_required") {
+        clearCommunityAuth(getCommunityUserDataPath());
+      }
+      return {
+        ok: false,
+        failureReason: bridgeFailure.reason,
+        message: bridgeFailure.message
+      };
+    }
 
     if (!firstRunComplete) {
       writeProofState(true);
     }
-    if (isIntakeStateReady(hostState)) {
-      const pt = hostState.projectType;
-      if (pt === "game" || pt === "widget") {
-        sessionRouting = {
-          templateMode: pt === "game" ? "game-creator" : "widget-creator",
-          projectType: pt,
-          ...(pt === "widget" && hostState.widgetSize ? { widgetSize: hostState.widgetSize } : {})
-        };
-      }
+    const createdRouting = effectiveWorkspacePath
+      ? readWorkspaceCreatorHints(effectiveWorkspacePath)
+      : null;
+    if (createdRouting) {
+      sessionRouting = createdRouting;
     }
     return { ok: true, sessionRouting };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown prompt error";
+    const bridgeFailure = bridgeRun?.readFailure();
+    const message = bridgeFailure?.message ?? (error instanceof Error ? error.message : "Unknown prompt error");
     if (message !== AGENT_STOPPED_MESSAGE) {
       const event: AgentEvent = { type: "error", message, at: Date.now() };
       logAgentEventToConsole(event, true);
       sendToRenderer(IPCChannels.subscribeEvents, event);
     }
-    return { ok: false };
-  } finally {
-    emitAgentSink.flush();
-    cancelAllIntakeUserInputPending();
-    agentEventEmitter = null;
-    if (sendPromptAbortController === runAbort) {
-      sendPromptAbortController = null;
+    if (bridgeFailure?.reason === "auth_required") {
+      clearCommunityAuth(getCommunityUserDataPath());
     }
+    return {
+      ok: false,
+      ...(bridgeFailure ? { failureReason: bridgeFailure.reason, message: bridgeFailure.message } : {})
+    };
+  } finally {
+    await bridgeRun?.finish("prompt_finalizer");
+    if (activeDartsnutLlmBridgeRun === bridgeRun) {
+      activeDartsnutLlmBridgeRun = null;
+    }
+    emitAgentSink.flush();
+    cancelPendingAgentInput();
+    agentEventEmitter = null;
+    runLease.settle();
   }
 });
 
-ipcMain.handle(IPCChannels.cancelAgent, () => {
-  cancelAllIntakeUserInputPending();
-  sendPromptAbortController?.abort();
+ipcMain.handle(IPCChannels.cancelAgent, async () => {
+  await stopActiveAgentRun("user_stop");
   return { ok: true };
 });
 
@@ -3696,6 +3998,7 @@ ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorCommand, async (_event, command: Em
       commandToSend = { type: "set_path", path: selectedPath };
       lastWidgetDir = selectedPath;
       writeEmulatorState();
+      startWidgetConfigWatchers();
       if (emulatorState.widgetPath !== selectedPath) {
         pendingEmulatorPathForReload = selectedPath;
       }
@@ -3726,6 +4029,7 @@ ipcMain.handle(EMULATOR_IPC_CHANNELS.emulatorPickPath, async () => {
   const selected = result.filePaths[0];
   lastWidgetDir = selected;
   writeEmulatorState();
+  startWidgetConfigWatchers();
   return { path: toRelativeFromEmulatorWorkspaceRoot(selected) };
 });
 

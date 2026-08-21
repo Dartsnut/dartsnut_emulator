@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import http from "node:http";
+import { authNetworkErrorDetails, authNetworkErrorMessage } from "./authNetworkError";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -10,12 +11,23 @@ export type GoogleOAuthOptions = {
   clientSecret?: string;
   openExternal: (url: string) => Promise<unknown>;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
   timeoutMs?: number;
 };
 
 export type GoogleOAuthResult =
   | { ok: true; idToken: string }
   | { ok: false; code: string; message: string };
+
+function googleOAuthCancelledError(): Error {
+  const error = new Error("Google sign-in was cancelled.");
+  error.name = "AbortError";
+  return error;
+}
+
+function isGoogleOAuthCancellation(error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true || (error instanceof Error && error.name === "AbortError");
+}
 
 function base64Url(input: Buffer): string {
   return input.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
@@ -96,17 +108,25 @@ async function createLoopbackRedirectServer(timeoutMs: number): Promise<{
     timeoutId = setTimeout(() => rejectRedirect(new Error("Google sign-in timed out.")), timeoutMs);
   }).finally(() => close());
 
-  const redirectUri = await new Promise<string>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("Could not allocate Google sign-in callback port."));
-        return;
-      }
-      resolve(`http://127.0.0.1:${address.port}/oauth/google/callback`);
+  let redirectUri: string;
+  try {
+    redirectUri = await new Promise<string>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("Could not allocate Google sign-in callback port."));
+          return;
+        }
+        resolve(`http://127.0.0.1:${address.port}/oauth/google/callback`);
+      });
     });
-  });
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    await close(failure);
+    await redirectPromise.catch(() => undefined);
+    throw failure;
+  }
   return { redirectUri, redirectPromise, close };
 }
 
@@ -138,12 +158,14 @@ async function exchangeCodeForIdToken(input: {
   code: string;
   codeVerifier: string;
   fetchImpl: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<string> {
   const body = buildGoogleOAuthTokenBody(input);
   const res = await input.fetchImpl(GOOGLE_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-    body
+    body,
+    signal: input.signal
   });
   const raw = await res.json().catch(() => null);
   const idToken = String((raw as Record<string, unknown> | null)?.id_token || "").trim();
@@ -159,13 +181,28 @@ export async function signInWithGoogleOAuth(options: GoogleOAuthOptions): Promis
   if (!clientId) {
     return { ok: false, code: "config_missing", message: "Google sign-in is not configured." };
   }
+  if (options.signal?.aborted) {
+    return { ok: false, code: "cancelled", message: "Google sign-in was cancelled." };
+  }
 
   const fetchImpl = options.fetchImpl ?? fetch;
   const state = base64Url(crypto.randomBytes(24));
   const pkce = createPkcePair();
+  let removeAbortListener: (() => void) | null = null;
   try {
     const timeoutMs = options.timeoutMs ?? GOOGLE_OAUTH_TIMEOUT_MS;
     const redirectServer = await createLoopbackRedirectServer(timeoutMs);
+    const cancelRedirect = () => {
+      void redirectServer.close(googleOAuthCancelledError());
+    };
+    if (options.signal) {
+      options.signal.addEventListener("abort", cancelRedirect, { once: true });
+      removeAbortListener = () => options.signal?.removeEventListener("abort", cancelRedirect);
+      if (options.signal.aborted) {
+        cancelRedirect();
+        await redirectServer.redirectPromise;
+      }
+    }
     const { redirectUri } = redirectServer;
     const authUrl = buildGoogleOAuthUrl({
       clientId,
@@ -199,10 +236,26 @@ export async function signInWithGoogleOAuth(options: GoogleOAuthOptions): Promis
       redirectUri,
       code,
       codeVerifier: pkce.verifier,
-      fetchImpl
+      fetchImpl,
+      signal: options.signal
     });
     return { ok: true, idToken };
   } catch (error) {
-    return { ok: false, code: "network_error", message: error instanceof Error ? error.message : String(error) };
+    if (isGoogleOAuthCancellation(error, options.signal)) {
+      return { ok: false, code: "cancelled", message: "Google sign-in was cancelled." };
+    }
+    console.warn("[community] Google OAuth token exchange failed", {
+      error: authNetworkErrorDetails(error) || String(error)
+    });
+    return {
+      ok: false,
+      code: "network_error",
+      message: authNetworkErrorMessage(error, {
+        action: "Couldn’t complete Google sign-in",
+        endpoint: GOOGLE_TOKEN_URL
+      })
+    };
+  } finally {
+    removeAbortListener?.();
   }
 }

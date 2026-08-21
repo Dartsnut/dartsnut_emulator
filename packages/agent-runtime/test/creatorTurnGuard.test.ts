@@ -38,6 +38,7 @@ describe("isFileMutationToolName", () => {
     expect(isFileMutationToolName("write_file")).toBe(true);
     expect(isFileMutationToolName("replace_in_file")).toBe(true);
     expect(isFileMutationToolName("copy_asset_file")).toBe(true);
+    expect(isFileMutationToolName("copy_chat_attachment")).toBe(true);
     expect(isFileMutationToolName("read_file")).toBe(false);
   });
 });

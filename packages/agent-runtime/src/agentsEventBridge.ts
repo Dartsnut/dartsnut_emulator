@@ -1,312 +1,233 @@
-import type { AgentEvent, AgentTokenUsage } from "@dartsnut/shared-ipc";
-import type { StreamedRunResult } from "@openai/agents";
-import {
-  isOpenAIChatCompletionsRawModelStreamEvent,
-  type RunStreamEvent
-} from "@openai/agents";
-import type { ChatCompletionChunk } from "openai/resources/chat/completions";
-import { isFileMutationToolName } from "./creatorTurnGuard";
+import type { AgentEvent, AgentSdkStreamEvent, AgentTokenUsage } from "@dartsnut/shared-ipc";
+import type { RunStreamEvent, StreamedRunResult } from "@openai/agents";
+import { normalizeTokenUsage } from "./tokenUsage";
 import {
   computeReplaceDiff,
   computeWriteDiff,
   emitToolStatusEvent,
-  extractPathFromArgumentsJson,
+  extractLatestArgumentsObject,
   safeParseObject,
   toRelPath,
   type ToolStatusContext
 } from "./toolStatusHelpers";
-import { addTokenUsage, normalizeTokenUsage } from "./tokenUsage";
 
-export type AgentsStreamBridgeHooks = {
-  readWorkspaceFileIfExists?: (relPath: string) => string | undefined;
-  persistTranscript?: (kind: "user" | "assistant" | "tool_status" | "thinking", text: string) => void;
-  onActiveAgentChange?: (agentName: string) => void;
-  onTokenUsage?: (runUsage: AgentTokenUsage) => void;
+export type AgentsStreamDiagnostics = {
+  rawModelEvents: number;
+  runItemEvents: number;
+  agentUpdatedEvents: number;
+  responseEventTypes: Record<string, number>;
+  runItemNames: Record<string, number>;
 };
 
-export type AgentsStreamBridgeResult = {
+export type AgentsStreamResult = {
   finalText: string;
-  sawReasoning: boolean;
-  sawToolCall: boolean;
-  stepText: string;
-  stepReasoning: string;
-  toolNames: string[];
-  filesWrittenThisTurn: number;
-  toolCallCount: number;
+  lastResponseId?: string;
   tokenUsage?: AgentTokenUsage;
+  activeAgentName?: string;
+  diagnostics: AgentsStreamDiagnostics;
 };
 
-type StreamingToolCallAccumulator = {
-  id: string;
-  name: string;
-  argumentsJson: string;
+export type AgentsStreamHooks = {
+  readWorkspaceFileIfExists?: (relPath: string) => string | undefined;
+  persistTranscript?: (kind: "tool_status", text: string) => void;
 };
 
-function readReasoningDelta(delta: unknown): string {
-  if (!delta || typeof delta !== "object") {
-    return "";
-  }
-  const d = delta as Record<string, unknown>;
-  const rc = d.reasoning_content;
-  if (typeof rc === "string" && rc.length > 0) {
-    return rc;
-  }
-  const r = d.reasoning;
-  if (typeof r === "string" && r.length > 0) {
-    return r;
-  }
-  return "";
+function incrementCount(counts: Record<string, number>, key: string): void {
+  counts[key] = (counts[key] ?? 0) + 1;
 }
 
-function mergeToolCallDeltas(
-  accumulators: Map<number, StreamingToolCallAccumulator>,
-  deltas: NonNullable<ChatCompletionChunk["choices"]>[number]["delta"]["tool_calls"]
-): void {
-  if (!Array.isArray(deltas)) {
-    return;
+function rawResponseEventType(event: RunStreamEvent): string | undefined {
+  if (event.type !== "raw_model_stream_event" || !event.data || typeof event.data !== "object") {
+    return undefined;
   }
-  for (let i = 0; i < deltas.length; i += 1) {
-    const delta = deltas[i];
-    if (!delta) {
-      continue;
-    }
-    const index = typeof delta.index === "number" ? delta.index : i;
-    const existing = accumulators.get(index) ?? { id: "", name: "", argumentsJson: "" };
-    if (typeof delta.id === "string" && delta.id.length > 0) {
-      existing.id = delta.id;
-    }
-    const fn = delta.function;
-    if (fn) {
-      if (typeof fn.name === "string" && fn.name.length > 0) {
-        existing.name = fn.name;
-      }
-      if (typeof fn.arguments === "string" && fn.arguments.length > 0) {
-        existing.argumentsJson += fn.arguments;
-      }
-    }
-    accumulators.set(index, existing);
+  const data = event.data as { type?: unknown; event?: { type?: unknown } };
+  if (data.type === "model" && typeof data.event?.type === "string") {
+    return data.event.type;
   }
+  return typeof data.type === "string" ? data.type : undefined;
 }
 
-function resolveStreamingToolCallId(acc: StreamingToolCallAccumulator, index: number): string {
-  return acc.id.length > 0 ? acc.id : `call_${index}`;
+export function serializeAgentsStreamEvent(event: RunStreamEvent): AgentSdkStreamEvent {
+  if (event.type === "raw_model_stream_event") {
+    return {
+      type: event.type,
+      ...(event.source ? { source: event.source } : {}),
+      data: event.data
+    };
+  }
+  if (event.type === "run_item_stream_event") {
+    return {
+      type: event.type,
+      name: event.name,
+      item: event.item.toJSON()
+    };
+  }
+  return {
+    type: event.type,
+    agent: event.agent.toJSON()
+  };
 }
 
-function emitFileToolCallDelta(
-  callId: string,
-  toolName: string,
-  argumentsJson: string,
-  emit: (event: AgentEvent) => void,
-  streamedFileToolCallIds: Set<string>
-): void {
-  if (!isFileMutationToolName(toolName)) {
-    return;
-  }
-  streamedFileToolCallIds.add(callId);
-  const relPath = extractPathFromArgumentsJson(argumentsJson);
-  emit({
-    type: "tool_call_delta",
-    at: Date.now(),
-    callId,
-    toolName,
-    argumentsJson,
-    ...(relPath ? { path: relPath } : {})
-  });
+function finalText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  return JSON.stringify(value);
 }
 
-function handleChatCompletionsChunk(
-  chunk: ChatCompletionChunk,
-  state: {
-    reasoningId: string;
-    sawReasoning: boolean;
-    stepReasoning: string;
-    stepText: string;
-    toolCallAccumulators: Map<number, StreamingToolCallAccumulator>;
-    streamedFileToolCallIds: Set<string>;
-    tokenUsage: AgentTokenUsage | null;
-    onTokenUsage?: (runUsage: AgentTokenUsage) => void;
-  },
-  emit: (event: AgentEvent) => void
-): void {
-  const chunkUsage = normalizeTokenUsage((chunk as { usage?: unknown }).usage);
-  if (chunkUsage) {
-    state.tokenUsage = state.tokenUsage ? addTokenUsage(state.tokenUsage, chunkUsage) : chunkUsage;
-    state.onTokenUsage?.(state.tokenUsage);
+function runItemRawItem(event: Extract<RunStreamEvent, { type: "run_item_stream_event" }>): Record<string, unknown> {
+  const item = event.item as unknown as { rawItem?: unknown; toJSON?: () => unknown };
+  if (item.rawItem && typeof item.rawItem === "object") {
+    return item.rawItem as Record<string, unknown>;
   }
-  const delta = chunk.choices?.[0]?.delta;
-  if (!delta) {
-    return;
+  const serialized = typeof item.toJSON === "function" ? item.toJSON() : null;
+  if (!serialized || typeof serialized !== "object") {
+    return {};
   }
-  const contentDelta = delta.content ?? "";
-  if (contentDelta) {
-    state.stepText += contentDelta;
-    emit({ type: "stream", at: Date.now(), delta: contentDelta });
+  const rawItem = (serialized as { rawItem?: unknown }).rawItem;
+  return rawItem && typeof rawItem === "object" ? rawItem as Record<string, unknown> : {};
+}
+
+function stringField(record: Record<string, unknown>, ...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = record[name];
+    if (typeof value === "string" && value) return value;
   }
-  const reasoningDelta = readReasoningDelta(delta);
-  if (reasoningDelta) {
-    state.sawReasoning = true;
-    state.stepReasoning += reasoningDelta;
-    emit({
-      type: "reasoning_stream",
-      at: Date.now(),
-      reasoningId: state.reasoningId,
-      delta: reasoningDelta
-    });
-  }
-  if (!Array.isArray(delta.tool_calls)) {
-    return;
-  }
-  mergeToolCallDeltas(state.toolCallAccumulators, delta.tool_calls);
-  for (const [index, acc] of state.toolCallAccumulators) {
-    if (!isFileMutationToolName(acc.name)) {
-      continue;
-    }
-    emitFileToolCallDelta(resolveStreamingToolCallId(acc, index), acc.name, acc.argumentsJson, emit, state.streamedFileToolCallIds);
-  }
+  return undefined;
 }
 
 function toolContextFromArgs(
   toolName: string,
   argsJson: string,
   callId: string,
-  hooks: AgentsStreamBridgeHooks
+  hooks: AgentsStreamHooks
 ): ToolStatusContext {
   let context: ToolStatusContext = { callId };
   try {
-    const args = safeParseObject(JSON.parse(argsJson));
-    const pathArg = toRelPath(args.path);
-    const sourceArg = toRelPath(args.source);
-    const skillIdArg = toRelPath(args.skill_id);
-    context = { callId, path: pathArg, source: sourceArg, skillId: skillIdArg };
+    const args = extractLatestArgumentsObject(argsJson, (candidate) => {
+      if (toolName === "write_file") {
+        return typeof candidate.path === "string" && typeof candidate.content === "string";
+      }
+      if (toolName === "replace_in_file") {
+        return typeof candidate.path === "string"
+          && typeof candidate.find === "string"
+          && typeof candidate.replace === "string";
+      }
+      return true;
+    }) ?? safeParseObject(JSON.parse(argsJson));
+    const path = toRelPath(args.path);
+    context = {
+      callId,
+      path,
+      source: toRelPath(args.source),
+      attachment_id: typeof args.attachment_id === "string" ? args.attachment_id : undefined,
+      skillId: toRelPath(args.skill_id)
+    };
     if (toolName === "write_file") {
       const nextContent = typeof args.content === "string" ? args.content : "";
-      const previousContent = pathArg ? hooks.readWorkspaceFileIfExists?.(pathArg) : undefined;
-      context = { ...context, ...computeWriteDiff(previousContent, nextContent) };
+      context = { ...context, ...computeWriteDiff(path ? hooks.readWorkspaceFileIfExists?.(path) : undefined, nextContent) };
     } else if (toolName === "replace_in_file") {
-      const findText = typeof args.find === "string" ? args.find : "";
-      const replaceText = typeof args.replace === "string" ? args.replace : "";
-      context = { ...context, ...computeReplaceDiff(findText, replaceText) };
+      context = {
+        ...context,
+        ...computeReplaceDiff(
+          typeof args.find === "string" ? args.find : "",
+          typeof args.replace === "string" ? args.replace : ""
+        )
+      };
     }
   } catch {
-    // ignore partial args
+    // Tool status remains useful when a provider omits or partially serializes arguments.
   }
   return context;
 }
 
-export async function mapAgentsStreamToAgentEvents(
+export async function forwardAgentsStream(
   stream: StreamedRunResult<any, any>,
   emit: (event: AgentEvent) => void,
-  hooks: AgentsStreamBridgeHooks = {}
-): Promise<AgentsStreamBridgeResult> {
-  const reasoningId = `rsn-${Date.now()}`;
-  const state = {
-    reasoningId,
-    sawReasoning: false,
-    stepReasoning: "",
-    stepText: "",
-    toolCallAccumulators: new Map<number, StreamingToolCallAccumulator>(),
-    streamedFileToolCallIds: new Set<string>(),
-    tokenUsage: null as AgentTokenUsage | null,
-    onTokenUsage: hooks.onTokenUsage
-  };
-  const toolNames: string[] = [];
-  let filesWrittenThisTurn = 0;
-  let toolCallCount = 0;
-  let lastToolName = "";
-  let lastCallId = "";
-  let lastToolContext: ToolStatusContext | undefined;
-
-  for await (const event of stream as AsyncIterable<RunStreamEvent>) {
-    if (event.type === "raw_model_stream_event" && isOpenAIChatCompletionsRawModelStreamEvent(event)) {
-      handleChatCompletionsChunk(event.data.event, state, emit);
-      continue;
-    }
-    if (event.type === "agent_updated_stream_event") {
-      const agentName = event.agent?.name;
-      if (typeof agentName === "string" && agentName.length > 0) {
-        hooks.onActiveAgentChange?.(agentName);
-        emit({ type: "status", at: Date.now(), message: `Agent: ${agentName}` });
-      }
-      continue;
-    }
-    if (event.type === "run_item_stream_event") {
-      if (event.name === "handoff_requested" || event.name === "handoff_occurred") {
-        const item = event.item as { agent?: { name?: string }; rawItem?: { name?: string } };
-        const targetName =
-          typeof item.agent?.name === "string"
-            ? item.agent.name
-            : typeof item.rawItem?.name === "string"
-              ? item.rawItem.name
-              : "specialist";
-        const verb = event.name === "handoff_requested" ? "Handoff requested" : "Handoff";
-        emit({ type: "status", at: Date.now(), message: `${verb}: ${targetName}` });
-        if (typeof item.agent?.name === "string") {
-          hooks.onActiveAgentChange?.(item.agent.name);
+  onActiveAgentChange?: (agentName: string) => void,
+  onIterationFailure?: (diagnostics: AgentsStreamDiagnostics, streamedText: string) => void,
+  hooks: AgentsStreamHooks = {}
+): Promise<AgentsStreamResult> {
+  let activeAgentName: string | undefined;
+  let currentResponseText = "";
+  let latestResponseText = "";
+  let rawModelEvents = 0;
+  let runItemEvents = 0;
+  let agentUpdatedEvents = 0;
+  const responseEventTypes: Record<string, number> = {};
+  const runItemNames: Record<string, number> = {};
+  const toolContexts = new Map<string, { name: string; context: ToolStatusContext }>();
+  let lastTool: { name: string; context: ToolStatusContext } | undefined;
+  const diagnostics = (): AgentsStreamDiagnostics => ({
+    rawModelEvents,
+    runItemEvents,
+    agentUpdatedEvents,
+    responseEventTypes: { ...responseEventTypes },
+    runItemNames: { ...runItemNames }
+  });
+  try {
+    for await (const event of stream as AsyncIterable<RunStreamEvent>) {
+      emit(serializeAgentsStreamEvent(event));
+      if (event.type === "raw_model_stream_event") {
+        rawModelEvents += 1;
+        const data = event.data && typeof event.data === "object"
+          ? event.data as { type?: unknown; delta?: unknown }
+          : null;
+        if (data?.type === "response_started") {
+          currentResponseText = "";
+        } else if (data?.type === "output_text_delta" && typeof data.delta === "string") {
+          currentResponseText += data.delta;
+        } else if (data?.type === "response_done" && currentResponseText.trim()) {
+          latestResponseText = currentResponseText.trim();
         }
-      }
-      if (event.name === "tool_called") {
-        const raw = event.item.rawItem as { name?: string; callId?: string; arguments?: string };
-        const name = typeof raw?.name === "string" ? raw.name : "";
-        const callId = typeof raw?.callId === "string" ? raw.callId : `call_${Date.now()}`;
-        const argsJson = typeof raw?.arguments === "string" ? raw.arguments : "";
-        if (name) {
-          lastToolName = name;
-          lastCallId = callId;
-          toolNames.push(name);
-          toolCallCount += 1;
-          if (isFileMutationToolName(name)) {
-            filesWrittenThisTurn += 1;
-          }
-          const context = toolContextFromArgs(name, argsJson, callId, hooks);
-          lastToolContext = context;
-          if (isFileMutationToolName(name) && !state.streamedFileToolCallIds.has(callId)) {
-            emitFileToolCallDelta(callId, name, argsJson, emit, state.streamedFileToolCallIds);
-          }
-          const skipCallStatus =
-            isFileMutationToolName(name) && state.streamedFileToolCallIds.has(callId);
-          if (!skipCallStatus) {
+        const responseType = rawResponseEventType(event);
+        if (responseType) incrementCount(responseEventTypes, responseType);
+      } else if (event.type === "run_item_stream_event") {
+        runItemEvents += 1;
+        incrementCount(runItemNames, event.name);
+        const rawItem = runItemRawItem(event);
+        if (event.name === "tool_called") {
+          const name = stringField(rawItem, "name");
+          if (name) {
+            const callId = stringField(rawItem, "callId", "call_id") ?? `call_${Date.now()}`;
+            const argsJson = stringField(rawItem, "arguments") ?? "{}";
+            const context = toolContextFromArgs(name, argsJson, callId, hooks);
+            const tracked = { name, context };
+            toolContexts.set(callId, tracked);
+            lastTool = tracked;
             emitToolStatusEvent(name, "call", emit, context, hooks.persistTranscript);
           }
+        } else if (event.name === "tool_output") {
+          const callId = stringField(rawItem, "callId", "call_id");
+          const tracked = (callId ? toolContexts.get(callId) : undefined) ?? lastTool;
+          const name = stringField(rawItem, "name") ?? tracked?.name;
+          if (name) {
+            const resolvedCallId = callId ?? tracked?.context.callId ?? `call_${Date.now()}`;
+            const context = tracked?.context.callId === resolvedCallId
+              ? tracked.context
+              : toolContextFromArgs(name, stringField(rawItem, "arguments") ?? "{}", resolvedCallId, hooks);
+            emitToolStatusEvent(name, "result", emit, context, hooks.persistTranscript);
+            toolContexts.delete(resolvedCallId);
+          }
         }
+      } else if (event.type === "agent_updated_stream_event") {
+        agentUpdatedEvents += 1;
       }
-      if (event.name === "tool_output") {
-        const item = event.item as {
-          rawItem?: { name?: string; callId?: string; arguments?: string };
-          agent?: { name?: string };
-        };
-        const raw = item.rawItem;
-        const name = typeof raw?.name === "string" ? raw.name : lastToolName;
-        const callId = typeof raw?.callId === "string" ? raw.callId : lastCallId;
-        if (name) {
-          const context = lastToolContext?.callId === callId && lastToolContext
-            ? { ...lastToolContext, callId: callId ?? lastToolContext.callId }
-            : toolContextFromArgs(name, raw?.arguments ?? "{}", callId ?? `call_${Date.now()}`, hooks);
-          emitToolStatusEvent(name, "result", emit, context, hooks.persistTranscript);
-        }
+      if (event.type === "agent_updated_stream_event" && event.agent.name) {
+        activeAgentName = event.agent.name;
+        onActiveAgentChange?.(activeAgentName);
       }
     }
+  } catch (error) {
+    onIterationFailure?.(diagnostics(), currentResponseText.trim() || latestResponseText);
+    throw error;
   }
-
   await stream.completed;
-
-  if (state.stepReasoning) {
-    hooks.persistTranscript?.("thinking", state.stepReasoning);
-    emit({ type: "reasoning_done", at: Date.now(), reasoningId });
-  }
-  if (state.stepText.trim()) {
-    hooks.persistTranscript?.("assistant", state.stepText.trim());
-  }
-
-  const finalText = typeof stream.finalOutput === "string" ? stream.finalOutput : state.stepText;
+  const tokenUsage = normalizeTokenUsage(stream.state.usage);
   return {
-    finalText: finalText.trim(),
-    sawReasoning: state.sawReasoning,
-    sawToolCall: toolCallCount > 0,
-    stepText: state.stepText,
-    stepReasoning: state.stepReasoning,
-    toolNames,
-    filesWrittenThisTurn,
-    toolCallCount,
-    ...(state.tokenUsage ? { tokenUsage: state.tokenUsage } : {})
+    finalText: finalText(stream.finalOutput).trim(),
+    ...(stream.lastResponseId ? { lastResponseId: stream.lastResponseId } : {}),
+    ...(tokenUsage ? { tokenUsage } : {}),
+    ...(activeAgentName ? { activeAgentName } : {}),
+    diagnostics: diagnostics()
   };
 }

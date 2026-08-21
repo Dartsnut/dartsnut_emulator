@@ -1,23 +1,31 @@
 /**
- * OpenAI Chat Completions function definitions for the agent runtime's tools.
+ * OpenAI Responses function definitions for the agent runtime's tools.
  *
  * File tools mirror `SessionEngine.normalizeAction` / `executeAction`.
- * `dartsnut_project_intake` and `dartsnut_ask_question` are executed by the host (Electron main) when configured.
  */
 
-import type { ChatCompletionTool } from "openai/resources/chat/completions/completions";
 import { DEFERRED_SKILL_IDS } from "./skillBundle";
 
-const GET_DARTSNUT_SKILL_TOOL: ChatCompletionTool = {
+export type AgentToolSchema = {
+  type: "function";
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  strict: boolean;
+};
+type ToolDefinition = Omit<AgentToolSchema, "type">;
+type WrappedToolDefinition = { type: "function"; function: ToolDefinition };
+
+function responseTool(definition: WrappedToolDefinition): AgentToolSchema {
+  return { type: "function", ...definition.function };
+}
+
+const GET_DARTSNUT_SKILL_TOOL = responseTool({
   type: "function",
   function: {
     name: "get_dartsnut_skill",
-    description: [
-      "Load markdown for a **Dartsnut house skill** (incremental scaffold, conf contract, pydartsnut runtime, display mapping, assets, etc.).",
-      "Load **just-in-time** when the **upcoming step** needs it — decide from **meaning** in English, Simplified Chinese, or Traditional Chinese, not exact keywords (e.g. user offers a picture → `asset-pipeline`, then Assets pane bind — not chat paste).",
-      "Per the router: always `creator-incremental`, `conf-contract`, `pydartsnut-core` first for new projects; other ids only when that step needs them.",
-      "Call before write_file / replace_in_file / copy_asset_file for the step you are on. Not for workspace files — use read_file. Returns JSON with `content` when `ok` is true."
-    ].join(" "),
+    description:
+      "Load one Dartsnut domain skill before editing related project files. Returns JSON with `content` when successful.",
     parameters: {
       type: "object",
       properties: {
@@ -32,74 +40,9 @@ const GET_DARTSNUT_SKILL_TOOL: ChatCompletionTool = {
     },
     strict: true
   }
-};
+});
 
-const DARTSNUT_ASK_QUESTION_TOOL: ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "dartsnut_ask_question",
-    description: [
-      "Dartsnut Agent **creation intake** only (host-executed). Presents a **blocking** question in the desktop UI — the call does not return until the user answers.",
-      "Use native `tool_calls` only. Prefer this whenever the user must choose in the UI rather than inferring from their message.",
-      "**question_id** `project_type` — Game vs Widget chips; on success updates the same intake state as `set_project_type`.",
-      "**question_id** `widget_display_size` — only when intake is already `widget`; shows WxH chips; on success same as `set_widget_size`.",
-      "Policy: if project type or widget size is uncertain, ask first; do not guess or default."
-    ].join(" "),
-    parameters: {
-      type: "object",
-      properties: {
-        question_id: {
-          type: "string",
-          enum: ["project_type", "widget_display_size"],
-          description: "Which blocking intake question to present."
-        }
-      },
-      required: ["question_id"],
-      additionalProperties: false
-    },
-    strict: true
-  }
-};
-
-const DARTSNUT_PROJECT_INTAKE_TOOL: ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "dartsnut_project_intake",
-    description: [
-      "Dartsnut Agent **new-project / workspace** setup (host-executed). Use standard `tool_calls` only.",
-      "Actions:",
-      "- **set_project_type** — record whether the user is building a `game` or `widget` (required before scaffolding). Use when the user already stated it clearly in text; otherwise call **`dartsnut_ask_question`** with `question_id` `project_type` first.",
-      "- **set_widget_size** — for widgets only; one of the supported WxH tokens. Use when the user already named a supported size; otherwise call **`dartsnut_ask_question`** with `widget_display_size` first.",
-      "- Never default project_type or widget_size when uncertain; ask the user.",
-      "- **read_workspace_conf** — reads `conf.json` in the **selected** workspace and reports deploy-style validity plus guidance. **If no workspace is selected yet**, the host **creates** an empty directory under the OS temp folder, selects it, then reads — call after type (and widget size if applicable) are resolved; call again if the user switches workspace via the app shell.",
-      "Typical order when starting from no workspace: infer or **`dartsnut_ask_question`(`project_type`)** → if widget, infer size or **`dartsnut_ask_question`(`widget_display_size`)** then `set_widget_size` when needed → **`read_workspace_conf`** (host allocates temp workspace on first call if needed), then ask **one** focused follow-up question when the snapshot shows an existing project or invalid `conf.json`."
-    ].join(" "),
-    parameters: {
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: ["set_project_type", "set_widget_size", "read_workspace_conf"]
-        },
-        project_type: {
-          type: "string",
-          enum: ["game", "widget"],
-          description: "Required when action is set_project_type."
-        },
-        widget_size: {
-          type: "string",
-          enum: ["128x160", "128x128", "128x64", "64x32"],
-          description: "Required when action is set_widget_size."
-        }
-      },
-      required: ["action"],
-      additionalProperties: false
-    },
-    strict: false
-  }
-};
-
-const DARTSNUT_MACHINE_MCP_TOOL: ChatCompletionTool = {
+const DARTSNUT_MACHINE_MCP_TOOL = responseTool({
   type: "function",
   function: {
     name: "dartsnut_machine_mcp",
@@ -131,16 +74,105 @@ const DARTSNUT_MACHINE_MCP_TOOL: ChatCompletionTool = {
     },
     strict: false
   }
-};
+});
+
+const PIXELLAB_GENERATE_TOOL = responseTool({
+  type: "function",
+  function: {
+    name: "pixellab_generate",
+    description: [
+      "Generate game-ready pixel art through the Dartsnut-hosted PixelLab bridge; PixelLab credentials never enter the workspace or model context.",
+      "Use operation `image` for sprites, objects, backgrounds, tiles, UI art, and character concepts.",
+      "Use operation `animation` to animate an existing PNG/JPEG workspace asset from an action description.",
+      "The host submits quickly, polls Dartsnut for up to 10 minutes, then writes returned PNG/JPEG/GIF/WebP assets inside the workspace.",
+      "If the result is PIXELLAB_PENDING, call this tool again with its generation_id to resume instead of starting another job."
+    ].join(" "),
+    parameters: {
+      type: "object",
+      properties: {
+        generation_id: {
+          type: "string",
+          description: "Resume an existing pending generation. When set, generation parameters are ignored."
+        },
+        operation: { type: "string", enum: ["image", "animation"] },
+        prompt: {
+          type: "string",
+          description: "Image description, or action description for animation."
+        },
+        width: { type: "number", description: "Output width. Images: 16-792; animations: 32-256." },
+        height: { type: "number", description: "Output height. Images: 16-688; animations: 32-256." },
+        reference_path: {
+          type: "string",
+          description: "Required for animation: workspace-relative PNG/JPEG file to animate."
+        },
+        output_path: {
+          type: "string",
+          description: "Optional workspace-relative destination file or directory. Defaults under assets/pixellab/."
+        },
+        seed: { type: "number", description: "Optional non-negative deterministic seed." },
+        no_background: { type: "boolean", description: "Request transparent background. Defaults true." },
+        view: {
+          type: "string",
+          enum: ["none", "low top-down", "high top-down", "side"],
+          description: "Animation camera perspective."
+        },
+        direction: {
+          type: "string",
+          enum: ["none", "south", "east", "west", "north", "south-east", "south-west", "north-east", "north-west"],
+          description: "Animation facing direction."
+        },
+        overwrite: { type: "boolean", description: "Replace existing destination files when true. Defaults false." }
+      },
+      anyOf: [
+        { required: ["generation_id"] },
+        { required: ["operation", "prompt", "width", "height"] }
+      ],
+      additionalProperties: false
+    },
+    strict: false
+  }
+});
+
+const ASK_USER_QUESTION_TOOL = responseTool({
+  type: "function",
+  function: {
+    name: "ask_user_question",
+    description: "Ask the user one concise question through the desktop question dialog. Use 2-3 clear options when possible; allow free text only when a choice cannot cover the answer. Wait for the answer before continuing.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "One concise question for the user." },
+        options: {
+          type: "array",
+          maxItems: 3,
+          items: {
+            type: "object",
+            properties: {
+              value: { type: "string" },
+              label: { type: "string" }
+            },
+            required: ["value", "label"],
+            additionalProperties: false
+          }
+        },
+        allow_free_text: { type: "boolean", description: "Show an Other text answer path." },
+        free_text_placeholder: { type: "string", description: "Placeholder for the Other text answer." }
+      },
+      required: ["question"],
+      additionalProperties: false
+    },
+    strict: false
+  }
+});
 
 /** File + asset tools only (no host intake). */
-export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
+const AGENT_FILE_TOOL_DEFINITIONS: WrappedToolDefinition[] = [
   {
     type: "function",
     function: {
       name: "list_files",
       description:
-        "List files inside the agent workspace, recursively. Returns paths relative to the workspace root. Use this to discover the layout before reading or editing.",
+        "List files inside the agent workspace, recursively. Returns paths relative to the workspace root. Generated dependency/cache directories including `.venv/`, `venv/`, `node_modules/`, `.dartsnut/`, and `.git/` are skipped.",
       parameters: {
         type: "object",
         properties: {
@@ -148,6 +180,10 @@ export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
             type: "string",
             description:
               "Relative subdirectory to list. Defaults to the workspace root when omitted."
+          },
+          max_results: {
+            type: "number",
+            description: "Maximum number of paths to return (default 500, hard cap 2000)."
           }
         },
         additionalProperties: false
@@ -160,7 +196,7 @@ export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
     function: {
       name: "grep_files",
       description:
-        "Search workspace file contents with a regular expression. Returns matching lines with their workspace-relative path and 1-based line number. Use this to find where something is defined or used before reading or editing. Binary files, `.dartsnut/`, and `node_modules/` are skipped.",
+        "Search workspace file contents with a regular expression. Returns matching lines with their workspace-relative path and 1-based line number. Binary files and generated dependency/cache directories such as `.venv/`, `venv/`, `.dartsnut/`, and `node_modules/` are skipped.",
       parameters: {
         type: "object",
         properties: {
@@ -197,7 +233,7 @@ export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
     function: {
       name: "glob_files",
       description:
-        "List workspace files whose relative path matches a glob pattern (e.g. `**/*.py`, `fonts/**`, `conf.json`). Returns sorted workspace-relative paths. Use to discover files by name/extension before reading them.",
+        "List workspace files whose relative path matches a glob pattern (e.g. `**/*.py`, `fonts/**`, `conf.json`). Generated dependency/cache directories such as `.venv/`, `venv/`, `.dartsnut/`, and `node_modules/` are skipped.",
       parameters: {
         type: "object",
         properties: {
@@ -328,25 +364,148 @@ export const AGENT_FILE_TOOL_SCHEMAS: ChatCompletionTool[] = [
       },
       strict: true
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "copy_chat_attachment",
+      description:
+        "Copy a media file the user dropped into chat into an agent-chosen workspace path. Use this before referencing a chat attachment in code/config. The source path is private; select by attachment_id from the user prompt. Set overwrite=true only when intentionally replacing an existing workspace asset.",
+      parameters: {
+        type: "object",
+        properties: {
+          attachment_id: {
+            type: "string",
+            description: "Attachment ID shown in the prompt, e.g. chat-..."
+          },
+          path: {
+            type: "string",
+            description: "Workspace-relative destination path, including filename."
+          },
+          overwrite: {
+            type: "boolean",
+            description: "When true, replace an existing file at path. Defaults to false."
+          }
+        },
+        required: ["attachment_id", "path"],
+        additionalProperties: false
+      },
+      strict: false
+    }
   }
 ];
 
-const RELOAD_EMULATOR_TOOL: ChatCompletionTool = {
+export const AGENT_FILE_TOOL_SCHEMAS: AgentToolSchema[] = AGENT_FILE_TOOL_DEFINITIONS.map(responseTool);
+
+const RELOAD_EMULATOR_TOOL = responseTool({
   type: "function",
   function: {
     name: "reload_emulator",
     description:
-      "Host-executed: re-applies the current workspace path to the embedded emulator, **re-reads `conf.json` from disk**, restarts the widget/game process, and refreshes deploy eligibility in the UI. After reload, call **get_emulator_logs** to confirm the project starts without Python errors.",
+      "Host-executed: re-applies the current workspace path to the embedded emulator, **re-reads `conf.json` from disk**, restarts the widget/game process, and refreshes deploy eligibility in the UI. Optional params are passed as widget/game launch params, clear_inputs resets buttons/darts before reload, and wait_for_frame_ms waits for a fresh frame. After reload, call **observe_emulator** and **get_emulator_logs** to confirm the project starts without Python errors.",
     parameters: {
       type: "object",
-      properties: {},
+      properties: {
+        params: {
+          type: "object",
+          description: "Optional JSON params passed to the app on reload, matching widget params semantics."
+        },
+        clear_inputs: {
+          type: "boolean",
+          description: "When true, clear all darts and release all buttons before reloading."
+        },
+        wait_for_frame_ms: {
+          type: "number",
+          description: "Optional maximum milliseconds for the host to wait for a fresh frame after reload."
+        }
+      },
       additionalProperties: false
     },
-    strict: true
+    strict: false
   }
-};
+});
 
-const GET_EMULATOR_LOGS_TOOL: ChatCompletionTool = {
+const OBSERVE_EMULATOR_TOOL = responseTool({
+  type: "function",
+  function: {
+    name: "observe_emulator",
+    description:
+      "Host-executed: waits for or reads the latest emulator frame and returns current emulator state, recent logs, display mapping metadata, frame hashes, non-black bounds/occupancy, dominant colors, and optional PNG base64 for the full surface, cropped main surface, cropped bottom surface, and hardware mockup. Use after reload_emulator and after input scenarios to verify the display is nonblank and mapped correctly.",
+    parameters: {
+      type: "object",
+      properties: {
+        include_png: {
+          type: "boolean",
+          description: "When true, include PNG base64 for the logical surface plus cropped main/bottom panel surfaces when available."
+        },
+        include_hardware_mockup: {
+          type: "boolean",
+          description: "When true with include_png, include the hardware/mockup PNG in addition to the surface PNG."
+        },
+        wait_for_frame_ms: {
+          type: "number",
+          description: "Maximum milliseconds to wait for a current frame before returning an actionable error."
+        },
+        max_log_lines: {
+          type: "number",
+          description: "Recent emulator log lines to include with the observation."
+        }
+      },
+      additionalProperties: false
+    },
+    strict: false
+  }
+});
+
+const CONTROL_EMULATOR_INPUT_TOOL = responseTool({
+  type: "function",
+  function: {
+    name: "control_emulator_input",
+    description:
+      "Host-executed: drives emulator input without using the renderer UI. Supports throw_dart, remove_dart, clear_darts, set_button, tap_button, and sequence. Use for game verification before observing the display and logs.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "object",
+          description:
+            "Input action. Shapes: {type:'throw_dart', index:0..11 or 'next', x, y}, {type:'remove_dart', x, y}, {type:'clear_darts'}, {type:'set_button', button, pressed}, {type:'tap_button', button, duration_ms}, or {type:'sequence', actions:[...]}"
+        }
+      },
+      required: ["action"],
+      additionalProperties: false
+    },
+    strict: false
+  }
+});
+
+const RUN_EMULATOR_SCENARIO_TOOL = responseTool({
+  type: "function",
+  function: {
+    name: "run_emulator_scenario",
+    description:
+      "Host-executed: runs a bounded emulator test scenario with steps such as reload, wait_frame, observe, input, delay, and logs. Hard caps are 30 steps, 30 seconds, and 4 observations. Use this for autonomous game/widget acceptance testing instead of many small tool calls.",
+    parameters: {
+      type: "object",
+      properties: {
+        steps: {
+          type: "array",
+          items: { type: "object" },
+          description: "Ordered scenario steps: reload, wait_frame, observe, input, delay, or logs."
+        },
+        timeout_ms: {
+          type: "number",
+          description: "Optional total scenario timeout, capped by the host at 30000ms."
+        }
+      },
+      required: ["steps"],
+      additionalProperties: false
+    },
+    strict: false
+  }
+});
+
+const GET_EMULATOR_LOGS_TOOL = responseTool({
   type: "function",
   function: {
     name: "get_emulator_logs",
@@ -364,9 +523,9 @@ const GET_EMULATOR_LOGS_TOOL: ChatCompletionTool = {
     },
     strict: true
   }
-};
+});
 
-const CHECK_PYTHON_TOOL: ChatCompletionTool = {
+const CHECK_PYTHON_TOOL = responseTool({
   type: "function",
   function: {
     name: "check_python",
@@ -385,24 +544,27 @@ const CHECK_PYTHON_TOOL: ChatCompletionTool = {
     },
     strict: false
   }
-};
+});
 
 const SEARCH_TOOL_NAMES = ["grep_files", "glob_files"] as const;
 
-function fileTool(name: string): ChatCompletionTool {
-  return AGENT_FILE_TOOL_SCHEMAS.find((t) => t.type === "function" && t.function?.name === name)!;
+function fileTool(name: string): AgentToolSchema {
+  return AGENT_FILE_TOOL_SCHEMAS.find((tool) => tool.name === name)!;
 }
 
-/** Default / full tool surface: file + search tools, deferred skills, emulator verify, check_python, project intake. */
-export const AGENT_TOOL_SCHEMAS: ChatCompletionTool[] = [
+/** Default tool surface: workspace, skills, emulator verification, and machine MCP. */
+export const AGENT_TOOL_SCHEMAS: AgentToolSchema[] = [
   ...AGENT_FILE_TOOL_SCHEMAS,
   GET_DARTSNUT_SKILL_TOOL,
   RELOAD_EMULATOR_TOOL,
   GET_EMULATOR_LOGS_TOOL,
+  OBSERVE_EMULATOR_TOOL,
+  CONTROL_EMULATOR_INPUT_TOOL,
+  RUN_EMULATOR_SCENARIO_TOOL,
   CHECK_PYTHON_TOOL,
-  DARTSNUT_ASK_QUESTION_TOOL,
-  DARTSNUT_PROJECT_INTAKE_TOOL,
-  DARTSNUT_MACHINE_MCP_TOOL
+  PIXELLAB_GENERATE_TOOL,
+  DARTSNUT_MACHINE_MCP_TOOL,
+  ASK_USER_QUESTION_TOOL
 ];
 
 export type AgentToolSchemaDefinition = {
@@ -411,7 +573,7 @@ export type AgentToolSchemaDefinition = {
 };
 
 /** Asset applier: bind art to existing slots (no copy_asset_file, no intake). */
-export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: ChatCompletionTool[] = [
+export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: AgentToolSchema[] = [
   fileTool("list_files"),
   ...SEARCH_TOOL_NAMES.map(fileTool),
   fileTool("read_file"),
@@ -420,10 +582,13 @@ export const AGENT_ASSET_APPLIER_TOOL_SCHEMAS: ChatCompletionTool[] = [
   GET_DARTSNUT_SKILL_TOOL,
   RELOAD_EMULATOR_TOOL,
   GET_EMULATOR_LOGS_TOOL,
+  OBSERVE_EMULATOR_TOOL,
+  CONTROL_EMULATOR_INPUT_TOOL,
+  RUN_EMULATOR_SCENARIO_TOOL,
   CHECK_PYTHON_TOOL
 ];
 
-const ALL_TOOL_SCHEMAS: ChatCompletionTool[] = [
+const ALL_TOOL_SCHEMAS: AgentToolSchema[] = [
   ...AGENT_TOOL_SCHEMAS,
   ...AGENT_ASSET_APPLIER_TOOL_SCHEMAS
 ];
@@ -432,19 +597,19 @@ const ALL_TOOL_SCHEMAS: ChatCompletionTool[] = [
 export function getAgentToolDefinition(name: string): AgentToolSchemaDefinition | undefined {
   const seen = new Set<string>();
   for (const entry of ALL_TOOL_SCHEMAS) {
-    if (entry.type !== "function" || entry.function?.name !== name) {
+    if (entry.name !== name) {
       continue;
     }
     if (seen.has(name)) {
       continue;
     }
     seen.add(name);
-    const parameters = entry.function.parameters;
+    const parameters = entry.parameters;
     if (!parameters || typeof parameters !== "object") {
       return undefined;
     }
     return {
-      description: entry.function.description ?? name,
+      description: entry.description ?? name,
       parameters: parameters as Record<string, unknown>
     };
   }

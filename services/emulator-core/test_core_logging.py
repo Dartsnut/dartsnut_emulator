@@ -41,20 +41,46 @@ def _load_core_module():
 def _write_widget_conf(workspace: Path, widget_dir_name: str) -> None:
     widget_dir = workspace / widget_dir_name
     widget_dir.mkdir(parents=True, exist_ok=True)
+    (widget_dir / "pyproject.toml").write_text(
+        "[project]\nname = 'demo-widget'\nversion = '1'\ndependencies = ['pydartsnut']\n",
+        encoding="utf-8",
+    )
     (widget_dir / "conf.json").write_text(
         json.dumps(
             {
-                "id": "demo-widget",
                 "name": "Demo Widget",
-                "type": "game",
                 "size": [128, 160],
+                "fields": [],
             }
         ),
         encoding="utf-8",
     )
 
 
+def _write_game_project(workspace: Path, game_dir_name: str) -> None:
+    game_dir = workspace / game_dir_name
+    game_dir.mkdir(parents=True, exist_ok=True)
+    (game_dir / "pyproject.toml").write_text(
+        "[project]\nname = 'demo-game'\nversion = '1'\ndependencies = ['pydartsnut']\n",
+        encoding="utf-8",
+    )
+
+
 class LifecycleLoggingTests(unittest.TestCase):
+    def test_load_game_without_conf_uses_pyproject_identity(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            _write_game_project(workspace, "demo")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+
+            state = core.apply_command({"type": "set_path", "path": "demo"})
+
+            self.assertEqual(state["widgetType"], "game")
+            self.assertEqual(state["widgetId"], "demo-game")
+
     def test_reload_widget_logs_launch_attempt_and_failure(self):
         module = _load_core_module()
         with tempfile.TemporaryDirectory() as workspace_dir:
@@ -79,6 +105,28 @@ class LifecycleLoggingTests(unittest.TestCase):
             self.assertTrue(any("reload_widget requested" in text for text in texts), texts)
             self.assertTrue(any("launch command" in text for text in texts), texts)
             self.assertTrue(any("spawn broken" in text for text in texts), texts)
+
+    def test_failed_workspace_prep_aborts_before_process_launch(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            _write_widget_conf(workspace, "demo")
+            (workspace / "demo" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+            core.apply_command({"type": "set_path", "path": "demo"})
+
+            with (
+                mock.patch.object(module.time, "sleep", lambda _: None),
+                mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=False),
+                mock.patch.object(module.subprocess, "Popen") as popen,
+            ):
+                state = core.apply_command({"type": "reload_widget"})
+
+            popen.assert_not_called()
+            self.assertEqual(state["status"], "Command failed")
+            self.assertIn("Failed to prepare workspace Python environment", state["lastError"])
 
     def test_reload_widget_invalidates_stale_shared_memory_frame_before_launch(self):
         module = _load_core_module()
@@ -112,7 +160,7 @@ class LifecycleLoggingTests(unittest.TestCase):
 
 
 class WidgetLaunchCommandTests(unittest.TestCase):
-    def test_widget_launch_uses_uv_workspace_run_when_venv_ready(self):
+    def test_widget_launch_uses_clean_uv_workspace_run_after_sync(self):
         module = _load_core_module()
         with tempfile.TemporaryDirectory() as workspace_dir:
             workspace = Path(workspace_dir)
@@ -148,7 +196,13 @@ class WidgetLaunchCommandTests(unittest.TestCase):
                     {
                         "DARTSNUT_UV_BIN": uv_bin,
                         "UV_PYTHON": "/tmp/dartsnut-python-test",
+                        "VIRTUAL_ENV": "/host/venv",
+                        "PYTHONHOME": "/host/python",
+                        "PYTHONPATH": "/host/packages",
+                        "PYTHONUSERBASE": "/host/userbase",
                         "UV_NO_SYNC": "1",
+                        "UV_NO_PROJECT": "1",
+                        "UV_PROJECT_ENVIRONMENT": "/other/venv",
                     },
                     clear=False,
                 ),
@@ -158,11 +212,20 @@ class WidgetLaunchCommandTests(unittest.TestCase):
 
             command = captured.get("command", [])
             child_env = captured.get("env", {})
-            self.assertNotIn("UV_NO_SYNC", child_env)
-            self.assertNotIn("UV_NO_PROJECT", child_env)
+            for key in (
+                "VIRTUAL_ENV",
+                "PYTHONHOME",
+                "PYTHONPATH",
+                "PYTHONUSERBASE",
+                "UV_NO_SYNC",
+                "UV_NO_PROJECT",
+                "UV_PROJECT_ENVIRONMENT",
+            ):
+                self.assertNotIn(key, child_env)
+            self.assertEqual(child_env.get("PYTHONNOUSERSITE"), "1")
             self.assertEqual(command[0], uv_bin)
-            self.assertEqual(command[1:4], ["run", "--directory", str(demo_dir)])
-            self.assertEqual(command[4], "main.py")
+            self.assertEqual(command[1:5], ["run", "--no-sync", "--directory", str(demo_dir)])
+            self.assertEqual(command[5], "main.py")
 
 
 class ShutdownCommandTests(unittest.TestCase):
@@ -226,6 +289,116 @@ class WidgetLaunchEnvTests(unittest.TestCase):
             assert isinstance(env, dict)
             self.assertEqual(env.get("SDL_VIDEODRIVER"), "dummy")
             self.assertNotIn("SDL_AUDIODRIVER", env)
+
+    def test_muted_widget_launch_uses_dummy_audio(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            _write_widget_conf(workspace, "demo")
+            (workspace / "demo" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+
+            core.apply_command({"type": "set_path", "path": "demo"})
+            core.apply_command({"type": "set_audio_muted", "muted": True})
+            captured: dict[str, object] = {}
+
+            def _capture_popen(*args, **kwargs):
+                captured["env"] = kwargs.get("env")
+                proc = mock.MagicMock()
+                proc.poll.return_value = 0
+                proc.stdout = None
+                proc.stderr = None
+                proc.pid = 4242
+                return proc
+
+            with (
+                mock.patch.object(module.time, "sleep", lambda _: None),
+                mock.patch.object(module.subprocess, "Popen", side_effect=_capture_popen),
+            ):
+                core.start_widget_process_for_current()
+
+            env = captured.get("env")
+            self.assertIsInstance(env, dict)
+            assert isinstance(env, dict)
+            self.assertEqual(env.get("SDL_AUDIODRIVER"), "dummy")
+
+    def test_unmuting_clears_dummy_audio_for_next_launch(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            _write_widget_conf(workspace, "demo")
+            (workspace / "demo" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+
+            core.apply_command({"type": "set_path", "path": "demo"})
+            core.apply_command({"type": "set_audio_muted", "muted": True})
+            state = core.apply_command({"type": "set_audio_muted", "muted": False})
+            captured: dict[str, object] = {}
+
+            def _capture_popen(*args, **kwargs):
+                captured["env"] = kwargs.get("env")
+                proc = mock.MagicMock()
+                proc.poll.return_value = 0
+                proc.stdout = None
+                proc.stderr = None
+                proc.pid = 4242
+                return proc
+
+            with (
+                mock.patch.object(module.time, "sleep", lambda _: None),
+                mock.patch.dict(module.os.environ, {"SDL_AUDIODRIVER": "coreaudio"}, clear=False),
+                mock.patch.object(module.subprocess, "Popen", side_effect=_capture_popen),
+            ):
+                core.start_widget_process_for_current()
+
+            env = captured.get("env")
+            self.assertFalse(state["audioMuted"])
+            self.assertIsInstance(env, dict)
+            assert isinstance(env, dict)
+            self.assertNotIn("SDL_AUDIODRIVER", env)
+
+    def test_toggling_audio_mute_restarts_running_widget(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            _write_widget_conf(workspace, "demo")
+            (workspace / "demo" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+
+            core.apply_command({"type": "set_path", "path": "demo"})
+            proc = mock.MagicMock()
+            proc.poll.return_value = None
+            proc.pid = 9999
+            core.widget_process = proc
+            core.state.running = True
+            launched: list[object] = []
+
+            def _capture_popen(*args, **kwargs):
+                new_proc = mock.MagicMock()
+                new_proc.poll.return_value = 0
+                new_proc.stdout = None
+                new_proc.stderr = None
+                new_proc.pid = 4243
+                launched.append(new_proc)
+                return new_proc
+
+            with (
+                mock.patch.object(module.time, "sleep", lambda _: None),
+                mock.patch.object(module, "_kill_process_tree") as kill_tree,
+                mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=True),
+                mock.patch.object(module.subprocess, "Popen", side_effect=_capture_popen),
+            ):
+                state = core.apply_command({"type": "set_audio_muted", "muted": True})
+
+            self.assertTrue(state["audioMuted"])
+            kill_tree.assert_called_once_with(proc, force=False)
+            self.assertEqual(len(launched), 1)
 
 
 if __name__ == "__main__":

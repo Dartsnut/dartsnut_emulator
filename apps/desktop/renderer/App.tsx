@@ -1,4 +1,50 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  memo,
+  Suspense,
+  type CSSProperties,
+  type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
+import {
+  Archive,
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  Check,
+  ChevronDown,
+  CircleAlert,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Code2,
+  Compass,
+  Palette,
+  Rocket,
+  Sparkles,
+  Terminal,
+  Wand2,
+  LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  Settings,
+  Square,
+  SquarePen,
+  Trash2,
+  UserRound,
+  X
+} from "lucide-react";
 import {
   type AgentEvent,
   type AgentSessionTokenUsage,
@@ -6,22 +52,50 @@ import {
   type AppUpdateStatus,
   type AssetManifest,
   type BootstrapState,
+  type ProjectRecord,
+  type ProjectTree,
+  type ProjectSwitchProgress,
   type DeployEligibility,
   type ManifestSnapshot,
   type ProviderId,
   type ProviderSettings,
   type PythonRuntimeProgress,
   type ProjectType,
-  type UserDefineProviderSettings,
+  type CustomProviderSettings,
   type PromptRequest,
   type SendPromptResponse,
-  type SaveTempWorkspaceResponse,
   type MainProcessConsoleMirrorPayload,
   type MachineMcpQuestionMachine,
+  type AgentQuestionOption,
   type WidgetSize,
   type CommunitySessionInfo,
-  type CommunitySubmitProgress
+  type CommunityLlmQuotaStatus,
+  type CommunitySubmitProgress,
+  type ChatMediaAttachment,
+  type WidgetConfigScope,
+  type WidgetConfigSnapshot,
+  type WidgetFieldDefinition,
+  type WidgetFieldValues,
+  createDefaultWidgetFieldValues,
+  inferChatMediaAttachmentKind,
+  mergeChatMediaAttachments,
+  reconcileWidgetFieldValues,
+  AGENT_PROFILES,
+  type AgentProfileId,
+  type AgentProfileDefinition,
+  type AgentProfileGroup
 } from "@dartsnut/shared-ipc";
+import {
+  getAnalyticsCollectionEnabled,
+  setAnalyticsCollectionEnabledPreference,
+  setAnalyticsViewContext,
+  trackAgentEvent,
+  trackPanelView,
+  trackScreenView,
+  updateAnalyticsUser
+} from "./analytics";
+import { shouldSetInitialChatTitle } from "./chatTitlePolicy";
+import { readyAgentProfileId, useChatPersonaController } from "./useChatPersonaController";
 import { AskQuestionCard } from "./AskQuestionCard";
 import { AssetManagerPanel } from "./AssetManagerPanel";
 import { cn } from "./cn";
@@ -36,6 +110,7 @@ import { EmulatorPanel } from "./EmulatorPanel";
 import { MyGamesPanel } from "./MyGamesPanel";
 import {
   agentEventTimelineRole,
+  describeTimelineError,
   formatAgentEventForTimeline,
   mergeTimelineSkillStatusEntry,
   parseToolStatusMessage,
@@ -43,19 +118,53 @@ import {
   transcriptLineToTimelineEntry,
   type TimelineEntry
 } from "./rawTimeline";
-import { ThemeSwitcherIcon } from "./ThemeSwitcher";
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
+import {
+  chatPaneRatioFromWidth,
+  chatPaneWidthFromRatio,
+  clampWorkspaceMenuWidth,
+  getStoredChatPaneWidth,
+  getStoredChatPaneRatio,
+  getStoredWorkspaceMenuWidth,
+  getStoredWorkspaceMenuCollapsed,
+  MAX_WORKSPACE_MENU_WIDTH,
+  MIN_CHAT_PANE_WIDTH,
+  MIN_EMULATOR_PANE_WIDTH,
+  MIN_WORKSPACE_MENU_WIDTH,
+  nextWorkspaceMenuWidthFromDrag,
+  setStoredChatPaneRatio,
+  setStoredWorkspaceMenuWidth,
+  setStoredWorkspaceMenuCollapsed
+} from "./splitPaneSizing";
 
-/** Same order as `WIDGET_DISPLAY_SIZES` in `@dartsnut/shared-ipc` — defined here because Vite/Rollup does not resolve that value through the package’s compiled CJS `export *` shim. */
-const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
-
-const CREATION_INTAKE_PROJECT_TYPES: readonly ProjectType[] = ["game", "widget"];
 const AgentMarkdownRenderer = lazy(() => import("./AgentMarkdownRenderer"));
 
-function projectTypeChipLabel(pt: ProjectType): string {
-  return pt === "game" ? "Game" : "Widget";
-}
+const AGENT_PROFILE_ICONS: Record<AgentProfileDefinition["icon"], typeof Sparkles> = {
+  sparkle: Sparkles,
+  palette: Palette,
+  code: Code2,
+  compass: Compass,
+  wand: Wand2,
+  rocket: Rocket,
+  terminal: Terminal
+};
+
+type PersonaAgeGroup = Exclude<AgentProfileGroup, "export">;
+const PERSONA_AGE_GROUPS: readonly { id: PersonaAgeGroup; label: string }[] = [
+  { id: "child", label: "Kids" },
+  { id: "teen", label: "Teens" },
+  { id: "adult", label: "Adults" }
+];
+
+const PERSONA_CARD_SUMMARIES: Record<Exclude<AgentProfileId, "export">, string> = {
+  "child-curious": "Warm guidance for everyday ideas you can build.",
+  "child-creator": "Playful experiments with bright launch energy.",
+  "teen-builder": "Expressive projects with clear technical thinking.",
+  "teen-explorer": "Fast exploration across tools and tradeoffs.",
+  "adult-vibe": "Personal taste meets useful technology.",
+  "adult-shipper": "Focused execution from concept to launch."
+};
 
 function isValidMachineHost(value: string): boolean {
   const trimmed = value.trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
@@ -68,11 +177,30 @@ function machineOptionLabel(machine: MachineMcpQuestionMachine): string {
   return details ? `${name}  ${details}` : name;
 }
 
-type RightPaneTab = "emulator" | "assets";
-type DeployPaneTab = "deploy" | "games";
-type CommunityAuthIntent = "deploy-devices" | "my-games";
+type DeployPaneTab = "deploy" | "games" | "assets";
+type CommunityAuthIntent = "deploy-devices" | "my-games" | "llm-use";
+
+const EMPTY_WIDGET_CONFIGS: Record<WidgetConfigScope, WidgetConfigSnapshot> = {
+  workspace: {
+    scope: "workspace",
+    status: "unavailable",
+    configKey: null,
+    confPath: null,
+    message: "No workspace is selected."
+  },
+  emulator: {
+    scope: "emulator",
+    status: "unavailable",
+    configKey: null,
+    confPath: null,
+    message: "No widget is selected in the emulator."
+  }
+};
+
+type WidgetValueState = { fields: WidgetFieldDefinition[]; values: WidgetFieldValues };
 
 type AppScreen = "main" | "settings";
+type SettingsSection = "general" | "provider";
 type SubmissionLockState = {
   active: boolean;
   stage: CommunitySubmitProgress["stage"] | "idle";
@@ -94,8 +222,9 @@ const COMPOSER_PROMPT_MAX_HEIGHT_PX = 200;
 const COMPOSER_PROMPT_MULTILINE_EPSILON_PX = 1;
 const GREETING_TEXT =
   "What are we making today? Share your idea and I'll help turn it into a Dartsnut widget or game.";
+const CHAT_ATTACHMENT_ERROR_TIMEOUT_MS = 3500;
 
-const EMPTY_USER_DEFINE: UserDefineProviderSettings = {
+const EMPTY_CUSTOM_PROVIDER: CustomProviderSettings = {
   baseUrl: "",
   apiKey: "",
   model: ""
@@ -103,9 +232,15 @@ const EMPTY_USER_DEFINE: UserDefineProviderSettings = {
 
 const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
   activeProvider: "dartsnut-llm",
-  custom: EMPTY_USER_DEFINE,
-  userDefine: EMPTY_USER_DEFINE
+  custom: EMPTY_CUSTOM_PROVIDER
 };
+
+function createChatMediaAttachmentId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `chat-${crypto.randomUUID()}`;
+  }
+  return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 const chromeIconBtnClass = "ui-chrome-btn";
 
@@ -119,6 +254,10 @@ function isSettingsShortcut(event: KeyboardEvent): boolean {
     return false;
   }
   return hasPrimaryShortcutModifier(event);
+}
+
+function settingsShortcutLabel(): string {
+  return navigator.platform.toLowerCase().includes("mac") ? "⌘," : "Ctrl+,";
 }
 
 function isComposerSendShortcut(event: { key: string; metaKey: boolean; ctrlKey: boolean }): boolean {
@@ -170,6 +309,122 @@ function formatTokenUsageTitle(usage: AgentTokenUsage): string {
   return `Input ${usage.inputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · Total ${usage.totalTokens.toLocaleString()}`;
 }
 
+type DartsnutLlmUsageCardProps = {
+  quota: CommunityLlmQuotaStatus | null;
+  loading: boolean;
+  error: string | null;
+  loggedIn: boolean;
+  onRefresh: () => void;
+};
+
+function DartsnutLlmUsageCard({ quota, loading, error, loggedIn, onRefresh }: DartsnutLlmUsageCardProps) {
+  const usagePercent = quota
+    ? quota.limitTokens > 0
+      ? Math.min(100, (quota.usedTokens / quota.limitTokens) * 100)
+      : 100
+    : 0;
+  return (
+    <section className="llm-usage-card" aria-label="Today’s Dartsnut LLM usage">
+      <div className="llm-usage-card__header">
+        <div>
+          <p className="llm-usage-card__eyebrow">Today · UTC</p>
+          <h3 className="llm-usage-card__title">Token usage</h3>
+        </div>
+        {quota?.quotaExceeded ? <span className="llm-usage-card__badge">Limit reached</span> : null}
+      </div>
+      {!loggedIn ? (
+        <p className="llm-usage-card__state">Sign in to view today’s usage and remaining allowance.</p>
+      ) : loading && !quota ? (
+        <p className="llm-usage-card__state" role="status">Loading today’s usage…</p>
+      ) : error && !quota ? (
+        <div className="llm-usage-card__state llm-usage-card__state--error" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={onRefresh}>Retry</button>
+        </div>
+      ) : quota ? (
+        <>
+          <div
+            className="llm-usage-card__track"
+            role="progressbar"
+            aria-label="Daily token allowance used"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(usagePercent)}
+          >
+            <span style={{ width: `${usagePercent}%` }} />
+          </div>
+          {error ? (
+            <div className="llm-usage-card__refresh-error" role="status">
+              <span>{error}</span>
+              <button type="button" onClick={onRefresh}>Retry</button>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function SettingsGroup({ children }: { children: ReactNode }) {
+  return <section className="settings-group">{children}</section>;
+}
+
+function SettingsRow({ title, description, control, children }: {
+  title?: string;
+  description?: string;
+  control?: ReactNode;
+  children?: ReactNode;
+}) {
+  return <div className={cn("settings-row", children && "settings-row--stacked")}>
+    {title ? <div className="settings-row__copy">
+      <span className="settings-row__title">{title}</span>
+      {description ? <span className="settings-row__description">{description}</span> : null}
+    </div> : null}
+    {control ? <div className="settings-row__control">{control}</div> : null}
+    {children ? <div className="settings-row__content">{children}</div> : null}
+  </div>;
+}
+
+function SettingsSelect<T extends string>({ value, options, onChange, label }: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+  label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selected = options.find((option) => option.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", dismiss);
+    return () => document.removeEventListener("mousedown", dismiss);
+  }, [open]);
+
+  return <div className="settings-select" ref={rootRef}>
+    <button type="button" className={cn("settings-select__trigger", open && "settings-select__trigger--open")} onClick={() => setOpen((current) => !current)} aria-label={label} aria-haspopup="menu" aria-expanded={open}>
+      <span>{selected?.label}</span><ChevronDown size={15} aria-hidden />
+    </button>
+    {open ? <div className="settings-select__menu" role="menu">
+      {options.map((option) => <button key={option.value} type="button" className={cn("settings-select__option", option.value === value && "settings-select__option--selected")} onClick={() => { onChange(option.value); setOpen(false); }} role="menuitemradio" aria-checked={option.value === value}>
+        <span>{option.label}</span>{option.value === value ? <Check size={15} aria-hidden /> : null}
+      </button>)}
+    </div> : null}
+  </div>;
+}
+
+function SettingsSwitch({ checked, onChange, label, analyticsId }: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  analyticsId?: string;
+}) {
+  return <button type="button" className={cn("settings-switch", checked && "settings-switch--checked")} onClick={() => onChange(!checked)} role="switch" aria-checked={checked} aria-label={label} data-analytics-id={analyticsId} data-analytics-area="settings"><span /></button>;
+}
+
 function UpdateDownloadPill({ status }: { status: AppUpdateStatus | null }) {
   if (!status || status.kind !== "downloading") {
     return null;
@@ -186,16 +441,29 @@ function UpdateDownloadPill({ status }: { status: AppUpdateStatus | null }) {
 
 type UpdateReadyOverlayProps = {
   status: AppUpdateStatus | null;
+  autoUpdateEnabled: boolean;
   installing: boolean;
   error: string | null;
+  onDownload: () => void;
+  onAutoUpdateChange: (enabled: boolean) => void;
   onInstallNow: () => void;
   onLater: () => void;
 };
 
-function UpdateReadyOverlay({ status, installing, error, onInstallNow, onLater }: UpdateReadyOverlayProps) {
-  if (!status || status.kind !== "ready") {
+export function UpdateReadyOverlay({
+  status,
+  autoUpdateEnabled,
+  installing,
+  error,
+  onDownload,
+  onAutoUpdateChange,
+  onInstallNow,
+  onLater
+}: UpdateReadyOverlayProps) {
+  if (!status || (status.kind !== "available" && status.kind !== "ready")) {
     return null;
   }
+  const isAvailable = status.kind === "available";
   return (
     <div className="app-update-overlay" role="dialog" aria-modal="true" aria-labelledby="app-update-title">
       <div className="app-update-panel">
@@ -206,14 +474,28 @@ function UpdateReadyOverlay({ status, installing, error, onInstallNow, onLater }
         </div>
         <div className="app-update-panel__copy">
           <p className="app-update-panel__eyebrow">Desktop update</p>
-          <h2 id="app-update-title" className="app-update-panel__title">Update ready</h2>
+          <h2 id="app-update-title" className="app-update-panel__title">{isAvailable ? "Update available" : "Update ready"}</h2>
           <p className="app-update-panel__version">
             Dartsnut Agent {status.currentVersion}
             {status.availableVersion ? ` -> ${status.availableVersion}` : ""}
           </p>
           <p className="app-update-panel__message">
-            The new version has finished downloading. Install it now to relaunch, or keep working and update the next time you open Dartsnut Agent.
+            {isAvailable
+              ? "A new version is available. Download it now, or skip it and check again next time."
+              : "The new version has finished downloading. Install it now to relaunch, or keep working and update the next time you open Dartsnut Agent."}
           </p>
+          {isAvailable ? (
+            <label className="app-update-panel__option">
+              <input
+                type="checkbox"
+                checked={autoUpdateEnabled}
+                data-analytics-id="app_update_auto_download"
+                data-analytics-area="update"
+                onChange={(event) => onAutoUpdateChange(event.target.checked)}
+              />
+              <span>Automatically download updates</span>
+            </label>
+          ) : null}
           {error ? (
             <p className="app-update-panel__error" role="alert">{error}</p>
           ) : null}
@@ -223,12 +505,117 @@ function UpdateReadyOverlay({ status, installing, error, onInstallNow, onLater }
             type="button"
             className="ui-btn-primary app-update-panel__primary"
             disabled={installing}
-            onClick={onInstallNow}
+            data-analytics-id={isAvailable ? "app_update_download" : "app_update_install"}
+            data-analytics-area="update"
+            onClick={isAvailable ? onDownload : onInstallNow}
           >
-            {installing ? "Preparing..." : "Update now"}
+            {isAvailable ? "Download update" : installing ? "Preparing..." : "Update now"}
           </button>
-          <button type="button" className="app-update-panel__secondary" disabled={installing} onClick={onLater}>
-            Next launch
+          <button type="button" className="app-update-panel__secondary" disabled={installing} data-analytics-id="app_update_later" data-analytics-area="update" onClick={onLater}>
+            {isAvailable ? "Skip" : "Next launch"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type RemoveProjectDialogProps = {
+  project: ProjectRecord;
+  removing: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+};
+
+export function RemoveProjectDialog({
+  project,
+  removing,
+  error,
+  onCancel,
+  onConfirm
+}: RemoveProjectDialogProps) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    cancelButtonRef.current?.focus();
+    return () => {
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (!removing) onCancel();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = Array.from(
+      panelRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []
+    );
+    if (controls.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  return (
+    <div
+      className="remove-project-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="remove-project-title"
+      aria-describedby="remove-project-description"
+      onMouseDown={(event) => {
+        if (!removing && event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div ref={panelRef} className="remove-project-dialog" onKeyDown={handleKeyDown}>
+        <div className="remove-project-dialog__header">
+          <h2 id="remove-project-title">Remove {project.name}?</h2>
+          <button
+            type="button"
+            className="remove-project-dialog__close"
+            aria-label="Close"
+            disabled={removing}
+            onClick={onCancel}
+          >
+            <X size={22} aria-hidden />
+          </button>
+        </div>
+        <p id="remove-project-description" className="remove-project-dialog__description">
+          This removes the local project and all of its chats from Dartsnut Agent. Files on your computer won't be deleted.
+        </p>
+        {error ? <p className="remove-project-dialog__error" role="alert">{error}</p> : null}
+        <div className="remove-project-dialog__actions">
+          <button
+            ref={cancelButtonRef}
+            type="button"
+            className="remove-project-dialog__cancel"
+            disabled={removing}
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="remove-project-dialog__confirm"
+            disabled={removing}
+            onClick={onConfirm}
+          >
+            {removing ? "Removing…" : "Remove local project"}
           </button>
         </div>
       </div>
@@ -239,11 +626,35 @@ function UpdateReadyOverlay({ status, installing, error, onInstallNow, onLater }
 type TimelineEntryViewProps = {
   entry: TimelineEntry;
   onToggleReasoning: (entryId: string) => void;
+  agentProfile: AgentProfileDefinition | null;
 };
+
+function TimelineErrorCard({ text }: { text: string }) {
+  const error = describeTimelineError(text);
+  return (
+    <div className="timeline-error-card" role="alert">
+      <div className="timeline-error-card__signal" aria-hidden>
+        <CircleAlert size={14} strokeWidth={1.8} />
+      </div>
+      <div className="timeline-error-card__content">
+        <span className="timeline-error-card__eyebrow">Run interrupted</span>
+        <strong className="timeline-error-card__title">{error.title}</strong>
+        <p className="timeline-error-card__message">{error.message}</p>
+        {error.technicalDetail ? (
+          <details className="timeline-error-card__details">
+            <summary>Technical details</summary>
+            <code>{error.technicalDetail}</code>
+          </details>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 const TimelineEntryView = memo(function TimelineEntryView({
   entry,
-  onToggleReasoning
+  onToggleReasoning,
+  agentProfile
 }: TimelineEntryViewProps) {
   return (
     <div
@@ -254,10 +665,12 @@ const TimelineEntryView = memo(function TimelineEntryView({
       )}
     >
       {entry.role === "agent" && entry.id.startsWith("greeting") ? (
-        <div className="greeting-card" role="status">
-          <p className="greeting-card__eyebrow">Neon Pit · ready</p>
-          <p className="greeting-card__title">Dartsnut Agent</p>
-          <p className="greeting-card__body">{entry.text}</p>
+        <div className={cn("greeting-card", agentProfile && `greeting-card--${agentProfile.group}`)} role="status">
+          <p className="greeting-card__eyebrow">
+            {agentProfile?.group === "export" ? "Life/Tech · ready" : `${agentProfile?.group ?? "agent"} studio · ready`}
+          </p>
+          <p className="greeting-card__title">{agentProfile?.name ?? "Dartsnut Agent"}</p>
+          <p className="greeting-card__body">{agentProfile?.greeting ?? entry.text}</p>
         </div>
       ) : entry.role === "user" ? (
         <div className="entry-text">{entry.text}</div>
@@ -306,7 +719,7 @@ const TimelineEntryView = memo(function TimelineEntryView({
       ) : entry.role === "status" ? (
         <div className="entry-text">{entry.text}</div>
       ) : (
-        <pre className="entry-json">{entry.text}</pre>
+        <TimelineErrorCard text={entry.text} />
       )}
     </div>
   );
@@ -325,13 +738,11 @@ function maskApiKey(value: string): string {
 
 function withProviderCustom(
   settings: ProviderSettings,
-  updater: (custom: UserDefineProviderSettings) => UserDefineProviderSettings
+  updater: (custom: CustomProviderSettings) => CustomProviderSettings
 ): ProviderSettings {
-  const custom = updater(settings.custom ?? settings.userDefine ?? EMPTY_USER_DEFINE);
   return {
     ...settings,
-    custom,
-    userDefine: custom
+    custom: updater(settings.custom)
   };
 }
 
@@ -342,22 +753,14 @@ function withProviderId(settings: ProviderSettings, activeProvider: ProviderId):
   };
 }
 
-function providerCustom(settings: ProviderSettings): UserDefineProviderSettings {
-  return settings.custom ?? settings.userDefine ?? EMPTY_USER_DEFINE;
+function providerCustom(settings: ProviderSettings): CustomProviderSettings {
+  return settings.custom;
 }
 
 function workspaceFolderBasename(workspaceRoot: string): string {
   const normalized = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
   const segments = normalized.split("/").filter(Boolean);
   return segments.length > 0 ? segments[segments.length - 1]! : workspaceRoot;
-}
-
-function isLikelyTempWorkspace(workspaceRoot: string | null | undefined): boolean {
-  if (!workspaceRoot) {
-    return false;
-  }
-  const basename = workspaceFolderBasename(workspaceRoot);
-  return basename.startsWith("dartsnut-chat-");
 }
 
 function AgentMarkdownBody({ source, className }: { source: string; className?: string }) {
@@ -373,12 +776,21 @@ type CommunityAuthStatusProps = {
   communitySession: CommunitySessionInfo;
   onAuthRequired: () => void;
   onSignOut: () => Promise<void>;
+  onOpenSettings: () => void;
+  placement?: "header" | "rail";
 };
 
-function CommunityAuthStatus({ communitySession, onAuthRequired, onSignOut }: CommunityAuthStatusProps) {
+function CommunityAuthStatus({
+  communitySession,
+  onAuthRequired,
+  onSignOut,
+  onOpenSettings,
+  placement = "header"
+}: CommunityAuthStatusProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const inRail = placement === "rail";
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -404,39 +816,50 @@ function CommunityAuthStatus({ communitySession, onAuthRequired, onSignOut }: Co
 
   if (communitySession.loggedIn) {
     return (
-      <div className="relative" ref={menuRef}>
+      <div className={cn("relative", inRail && "w-full")} ref={menuRef}>
         <button
           type="button"
-          className="inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1.5 rounded border border-transparent bg-transparent px-2.5 py-0 text-xs font-medium text-[var(--color-app-btn-text)] transition-colors hover:bg-[var(--color-app-btn-bg-hover)] hover:text-[var(--color-app-btn-text-hover)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
+          className={cn(
+            inRail
+              ? "workspace-menu__button"
+              : "inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1.5 rounded border border-transparent bg-transparent px-2.5 py-0 text-xs font-medium text-[var(--color-app-btn-text)] transition-colors hover:bg-[var(--color-app-btn-bg-hover)] hover:text-[var(--color-app-btn-text-hover)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-45"
+          )}
           onClick={() => setMenuOpen(!menuOpen)}
           aria-label="Account menu"
+          aria-expanded={menuOpen}
           title={communitySession.account || "Signed in"}
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden className="shrink-0">
-            <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
-            <path
-              d="M6 21c0-3.3 2.7-6 6-6s6 2.7 6 6"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          </svg>
-          <span className="whitespace-nowrap">{communitySession.account || "Signed in"}</span>
+          <UserRound size={inRail ? 16 : 12} className="shrink-0" aria-hidden />
+          {inRail ? <span className="workspace-menu__button-label">{communitySession.account || "Account"}</span> : null}
+          {!inRail ? <span className="whitespace-nowrap">{communitySession.account || "Signed in"}</span> : null}
         </button>
         {menuOpen ? (
           <div
-            className="absolute right-0 top-full z-50 mt-1 min-w-[120px] rounded-md border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] py-1 shadow-sm"
+            className={cn(
+              "absolute z-50 min-w-[190px] rounded-md border border-[var(--color-emulator-toolbar-border)] bg-[var(--color-emulator-toolbar-bg)] py-1 shadow-sm",
+              inRail ? "bottom-full left-0" : "right-0 top-full mt-1"
+            )}
             role="menu"
           >
             <button
               type="button"
-              className="w-full border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+              className="flex w-full items-center gap-2 border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none"
+              onClick={() => { onOpenSettings(); setMenuOpen(false); }}
+              role="menuitem"
+            >
+              <Settings size={14} className="shrink-0" aria-hidden />
+              <span>Settings</span>
+              <kbd className="ml-auto whitespace-nowrap text-[11px] font-normal text-[var(--color-text-subtle)]">{settingsShortcutLabel()}</kbd>
+            </button>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 border-0 bg-transparent px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-emulator-toolbar-label)] transition-colors hover:bg-[var(--color-emulator-toolbar-bg-hover)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() => void handleSignOut()}
               disabled={signingOut}
               role="menuitem"
             >
-              {signingOut ? "Signing out..." : "Sign out"}
+              <LogOut size={14} className="shrink-0" aria-hidden />
+              {signingOut ? "Logging out..." : "Log out"}
             </button>
           </div>
         ) : null}
@@ -447,21 +870,13 @@ function CommunityAuthStatus({ communitySession, onAuthRequired, onSignOut }: Co
   return (
     <button
       type="button"
-      className={chromeIconBtnClass}
+      className={inRail ? "workspace-menu__button" : chromeIconBtnClass}
       onClick={onAuthRequired}
       aria-label="Sign in"
       title="Sign in"
     >
-      <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-        <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
-        <path
-          d="M6 21c0-3.3 2.7-6 6-6s6 2.7 6 6"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-      </svg>
+      <UserRound size={inRail ? 16 : 14} aria-hidden />
+      {inRail ? <span className="workspace-menu__button-label">Sign in</span> : null}
     </button>
   );
 }
@@ -509,7 +924,14 @@ function extractPartialStringField(argumentsJson: string, fieldName: string): st
   return out;
 }
 
-function summarizeFileToolCallDelta(event: Extract<AgentEvent, { type: "tool_call_delta" }>): string {
+type FunctionCallPreview = {
+  callId: string;
+  toolName: string;
+  argumentsJson: string;
+  path?: string;
+};
+
+function summarizeFileToolCallDelta(event: FunctionCallPreview): string {
   const args = event.argumentsJson ?? "";
   const trimmedPath = typeof event.path === "string" && event.path.trim() ? event.path.trim() : "file";
   if (event.toolName === "write_file") {
@@ -542,10 +964,26 @@ export function App() {
   }, []);
 
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
+  const [projectTree, setProjectTree] = useState<ProjectTree>({ projects: [], chats: [] });
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
+  const [projectSwitchProgress, setProjectSwitchProgress] = useState<ProjectSwitchProgress>({ active: false, stage: "ready" });
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [createProjectName, setCreateProjectName] = useState("");
+  const [createProjectFolder, setCreateProjectFolder] = useState<string | null>(null);
+  const [createProjectError, setCreateProjectError] = useState<string | null>(null);
+  const [createProjectPicking, setCreateProjectPicking] = useState(false);
+  const [removeProjectTarget, setRemoveProjectTarget] = useState<ProjectRecord | null>(null);
+  const [removingProject, setRemovingProject] = useState(false);
+  const [removeProjectError, setRemoveProjectError] = useState<string | null>(null);
   const [entries, setEntries] = useState<TimelineEntry[]>([
     { id: "greeting-initial", role: "agent", text: GREETING_TEXT }
   ]);
   const [prompt, setPrompt] = useState("");
+  const [personaAgeGroup, setPersonaAgeGroup] = useState<PersonaAgeGroup>("adult");
+  const [chatMediaAttachments, setChatMediaAttachments] = useState<ChatMediaAttachment[]>([]);
+  const [chatAttachmentError, setChatAttachmentError] = useState<string | null>(null);
+  const [composerDragActive, setComposerDragActive] = useState(false);
   const [sending, setSending] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [pythonRuntimeStatus, setPythonRuntimeStatus] = useState<string | null>(null);
@@ -556,6 +994,7 @@ export function App() {
     message: null
   });
   const [screen, setScreen] = useState<AppScreen>("main");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   /** Preserves widget/game creator routing for follow-up prompts after the first send. */
   const [sessionTemplateMode, setSessionTemplateMode] = useState<
     "game-creator" | "widget-creator" | null
@@ -563,16 +1002,6 @@ export function App() {
   const [sessionWidgetSize, setSessionWidgetSize] = useState<WidgetSize | null>(null);
   const [sessionProjectType, setSessionProjectType] = useState<ProjectType | null>(null);
   const [tokenUsage, setTokenUsage] = useState<AgentSessionTokenUsage | null>(null);
-  /** Shown until intake records project type (`intake_project_type_prompt` from host). */
-  const [projectTypePicker, setProjectTypePicker] = useState<{
-    visible: boolean;
-    types: ProjectType[];
-  }>({ visible: false, types: [] });
-  /** Shown after intake records `widget` but not yet `set_widget_size` (host pushes `intake_widget_size_prompt`). */
-  const [widgetSizePicker, setWidgetSizePicker] = useState<{
-    visible: boolean;
-    sizes: WidgetSize[];
-  }>({ visible: false, sizes: [] });
   const [machineMcpPicker, setMachineMcpPicker] = useState<{
     visible: boolean;
     machines: MachineMcpQuestionMachine[];
@@ -580,6 +1009,14 @@ export function App() {
   }>({ visible: false, machines: [], manualOnly: true });
   const [machineMcpManualIp, setMachineMcpManualIp] = useState("");
   const [machineMcpInputError, setMachineMcpInputError] = useState<string | null>(null);
+  const [agentQuestion, setAgentQuestion] = useState<{
+    questionId: string;
+    question: string;
+    options: AgentQuestionOption[];
+    allowFreeText: boolean;
+    freeTextPlaceholder: string;
+  } | null>(null);
+  const [agentQuestionText, setAgentQuestionText] = useState("");
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const eventSeqRef = useRef(0);
   const activeStreamEntryIdRef = useRef<string | null>(null);
@@ -588,31 +1025,51 @@ export function App() {
   const activeReasoningIdRef = useRef<string | null>(null);
   const activeReasoningStreamDeltaRef = useRef("");
   const activeReasoningStartedAtRef = useRef<number | null>(null);
+  const sdkFunctionCallsRef = useRef(new Map<string, FunctionCallPreview>());
   const activeToolStatusEntryByKeyRef = useRef<Map<string, string>>(new Map());
+  const seenAgentToolAnalyticsRef = useRef<Set<string>>(new Set());
+  const activeAgentRunRef = useRef<{ startedAt: number; finished: boolean } | null>(null);
   /** After session reset / new project, discard agent stream events until the next user send. */
   const discardAgentEventsRef = useRef(false);
-  const lastAgentSessionHydrateKeyRef = useRef<string>("");
   const timelineRef = useRef<HTMLElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const personaController = useChatPersonaController();
+  const personaState = personaController.state;
   const [composerExpandedSticky, setComposerExpandedSticky] = useState(false);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>(DEFAULT_PROVIDER_SETTINGS);
+  const [analyticsEnabled, setAnalyticsEnabled] = useState(() => getAnalyticsCollectionEnabled());
   const [providerSettingsError, setProviderSettingsError] = useState<string | null>(null);
   const [providerSettingsNotice, setProviderSettingsNotice] = useState<string | null>(null);
   const [savingProviderSettings, setSavingProviderSettings] = useState(false);
   const [assetManifest, setAssetManifest] = useState<AssetManifest | null>(null);
   const [pendingChangeSlotIds, setPendingChangeSlotIds] = useState<string[]>([]);
-  const [rightPaneTab, setRightPaneTab] = useState<RightPaneTab>("emulator");
   const [deployPaneTab, setDeployPaneTab] = useState<DeployPaneTab>("deploy");
+  const [deployDrawerOpen, setDeployDrawerOpen] = useState(false);
   const [deployEligibility, setDeployEligibility] = useState<DeployEligibility>({
     ok: false,
     reason: "no_workspace"
   });
-  const [widgetParamsText, setWidgetParamsText] = useState("{}");
-  const [widgetParamsError, setWidgetParamsError] = useState<string | null>(null);
+  const deployEligible = deployEligibility.ok;
+  const activeProject = projectTree.projects.find((project) => project.id === bootstrap?.activeProjectId) ?? null;
+  const activeChat = projectTree.chats.find((chat) => chat.id === bootstrap?.activeChatId) ?? null;
+  const validProject = Boolean(
+    activeProject &&
+    bootstrap?.workspaceRoot &&
+    deployEligibility.ok &&
+    (deployEligibility.projectType === "game" || deployEligibility.projectType === "widget")
+  );
+  const showEmulator = validProject;
+  const showRuntimeSetup = pythonRuntimeProgress.running || Boolean(pythonRuntimeProgress.error);
+  const showEmulatorPane = screen === "main" && showEmulator && !showRuntimeSetup;
+  const showDeployDrawer = screen === "main" && validProject && !showRuntimeSetup;
+  const [widgetConfigs, setWidgetConfigs] = useState<Record<WidgetConfigScope, WidgetConfigSnapshot>>(EMPTY_WIDGET_CONFIGS);
+  const [widgetValuesByConfig, setWidgetValuesByConfig] = useState<Record<string, WidgetValueState>>({});
   const [theme, setTheme] = useState<ThemeId>(() => resolveThemeFromEnvironment());
   const [communitySession, setCommunitySession] = useState<CommunitySessionInfo>({
     loggedIn: false,
     account: null,
+    analyticsUserId: null,
+    authMethod: null,
     hasSupabase: false,
     googleClientId: "",
     googleDesktopClientId: "",
@@ -622,14 +1079,225 @@ export function App() {
   const [communityAuthIntent, setCommunityAuthIntent] = useState<CommunityAuthIntent>("deploy-devices");
   const [communityAuthSkippedVersion, setCommunityAuthSkippedVersion] = useState(0);
   const [communitySessionVersion, setCommunitySessionVersion] = useState(0);
+  const [llmQuota, setLlmQuota] = useState<CommunityLlmQuotaStatus | null>(null);
+  const [llmQuotaLoading, setLlmQuotaLoading] = useState(false);
+  const [llmQuotaError, setLlmQuotaError] = useState<string | null>(null);
   const [submissionLock, setSubmissionLock] = useState<SubmissionLockState>({
     active: false,
     stage: "idle",
     message: "Preparing submission..."
   });
   const [appUpdate, setAppUpdate] = useState<UpdatePromptState | null>(null);
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
+  const [legacyChatPaneWidth] = useState(getStoredChatPaneWidth);
+  const [chatPaneRatio, setChatPaneRatio] = useState<number | null>(getStoredChatPaneRatio);
+  const [mainWorkspacePanelWidth, setMainWorkspacePanelWidth] = useState(0);
+  const [chatPaneResizing, setChatPaneResizing] = useState(false);
+  const [workspaceMenuWidth, setWorkspaceMenuWidth] = useState(getStoredWorkspaceMenuWidth);
+  const [workspaceMenuCollapsed, setWorkspaceMenuCollapsed] = useState(getStoredWorkspaceMenuCollapsed);
+  const [workspaceMenuResizing, setWorkspaceMenuResizing] = useState(false);
+  const chatPaneResizeDragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startWidth: number;
+    panelWidth: number;
+  } | null>(null);
+  const workspaceMenuResizeDragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startWidth: number;
+  } | null>(null);
+  const mainWorkspaceBodyRef = useRef<HTMLDivElement | null>(null);
+  const projectsSectionButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  const composerHasContent = prompt.trim().length > 0 || chatMediaAttachments.length > 0;
+  const personaPickerOpen = personaState.phase === "picking";
+  const agentProfileId = readyAgentProfileId(personaState, bootstrap?.activeChatId);
+  const agentProfile = AGENT_PROFILES.find((profile) => profile.id === agentProfileId) ?? null;
+  const agentProfileReady = bootstrap !== null && agentProfileId !== null;
+  const visiblePersonaProfiles = AGENT_PROFILES.filter(
+    (profile) => profile.group === personaAgeGroup
+  );
+  const exportProfile = AGENT_PROFILES.find((profile) => profile.id === "export")!;
 
   const api = window.dartsnutApi;
+
+  useEffect(() => {
+    if (bootstrap) personaController.syncBootstrap(bootstrap);
+  }, [bootstrap, personaController.syncBootstrap]);
+
+  useEffect(() => {
+    if (!api) return;
+    void api.listProjects().then(setProjectTree).catch(() => undefined);
+    return api.onProjectSwitchProgress(setProjectSwitchProgress);
+  }, [api]);
+
+  useEffect(() => {
+    if (!api || !bootstrap?.activeChatId) return;
+    void api.listProjects().then(setProjectTree).catch(() => undefined);
+  }, [api, bootstrap?.activeChatId]);
+
+  useEffect(() => {
+    if (!projectMenuOpen) return;
+    const dismiss = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest(".ui-composer__project-row")) setProjectMenuOpen(false);
+    };
+    document.addEventListener("mousedown", dismiss);
+    return () => document.removeEventListener("mousedown", dismiss);
+  }, [projectMenuOpen]);
+
+  const mainGridTemplateColumns = useMemo(() => {
+    const menuColumn = `${workspaceMenuCollapsed ? 0 : workspaceMenuWidth}px`;
+    return `${menuColumn} minmax(0,1fr)`;
+  }, [workspaceMenuCollapsed, workspaceMenuWidth]);
+
+  const paneLayoutWidth = mainWorkspacePanelWidth > 0
+    ? mainWorkspacePanelWidth
+    : legacyChatPaneWidth + MIN_EMULATOR_PANE_WIDTH;
+  const preferredChatPaneRatio = chatPaneRatio
+    ?? chatPaneRatioFromWidth(legacyChatPaneWidth, paneLayoutWidth);
+  const chatPaneWidth = chatPaneWidthFromRatio(preferredChatPaneRatio, paneLayoutWidth);
+
+  const mainWorkspaceGridTemplateColumns = useMemo(() => {
+    if (!showEmulatorPane) {
+      return "minmax(0,1fr)";
+    }
+    return `${chatPaneWidth}px minmax(${MIN_EMULATOR_PANE_WIDTH}px,1fr)`;
+  }, [chatPaneWidth, showEmulatorPane]);
+
+  const mainGridStyle = useMemo(
+    () => ({
+      "--app-main-grid-cols": mainGridTemplateColumns,
+      "--main-workspace-grid-cols": mainWorkspaceGridTemplateColumns,
+      "--workspace-menu-rendered-width": `${workspaceMenuCollapsed ? 0 : workspaceMenuWidth}px`
+    }) as CSSProperties,
+    [mainGridTemplateColumns, mainWorkspaceGridTemplateColumns, workspaceMenuCollapsed, workspaceMenuWidth]
+  );
+  const chatPaneResizeMax = Math.max(MIN_CHAT_PANE_WIDTH, paneLayoutWidth - MIN_EMULATOR_PANE_WIDTH);
+  const workspaceMenuResizeMax = MAX_WORKSPACE_MENU_WIDTH;
+
+  const finishChatPaneResize = useCallback((target?: Element) => {
+    const activeDrag = chatPaneResizeDragRef.current;
+    if (activeDrag && target instanceof HTMLElement && target.hasPointerCapture(activeDrag.pointerId)) {
+      target.releasePointerCapture(activeDrag.pointerId);
+    }
+    chatPaneResizeDragRef.current = null;
+    setChatPaneResizing(false);
+  }, []);
+
+  const handleChatPaneResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    chatPaneResizeDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startWidth: chatPaneWidth,
+      panelWidth: paneLayoutWidth
+    };
+    setChatPaneResizing(true);
+    event.preventDefault();
+  }, [chatPaneWidth, paneLayoutWidth]);
+
+  const handleChatPaneResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const activeDrag = chatPaneResizeDragRef.current;
+    if (!activeDrag || activeDrag.pointerId !== event.pointerId) {
+      return;
+    }
+    const targetWidth = activeDrag.startWidth + event.clientX - activeDrag.startClientX;
+    const ratio = chatPaneRatioFromWidth(targetWidth, activeDrag.panelWidth);
+    setChatPaneRatio(ratio);
+  }, []);
+
+  const handleChatPaneResizePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (chatPaneResizeDragRef.current?.pointerId === event.pointerId) {
+      finishChatPaneResize(event.currentTarget);
+    }
+  }, [finishChatPaneResize]);
+
+  const handleChatPaneResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 80 : 24;
+    const panelWidth = paneLayoutWidth;
+    const resizeTo = (targetWidth: number) => {
+      setChatPaneRatio(chatPaneRatioFromWidth(targetWidth, panelWidth));
+    };
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      resizeTo(chatPaneWidth - step);
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      resizeTo(chatPaneWidth + step);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      resizeTo(MIN_CHAT_PANE_WIDTH);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      resizeTo(panelWidth - MIN_EMULATOR_PANE_WIDTH);
+    }
+  }, [chatPaneWidth, paneLayoutWidth]);
+
+  const finishWorkspaceMenuResize = useCallback((target?: Element) => {
+    const activeDrag = workspaceMenuResizeDragRef.current;
+    if (activeDrag && target instanceof HTMLElement && target.hasPointerCapture(activeDrag.pointerId)) {
+      target.releasePointerCapture(activeDrag.pointerId);
+    }
+    workspaceMenuResizeDragRef.current = null;
+    setWorkspaceMenuResizing(false);
+  }, []);
+
+  const handleWorkspaceMenuResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    workspaceMenuResizeDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startWidth: workspaceMenuWidth
+    };
+    setWorkspaceMenuResizing(true);
+    event.preventDefault();
+  }, [workspaceMenuWidth]);
+
+  const handleWorkspaceMenuResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const activeDrag = workspaceMenuResizeDragRef.current;
+    if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
+    setWorkspaceMenuWidth(nextWorkspaceMenuWidthFromDrag({
+      startClientX: activeDrag.startClientX,
+      currentClientX: event.clientX,
+      startWidth: activeDrag.startWidth
+    }));
+  }, []);
+
+  const handleWorkspaceMenuResizePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (workspaceMenuResizeDragRef.current?.pointerId === event.pointerId) {
+      finishWorkspaceMenuResize(event.currentTarget);
+    }
+  }, [finishWorkspaceMenuResize]);
+
+  const handleWorkspaceMenuResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 40 : 16;
+    const resizeTo = (targetMenuWidth: number) => setWorkspaceMenuWidth(clampWorkspaceMenuWidth(targetMenuWidth));
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      resizeTo(workspaceMenuWidth - step);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      resizeTo(workspaceMenuWidth + step);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      resizeTo(MIN_WORKSPACE_MENU_WIDTH);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      resizeTo(workspaceMenuResizeMax);
+    }
+  }, [workspaceMenuResizeMax, workspaceMenuWidth]);
 
   const handleCommunitySubmitProgress = useCallback((progress: CommunitySubmitProgress | null) => {
     if (!progress) {
@@ -669,6 +1337,53 @@ export function App() {
     });
   }, [api]);
 
+  const handleDownloadAppUpdate = useCallback(() => {
+    if (!api?.downloadAppUpdate) {
+      return;
+    }
+    setAppUpdate((current) => current ? { ...current, error: null } : current);
+    void api.downloadAppUpdate().then((result) => {
+      if (!result.ok && result.reason !== "already_downloading") {
+        setAppUpdate((current) =>
+          current
+            ? {
+                ...current,
+                error: result.message ?? "Could not download the update. Try again next launch."
+              }
+            : current
+        );
+      }
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Could not download the update.";
+      setAppUpdate((current) => current ? { ...current, error: message } : current);
+    });
+  }, [api]);
+
+  const handleAutoUpdateChange = useCallback((enabled: boolean) => {
+    const persistAutoUpdate = api?.setAppUpdateAutoDownload;
+    setAutoUpdateEnabled(enabled);
+    if (!persistAutoUpdate) {
+      return;
+    }
+    void persistAutoUpdate(enabled).then(setAutoUpdateEnabled).catch(() => {
+      setAutoUpdateEnabled(!enabled);
+    });
+  }, [api]);
+
+  const handleCheckAppUpdate = useCallback(() => {
+    if (!api?.checkAppUpdate) {
+      return;
+    }
+    void api.checkAppUpdate().then((result) => {
+      if (!result.ok && result.reason !== "already_checking" && result.reason !== "already_ready") {
+        setAppUpdate((current) => current ? { ...current, error: result.message ?? "Could not check for updates." } : current);
+      }
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Could not check for updates.";
+      setAppUpdate((current) => current ? { ...current, error: message } : current);
+    });
+  }, [api]);
+
   const handleUpdateNextLaunch = useCallback(() => {
     setAppUpdate((current) =>
       current
@@ -692,6 +1407,8 @@ export function App() {
         const changed =
           prev.loggedIn !== session.loggedIn ||
           prev.account !== session.account ||
+          prev.analyticsUserId !== session.analyticsUserId ||
+          prev.authMethod !== session.authMethod ||
           prev.hasSupabase !== session.hasSupabase ||
           prev.googleClientId !== session.googleClientId ||
           prev.googleDesktopClientId !== session.googleDesktopClientId ||
@@ -707,19 +1424,97 @@ export function App() {
     }
   }, [api]);
 
+  const refreshLlmQuota = useCallback(async () => {
+    if (!api?.communityGetLlmQuota || !communitySession.loggedIn) {
+      setLlmQuota(null);
+      setLlmQuotaError(null);
+      setLlmQuotaLoading(false);
+      return;
+    }
+    setLlmQuotaLoading(true);
+    setLlmQuotaError(null);
+    try {
+      const result = await api.communityGetLlmQuota();
+      if (!result.ok) {
+        if (result.authRequired) {
+          await refreshCommunitySession();
+        }
+        setLlmQuotaError(result.message);
+        return;
+      }
+      setLlmQuota(result.quota);
+    } catch (error: unknown) {
+      setLlmQuotaError(error instanceof Error ? error.message : "Failed to load today’s usage.");
+    } finally {
+      setLlmQuotaLoading(false);
+    }
+  }, [api, communitySession.loggedIn, refreshCommunitySession]);
+
   useEffect(() => {
     void refreshCommunitySession();
   }, [refreshCommunitySession]);
+
+  useEffect(() => {
+    if (screen === "settings" && providerSettings.activeProvider === "dartsnut-llm") {
+      void refreshLlmQuota();
+    }
+  }, [communitySessionVersion, providerSettings.activeProvider, refreshLlmQuota, screen]);
+
+  useEffect(() => {
+    if (!providerSettingsNotice) return;
+    const timeout = window.setTimeout(() => setProviderSettingsNotice(null), 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [providerSettingsNotice]);
+
+  useEffect(() => {
+    if (!providerSettingsError) return;
+    const timeout = window.setTimeout(() => setProviderSettingsError(null), 7_000);
+    return () => window.clearTimeout(timeout);
+  }, [providerSettingsError]);
 
   useEffect(() => {
     if (communitySession.loggedIn) {
       setDeployAuthGateOpen(false);
     }
   }, [communitySession.loggedIn]);
+  useEffect(() => {
+    updateAnalyticsUser({
+      analyticsUserId: communitySession.analyticsUserId,
+      loggedIn: communitySession.loggedIn,
+      authMethod: communitySession.authMethod
+    });
+  }, [communitySession.analyticsUserId, communitySession.authMethod, communitySession.loggedIn]);
 
-  const requestCommunityAuth = useCallback((intent: CommunityAuthIntent) => {
+  useEffect(() => {
+    trackScreenView(screen);
+    const activePanel = deployDrawerOpen
+      ? deployPaneTab === "games" ? "community" : deployPaneTab
+      : "emulator";
+    setAnalyticsViewContext(screen, screen === "settings" ? null : activePanel);
+  }, [deployDrawerOpen, deployPaneTab, screen]);
+
+  useEffect(() => {
+    if (screen !== "main") {
+      return;
+    }
+    trackPanelView("emulator", "right_pane");
+  }, [screen]);
+
+  useEffect(() => {
+    if (screen !== "main" || !deployEligible || !deployDrawerOpen) {
+      return;
+    }
+    trackPanelView(deployPaneTab === "games" ? "community" : deployPaneTab, "deploy_pane");
+  }, [deployDrawerOpen, deployEligible, deployPaneTab, screen]);
+
+
+  const requestCommunityAuth = useCallback((intent: CommunityAuthIntent, force = false) => {
     setCommunityAuthIntent(intent);
-    if (!communitySession.loggedIn && !isCommunityAuthSkippedForSession()) {
+    if (
+      force ||
+      (!communitySession.loggedIn &&
+        (intent === "llm-use" || !isCommunityAuthSkippedForSession()))
+    ) {
       setDeployAuthGateOpen(true);
     }
   }, [communitySession.loggedIn]);
@@ -747,6 +1542,16 @@ export function App() {
 
   useLayoutEffect(() => {
     applyTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (theme !== "system" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const colorScheme = window.matchMedia("(prefers-color-scheme: light)");
+    const handleColorSchemeChange = () => applyTheme("system");
+    colorScheme.addEventListener("change", handleColorSchemeChange);
+    return () => colorScheme.removeEventListener("change", handleColorSchemeChange);
   }, [theme]);
 
   function handleThemeChange(next: ThemeId) {
@@ -809,11 +1614,11 @@ export function App() {
     const role = agentEventTimelineRole(event);
     setEntries((prev) => [
       ...prev,
-      { id: `evt-${seq}-${event.at}`, role, text: formatAgentEventForTimeline(event) }
+      { id: `evt-${seq}-${"at" in event ? event.at : Date.now()}`, role, text: formatAgentEventForTimeline(event) }
     ]);
   }
 
-  function appendOrPatchReasoningStream(event: Extract<AgentEvent, { type: "reasoning_stream" }>): void {
+  function appendOrPatchReasoningStream(event: { reasoningId: string; delta: string; at: number }): void {
     const activeId = activeReasoningStreamEntryIdRef.current;
     const activeReasoningId = activeReasoningIdRef.current;
     if (!activeId || (activeReasoningId && activeReasoningId !== event.reasoningId)) {
@@ -860,7 +1665,7 @@ export function App() {
     return Math.round(secs).toString();
   }
 
-  function appendOrPatchStream(event: Extract<AgentEvent, { type: "stream" }>): void {
+  function appendOrPatchStream(event: { delta: string; at: number }): void {
     const activeId = activeStreamEntryIdRef.current;
     if (!activeId) {
       const seq = eventSeqRef.current;
@@ -942,15 +1747,53 @@ export function App() {
     syncComposerPromptHeight();
   }, [prompt]);
 
+  useLayoutEffect(() => {
+    if (!mainWorkspaceBodyRef.current || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const body = mainWorkspaceBodyRef.current;
+    const syncPanelWidth = () => {
+      const panelWidth = body.clientWidth;
+      if (panelWidth > 0) {
+        setMainWorkspacePanelWidth(panelWidth);
+      }
+    };
+    const observer = new ResizeObserver(syncPanelWidth);
+    observer.observe(body);
+    syncPanelWidth();
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    if (chatPaneRatio === null && mainWorkspacePanelWidth > 0) {
+      setChatPaneRatio(chatPaneRatioFromWidth(legacyChatPaneWidth, mainWorkspacePanelWidth));
+    }
+  }, [chatPaneRatio, legacyChatPaneWidth, mainWorkspacePanelWidth]);
+
   useEffect(() => {
     const onResize = () => {
       syncComposerPromptHeight();
     };
     window.addEventListener("resize", onResize);
+    onResize();
     return () => {
       window.removeEventListener("resize", onResize);
     };
   }, []);
+
+  useEffect(() => {
+    if (chatPaneRatio !== null) {
+      setStoredChatPaneRatio(chatPaneRatio);
+    }
+  }, [chatPaneRatio]);
+
+  useEffect(() => {
+    setStoredWorkspaceMenuWidth(workspaceMenuWidth);
+  }, [workspaceMenuWidth]);
+
+  useEffect(() => {
+    setStoredWorkspaceMenuCollapsed(workspaceMenuCollapsed);
+  }, [workspaceMenuCollapsed]);
 
   useEffect(() => {
     scrollTimelineToBottom();
@@ -995,44 +1838,15 @@ export function App() {
     }).catch(() => {
       // Update checks are best effort.
     });
+    api.getAppUpdateAutoDownload?.().then(setAutoUpdateEnabled).catch(() => {
+      setAutoUpdateEnabled(false);
+    });
     const unsubscribe = api.onAgentEvent((event) => {
       if (discardAgentEventsRef.current) {
         return;
       }
-      if (event.type === "intake_project_type_prompt") {
-        if (event.visible) {
-          setMachineMcpPicker({ visible: false, machines: [], manualOnly: true });
-        }
-        setProjectTypePicker({
-          visible: event.visible,
-          types:
-            event.visible && event.options && event.options.length > 0
-              ? event.options
-              : event.visible
-                ? [...CREATION_INTAKE_PROJECT_TYPES]
-                : []
-        });
-        return;
-      }
-      if (event.type === "intake_widget_size_prompt") {
-        if (event.visible) {
-          setMachineMcpPicker({ visible: false, machines: [], manualOnly: true });
-        }
-        setWidgetSizePicker({
-          visible: event.visible,
-          sizes:
-            event.visible && event.sizes && event.sizes.length > 0
-              ? event.sizes
-              : event.visible
-                ? [...WIDGET_DISPLAY_SIZES]
-                : []
-        });
-        return;
-      }
       if (event.type === "machine_mcp_prompt") {
         if (event.visible) {
-          setProjectTypePicker({ visible: false, types: [] });
-          setWidgetSizePicker({ visible: false, sizes: [] });
           setMachineMcpManualIp("");
           setMachineMcpInputError(null);
         }
@@ -1043,85 +1857,138 @@ export function App() {
         });
         return;
       }
+      if (event.type === "agent_question") {
+        if (!event.visible) {
+          setAgentQuestion(null);
+          setAgentQuestionText("");
+        } else {
+          setAgentQuestion({
+            questionId: event.questionId,
+            question: event.question,
+            options: event.options ?? [],
+            allowFreeText: event.allowFreeText === true,
+            freeTextPlaceholder: event.freeTextPlaceholder ?? "Type your own answer"
+          });
+          setAgentQuestionText("");
+        }
+        return;
+      }
       if (event.type === "token_usage") {
         setTokenUsage(event.sessionUsage);
         return;
       }
-      if (event.type === "reasoning_stream") {
-        appendOrPatchReasoningStream(event);
-        return;
-      }
-      if (event.type === "stream") {
-        appendOrPatchStream(event);
-        return;
-      }
-      if (event.type === "tool_call_delta") {
-        clearActiveCoalescedStreamEntries();
-        const key = toolStatusKey({ callId: event.callId, toolName: event.toolName, filePath: event.path });
-        if (!key) {
+      if (event.type === "raw_model_stream_event") {
+        const data = event.data && typeof event.data === "object" ? event.data as Record<string, unknown> : null;
+        const responseEvent = data?.type === "model" && data.event && typeof data.event === "object"
+          ? data.event as Record<string, unknown>
+          : null;
+        if (!responseEvent) return;
+        const responseType = typeof responseEvent?.type === "string" ? responseEvent.type : "";
+        if (responseType === "response.output_text.delta" && typeof responseEvent?.delta === "string") {
+          appendOrPatchStream({ delta: responseEvent.delta, at: Date.now() });
           return;
         }
-        const priorId = activeToolStatusEntryByKeyRef.current.get(key);
-        const text = summarizeFileToolCallDelta(event);
-        if (priorId) {
-          setEntries((prev) =>
-            prev.map((entry) =>
+        if (
+          (responseType === "response.reasoning_text.delta" || responseType === "response.reasoning_summary_text.delta") &&
+          typeof responseEvent?.delta === "string"
+        ) {
+          const itemId = typeof responseEvent.item_id === "string" ? responseEvent.item_id : "reasoning";
+          appendOrPatchReasoningStream({ reasoningId: itemId, delta: responseEvent.delta, at: Date.now() });
+          return;
+        }
+        if (responseType === "response.reasoning_text.done" || responseType === "response.reasoning_summary_text.done") {
+          const activeId = activeReasoningStreamEntryIdRef.current;
+          const startedAt = activeReasoningStartedAtRef.current;
+          if (activeId && startedAt != null) {
+            const elapsed = formatReasoningElapsedSeconds(startedAt, Date.now());
+            setEntries((prev) => prev.map((entry) =>
+              entry.id === activeId ? { ...entry, text: `Thought for ${elapsed} s`, reasoningMode: "summary" } : entry
+            ));
+          }
+          activeReasoningStreamEntryIdRef.current = null;
+          activeReasoningIdRef.current = null;
+          activeReasoningStreamDeltaRef.current = "";
+          activeReasoningStartedAtRef.current = null;
+          return;
+        }
+        if (responseType === "response.output_item.added") {
+          const item = responseEvent.item && typeof responseEvent.item === "object"
+            ? responseEvent.item as Record<string, unknown>
+            : null;
+          if (item?.type === "function_call") {
+            const itemId = typeof item.id === "string" ? item.id : String(item.call_id ?? "");
+            sdkFunctionCallsRef.current.set(itemId, {
+              callId: String(item.call_id ?? itemId),
+              toolName: String(item.name ?? "tool"),
+              argumentsJson: typeof item.arguments === "string" ? item.arguments : ""
+            });
+          } else if (item?.type === "web_search_call" || item?.type === "code_interpreter_call") {
+            const toolName = item.type === "web_search_call" ? "web_search" : "code_interpreter";
+            trackAgentEvent("agent_tool_used", { tool_name: toolName, phase: "call" });
+          }
+          return;
+        }
+        if (responseType === "response.function_call_arguments.delta" || responseType === "response.function_call_arguments.done") {
+          const itemId = String(responseEvent.item_id ?? "");
+          const current = sdkFunctionCallsRef.current.get(itemId);
+          if (!current) return;
+          current.argumentsJson = responseType.endsWith(".done") && typeof responseEvent.arguments === "string"
+            ? responseEvent.arguments
+            : current.argumentsJson + (typeof responseEvent.delta === "string" ? responseEvent.delta : "");
+          const path = extractPartialStringField(current.argumentsJson, "path");
+          if (path) current.path = path;
+          if (current.toolName !== "write_file" && current.toolName !== "replace_in_file") return;
+          clearActiveCoalescedStreamEntries();
+          const key = toolStatusKey({ callId: current.callId, toolName: current.toolName, filePath: current.path });
+          if (!key) return;
+          const priorId = activeToolStatusEntryByKeyRef.current.get(key);
+          const text = summarizeFileToolCallDelta(current);
+          if (priorId) {
+            setEntries((prev) => prev.map((entry) =>
               entry.id === priorId
                 ? {
                   ...entry,
                   role: "status",
                   text,
                   toolStatusMeta: {
-                    callId: event.callId,
-                    toolName: event.toolName,
+                    callId: current.callId,
+                    toolName: current.toolName,
                     phase: "call",
-                    filePath: event.path
+                    filePath: current.path
                   }
                 }
                 : entry
-            )
-          );
-          return;
-        }
-        const seq = eventSeqRef.current;
-        eventSeqRef.current += 1;
-        const id = `evt-${seq}-${event.at}`;
-        setEntries((prev) => [
-          ...prev,
-          {
+            ));
+            return;
+          }
+          const seq = eventSeqRef.current;
+          eventSeqRef.current += 1;
+          const id = `evt-${seq}-${Date.now()}`;
+          setEntries((prev) => [...prev, {
             id,
             role: "status",
             text,
             toolStatusMeta: {
-              callId: event.callId,
-              toolName: event.toolName,
+              callId: current.callId,
+              toolName: current.toolName,
               phase: "call",
-              filePath: event.path
+              filePath: current.path
             }
-          }
-        ]);
-        activeToolStatusEntryByKeyRef.current.set(key, id);
+          }]);
+          activeToolStatusEntryByKeyRef.current.set(key, id);
+          return;
+        }
         return;
       }
-      if (event.type === "reasoning_done") {
-        const activeId = activeReasoningStreamEntryIdRef.current;
-        const activeReasoningId = activeReasoningIdRef.current;
-        const startedAt = activeReasoningStartedAtRef.current;
-        if (activeId && startedAt != null && activeReasoningId === event.reasoningId) {
-          const elapsed = formatReasoningElapsedSeconds(startedAt, event.at);
-          setEntries((prev) =>
-            prev.map((entry) =>
-              entry.id === activeId
-                ? { ...entry, text: `Thought for ${elapsed} s`, reasoningMode: "summary" }
-                : entry
-            )
-          );
-        }
-        if (activeReasoningId === event.reasoningId) {
-          activeReasoningStreamEntryIdRef.current = null;
-          activeReasoningIdRef.current = null;
-          activeReasoningStreamDeltaRef.current = "";
-          activeReasoningStartedAtRef.current = null;
+      if (event.type === "agent_updated_stream_event") {
+        return;
+      }
+      if (event.type === "run_item_stream_event") {
+        const item = event.item && typeof event.item === "object" ? event.item as Record<string, unknown> : null;
+        const raw = item?.rawItem && typeof item.rawItem === "object" ? item.rawItem as Record<string, unknown> : null;
+        const toolName = typeof raw?.name === "string" ? raw.name : "tool";
+        if (event.name === "tool_called") {
+          trackAgentEvent("agent_tool_used", { tool_name: toolName, phase: "call" });
         }
         return;
       }
@@ -1134,6 +2001,16 @@ export function App() {
         eventSeqRef.current += 1;
         const parsed = parseToolStatusMessage(event.message);
         const meta = parsed.meta;
+        if (meta?.phase === "result" && meta.toolName) {
+          const analyticsKey = meta.callId ?? `${meta.toolName}:${meta.skillId ?? ""}`;
+          if (!seenAgentToolAnalyticsRef.current.has(analyticsKey)) {
+            seenAgentToolAnalyticsRef.current.add(analyticsKey);
+            trackAgentEvent("agent_tool_used", {
+              tool_name: meta.toolName,
+              phase: "result"
+            });
+          }
+        }
         if (shouldHideTimelineStatus({ text: parsed.text, toolStatusMeta: meta })) {
           return;
         }
@@ -1202,10 +2079,12 @@ export function App() {
       }
       if (event.type === "final") {
         activeToolStatusEntryByKeyRef.current.clear();
-        if (
-          activeStreamEntryIdRef.current &&
-          activeStreamDeltaRef.current.trim() === event.content.trim()
-        ) {
+        const activeStreamId = activeStreamEntryIdRef.current;
+        if (activeStreamId) {
+          const finalText = event.content.trim();
+          setEntries((prev) => prev.map((entry) =>
+            entry.id === activeStreamId ? { ...entry, text: finalText } : entry
+          ));
           activeStreamEntryIdRef.current = null;
           activeStreamDeltaRef.current = "";
           return;
@@ -1215,8 +2094,19 @@ export function App() {
         const id = `evt-${seq}-${event.at}`;
         setEntries((prev) => {
           const last = prev.length > 0 ? prev[prev.length - 1] : null;
-          if (last && last.role === "agent" && last.text.trim() === event.content.trim()) {
-            return prev;
+          const finalText = event.content.trim();
+          if (last && last.role === "agent") {
+            const lastText = last.text.trim();
+            // Streamed assistant text may be partial, while finalOutput contains
+            // the complete response. Replace that entry instead of appending a
+            // second, overlapping timeline item.
+            if (
+              lastText === finalText ||
+              (lastText.length >= 24 && finalText.startsWith(lastText)) ||
+              (finalText.length >= 24 && lastText.startsWith(finalText))
+            ) {
+              return prev.map((entry) => entry.id === last.id ? { ...entry, text: finalText } : entry);
+            }
           }
           return [...prev, { id, role: "agent", text: event.content }];
         });
@@ -1330,7 +2220,51 @@ export function App() {
     };
   }, [api, bootstrap?.workspaceRoot]);
 
-  const deployEligible = deployEligibility.ok;
+  const acceptWidgetConfig = useCallback((snapshot: WidgetConfigSnapshot) => {
+    setWidgetConfigs((previous) => ({ ...previous, [snapshot.scope]: snapshot }));
+    if (snapshot.status !== "ready") {
+      return;
+    }
+    setWidgetValuesByConfig((previous) => {
+      const current = previous[snapshot.configKey];
+      return {
+        ...previous,
+        [snapshot.configKey]: {
+          fields: snapshot.fields,
+          values: current
+            ? reconcileWidgetFieldValues(current.fields, current.values, snapshot.fields)
+            : createDefaultWidgetFieldValues(snapshot.fields)
+        }
+      };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!api?.getWidgetConfig || !api.onWidgetConfig) {
+      return;
+    }
+    let cancelled = false;
+    for (const scope of ["workspace", "emulator"] as const) {
+      void api.getWidgetConfig(scope).then((snapshot) => {
+        if (!cancelled) acceptWidgetConfig(snapshot);
+      });
+    }
+    const unsubscribe = api.onWidgetConfig((snapshot) => {
+      if (!cancelled) acceptWidgetConfig(snapshot);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [acceptWidgetConfig, api, bootstrap?.workspaceRoot]);
+
+  const updateWidgetValues = useCallback((configKey: string, values: WidgetFieldValues) => {
+    setWidgetValuesByConfig((previous) => {
+      const current = previous[configKey];
+      return current ? { ...previous, [configKey]: { ...current, values } } : previous;
+    });
+  }, []);
+
   const deployPanelShowsWidgetParams = deployEligible && deployEligibility.projectType === "widget";
   const communityWorkspaceRefreshKey = [
     bootstrap?.workspaceRoot ?? "",
@@ -1340,112 +2274,126 @@ export function App() {
   const communityAuthSkipped = communityAuthSkippedVersion >= 0 && isCommunityAuthSkippedForSession();
   const gamesTabDisabled = !communitySession.loggedIn && communityAuthSkipped;
   const visibleAppUpdate =
-    appUpdate?.kind === "ready" && appUpdate.dismissedVersion !== appUpdate.availableVersion
+    (appUpdate?.kind === "available" || appUpdate?.kind === "ready") &&
+    appUpdate.dismissedVersion !== appUpdate.availableVersion
       ? appUpdate
       : null;
 
-  // Reset to Emulator tab when the active tab is no longer available.
   useEffect(() => {
-    if (!assetManifest && rightPaneTab === "assets") {
-      setRightPaneTab("emulator");
-    }
-  }, [assetManifest, deployEligible, rightPaneTab]);
+    setDeployDrawerOpen(false);
+  }, [bootstrap?.activeProjectId]);
 
   useEffect(() => {
-    if (!deployEligible || (gamesTabDisabled && deployPaneTab === "games")) {
+    if (
+      !deployEligible ||
+      (gamesTabDisabled && deployPaneTab === "games") ||
+      (!assetManifest && deployPaneTab === "assets")
+    ) {
       setDeployPaneTab("deploy");
     }
-  }, [deployEligible, deployPaneTab, gamesTabDisabled]);
+  }, [assetManifest, deployEligible, deployPaneTab, gamesTabDisabled]);
 
   useEffect(() => {
     const ws = bootstrap?.workspaceRoot;
-    if (!api || !ws) {
-      lastAgentSessionHydrateKeyRef.current = "";
-      return;
-    }
-    if (lastAgentSessionHydrateKeyRef.current === ws) {
-      return;
-    }
+    if (!api || !ws || personaState.phase !== "hydrating") return;
+    const { chatId, generation } = personaState;
     let cancelled = false;
     void (async () => {
-      const summary = await api.getWorkspaceSessionSummary();
-      if (cancelled) {
-        return;
-      }
-      lastAgentSessionHydrateKeyRef.current = ws;
-      setTokenUsage(summary.tokenUsage ?? null);
-      if (!summary.hasPersistedSession || summary.transcriptTail.length === 0) {
-        setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT }]);
-        return;
-      }
-      const hydrated = summary.transcriptTail
-        .map((line, idx) => transcriptLineToTimelineEntry(line, idx))
-        .filter((entry): entry is TimelineEntry => entry != null);
-      const toolCallEntryIndexByKey = new Map<string, number>();
-      const deduped: TimelineEntry[] = [];
-      for (const entry of hydrated) {
-        if (entry.role === "status" && entry.toolStatusMeta?.toolName === "get_dartsnut_skill") {
-          const priorIdx = deduped.findIndex(
-            (candidate) =>
-              candidate.role === "status" &&
-              candidate.toolStatusMeta?.toolName === "get_dartsnut_skill"
-          );
-          if (priorIdx >= 0) {
-            deduped[priorIdx] = mergeTimelineSkillStatusEntry(deduped[priorIdx], entry);
-            continue;
-          }
-          deduped.push(
-            mergeTimelineSkillStatusEntry(
-              {
-                id: entry.id,
-                role: "status",
-                text: "Loaded Dartsnut skills.",
-                toolStatusMeta: { toolName: "get_dartsnut_skill", phase: "result" }
-              },
-              entry
-            )
-          );
-          continue;
+      try {
+        const summary = await api.getWorkspaceSessionSummary(chatId);
+        if (cancelled) return;
+        if (summary.chatId !== chatId) {
+          personaController.failHydration(chatId, generation);
+          return;
         }
-        if (entry.role === "status" && entry.toolStatusMeta) {
-          const key = toolStatusKey(entry.toolStatusMeta);
-          if (entry.toolStatusMeta.phase === "result" && key) {
-            const priorIdx = toolCallEntryIndexByKey.get(key);
-            if (typeof priorIdx === "number") {
-              deduped[priorIdx] = { ...deduped[priorIdx], ...entry };
-              toolCallEntryIndexByKey.delete(key);
+        setTokenUsage(summary.tokenUsage ?? null);
+        if (!summary.hasPersistedSession || summary.transcriptTail.length === 0) {
+          setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT }]);
+        } else {
+          const hydrated = summary.transcriptTail
+            .map((line, idx) => transcriptLineToTimelineEntry(line, idx))
+            .filter((entry): entry is TimelineEntry => entry != null);
+          const toolCallEntryIndexByKey = new Map<string, number>();
+          const deduped: TimelineEntry[] = [];
+          for (const entry of hydrated) {
+            if (entry.role === "status" && entry.toolStatusMeta?.toolName === "get_dartsnut_skill") {
+              const priorIdx = deduped.findIndex(
+                (candidate) =>
+                  candidate.role === "status" &&
+                  candidate.toolStatusMeta?.toolName === "get_dartsnut_skill"
+              );
+              if (priorIdx >= 0) {
+                deduped[priorIdx] = mergeTimelineSkillStatusEntry(deduped[priorIdx], entry);
+                continue;
+              }
+              deduped.push(
+                mergeTimelineSkillStatusEntry(
+                  {
+                    id: entry.id,
+                    role: "status",
+                    text: "Loaded Dartsnut skills.",
+                    toolStatusMeta: { toolName: "get_dartsnut_skill", phase: "result" }
+                  },
+                  entry
+                )
+              );
               continue;
             }
+            if (entry.role === "status" && entry.toolStatusMeta) {
+              const key = toolStatusKey(entry.toolStatusMeta);
+              if (entry.toolStatusMeta.phase === "result" && key) {
+                const priorIdx = toolCallEntryIndexByKey.get(key);
+                if (typeof priorIdx === "number") {
+                  deduped[priorIdx] = { ...deduped[priorIdx], ...entry };
+                  toolCallEntryIndexByKey.delete(key);
+                  continue;
+                }
+              }
+              if (entry.toolStatusMeta.phase === "call" && key) {
+                toolCallEntryIndexByKey.set(key, deduped.length);
+              }
+            }
+            const prev = deduped.length > 0 ? deduped[deduped.length - 1] : null;
+            if (
+              prev &&
+              prev.role === "agent" &&
+              entry.role === "agent" &&
+              prev.text.trim() === entry.text.trim()
+            ) {
+              continue;
+            }
+            deduped.push(entry);
           }
-          if (entry.toolStatusMeta.phase === "call" && key) {
-            toolCallEntryIndexByKey.set(key, deduped.length);
-          }
+          setEntries(deduped);
         }
-        const prev = deduped.length > 0 ? deduped[deduped.length - 1] : null;
-        if (
-          prev &&
-          prev.role === "agent" &&
-          entry.role === "agent" &&
-          prev.text.trim() === entry.text.trim()
-        ) {
-          continue;
+        personaController.completeHydration(chatId, generation, summary.agentProfileId);
+      } catch {
+        if (!cancelled) {
+          setEntries([{ id: "greeting-initial", role: "agent", text: GREETING_TEXT }]);
+          personaController.failHydration(chatId, generation);
         }
-        deduped.push(entry);
       }
-      setEntries(deduped);
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, bootstrap?.workspaceRoot]);
+  }, [
+    api,
+    bootstrap?.workspaceRoot,
+    personaController.completeHydration,
+    personaController.failHydration,
+    personaState
+  ]);
 
   const chatDisabled = useMemo(() => {
     if (!bootstrap) {
       return true;
     }
-    return sending;
-  }, [bootstrap, sending]);
-  const showRuntimeSetup = pythonRuntimeProgress.running || Boolean(pythonRuntimeProgress.error);
+    return sending || Boolean(agentQuestion) || machineMcpPicker.visible;
+  }, [agentQuestion, bootstrap, machineMcpPicker.visible, sending]);
+  const greetingOnlyTimeline = entries.length > 0 && entries.every(
+    (entry) => entry.role === "agent" && (entry.id === "greeting-initial" || entry.id.startsWith("greeting-"))
+  );
   const runtimeProgressPercent = Math.min(100, Math.max(0, Math.round(pythonRuntimeProgress.percent)));
 
   useEffect(() => {
@@ -1457,19 +2405,31 @@ export function App() {
     });
   }, [api]);
 
+  useEffect(() => {
+    if (!chatAttachmentError) {
+      return;
+    }
+    const timer = window.setTimeout(() => setChatAttachmentError(null), CHAT_ATTACHMENT_ERROR_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [chatAttachmentError]);
+
   function resetChatSessionUi() {
     discardAgentEventsRef.current = true;
     clearActiveCoalescedStreamEntries();
     activeToolStatusEntryByKeyRef.current.clear();
+    seenAgentToolAnalyticsRef.current.clear();
+    activeAgentRunRef.current = null;
     eventSeqRef.current = 0;
-    lastAgentSessionHydrateKeyRef.current = "";
     setSessionTemplateMode(null);
     setSessionWidgetSize(null);
     setSessionProjectType(null);
     setTokenUsage(null);
-    setWidgetSizePicker({ visible: false, sizes: [] });
-    setProjectTypePicker({ visible: false, types: [] });
+    setAgentQuestion(null);
+    setAgentQuestionText("");
     setPrompt("");
+    setChatMediaAttachments([]);
+    setChatAttachmentError(null);
+    setComposerDragActive(false);
     setRuntimeError(null);
     setEntries([{ id: `greeting-${Date.now()}`, role: "agent", text: GREETING_TEXT }]);
   }
@@ -1500,24 +2460,84 @@ export function App() {
     setEntries((prev) => [...prev, { id: `status-${Date.now()}`, role: "status", text }]);
   }
 
-  async function submitPrompt(request: PromptRequest) {
-    setWidgetSizePicker({ visible: false, sizes: [] });
-    setProjectTypePicker({ visible: false, types: [] });
+  function finishAgentRun(outcome: "success" | "rejected" | "failed" | "cancelled", failureReason?: string): void {
+    const run = activeAgentRunRef.current;
+    if (!run || run.finished) {
+      return;
+    }
+    run.finished = true;
+    trackAgentEvent("agent_run_finished", {
+      outcome,
+      duration_ms: Math.max(0, Date.now() - run.startedAt),
+      ...(failureReason ? { failure_reason: failureReason } : {})
+    });
+    activeAgentRunRef.current = null;
+  }
+
+  async function submitPrompt(request: PromptRequest, firstUserMessageForTitle?: string) {
     discardAgentEventsRef.current = false;
     setSending(true);
     if (!api) {
       setSending(false);
       return;
     }
+    seenAgentToolAnalyticsRef.current.clear();
+    activeAgentRunRef.current = { startedAt: Date.now(), finished: false };
+    const shouldGenerateTitle = shouldSetInitialChatTitle(
+      firstUserMessageForTitle,
+      request.chatId,
+      activeChat
+    );
+    trackAgentEvent("agent_run_started", {
+      provider: providerSettings.activeProvider,
+      template_mode: request.templateMode ?? "follow_up",
+      project_type: request.projectType ?? sessionProjectType ?? "unknown",
+      workspace_kind: request.workspacePath ? "persisted" : "none",
+      attachment_count: request.chatMediaAttachments?.length ?? 0
+    });
     try {
       const result: SendPromptResponse = await api.sendPrompt(request);
       const refreshed = await api.getBootstrapState();
       setBootstrap(refreshed);
-      if (result.ok && result.sessionRouting) {
+      if (!result.ok) {
+        if (shouldGenerateTitle && refreshed.activeChatId && firstUserMessageForTitle) {
+          try {
+            const { tree } = await api.generateChatTitle({
+              chatId: refreshed.activeChatId,
+              firstUserMessage: firstUserMessageForTitle,
+              fallbackOnly: true
+            });
+            setProjectTree(tree);
+          } catch {
+            // Prompt failure remains primary; title fallback is best effort.
+          }
+        }
+        finishAgentRun("rejected", result.failureReason);
+        if (result.failureReason === "auth_required") {
+          await refreshCommunitySession();
+          requestCommunityAuth("llm-use", true);
+        }
+        if (result.message) {
+          postStatus(result.message);
+        }
+        return;
+      }
+      if (shouldGenerateTitle && refreshed.activeChatId && firstUserMessageForTitle) {
+        void api.generateChatTitle({
+          chatId: refreshed.activeChatId,
+          firstUserMessage: firstUserMessageForTitle,
+          fallbackOnly: false
+        }).then(({ tree }) => setProjectTree(tree)).catch(() => undefined);
+      }
+      if (result.sessionRouting) {
         setSessionTemplateMode(result.sessionRouting.templateMode);
         setSessionProjectType(result.sessionRouting.projectType);
         setSessionWidgetSize(result.sessionRouting.widgetSize ?? null);
       }
+      finishAgentRun("success");
+    } catch (error) {
+      finishAgentRun("failed");
+      throw error;
     } finally {
       setSending(false);
     }
@@ -1531,53 +2551,187 @@ export function App() {
     setBootstrap(updated.state);
   }
 
-  async function handleSaveTempWorkspace() {
-    if (!api || sending) {
+  async function handleNewChat() {
+    if (!api || sending || projectSwitchProgress.active) return;
+    await handleNoProject();
+  }
+
+  async function handleSelectAgentProfile(profileId: AgentProfileId) {
+    if (!api || sending || personaState.phase !== "picking") return;
+    const projectId = personaState.projectId;
+    personaController.selectProfile(profileId);
+    if (!projectId) {
+      openCreateProjectDialog();
       return;
     }
     try {
-      const result: SaveTempWorkspaceResponse = await api.saveTempWorkspace();
-      if (!result.ok) {
-        if (result.reason !== "cancelled") {
-          postStatus(result.message ?? `Could not save workspace (${result.reason}).`);
-        }
-        return;
-      }
+      const result = await api.createChat({ projectId, agentProfileId: profileId });
       setBootstrap(result.state);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Save failed.";
-      setRuntimeError(message);
+      setProjectTree(result.tree);
+      resetChatSessionUi();
+      if (!result.state.activeChatId) throw new Error("Created chat was not activated.");
+      personaController.completeCreation(result.state.activeChatId, profileId);
+    } catch {
+      personaController.failCreation();
+      postStatus("Could not start this chat. Try again.");
     }
   }
 
-  async function handleStartNewProject() {
-    if (!api || sending) {
-      return;
+  function openCreateProjectDialog() {
+    if (sending) return;
+    setProjectMenuOpen(false);
+    setCreateProjectName("");
+    setCreateProjectFolder(null);
+    setCreateProjectError(null);
+    setCreateProjectOpen(true);
+  }
+
+  function handleCreateProject() {
+    openCreateProjectDialog();
+  }
+
+  function closeCreateProjectDialog(keepPersona = false) {
+    setCreateProjectOpen(false);
+    if (!keepPersona && personaState.phase === "creating-project") {
+      personaController.cancelProjectCreation();
     }
-    if (!bootstrap?.isTemporaryWorkspace) {
-      const confirmed = window.confirm(
-        "Start a new project?\n\n" +
-          "Your game files on disk stay saved.\n\n" +
-          "This will leave the current workspace unset, stop the emulator, clear emulator logs, and clear this chat.",
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
+  }
+
+  async function handlePickProjectFolder() {
+    if (!api || sending || createProjectPicking) return;
+    setCreateProjectPicking(true);
+    setCreateProjectError(null);
     try {
-      const refreshed = await api.startNewProject();
-      setBootstrap(refreshed);
+      const picked = await api.pickWorkspace();
+      if (picked.accepted && picked.selectedPath) {
+        setCreateProjectFolder(picked.selectedPath);
+        setCreateProjectName((current) => current.trim() || workspaceFolderBasename(picked.selectedPath!));
+      }
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Could not start a new project.";
-      setRuntimeError(message);
+      setCreateProjectError(error instanceof Error ? error.message : "Could not choose source folder.");
+    } finally {
+      setCreateProjectPicking(false);
     }
+  }
+
+  async function handleSubmitCreateProject() {
+    if (!api || sending || !createProjectFolder) return;
+    setCreateProjectError(null);
+    try {
+      const carriedAgentProfileId = personaState.phase === "creating-project"
+        ? personaState.profileId
+        : null;
+      const result = await api.createProject({
+        folderPath: createProjectFolder,
+        name: createProjectName,
+        agentProfileId: carriedAgentProfileId ?? undefined
+      });
+      closeCreateProjectDialog(true);
+      setBootstrap(result.state);
+      setProjectTree(result.tree);
+      resetChatSessionUi();
+      personaController.syncBootstrap(result.state);
+      if (carriedAgentProfileId && result.state.activeChatId) {
+        personaController.completeCreation(result.state.activeChatId, carriedAgentProfileId);
+      }
+    } catch (error: unknown) {
+      setCreateProjectError(error instanceof Error ? error.message : "Could not create project.");
+    }
+  }
+
+  async function handleSelectProject(projectId: string) {
+    if (!api || sending || projectSwitchProgress.active) return;
+    const result = await api.selectProject({ projectId });
+    if (result.accepted) {
+      setBootstrap(result.state);
+      setProjectTree(result.tree);
+      resetChatSessionUi();
+      personaController.startNewChat(projectId);
+    }
+    setProjectMenuOpen(false);
+  }
+
+  function handleOpenRemoveProject(project: ProjectRecord) {
+    if (sending || projectSwitchProgress.active) return;
+    setRemoveProjectError(null);
+    setRemoveProjectTarget(project);
+  }
+
+  function handleCloseRemoveProject() {
+    if (removingProject) return;
+    setRemoveProjectError(null);
+    setRemoveProjectTarget(null);
+  }
+
+  async function handleConfirmRemoveProject() {
+    if (!api || !removeProjectTarget || removingProject) return;
+    const projectId = removeProjectTarget.id;
+    const wasActive = bootstrap?.activeProjectId === projectId;
+    setRemovingProject(true);
+    setRemoveProjectError(null);
+    try {
+      const result = await api.removeProject(projectId);
+      setBootstrap(result.state);
+      setProjectTree(result.tree);
+      setRemoveProjectTarget(null);
+      if (wasActive) {
+        resetChatSessionUi();
+        personaController.startNewChat(null);
+      }
+      window.requestAnimationFrame(() => projectsSectionButtonRef.current?.focus());
+    } catch (error: unknown) {
+      setRemoveProjectError(error instanceof Error ? error.message : "Could not remove the local project.");
+    } finally {
+      setRemovingProject(false);
+    }
+  }
+
+  async function handleNoProject() {
+    if (!api || sending || projectSwitchProgress.active) return;
+    const result = await api.selectProject({ projectId: null });
+    if (result.accepted) {
+      setBootstrap(result.state);
+      setProjectTree(result.tree);
+      resetChatSessionUi();
+      personaController.startNewChat(null);
+    }
+    setProjectMenuOpen(false);
+  }
+
+  async function handleNewChatForProject(projectId: string) {
+    await handleSelectProject(projectId);
+  }
+
+  async function handleSelectChat(chatId: string) {
+    if (!api || sending) return;
+    const result = await api.selectChat(chatId);
+    if (!result.accepted) return;
+    setBootstrap(result.state);
+    setProjectTree(result.tree);
+    resetChatSessionUi();
+    personaController.syncBootstrap(result.state);
+  }
+
+  async function handleArchiveChat(chatId: string) {
+    if (!api || sending || projectSwitchProgress.active) return;
+    const wasActive = bootstrap?.activeChatId === chatId;
+    const result = await api.archiveChat(chatId);
+    setBootstrap(result.state); setProjectTree(result.tree);
+    if (wasActive) {
+      resetChatSessionUi();
+      personaController.archiveActiveChat(result.state.activeProjectId);
+    }
+  }
+
+  function handleOpenSettings() {
+    setScreen((current) => current === "settings" ? "main" : "settings");
   }
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (isSettingsShortcut(event)) {
         event.preventDefault();
-        setScreen("settings");
+        handleOpenSettings();
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -1593,6 +2747,10 @@ export function App() {
     setProviderSettingsNotice(null);
     const custom = providerCustom(providerSettings);
     if (providerSettings.activeProvider === "custom") {
+      if (!custom.baseUrl.trim()) {
+        setProviderSettingsError("Endpoint is required.");
+        return;
+      }
       if (!custom.apiKey.trim()) {
         setProviderSettingsError("API key is required.");
         return;
@@ -1601,13 +2759,11 @@ export function App() {
         setProviderSettingsError("Model is required.");
         return;
       }
-      if (custom.baseUrl.trim()) {
-        try {
-          new URL(custom.baseUrl.trim());
-        } catch {
-          setProviderSettingsError("Endpoint must be a valid URL.");
-          return;
-        }
+      try {
+        new URL(custom.baseUrl.trim());
+      } catch {
+        setProviderSettingsError("Endpoint must be a valid URL.");
+        return;
       }
     }
     setSavingProviderSettings(true);
@@ -1632,34 +2788,6 @@ export function App() {
     }
   }
 
-  async function handleProjectTypeChip(projectType: ProjectType) {
-    if (!api) {
-      return;
-    }
-    const res = await api.intakeSubmitQuestionAnswer({ kind: "project_type", value: projectType });
-    if (!res.ok) {
-      if (res.reason === "no_pending") {
-        postStatus("Nothing is waiting for a Game/Widget choice right now — send your idea in the chat first.");
-      } else if (res.reason === "kind_mismatch" || res.reason === "invalid_value") {
-        postStatus("That choice does not match the current question.");
-      }
-    }
-  }
-
-  async function handleWidgetSizeChip(size: WidgetSize) {
-    if (!api) {
-      return;
-    }
-    const res = await api.intakeSubmitQuestionAnswer({ kind: "widget_size", value: size });
-    if (!res.ok) {
-      if (res.reason === "no_pending") {
-        postStatus("Nothing is waiting for a widget size choice right now.");
-      } else if (res.reason === "kind_mismatch" || res.reason === "invalid_value") {
-        postStatus("That choice does not match the current question.");
-      }
-    }
-  }
-
   async function handleMachineMcpChoice(value: string) {
     if (!api) {
       return;
@@ -1673,6 +2801,11 @@ export function App() {
       kind: "machine",
       deviceId: machine.deviceId,
       ipAddress: machine.ipAddress
+    });
+    trackAgentEvent("agent_question_answered", {
+      question_type: "machine",
+      answer_method: "known_machine",
+      outcome: res.ok ? "success" : "rejected"
     });
     if (!res.ok) {
       postStatus("The machine selection could not be used. Enter the IP manually.");
@@ -1688,13 +2821,93 @@ export function App() {
       return;
     }
     const res = await api.machineMcpSubmitQuestionAnswer({ kind: "manual_ip", value });
+    trackAgentEvent("agent_question_answered", {
+      question_type: "machine",
+      answer_method: "manual_host",
+      outcome: res.ok ? "success" : "rejected"
+    });
     if (!res.ok) {
       setMachineMcpInputError("That address could not be used.");
     }
   }
 
+  async function handleAgentQuestionAnswer(value: string) {
+    if (!api || !agentQuestion) return;
+    const response = await api.agentQuestionSubmitAnswer({ questionId: agentQuestion.questionId, value });
+    trackAgentEvent("agent_question_answered", {
+      question_type: "agent",
+      answer_method: agentQuestion.options.some((option) => option.value === value) ? "option" : "free_text",
+      outcome: response.ok ? "success" : "rejected"
+    });
+    if (!response.ok) {
+      postStatus(response.reason === "stale_question" ? "That question is no longer active." : "That answer could not be used.");
+    }
+  }
+
+  function resolveChatMediaAttachments(fileList: FileList): { accepted: ChatMediaAttachment[]; rejected: number } {
+    const files = Array.from(fileList);
+    const accepted: ChatMediaAttachment[] = [];
+    let rejected = 0;
+    for (const file of files) {
+      const filePath = api?.assets?.getPathForFile(file) ?? "";
+      const displayName = file.name || filePath.split(/[\\/]/).pop() || "media file";
+      const kind = inferChatMediaAttachmentKind(file.type, displayName);
+      if (!filePath || !kind) {
+        rejected += 1;
+        continue;
+      }
+      accepted.push({
+        id: createChatMediaAttachmentId(),
+        path: filePath,
+        name: displayName,
+        mimeType: file.type,
+        kind,
+        size: file.size
+      });
+    }
+    return { accepted, rejected };
+  }
+
+  function handleComposerDragOver(event: DragEvent<HTMLDivElement>) {
+    if (chatDisabled || !event.dataTransfer.types.includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setComposerDragActive(true);
+  }
+
+  function handleComposerDragLeave(event: DragEvent<HTMLDivElement>) {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+    setComposerDragActive(false);
+  }
+
+  function handleComposerDrop(event: DragEvent<HTMLDivElement>) {
+    if (chatDisabled) {
+      return;
+    }
+    event.preventDefault();
+    setComposerDragActive(false);
+    const { accepted, rejected } = resolveChatMediaAttachments(event.dataTransfer.files);
+    if (accepted.length > 0) {
+      setChatMediaAttachments((prev) => mergeChatMediaAttachments(prev, accepted));
+      setChatAttachmentError(null);
+    }
+    if (rejected > 0) {
+      setChatAttachmentError("Drop image, audio, or video files from your computer.");
+    }
+  }
+
   async function handleSend() {
-    if (!prompt.trim() || chatDisabled) {
+    if (
+      personaState.phase !== "ready" ||
+      personaState.chatId !== bootstrap?.activeChatId ||
+      !composerHasContent ||
+      chatDisabled
+    ) {
       return;
     }
     if (bootstrap?.providerStatus !== "ready") {
@@ -1702,17 +2915,30 @@ export function App() {
       setScreen("settings");
       return;
     }
-    const current = prompt.trim();
+    const visiblePrompt = prompt.trim();
+    const attachments = chatMediaAttachments;
+    const visibleUserText = attachments.length > 0
+      ? [
+        visiblePrompt || "Add the attached media files into the current game/widget.",
+        "",
+        `Attached: ${attachments.map((attachment) => attachment.name).join(", ")}`
+      ].join("\n")
+      : visiblePrompt;
     setPrompt("");
-    setEntries((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", text: current }]);
+    setChatMediaAttachments([]);
+    setEntries((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", text: visibleUserText }]);
 
     await submitPrompt({
-      prompt: current,
+      prompt: visiblePrompt,
+      chatMediaAttachments: attachments,
       workspacePath: bootstrap?.workspaceRoot ?? undefined,
-      templateMode: bootstrap?.needsCreationIntake ? undefined : sessionTemplateMode ?? undefined,
-      widgetSize: bootstrap?.needsCreationIntake ? undefined : sessionWidgetSize ?? undefined,
-      projectType: bootstrap?.needsCreationIntake ? undefined : sessionProjectType ?? undefined
-    });
+      projectId: bootstrap?.activeProjectId ?? undefined,
+      chatId: bootstrap?.activeChatId ?? undefined,
+      templateMode: sessionTemplateMode ?? undefined,
+      widgetSize: sessionWidgetSize ?? undefined,
+      projectType: sessionProjectType ?? undefined,
+      agentProfileId: personaState.profileId
+    }, visibleUserText);
   }
 
   async function handleStopAgent() {
@@ -1721,202 +2947,212 @@ export function App() {
     }
     clearActiveCoalescedStreamEntries();
     activeToolStatusEntryByKeyRef.current.clear();
-    setWidgetSizePicker({ visible: false, sizes: [] });
-    setProjectTypePicker({ visible: false, types: [] });
-    setSending(false);
+    finishAgentRun("cancelled");
     try {
       await api.cancelAgent();
     } catch {
       // Bridge unavailable — nothing to abort.
+    } finally {
+      setSending(false);
     }
   }
 
   return (
     <main
       className={cn(
-        "app-shell grid h-full w-full items-stretch overflow-visible pt-0",
-        deployEligible
-          ? "grid-cols-[minmax(520px,700px)_minmax(420px,1fr)_minmax(360px,420px)]"
-          : "grid-cols-[minmax(620px,760px)_1fr]",
+        "app-shell grid h-full w-full items-stretch pt-0",
+        "grid-cols-[var(--app-main-grid-cols)]",
         "grid-rows-[auto_minmax(0,1fr)]",
         "pr-[var(--window-control-inset-right)] pb-[var(--window-control-inset-bottom)] pl-[var(--window-control-inset-left)]",
-        "max-[1100px]:grid-cols-1 max-[1100px]:grid-rows-[auto_minmax(0,1fr)]"
+        "max-[1100px]:grid-cols-[54px_minmax(0,1fr)] max-[1100px]:grid-rows-[auto_minmax(0,1fr)]",
+        (chatPaneResizing || workspaceMenuResizing) && "app-shell--column-resizing"
       )}
+      style={mainGridStyle}
       aria-busy={submissionLock.active}
     >
+      <div className="window-chrome-drag-strip" aria-hidden />
       <header
-        className="app-header col-span-full row-start-1 flex min-h-[max(var(--window-control-inset-top),40px)] items-center gap-2 border-b border-edge bg-[var(--gradient-app-bar)] shadow-[var(--shadow-app-bar-divider)] [app-region:no-drag] [-webkit-app-region:no-drag]"
+        className="workspace-header flex min-h-10 items-center gap-2 [app-region:drag] [-webkit-app-region:drag]"
         style={{
           paddingLeft: "calc(6px + var(--chrome-margin-inline-start))",
-          paddingRight: "calc(6px + var(--chrome-margin-inline-end))",
           paddingTop: "5px",
           paddingBottom: "5px"
         }}
         role="banner"
       >
-        {screen === "main" ? (
-          <>
-            <div className="flex min-w-0 shrink items-center gap-1.5">
-              <h1
-                className="m-0 min-w-0 p-0 font-[family-name:var(--font-display)] text-[13px] font-semibold leading-snug tracking-tight text-fg-strong"
-                title={
-                  bootstrap?.workspaceRoot && !bootstrap.isTemporaryWorkspace && !isLikelyTempWorkspace(bootstrap.workspaceRoot)
-                    ? bootstrap.workspaceRoot
-                    : "Embedded assistant for pygame + pydartsnut"
-                }
-              >
-                <span className="block truncate">
-                  {bootstrap?.workspaceRoot && !bootstrap.isTemporaryWorkspace && !isLikelyTempWorkspace(bootstrap.workspaceRoot)
-                    ? workspaceFolderBasename(bootstrap.workspaceRoot)
-                    : "Dartsnut Agent"}
-                </span>
-              </h1>
-              <button
-                type="button"
-                className={chromeIconBtnClass}
-                onClick={() => void handleStartNewProject()}
-                disabled={sending}
-                aria-label="Start new project"
-                title="Start new project"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"
-                  />
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M14 2v6h6M12 11v6M9 14h6"
-                  />
-                </svg>
-              </button>
-              {bootstrap?.isTemporaryWorkspace ? (
+        <button
+          type="button"
+          className="header-menu-toggle max-[1100px]:hidden"
+          aria-label={workspaceMenuCollapsed ? "Show side menu" : "Hide side menu"}
+          aria-expanded={!workspaceMenuCollapsed}
+          title={workspaceMenuCollapsed ? "Show side menu" : "Hide side menu"}
+          onClick={() => setWorkspaceMenuCollapsed((collapsed) => !collapsed)}
+        >
+          {workspaceMenuCollapsed ? <PanelLeftOpen size={18} aria-hidden /> : <PanelLeftClose size={18} aria-hidden />}
+        </button>
+        {workspaceMenuCollapsed ? <span className="header-menu-toggle-divider" aria-hidden /> : null}
+      </header>
+      <aside className={cn("workspace-menu col-start-1 row-start-2", workspaceMenuCollapsed && "workspace-menu--hidden", screen === "settings" && "workspace-menu--settings")} aria-label={screen === "settings" ? "Settings menu" : "Workspace menu"}>
+        {screen === "settings" ? <>
+          <div className="workspace-menu__actions">
+            <button type="button" className="workspace-menu__button" onClick={() => { setScreen("main"); setProviderSettingsError(null); setProviderSettingsNotice(null); }} aria-label="Back to app" title="Back to app">
+              <ArrowLeft size={16} aria-hidden />
+              <span className="workspace-menu__button-label">Back to app</span>
+            </button>
+          </div>
+          <nav className="workspace-menu__settings-nav" aria-label="Settings sections">
+            <p className="workspace-menu__section-label">Settings</p>
+            <button type="button" className={cn("workspace-menu__button", settingsSection === "general" && "workspace-menu__button--active")} onClick={() => setSettingsSection("general")} aria-current={settingsSection === "general" ? "page" : undefined} data-analytics-id="settings_general" data-analytics-area="settings">
+              <Settings size={16} aria-hidden /><span className="workspace-menu__button-label">General</span>
+            </button>
+            <button type="button" className={cn("workspace-menu__button", settingsSection === "provider" && "workspace-menu__button--active")} onClick={() => setSettingsSection("provider")} aria-current={settingsSection === "provider" ? "page" : undefined}>
+              <CircleAlert size={16} aria-hidden /><span className="workspace-menu__button-label">Provider configuration</span>
+            </button>
+          </nav>
+        </> : <>
+        <div className="workspace-menu__actions">
+          <button
+            type="button"
+            className="workspace-menu__button"
+            onClick={() => void handleNewChat()}
+            data-analytics-id="project_new"
+            data-analytics-area="project"
+            disabled={sending || projectSwitchProgress.active}
+            aria-label="New chat"
+            title="New chat"
+          >
+            <SquarePen size={16} aria-hidden />
+            <span className="workspace-menu__button-label">New chat</span>
+          </button>
+        </div>
+        <div className="workspace-menu__projects">
+          <button
+            ref={projectsSectionButtonRef}
+            type="button"
+            className="workspace-menu__section"
+            aria-expanded={expandedProjects.__all ?? true}
+            onClick={() => setExpandedProjects((p) => ({ ...p, __all: !(p.__all ?? true) }))}
+          >
+            <span>Projects</span>
+          </button>
+          {(expandedProjects.__all ?? true) ? projectTree.projects.map((project) => {
+            const open = expandedProjects[project.id] ?? true;
+            const projectChats = projectTree.chats.filter((chat) => chat.projectId === project.id);
+            return <div key={project.id} className="workspace-menu__project-group">
+              <div className="workspace-menu__project-row">
+                <button type="button" className="workspace-menu__project" onClick={() => { setExpandedProjects((p) => ({ ...p, [project.id]: !open })); void handleSelectProject(project.id); }}>
+                  <FolderOpen className="workspace-menu__project-icon" size={16} aria-hidden />
+                  <span className="truncate">{project.name}</span>
+                </button>
                 <button
                   type="button"
-                  className={chromeIconBtnClass}
-                  onClick={() => void handleSaveTempWorkspace()}
-                  disabled={sending}
-                  aria-label="Save project to a folder"
-                  title="Save project to a folder"
+                  className="workspace-menu__project-new-chat"
+                  onClick={(event) => { event.stopPropagation(); void handleNewChatForProject(project.id); }}
+                  disabled={sending || projectSwitchProgress.active}
+                  aria-label={`New chat for ${project.name}`}
+                  title={`New chat for ${project.name}`}
+                  data-analytics-id="project_new_for_project"
+                  data-analytics-area="project"
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                    <path
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"
-                    />
-                    <path
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M17 21v-8H7v8M7 3v5h8"
-                    />
-                  </svg>
+                  <SquarePen size={14} aria-hidden />
                 </button>
+                <button
+                  type="button"
+                  className="workspace-menu__project-remove"
+                  onClick={(event) => { event.stopPropagation(); handleOpenRemoveProject(project); }}
+                  disabled={sending || projectSwitchProgress.active}
+                  aria-label={`Remove local project ${project.name}`}
+                  title="Remove local project"
+                  data-analytics-id="project_remove_local"
+                  data-analytics-area="project"
+                >
+                  <Trash2 size={14} aria-hidden />
+                </button>
+              </div>
+              {open && projectChats.length === 0 ? (
+                <div className="workspace-menu__chat-empty">No chats</div>
               ) : null}
+              {open ? projectChats.map((chat) => {
+                const active = bootstrap?.activeChatId === chat.id;
+                return <div key={chat.id} className={cn("workspace-menu__chat-row", active && "workspace-menu__chat-row--active")}>
+                  <button type="button" className={cn("workspace-menu__chat", active && "workspace-menu__chat--active")} onClick={() => void handleSelectChat(chat.id)}>
+                    <span className="truncate">{chat.title}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="workspace-menu__chat-archive"
+                    onClick={(event) => { event.stopPropagation(); void handleArchiveChat(chat.id); }}
+                    disabled={sending || projectSwitchProgress.active}
+                    aria-label={`Archive ${chat.title}`}
+                    title={`Archive ${chat.title}`}
+                  >
+                    <Archive size={13} aria-hidden />
+                  </button>
+                </div>;
+              }) : null}
+            </div>;
+          }) : null}
+        </div>
+        </>}
+        <div className="workspace-menu__utilities">
+          <CommunityAuthStatus
+            placement="rail"
+            communitySession={communitySession}
+            onOpenSettings={handleOpenSettings}
+            onAuthRequired={() => requestCommunityAuth("deploy-devices", true)}
+            onSignOut={async () => {
+              if (!api?.communityLogout) {
+                return;
+              }
+              try {
+                await api.communityLogout();
+                await refreshCommunitySession();
+              } catch {
+                // ignore
+              }
+            }}
+          />
+        </div>
+        <div
+          className={cn("workspace-menu-splitter", workspaceMenuResizing && "workspace-menu-splitter--active")}
+          role="separator"
+          tabIndex={0}
+          aria-label="Resize side menu"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_WORKSPACE_MENU_WIDTH}
+          aria-valuemax={workspaceMenuResizeMax}
+          aria-valuenow={workspaceMenuWidth}
+          title="Drag to resize side menu"
+          onPointerDown={handleWorkspaceMenuResizePointerDown}
+          onPointerMove={handleWorkspaceMenuResizePointerMove}
+          onPointerUp={handleWorkspaceMenuResizePointerUp}
+          onPointerCancel={handleWorkspaceMenuResizePointerUp}
+          onKeyDown={handleWorkspaceMenuResizeKeyDown}
+        />
+      </aside>
+      <section className="main-workspace-panel col-start-2 col-end-3 row-start-2 min-h-0 min-w-0">
+        <div className="main-workspace-panel__chrome">
+          <div className="main-workspace-panel__drag-region" aria-hidden />
+          <div className="main-workspace-panel__controls">
+            <UpdateDownloadPill status={appUpdate} />
+            {screen === "main" && showDeployDrawer ? (
               <button
                 type="button"
-                className={chromeIconBtnClass}
-                onClick={() => void handlePickWorkspace()}
-                disabled={sending}
-                aria-label="Open an existing project"
-                title="Open an existing project"
+                className="header-deploy-toggle max-[1100px]:hidden"
+                aria-label={deployDrawerOpen ? "Collapse Deploy and Community panel" : "Open Deploy and Community panel"}
+                aria-expanded={deployDrawerOpen}
+                title={deployDrawerOpen ? "Collapse right panel" : "Open right panel"}
+                onClick={() => setDeployDrawerOpen((open) => !open)}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M4 10V8a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8z"
-                  />
-                  <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 14v4M10 16h4" />
-                </svg>
+                {deployDrawerOpen ? <PanelRightClose size={18} aria-hidden /> : <PanelRightOpen size={18} aria-hidden />}
               </button>
-            </div>
-            <div
-              className="min-h-0 min-w-0 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
-              aria-hidden
-            />
-            <div className="inline-flex shrink-0 items-center justify-end gap-3 overflow-visible">
-              <UpdateDownloadPill status={appUpdate} />
-              <CommunityAuthStatus
-                communitySession={communitySession}
-                onAuthRequired={() => requestCommunityAuth("deploy-devices")}
-                onSignOut={async () => {
-                  if (!api?.communityLogout) {
-                    return;
-                  }
-                  try {
-                    await api.communityLogout();
-                    await refreshCommunitySession();
-                  } catch {
-                    // ignore
-                  }
-                }}
-              />
-              <ThemeSwitcherIcon id="main-theme-icon" value={theme} onChange={handleThemeChange} />
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="flex min-w-0 shrink-0 items-center gap-1.5">
-              <button
-                type="button"
-                className={chromeIconBtnClass}
-                onClick={() => {
-                  setScreen("main");
-                  setProviderSettingsError(null);
-                  setProviderSettingsNotice(null);
-                }}
-                aria-label="Back to main view"
-                title="Back to main view"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M15 18l-6-6 6-6"
-                  />
-                </svg>
-              </button>
-              <h1 className="m-0 min-w-0 flex-[0_1_auto] p-0 font-[family-name:var(--font-display)] text-[13px] font-semibold leading-snug tracking-tight text-fg-strong">
-                <span className="block truncate">Settings</span>
-              </h1>
-            </div>
-            <div
-              className="min-h-0 min-w-6 flex-1 self-stretch [-webkit-app-region:drag] [app-region:drag]"
-              aria-hidden
-            />
-            <div className="inline-flex shrink-0 items-center gap-2">
-              <ThemeSwitcherIcon id="settings-theme-icon" value={theme} onChange={handleThemeChange} />
-            </div>
-          </>
-        )}
-      </header>
+            ) : null}
+          </div>
+        </div>
+        <div className="main-workspace-panel__body" ref={mainWorkspaceBodyRef}>
       {screen === "main" && showRuntimeSetup ? (
         <section
-          className={cn(
-            "runtime-config-main col-start-1 row-start-2 min-h-0 h-full overflow-auto bg-[var(--gradient-rail)] max-[1100px]:col-end-2",
-            deployEligible ? "col-end-4" : "col-end-3"
-          )}
+          className="runtime-config-main col-span-full min-h-0 h-full overflow-auto bg-[var(--gradient-rail)]"
           aria-live="polite"
         >
           <div className="runtime-config-main__inner">
@@ -1946,8 +3182,8 @@ export function App() {
       ) : screen === "main" ? (
         <section
           className={cn(
-            "left-rail left-rail--chat col-start-1 row-start-2 relative min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
-            "max-[1100px]:col-start-1 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]"
+            "left-rail left-rail--chat col-start-1 relative min-w-0 min-h-0 h-full overflow-hidden border-r border-edge bg-[var(--gradient-rail)]",
+            "max-[1100px]:max-w-[760px]"
           )}
         >
           <section
@@ -1970,15 +3206,83 @@ export function App() {
             }}
           >
             <div className="timeline-inner">
-            {entries.map((entry) => (
+            {personaPickerOpen ? (
+              <section className="agent-profile-picker" aria-labelledby="agent-profile-picker-title">
+                <div className="agent-profile-picker__intro">
+                  <h1 id="agent-profile-picker-title">
+                    Who should help you build {
+                      projectTree.projects.find((project) => project.id === personaState.projectId)?.name ?? "your project"
+                    }?
+                  </h1>
+                  <p>Choose a pace and personality.</p>
+                </div>
+                <div className="agent-profile-stage">
+                  <div className="agent-profile-age-tabs" role="tablist" aria-label="Builder age group">
+                    {PERSONA_AGE_GROUPS.map((group) => (
+                      <button
+                        key={group.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={personaAgeGroup === group.id}
+                        className={cn("agent-profile-age-tab", personaAgeGroup === group.id && "agent-profile-age-tab--active")}
+                        onClick={() => setPersonaAgeGroup(group.id)}
+                      >
+                        {group.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="agent-profile-grid">
+                  {visiblePersonaProfiles.map((profile) => {
+                    const Icon = AGENT_PROFILE_ICONS[profile.icon];
+                    return (
+                      <button
+                        key={profile.id}
+                        type="button"
+                        className={`agent-profile-card agent-profile-card--${profile.group}`}
+                        onClick={() => void handleSelectAgentProfile(profile.id)}
+                        disabled={sending}
+                        aria-label={`${profile.name}: ${profile.description}`}
+                      >
+                        <span className="agent-profile-card__icon"><Icon size={22} aria-hidden /></span>
+                        <span className="agent-profile-card__content">
+                          <span className="agent-profile-card__identity">
+                            <span className="agent-profile-card__name">{profile.name}</span>
+                          </span>
+                          <span className="agent-profile-card__description">
+                            {PERSONA_CARD_SUMMARIES[profile.id as Exclude<AgentProfileId, "export">]}
+                          </span>
+                        </span>
+                        <ChevronDown className="agent-profile-card__select" size={18} aria-hidden />
+                      </button>
+                    );
+                  })}
+                  </div>
+                  <button
+                    type="button"
+                    className="agent-profile-standard"
+                    onClick={() => void handleSelectAgentProfile(exportProfile.id)}
+                    disabled={sending}
+                  >
+                    <Terminal size={15} aria-hidden />
+                    <span>Use standard Dartsnut Agent</span>
+                  </button>
+                </div>
+              </section>
+            ) : agentProfileReady ? entries.map((entry) => (
               <TimelineEntryView
                 key={entry.id}
                 entry={entry}
                 onToggleReasoning={toggleReasoningEntry}
+                agentProfile={agentProfile}
               />
-            ))}
+            )) : null}
             </div>
           </section>
+
+          {activeChat ? <div className="chat-panel-chat-header" title={activeChat.title}>
+            <FolderOpen size={15} aria-hidden />
+            <span>{activeChat.title}</span>
+          </div> : null}
 
           {runtimeError || pythonRuntimeStatus ? (
             <div className="chat-rail-overlay chat-rail-overlay--top pointer-events-none absolute inset-x-0 top-0 z-10">
@@ -2020,26 +3324,19 @@ export function App() {
               </div>
             </div>
           ) : null}
-          {/* Blocking `dartsnut_ask_question` UI — shown while the host waits for an answer. */}
-          {projectTypePicker.visible && projectTypePicker.types.length > 0 ? (
+          {agentQuestion ? (
             <AskQuestionCard
-              question="Are you building a game or a widget?"
-              options={projectTypePicker.types.map((pt) => ({
-                value: pt,
-                label: projectTypeChipLabel(pt),
-              }))}
-              onSubmit={(value) => void handleProjectTypeChip(value as ProjectType)}
+              question={agentQuestion.question}
+              options={agentQuestion.options}
+              input={agentQuestion.allowFreeText ? {
+                value: agentQuestionText,
+                placeholder: agentQuestion.freeTextPlaceholder,
+                onChange: setAgentQuestionText
+              } : undefined}
+              onSubmit={(value) => void handleAgentQuestionAnswer(value)}
             />
-          ) : widgetSizePicker.visible && widgetSizePicker.sizes.length > 0 ? (
-            <AskQuestionCard
-              question="Which widget display size do you want?"
-              options={widgetSizePicker.sizes.map((sz) => ({
-                value: sz,
-                label: sz,
-              }))}
-              onSubmit={(value) => void handleWidgetSizeChip(value as WidgetSize)}
-            />
-          ) : machineMcpPicker.visible ? (
+          ) : null}
+          {machineMcpPicker.visible ? (
             <AskQuestionCard
               question={
                 machineMcpPicker.manualOnly
@@ -2076,19 +3373,62 @@ export function App() {
             />
           ) : null}
 
-          <section className="flex flex-col gap-3 border-0 bg-transparent p-0">
+          {agentProfileReady ? <section className="flex flex-col gap-3 border-0 bg-transparent p-0">
+            {agentProfile ? <div className="agent-profile-context" aria-label={`Current helper: ${agentProfile.name}`}>
+              <span className={`agent-profile-context__dot agent-profile-context__dot--${agentProfile.group}`} />
+              <span>{agentProfile.name}</span>
+            </div> : null}
             <div
               className={cn(
                 "ui-composer",
-                composerExpandedSticky && "flex-col items-stretch gap-2"
+                chatMediaAttachments.length > 0 && "ui-composer--has-attachments",
+                composerDragActive && "ui-composer--drag-active"
               )}
               data-expanded={composerExpandedSticky ? "true" : undefined}
+              onDragOver={handleComposerDragOver}
+              onDragLeave={handleComposerDragLeave}
+              onDrop={handleComposerDrop}
             >
+              {greetingOnlyTimeline ? <div className="ui-composer__project-row">
+                <button type="button" className={cn("project-chat-trigger", projectMenuOpen && "project-chat-trigger--active")} onClick={() => setProjectMenuOpen((open) => !open)} disabled={projectSwitchProgress.active || sending} aria-haspopup="menu" aria-expanded={projectMenuOpen}>
+                  <Folder className="ui-composer__project-glyph" size={16} aria-hidden />
+                  <span className="project-chat-trigger__label">{projectTree.projects.find((project) => project.id === bootstrap?.activeProjectId)?.name ?? "Choose Project"}</span>
+                </button>
+                {projectMenuOpen ? <div className="project-picker-menu" role="menu">
+                  {projectTree.projects.map((project) => <button key={project.id} type="button" role="menuitem" className={cn("project-picker-menu__item", bootstrap?.activeProjectId === project.id && "project-picker-menu__item--active")} onClick={() => void handleSelectProject(project.id)}><FolderOpen className="project-picker-menu__folder" size={20} aria-hidden /><span>{project.name}</span>{bootstrap?.activeProjectId === project.id ? <Check className="project-picker-menu__check" size={18} aria-hidden /> : null}</button>)}
+                  {projectTree.projects.length > 0 ? <div className="project-picker-menu__divider" /> : null}
+                  <button type="button" role="menuitem" className="project-picker-menu__item" onClick={handleCreateProject}><Plus className="project-picker-menu__plus" size={20} aria-hidden /><span>Add project</span></button>
+                </div> : null}
+              </div> : null}
+              {chatMediaAttachments.length > 0 ? (
+                <div className="ui-composer-attachments" aria-label="Attached media files">
+                  {chatMediaAttachments.map((attachment) => (
+                    <span key={attachment.path} className="ui-composer-attachment">
+                      <span className="ui-composer-attachment__kind">{attachment.kind}</span>
+                      <span className="ui-composer-attachment__name">{attachment.name}</span>
+                      <button
+                        type="button"
+                        className="ui-composer-attachment__remove"
+                        aria-label={`Remove ${attachment.name}`}
+                        data-analytics-id="agent_attachment_remove"
+                        data-analytics-area="agent"
+                        disabled={chatDisabled}
+                        onClick={() =>
+                          setChatMediaAttachments((prev) => prev.filter((item) => item.path !== attachment.path))
+                        }
+                      >
+                        x
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              <div className="ui-composer__input-row">
               <textarea
                 ref={promptInputRef}
                 className={cn(
                   "m-0 max-h-[200px] min-h-[26px] min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-0.5 text-[13px] leading-snug text-[var(--color-composer-input)] shadow-none outline-none [font:inherit] placeholder:text-[var(--color-composer-placeholder)] focus:border-0 focus:shadow-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-45",
-                  composerExpandedSticky ? "w-full flex-none" : "flex-1"
+                  "flex-1"
                 )}
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
@@ -2098,7 +3438,7 @@ export function App() {
                     void handleSend();
                   }
                 }}
-                placeholder="Message..."
+                placeholder="Do anything"
                 rows={1}
                 aria-label="Message"
                 disabled={chatDisabled}
@@ -2116,251 +3456,228 @@ export function App() {
                     className="m-0 inline-flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-full border border-[var(--color-composer-scroll-border)] bg-[var(--color-composer-scroll-bg)] p-0 text-[var(--color-composer-scroll-fg)] hover:bg-[var(--color-composer-scroll-hover)]"
                     aria-label="Scroll to bottom and enable auto-scroll"
                     title="Scroll to bottom and enable auto-scroll"
+                    data-analytics-id="agent_scroll_to_bottom"
+                    data-analytics-area="agent"
                     onClick={() => {
                       scrollTimelineToBottom();
                       setAutoScrollEnabled(true);
                     }}
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                      <path
-                        d="M12 5v14M12 19l-5-5M12 19l5-5"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.1"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <ArrowDown size={14} aria-hidden />
                   </button>
                 ) : null}
                 <button
                   type="button"
                   className="m-0 inline-flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-full border-0 bg-[var(--color-composer-send-bg)] p-0 text-[var(--color-composer-send-fg)] hover:enabled:bg-[var(--color-composer-send-hover)] disabled:cursor-not-allowed disabled:opacity-45"
-                  disabled={sending ? false : chatDisabled}
+                  disabled={sending ? false : chatDisabled || !composerHasContent}
                   aria-busy={false}
                   aria-label={sending ? "Stop" : "Send"}
+                  data-analytics-id={sending ? "agent_stop" : "agent_send"}
+                  data-analytics-area="agent"
                   onClick={() => (sending ? void handleStopAgent() : void handleSend())}
                 >
                   {sending ? (
-                    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                      <rect x="5" y="5" width="14" height="14" rx="1.5" fill="currentColor" />
-                    </svg>
+                    <Square size={14} fill="currentColor" aria-hidden />
                   ) : (
-                    <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden>
-                      <path
-                        d="M12 19V6M12 6l-4.5 4.5M12 6l4.5 4.5"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <ArrowUp size={15} strokeWidth={2.2} aria-hidden />
                   )}
                 </button>
               </div>
+              </div>
             </div>
-          </section>
+            {chatAttachmentError ? (
+              <p className="ui-composer-attachment-error" role="status">
+                {chatAttachmentError}
+              </p>
+            ) : null}
+          </section> : null}
             </div>
           </div>
+          {showEmulatorPane ? (
+            <div
+              className={cn("chat-emulator-splitter", chatPaneResizing && "chat-emulator-splitter--active")}
+              role="separator"
+              tabIndex={0}
+              aria-label="Resize chat and emulator panels"
+              aria-orientation="vertical"
+              aria-valuemin={MIN_CHAT_PANE_WIDTH}
+              aria-valuemax={chatPaneResizeMax}
+              aria-valuenow={chatPaneWidth}
+              title="Drag to resize chat and emulator panels"
+              onPointerDown={handleChatPaneResizePointerDown}
+              onPointerMove={handleChatPaneResizePointerMove}
+              onPointerUp={handleChatPaneResizePointerUp}
+              onPointerCancel={handleChatPaneResizePointerUp}
+              onKeyDown={handleChatPaneResizeKeyDown}
+            />
+          ) : null}
         </section>
       ) : (
-        <section
-          className={cn(
-            "left-rail col-start-1 row-start-2 grid min-h-0 h-full overflow-visible border-r border-edge bg-[var(--gradient-rail)] pt-[14px] pb-[18px] px-[18px]",
-            "grid-rows-[auto_minmax(0,1fr)] gap-4",
-            "max-[1100px]:col-start-1 max-[1100px]:row-start-2 max-[1100px]:max-w-[760px]",
-            "max-[760px]:gap-2.5 max-[760px]:p-3"
-          )}
-        >
-          <div className="flex min-w-0 flex-col gap-2.5">
-            <div className="flex min-w-0 flex-col gap-2">
-              {providerSettingsError ? (
-                <div
-                  className="m-0 rounded-lg border border-[var(--color-runtime-error-border)] bg-[var(--color-runtime-error-bg)] p-2 text-xs"
-                  role="alert"
-                >
-                  {providerSettingsError}
+        <section className="settings-page col-span-full min-h-0 overflow-auto">
+          <div className="settings-page__content">
+          <div className="settings-page__body">
+              {settingsSection === "provider" ? (
+                <div>
+                  <h1 className="m-0 text-2xl font-semibold text-fg-strong">Provider configuration</h1>
+                  <p className="mt-1 text-sm leading-relaxed text-fg-muted">Choose and configure the model provider used by Dartsnut Agent.</p>
                 </div>
               ) : null}
-              {providerSettingsNotice ? (
-                <div className="m-0 rounded-lg border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] p-2 text-xs">
-                  {providerSettingsNotice}
-                </div>
-              ) : null}
-            </div>
-          </div>
-          <section className="grid min-h-0 grid-cols-[220px_1fr] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-settings-layout-border)] bg-[var(--color-settings-layout-bg)] shadow-[var(--shadow-sm)]">
-            <nav className="flex flex-col gap-2 border-r border-[var(--color-settings-layout-border)] p-3" aria-label="Settings menu">
-              <button
-                type="button"
-                className="w-full rounded-[var(--radius-md)] border-0 bg-[var(--color-settings-menu-active)] px-3 py-2 text-left text-[13px] font-medium text-fg [app-region:no-drag] [-webkit-app-region:no-drag]"
-              >
-                Provider configuration
-              </button>
-            </nav>
-            <div className="flex min-h-0 flex-col gap-3 overflow-auto p-4 text-[13px]">
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[var(--color-text-subtle)]">Provider</span>
-                <select
-                  className="ui-input"
-                  value={providerSettings.activeProvider}
-                  onChange={(event) =>
-                    setProviderSettings((prev) =>
-                      withProviderId(prev, event.target.value === "custom" ? "custom" : "dartsnut-llm")
-                    )
-                  }
-                >
-                  <option value="dartsnut-llm">Dartsnut LLM</option>
-                  <option value="custom">Custom</option>
-                </select>
-              </label>
-              {providerSettings.activeProvider === "dartsnut-llm" ? (
-                <div className="rounded-[var(--radius-md)] border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
-                  <p className="m-0 font-medium">This service is free for a limited time only.</p>
-                  <p className="m-0 mt-1 text-fg-muted">
-                    Please use Dartsnut LLM only for creating and updating Dartsnut games,
-                    widgets, and related project assets. Avoid sending unrelated, sensitive,
-                    or personal content.
-                  </p>
-                </div>
-              ) : null}
-              {providerSettings.activeProvider === "custom" ? (
+              {settingsSection === "general" ? (
                 <>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="text-[var(--color-text-subtle)]">API endpoint</span>
-                    <input
+                  <div>
+                    <h1 className="m-0 text-2xl font-semibold text-fg-strong">General</h1>
+                    <p className="mt-1 text-sm leading-relaxed text-fg-muted">
+                      Control app appearance, updates, and privacy.
+                    </p>
+                  </div>
+                  <h2 className="settings-group-heading">General</h2>
+                  <SettingsGroup>
+                    <SettingsRow title="Theme" description="Choose how Dartsnut Agent looks." control={
+                      <SettingsSelect value={theme} label="Theme" options={[{ value: "system", label: "System" }, { value: "light", label: "Light" }, { value: "dark", label: "Dark" }]} onChange={handleThemeChange} />
+                    } />
+                  </SettingsGroup>
+                  <h2 className="settings-group-heading">Update</h2>
+                  <SettingsGroup>
+                    <SettingsRow title="Automatically download updates" description="Check for new versions on launch and download them automatically. Installation still requires your confirmation." control={
+                      <SettingsSwitch checked={autoUpdateEnabled} label="Automatically download updates" analyticsId="settings_auto_update_toggle" onChange={handleAutoUpdateChange} />
+                    } />
+                    <SettingsRow title="App updates" description={appUpdate?.kind === "not_available" ? appUpdate.message ?? "Dartsnut Agent is up to date." : appUpdate?.kind === "error" ? appUpdate.message ?? "Update check failed." : "Check for a newer desktop version."} control={<button
+                      type="button"
+                      className="ui-btn-secondary min-h-8 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-55"
+                      disabled={appUpdate?.kind === "checking" || appUpdate?.kind === "downloading" || appUpdate?.kind === "ready"}
+                      onClick={handleCheckAppUpdate}
+                      data-analytics-id="settings_check_update"
+                      data-analytics-area="settings"
+                    >
+                      {appUpdate?.kind === "checking" ? "Checking..." : "Check for updates"}
+                    </button>} />
+                  </SettingsGroup>
+                  <h2 className="settings-group-heading">Privacy</h2>
+                  <SettingsGroup>
+                    <SettingsRow title="Share anonymous usage analytics" description="Helps improve Dartsnut Agent. Chat text, model responses, file paths, credentials, account names, and email addresses are never sent." control={
+                      <SettingsSwitch checked={analyticsEnabled} label="Share anonymous usage analytics" analyticsId="analytics_toggle" onChange={(enabled) => {
+                        setAnalyticsEnabled(enabled);
+                        setAnalyticsCollectionEnabledPreference(enabled);
+                      }} />
+                    } />
+                  </SettingsGroup>
+                </>
+              ) : null}
+              {settingsSection === "provider" ? (<SettingsGroup>
+                <SettingsRow title="Provider" description="Model service used for agent requests." control={
+                  <SettingsSelect value={providerSettings.activeProvider} label="Provider" options={[{ value: "dartsnut-llm", label: "Dartsnut LLM" }, { value: "custom", label: "Custom" }]} onChange={(value) =>
+                    setProviderSettings((prev) =>
+                      withProviderId(prev, value)
+                    )
+                  } />
+                } />
+              {settingsSection === "provider" && providerSettings.activeProvider === "dartsnut-llm" ? (
+                <SettingsRow title="Daily usage" description="Today's Dartsnut LLM token allowance."><DartsnutLlmUsageCard
+                    quota={llmQuota}
+                    loading={llmQuotaLoading}
+                    error={llmQuotaError}
+                    loggedIn={communitySession.loggedIn}
+                    onRefresh={() => void refreshLlmQuota()}
+                  /></SettingsRow>
+              ) : null}
+              {settingsSection === "provider" && providerSettings.activeProvider === "dartsnut-llm" ? (
+                  <SettingsRow><div className="rounded-[var(--radius-md)] border border-[var(--color-notice-success-border)] bg-[var(--color-notice-success-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
+                    <p className="m-0 font-medium">This service is free for a limited time only.</p>
+                    <p className="m-0 mt-1 text-fg-muted">
+                      Please use Dartsnut LLM only for creating and updating Dartsnut games,
+                      widgets, and related project assets. Avoid sending unrelated, sensitive,
+                      or personal content.
+                    </p>
+                  </div></SettingsRow>
+              ) : null}
+              {settingsSection === "provider" && providerSettings.activeProvider === "custom" ? (
+                <>
+                  <SettingsRow><div className="rounded-[var(--radius-md)] border border-[var(--color-notice-warning-border)] bg-[var(--color-notice-warning-bg)] px-3 py-2 text-xs leading-relaxed text-fg">
+                    Custom providers must expose an OpenAI Responses API-compatible endpoint.
+                  </div></SettingsRow>
+                  <SettingsRow title="API base URL" description="Responses API-compatible endpoint." control={<input
                       type="url"
-                      className="ui-input"
+                      className="ui-input settings-row__input"
                       value={providerCustom(providerSettings).baseUrl}
                       onChange={(event) =>
                         setProviderSettings((prev) =>
                           withProviderCustom(prev, (custom) => ({ ...custom, baseUrl: event.target.value }))
                         )
                       }
-                      placeholder="https://api.openai.com/v1"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="text-[var(--color-text-subtle)]">API key</span>
-                    <input
+                      placeholder="https://provider.example.com/v1"
+                    />} />
+                  <SettingsRow title="API key" description={`Stored key: ${maskApiKey(providerCustom(providerSettings).apiKey) || "(empty)"}`} control={<input
                       type="password"
-                      className="ui-input"
+                      className="ui-input settings-row__input"
                       value={providerCustom(providerSettings).apiKey}
                       onChange={(event) =>
                         setProviderSettings((prev) =>
                           withProviderCustom(prev, (custom) => ({ ...custom, apiKey: event.target.value }))
                         )
                       }
-                      placeholder="sk-..."
-                    />
-                  </label>
-                  <div className="text-xs text-fg-muted">
-                    Stored key preview:{" "}
-                    {maskApiKey(providerCustom(providerSettings).apiKey) || "(empty)"}
-                  </div>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="text-[var(--color-text-subtle)]">Model</span>
-                    <input
+                      placeholder="provider-key"
+                    />} />
+                  <SettingsRow title="Model" description="Model identifier sent to the provider." control={<input
                       type="text"
-                      className="ui-input"
+                      className="ui-input settings-row__input"
                       value={providerCustom(providerSettings).model}
                       onChange={(event) =>
                         setProviderSettings((prev) =>
                           withProviderCustom(prev, (custom) => ({ ...custom, model: event.target.value }))
                         )
                       }
-                      placeholder="gpt-4.1-mini"
-                    />
-                  </label>
+                      placeholder="model-name"
+                    />} />
                 </>
               ) : null}
-              <div className="flex justify-start">
+              {settingsSection === "provider" ? <SettingsRow title="Save configuration" description="Apply provider changes to future requests." control={
                 <button
                   type="button"
                   className="ui-btn-primary mt-0 disabled:cursor-not-allowed disabled:opacity-55"
                   onClick={() => void handleSaveProviderSettings()}
+                  data-analytics-id="provider_save"
+                  data-analytics-area="settings"
                   disabled={savingProviderSettings}
                 >
                   {savingProviderSettings ? "Saving..." : "Save"}
                 </button>
-              </div>
-            </div>
-          </section>
+              } /> : null}
+              </SettingsGroup>) : null}
+          </div>
+          </div>
         </section>
       )}
-      <aside
+      {showEmulatorPane ? <aside
         className={cn(
-          "right-pane col-start-2 row-start-2 flex min-h-0 h-full min-w-[460px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+          "right-pane col-start-2 flex min-h-0 h-full min-w-[360px] flex-1 flex-col overflow-hidden border-l border-edge bg-[var(--color-emulator-bg)]",
           showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
         )}
       >
-        {assetManifest ? (
-            <div className="flex gap-0.5 border-b border-edge px-3 pb-0 pt-2" role="tablist" aria-label="Right pane view">
-              <button
-                type="button"
-                className={cn("ui-tab", rightPaneTab === "emulator" && "ui-tab--active")}
-                role="tab"
-                aria-selected={rightPaneTab === "emulator"}
-                onClick={() => setRightPaneTab("emulator")}
-              >
-                Emulator
-              </button>
-              {assetManifest ? (
-                <button
-                  type="button"
-                  className={cn("ui-tab", rightPaneTab === "assets" && "ui-tab--active")}
-                  role="tab"
-                  aria-selected={rightPaneTab === "assets"}
-                  onClick={() => setRightPaneTab("assets")}
-                >
-                  Assets
-                  {pendingChangeSlotIds.length > 0 ? (
-                    <span
-                      className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-badge-bg)] px-1.5 text-[11px] font-semibold text-[var(--color-badge-text)]"
-                      aria-label={`${pendingChangeSlotIds.length} pending`}
-                    >
-                      {pendingChangeSlotIds.length}
-                    </span>
-                  ) : null}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
         <div className="flex min-h-0 flex-1 flex-col">
-            <div
-              className={cn(
-                "flex min-h-0 flex-1 flex-col",
-                Boolean(assetManifest) && rightPaneTab !== "emulator" && "hidden"
-              )}
-            >
+            <div className="flex min-h-0 flex-1 flex-col">
               <EmulatorPanel
-                widgetParamsText={widgetParamsText}
-                setWidgetParamsText={setWidgetParamsText}
-                widgetParamsError={widgetParamsError}
-                setWidgetParamsError={setWidgetParamsError}
+                widgetConfig={widgetConfigs.emulator}
+                widgetValuesByConfig={widgetValuesByConfig}
+                onWidgetValuesChange={updateWidgetValues}
               />
             </div>
-          {assetManifest && bootstrap?.workspaceRoot ? (
-              <div className={cn("flex min-h-0 flex-1 flex-col", rightPaneTab !== "assets" && "hidden")}>
-                <AssetManagerPanel
-                  workspacePath={bootstrap.workspaceRoot}
-                  manifest={assetManifest}
-                  pendingChangeSlotIds={pendingChangeSlotIds}
-                  onAllowAgentIngress={() => {
-                    discardAgentEventsRef.current = false;
-                  }}
-                />
-              </div>
-            ) : null}
         </div>
-      </aside>
-      {deployEligible ? (
+      </aside> : null}
+        </div>
+      {showDeployDrawer ? (
+        <div
+          className={cn(
+            "deploy-drawer-viewport max-[1100px]:hidden",
+            deployDrawerOpen ? "deploy-drawer-viewport--open" : "deploy-drawer-viewport--closed"
+          )}
+        >
         <aside
           className={cn(
-            "right-pane col-start-3 row-start-2 flex min-h-0 h-full min-w-[360px] flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
-            showRuntimeSetup ? "hidden" : "max-[1100px]:hidden"
+            "right-pane deploy-drawer flex min-h-0 flex-col overflow-hidden border-l border-edge bg-[var(--color-right-pane-bg)]",
+            deployDrawerOpen ? "deploy-drawer--open" : "deploy-drawer--closed"
           )}
+          aria-hidden={!deployDrawerOpen}
+          inert={deployDrawerOpen ? undefined : true}
         >
           <div className="flex gap-0.5 border-b border-edge px-3 pb-0 pt-2" role="tablist" aria-label="Deploy view">
             <button
@@ -2369,6 +3686,8 @@ export function App() {
               role="tab"
               aria-selected={deployPaneTab === "deploy"}
               onClick={() => setDeployPaneTab("deploy")}
+              data-analytics-id="panel_deploy"
+              data-analytics-area="navigation"
             >
               Deploy
             </button>
@@ -2379,6 +3698,8 @@ export function App() {
               aria-selected={deployPaneTab === "games"}
               aria-disabled={gamesTabDisabled}
               disabled={gamesTabDisabled}
+              data-analytics-id="panel_community"
+              data-analytics-area="navigation"
               onClick={() => {
                 if (!gamesTabDisabled) {
                   setCommunityAuthIntent("my-games");
@@ -2388,16 +3709,36 @@ export function App() {
             >
               Community
             </button>
+            {assetManifest ? (
+              <button
+                type="button"
+                className={cn("ui-tab", deployPaneTab === "assets" && "ui-tab--active")}
+                role="tab"
+                aria-selected={deployPaneTab === "assets"}
+                onClick={() => setDeployPaneTab("assets")}
+                data-analytics-id="panel_assets"
+                data-analytics-area="navigation"
+              >
+                Assets
+                {pendingChangeSlotIds.length > 0 ? (
+                  <span
+                    className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-badge-bg)] px-1.5 text-[11px] font-semibold text-[var(--color-badge-text)]"
+                    aria-label={`${pendingChangeSlotIds.length} pending`}
+                  >
+                    {pendingChangeSlotIds.length}
+                  </span>
+                ) : null}
+              </button>
+            ) : null}
           </div>
           <div className="flex min-h-0 flex-1 flex-col">
             <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "deploy" && "hidden")}>
               <DeployPanel
-                active={deployPaneTab === "deploy"}
+                active={deployDrawerOpen && deployPaneTab === "deploy"}
                 showWidgetParams={deployPanelShowsWidgetParams}
-                widgetParamsText={widgetParamsText}
-                setWidgetParamsText={setWidgetParamsText}
-                widgetParamsError={widgetParamsError}
-                setWidgetParamsError={setWidgetParamsError}
+                widgetConfig={widgetConfigs.workspace}
+                widgetValuesByConfig={widgetValuesByConfig}
+                onWidgetValuesChange={updateWidgetValues}
                 communitySession={communitySession}
                 communitySessionVersion={communitySessionVersion + communityAuthSkippedVersion}
                 onCommunitySessionChange={refreshCommunitySession}
@@ -2406,7 +3747,7 @@ export function App() {
             </div>
             <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "games" && "hidden")}>
               <MyGamesPanel
-                active={deployPaneTab === "games"}
+                active={deployDrawerOpen && deployPaneTab === "games"}
                 communitySession={communitySession}
                 communitySessionVersion={communitySessionVersion + communityAuthSkippedVersion}
                 communityWorkspaceRefreshKey={communityWorkspaceRefreshKey}
@@ -2415,18 +3756,97 @@ export function App() {
                 onSubmitProgress={handleCommunitySubmitProgress}
               />
             </div>
+            {assetManifest && bootstrap?.workspaceRoot ? (
+              <div className={cn("flex min-h-0 flex-1 flex-col", deployPaneTab !== "assets" && "hidden")}>
+                <AssetManagerPanel
+                  workspacePath={bootstrap.workspaceRoot}
+                  manifest={assetManifest}
+                  pendingChangeSlotIds={pendingChangeSlotIds}
+                  onAllowAgentIngress={() => {
+                    discardAgentEventsRef.current = false;
+                  }}
+                />
+              </div>
+            ) : null}
           </div>
         </aside>
+        </div>
+      ) : null}
+      </section>
+      {providerSettingsError || providerSettingsNotice ? (
+        <div className="global-toast-stack" aria-live="polite">
+          {providerSettingsError ? <div className="global-toast global-toast--error" role="alert">{providerSettingsError}</div> : null}
+          {providerSettingsNotice ? <div className="global-toast global-toast--success" role="status">{providerSettingsNotice}</div> : null}
+        </div>
+      ) : null}
+      {projectSwitchProgress.active ? <div className="project-switch-overlay" role="status" aria-live="polite"><div><h2>Switching project</h2><p>{projectSwitchProgress.message ?? "Preparing…"}</p></div></div> : null}
+      {removeProjectTarget ? (
+        <RemoveProjectDialog
+          project={removeProjectTarget}
+          removing={removingProject}
+          error={removeProjectError}
+          onCancel={handleCloseRemoveProject}
+          onConfirm={() => void handleConfirmRemoveProject()}
+        />
+      ) : null}
+      {createProjectOpen ? (
+        <div
+          className="create-project-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="create-project-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeCreateProjectDialog();
+          }}
+        >
+          <div className="create-project-popover">
+            <div className="create-project-popover__header">
+              <h2 id="create-project-title">Create project</h2>
+              <button type="button" className="create-project-popover__close" aria-label="Close" onClick={() => closeCreateProjectDialog()}><X size={22} aria-hidden /></button>
+            </div>
+            <label className="create-project-name-field">
+              <Folder size={24} strokeWidth={1.7} aria-hidden />
+              <input value={createProjectName} onChange={(event) => setCreateProjectName(event.target.value)} placeholder="Project name" autoFocus />
+            </label>
+            <p className="create-project-popover__section-label">Source folder</p>
+            <button type="button" className={cn("create-project-folder-picker", createProjectFolder && "create-project-folder-picker--selected")} onClick={() => void handlePickProjectFolder()} disabled={createProjectPicking}>
+              <FolderPlus size={32} strokeWidth={1.5} aria-hidden />
+              <span>{createProjectFolder ? workspaceFolderBasename(createProjectFolder) : "Add folder Dartsnut Agent can read and edit"}</span>
+              {createProjectFolder ? <small>{createProjectFolder}</small> : null}
+            </button>
+            <p className="create-project-popover__hint">Each project uses one source folder.</p>
+            {createProjectError ? <p className="create-project-popover__error" role="alert">{createProjectError}</p> : null}
+            <div className="create-project-popover__actions">
+              <button type="button" className="create-project-popover__cancel" onClick={() => closeCreateProjectDialog()}>Cancel</button>
+              <button type="button" className="create-project-popover__submit" disabled={!createProjectFolder || createProjectPicking || sending} onClick={() => void handleSubmitCreateProject()}>Create project</button>
+            </div>
+          </div>
+        </div>
       ) : null}
       <DeployAuthGate
         open={deployAuthGateOpen}
         googleSignInAvailable={communitySession.googleSignInAvailable}
-        title={communityAuthIntent === "my-games" ? "Sign in to publish apps" : "Sign in to pick a device"}
+        title={
+          communityAuthIntent === "my-games"
+            ? "Sign in to publish apps"
+            : communityAuthIntent === "llm-use"
+              ? "Sign in to use Dartsnut LLM"
+              : "Sign in to pick a device"
+        }
         description={
           communityAuthIntent === "my-games"
             ? "Log in with your Dartsnut account to publish games and widgets."
-            : "Log in with your Dartsnut account to select a bound machine and use its IP automatically. You can continue without signing in and enter an IP manually."
+            : communityAuthIntent === "llm-use"
+              ? "Dartsnut LLM requires a signed-in account with at least one bound machine."
+              : "Log in with your Dartsnut account to select a bound machine and use its IP automatically. You can continue without signing in and enter an IP manually."
         }
+        allowSkip={communityAuthIntent !== "llm-use"}
+        onClose={() => {
+          setDeployAuthGateOpen(false);
+          if (communityAuthIntent === "my-games") {
+            setDeployPaneTab("deploy");
+          }
+        }}
         onSkip={() => {
           setCommunityAuthSkippedForSession();
           setCommunityAuthSkippedVersion((v) => v + 1);
@@ -2443,8 +3863,11 @@ export function App() {
       />
       <UpdateReadyOverlay
         status={visibleAppUpdate}
+        autoUpdateEnabled={autoUpdateEnabled}
         installing={appUpdate?.installing ?? false}
         error={appUpdate?.error ?? null}
+        onDownload={handleDownloadAppUpdate}
+        onAutoUpdateChange={handleAutoUpdateChange}
         onInstallNow={handleInstallAppUpdateNow}
         onLater={handleUpdateNextLaunch}
       />

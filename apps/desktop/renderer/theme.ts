@@ -1,9 +1,10 @@
 /** Must match inline script in apps/desktop/index.html */
 export const THEME_STORAGE_KEY = "dartsnut-theme";
 
-export type ThemeId = "dark" | "light";
+export type ThemeId = "system" | "dark" | "light";
+export type ResolvedThemeId = Exclude<ThemeId, "system">;
 
-const VALID: Record<string, true> = { dark: true, light: true };
+const VALID: Record<string, true> = { system: true, dark: true, light: true };
 
 /** Legacy stored value before the theme id was renamed from `dart` to `dark`. */
 const LEGACY_DARK_THEME_ID = "dart";
@@ -25,10 +26,10 @@ export function isThemeId(value: string): value is ThemeId {
   return VALID[value] === true;
 }
 
-/** No stored value: light OS → light theme, else dark */
+/** No stored value follows the operating system. */
 export function resolveThemeFromEnvironment(): ThemeId {
   if (typeof window === "undefined") {
-    return "dark";
+    return "system";
   }
   try {
     normalizeLegacyThemeInStorage();
@@ -39,16 +40,7 @@ export function resolveThemeFromEnvironment(): ThemeId {
   } catch {
     /* ignore */
   }
-  if (typeof window.matchMedia === "function") {
-    try {
-      if (window.matchMedia("(prefers-color-scheme: light)").matches) {
-        return "light";
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-  return "dark";
+  return "system";
 }
 
 export function getStoredTheme(): ThemeId | null {
@@ -75,11 +67,26 @@ export function setStoredTheme(theme: ThemeId): void {
   }
 }
 
+export function resolveThemePreference(theme: ThemeId): ResolvedThemeId {
+  if (theme !== "system") {
+    return theme;
+  }
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+    try {
+      return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    } catch {
+      /* ignore */
+    }
+  }
+  return "dark";
+}
+
 export function applyTheme(theme: ThemeId): void {
   if (typeof document === "undefined") {
     return;
   }
-  document.documentElement.dataset.theme = theme;
+  const resolved = resolveThemePreference(theme);
+  document.documentElement.dataset.theme = resolved;
   setStoredTheme(theme);
   if (typeof window !== "undefined" && window.dartsnutApi?.setShellUiTheme) {
     void window.dartsnutApi.setShellUiTheme(theme);

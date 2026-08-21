@@ -10,18 +10,10 @@ const pluginRoot = path.join(repoRoot, "plugins", "dartsnut-agent");
 const sourceSkillsDir = path.join(repoRoot, "packages", "agent-runtime", "skills");
 
 const exportedSkills = [
-  "karpathy-guidelines",
-  "creator-incremental",
-  "conf-contract",
-  "pydartsnut-core",
-  "pydartsnut-game-io",
-  "pydartsnut-widget-loop",
-  "widget-fonts",
-  "game-dart-colors",
-  "dartsnut-display-mapping",
-  "design-console-smallform",
-  "asset-pipeline",
-  "dartsnut-skill"
+  "dartsnut-core",
+  "dartsnut-game",
+  "dartsnut-widget",
+  "dartsnut-assets"
 ];
 
 function readJson(relativePath) {
@@ -79,7 +71,7 @@ const extraSourceSkills = fs
   .filter((skillId) => !exportedSkills.includes(skillId))
   .sort();
 
-const expectedInternalOnly = ["creation-intake", "game-creator", "widget-creator"];
+const expectedInternalOnly = [];
 assert(
   JSON.stringify(extraSourceSkills) === JSON.stringify(expectedInternalOnly),
   `Unexpected non-exported skills: ${extraSourceSkills.join(", ")}`

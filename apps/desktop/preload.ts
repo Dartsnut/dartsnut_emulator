@@ -3,6 +3,8 @@ import {
   IPCChannels,
   type AgentEvent,
   type AppUpdateInstallResponse,
+  type AppUpdateDownloadResponse,
+  type AppUpdateCheckResponse,
   type AppUpdateStatus,
   type MainProcessConsoleMirrorPayload,
   type ApplyAssetsRequest,
@@ -10,14 +12,18 @@ import {
   type BindSlotRequest,
   type BindSlotResponse,
   type BootstrapState,
-  type SaveTempWorkspaceResponse,
+  type ProjectTree,
+  type ProjectCreateRequest,
+  type ProjectSelectRequest,
+  type ChatCreateRequest,
+  type ProjectSwitchProgress,
   type ManifestSnapshot,
   type PickWorkspaceRequest,
   type PickWorkspaceResponse,
-  type IntakeSubmitQuestionAnswerRequest,
-  type IntakeSubmitQuestionAnswerResponse,
   type MachineMcpSubmitQuestionAnswerRequest,
   type MachineMcpSubmitQuestionAnswerResponse,
+  type AgentQuestionAnswerRequest,
+  type AgentQuestionAnswerResponse,
   type PromptRequest,
   type ProviderSettings,
   type PythonRuntimeProgress,
@@ -33,24 +39,34 @@ import {
   type DeployActionResponse,
   type DeployLaunchRequest,
   type CommunitySessionInfo,
+  type CommunityCancelGoogleLoginResponse,
   type CommunityLoginRequest,
   type CommunityLoginResponse,
+  type CommunitySetPasswordRequest,
+  type CommunitySetPasswordResponse,
   type CommunityLogoutResponse,
+  type CommunityGetLlmQuotaResponse,
   type CommunityListDeployDevicesResponse,
   type CommunityListMyGamesResponse,
   type CommunityGetPublishOptionsResponse,
+  type CommunityListAppVersionsRequest,
+  type CommunityListAppVersionsResponse,
   type CommunityCreateAppRequest,
   type CommunityCreateAppResponse,
   type CommunityUploadNativeImageRequest,
   type CommunityUploadNativeImageResponse,
   type CommunitySubmitAppVersionRequest,
   type CommunitySubmitAppVersionResponse,
+  type CommunityUpdateWorkspaceVersionRequest,
+  type CommunityUpdateWorkspaceVersionResponse,
   type CommunitySubmitProgress,
   type CommunityWithdrawAppVersionRequest,
   type CommunityWithdrawAppVersionResponse,
   type WindowChromeInsets,
   type ShellUiTheme,
-  type AgentSessionWorkspaceSummary
+  type AgentSessionWorkspaceSummary,
+  type WidgetConfigScope,
+  type WidgetConfigSnapshot
 } from "@dartsnut/shared-ipc";
 import {
   EMULATOR_IPC_CHANNELS,
@@ -62,31 +78,49 @@ import {
 
 const api = {
   getBootstrapState: () => ipcRenderer.invoke(IPCChannels.bootstrapState) as Promise<BootstrapState>,
-  getWorkspaceSessionSummary: () =>
-    ipcRenderer.invoke(IPCChannels.getWorkspaceSessionSummary) as Promise<AgentSessionWorkspaceSummary>,
+  getWorkspaceSessionSummary: (chatId?: string) =>
+    ipcRenderer.invoke(IPCChannels.getWorkspaceSessionSummary, chatId) as Promise<AgentSessionWorkspaceSummary>,
   resetWorkspaceSession: () =>
     ipcRenderer.invoke(IPCChannels.resetWorkspaceSession) as Promise<
       { ok: true } | { ok: false; reason: "no_workspace" | "persistence_disabled" }
     >,
+  listProjects: () => ipcRenderer.invoke(IPCChannels.projectsList) as Promise<ProjectTree>,
+  createProject: (request: ProjectCreateRequest) => ipcRenderer.invoke(IPCChannels.projectCreate, request) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
+  removeProject: (projectId: string) => ipcRenderer.invoke(IPCChannels.projectRemove, projectId) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
+  selectProject: (request: ProjectSelectRequest) => ipcRenderer.invoke(IPCChannels.projectSelect, request) as Promise<{ state: BootstrapState; tree: ProjectTree; accepted: boolean }>,
+  createChat: (request: ChatCreateRequest) => ipcRenderer.invoke(IPCChannels.chatCreate, request) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
+  archiveChat: (chatId: string) => ipcRenderer.invoke("agent:chat-archive", chatId) as Promise<{ state: BootstrapState; tree: ProjectTree }>,
+  generateChatTitle: (request: { chatId: string; firstUserMessage: string; fallbackOnly?: boolean }) => ipcRenderer.invoke("agent:chat-generate-title", request) as Promise<{ tree: ProjectTree; updated: boolean }>,
+  selectChat: (chatId: string) => ipcRenderer.invoke(IPCChannels.chatSelect, chatId) as Promise<{ state: BootstrapState; tree: ProjectTree; accepted: boolean }>,
+  onProjectSwitchProgress: (listener: (progress: ProjectSwitchProgress) => void) => {
+    const handler = (_: unknown, progress: ProjectSwitchProgress) => listener(progress);
+    ipcRenderer.on(IPCChannels.projectSwitchProgress, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.projectSwitchProgress, handler);
+  },
   getWindowChromeInsets: () =>
     ipcRenderer.invoke(IPCChannels.windowChromeInsets) as Promise<WindowChromeInsets>,
   getAppUpdateStatus: () =>
     ipcRenderer.invoke(IPCChannels.appUpdateStatus) as Promise<AppUpdateStatus>,
   installAppUpdateNow: () =>
     ipcRenderer.invoke(IPCChannels.appUpdateInstallNow) as Promise<AppUpdateInstallResponse>,
+  getAppUpdateAutoDownload: () =>
+    ipcRenderer.invoke(IPCChannels.appUpdateAutoDownload) as Promise<boolean>,
+  setAppUpdateAutoDownload: (enabled: boolean) =>
+    ipcRenderer.invoke(IPCChannels.appUpdateSetAutoDownload, enabled) as Promise<boolean>,
+  downloadAppUpdate: () =>
+    ipcRenderer.invoke(IPCChannels.appUpdateDownload) as Promise<AppUpdateDownloadResponse>,
+  checkAppUpdate: () =>
+    ipcRenderer.invoke(IPCChannels.appUpdateCheck) as Promise<AppUpdateCheckResponse>,
   setShellUiTheme: (theme: ShellUiTheme) =>
     ipcRenderer.invoke(IPCChannels.shellUiTheme, theme) as Promise<void>,
-  startNewProject: () => ipcRenderer.invoke(IPCChannels.startNewProject) as Promise<BootstrapState>,
-  saveTempWorkspace: () =>
-    ipcRenderer.invoke(IPCChannels.saveTempWorkspace) as Promise<SaveTempWorkspaceResponse>,
   pickWorkspace: (request?: PickWorkspaceRequest) =>
     (request === undefined
       ? ipcRenderer.invoke(IPCChannels.pickWorkspace)
       : ipcRenderer.invoke(IPCChannels.pickWorkspace, request)) as Promise<PickWorkspaceResponse>,
-  intakeSubmitQuestionAnswer: (body: IntakeSubmitQuestionAnswerRequest) =>
-    ipcRenderer.invoke(IPCChannels.intakeSubmitQuestionAnswer, body) as Promise<IntakeSubmitQuestionAnswerResponse>,
   machineMcpSubmitQuestionAnswer: (body: MachineMcpSubmitQuestionAnswerRequest) =>
     ipcRenderer.invoke(IPCChannels.machineMcpSubmitQuestionAnswer, body) as Promise<MachineMcpSubmitQuestionAnswerResponse>,
+  agentQuestionSubmitAnswer: (body: AgentQuestionAnswerRequest) =>
+    ipcRenderer.invoke(IPCChannels.agentQuestionSubmitAnswer, body) as Promise<AgentQuestionAnswerResponse>,
   sendPrompt: (request: PromptRequest) =>
     ipcRenderer.invoke(IPCChannels.sendPrompt, request) as Promise<SendPromptResponse>,
   cancelAgent: () => ipcRenderer.invoke(IPCChannels.cancelAgent) as Promise<{ ok: boolean }>,
@@ -168,6 +202,13 @@ const api = {
     ipcRenderer.on(EMULATOR_IPC_CHANNELS.emulatorLogsClear, handler);
     return () => ipcRenderer.removeListener(EMULATOR_IPC_CHANNELS.emulatorLogsClear, handler);
   },
+  getWidgetConfig: (scope: WidgetConfigScope) =>
+    ipcRenderer.invoke(IPCChannels.widgetConfigGet, scope) as Promise<WidgetConfigSnapshot>,
+  onWidgetConfig: (listener: (snapshot: WidgetConfigSnapshot) => void) => {
+    const handler = (_: unknown, snapshot: WidgetConfigSnapshot) => listener(snapshot);
+    ipcRenderer.on(IPCChannels.widgetConfigChanged, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.widgetConfigChanged, handler);
+  },
   deployGetEligibility: () =>
     ipcRenderer.invoke(IPCChannels.deployGetEligibility) as Promise<DeployEligibility>,
   onDeployEligibility: (listener: (eligibility: DeployEligibility) => void) => {
@@ -199,20 +240,30 @@ const api = {
     ipcRenderer.invoke(IPCChannels.communityGetSession) as Promise<CommunitySessionInfo>,
   communityLogin: (request: CommunityLoginRequest) =>
     ipcRenderer.invoke(IPCChannels.communityLogin, request) as Promise<CommunityLoginResponse>,
+  communitySetPassword: (request: CommunitySetPasswordRequest) =>
+    ipcRenderer.invoke(IPCChannels.communitySetPassword, request) as Promise<CommunitySetPasswordResponse>,
+  communityCancelGoogleLogin: () =>
+    ipcRenderer.invoke(IPCChannels.communityCancelGoogleLogin) as Promise<CommunityCancelGoogleLoginResponse>,
   communityLogout: () =>
     ipcRenderer.invoke(IPCChannels.communityLogout) as Promise<CommunityLogoutResponse>,
+  communityGetLlmQuota: () =>
+    ipcRenderer.invoke(IPCChannels.communityGetLlmQuota) as Promise<CommunityGetLlmQuotaResponse>,
   communityListDeployDevices: () =>
     ipcRenderer.invoke(IPCChannels.communityListDeployDevices) as Promise<CommunityListDeployDevicesResponse>,
   communityListMyGames: () =>
     ipcRenderer.invoke(IPCChannels.communityListMyGames) as Promise<CommunityListMyGamesResponse>,
   communityGetPublishOptions: () =>
     ipcRenderer.invoke(IPCChannels.communityGetPublishOptions) as Promise<CommunityGetPublishOptionsResponse>,
+  communityListAppVersions: (request: CommunityListAppVersionsRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityListAppVersions, request) as Promise<CommunityListAppVersionsResponse>,
   communityCreateApp: (request: CommunityCreateAppRequest) =>
     ipcRenderer.invoke(IPCChannels.communityCreateApp, request) as Promise<CommunityCreateAppResponse>,
   communityUploadNativeImage: (request: CommunityUploadNativeImageRequest) =>
     ipcRenderer.invoke(IPCChannels.communityUploadNativeImage, request) as Promise<CommunityUploadNativeImageResponse>,
   communitySubmitAppVersion: (request: CommunitySubmitAppVersionRequest) =>
     ipcRenderer.invoke(IPCChannels.communitySubmitAppVersion, request) as Promise<CommunitySubmitAppVersionResponse>,
+  communityUpdateWorkspaceVersion: (request: CommunityUpdateWorkspaceVersionRequest) =>
+    ipcRenderer.invoke(IPCChannels.communityUpdateWorkspaceVersion, request) as Promise<CommunityUpdateWorkspaceVersionResponse>,
   onCommunitySubmitProgress: (listener: (progress: CommunitySubmitProgress) => void) => {
     const handler = (_: unknown, progress: CommunitySubmitProgress) => listener(progress);
     ipcRenderer.on(IPCChannels.communitySubmitProgress, handler);

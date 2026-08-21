@@ -2,6 +2,7 @@
  * Dartsnut community API + Supabase device state (mirrors dartsnut-community-pc server routes).
  */
 
+import { authNetworkErrorDetails, authNetworkErrorMessage } from "./authNetworkError";
 import { withDartsnutSourceHeader } from "./dartsnutSourceHeader";
 
 export const DEFAULT_BASE_API = "https://api.dartsnut.com";
@@ -87,6 +88,11 @@ export type CommunityVersionRow = {
   description: string;
   status: string;
   createdAt: string | null;
+  updatedAt: string | null;
+  reviewAction: string;
+  reviewComment: string;
+  reviewedAt: string | null;
+  preview: string[];
 };
 
 export type CommunityCreateAppInput = {
@@ -104,6 +110,7 @@ export type CommunityCreateAppInput = {
 export type CommunitySubmitAppVersionInput = {
   projectType: "game" | "widget";
   appSystemId: number | string;
+  appId: string;
   version: string;
   downloadUrl: string;
   downloadMd5: string;
@@ -114,6 +121,7 @@ export type CommunitySubmitAppVersionInput = {
 
 export type CommunitySubmitGameVersionInput = {
   gameSystemId: number | string;
+  gameId: string;
   version: string;
   gameDownloadUrl: string;
   gameDownloadMd5: string;
@@ -130,7 +138,6 @@ export type CommunityVersionSubmitResult = {
 export type CommunityWithdrawAppVersionInput = {
   projectType: "game" | "widget";
   versionId: number | string;
-  appSystemId: number | string;
 };
 
 export type CommunityUploadZipResult = {
@@ -150,6 +157,20 @@ export type CommunityApiError = {
   code: CommunityAuthErrorCode;
   message: string;
   serverMessage?: string;
+};
+
+export type LlmQuotaStatus = {
+  accountId: number;
+  usageDate: string;
+  inputTokens: number;
+  outputTokens: number;
+  usedTokens: number;
+  customLimitTokens: number | null;
+  limitTokens: number;
+  defaultLimitTokens: number;
+  remainingTokens: number;
+  quotaExceeded: boolean;
+  accountingHealth: string;
 };
 
 export function readCommunityConfig(env: NodeJS.ProcessEnv = process.env): CommunityConfig {
@@ -172,6 +193,22 @@ export function readCommunityConfig(env: NodeJS.ProcessEnv = process.env): Commu
     googleDesktopClientSecret,
     hasSupabase: Boolean(supabaseUrl && supabaseAnonKey)
   };
+}
+
+export function normalizeAnalyticsUserId(userInfo: unknown, account: string): string | null {
+  if (!userInfo || typeof userInfo !== "object") {
+    return null;
+  }
+  const record = userInfo as Record<string, unknown>;
+  const accountKey = account.trim().toLowerCase();
+  for (const key of ["id", "member_id", "user_id", "uuid"]) {
+    const value = String(record[key] ?? "").trim();
+    if (!value || value.toLowerCase() === accountKey || value.includes("@") || /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) {
+      continue;
+    }
+    return value;
+  }
+  return null;
 }
 
 export function normalizeApiJson(raw: unknown): ApiEnvelope | null {
@@ -206,6 +243,29 @@ export function mapApiErrorCode(code: number): CommunityAuthErrorCode {
 export function apiServerMessage(parsed: ApiEnvelope): string | undefined {
   const value = parsed.desc || parsed.msg;
   return value ? String(value) : undefined;
+}
+
+function nonNegativeNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+export function normalizeLlmQuotaStatus(raw: unknown): LlmQuotaStatus {
+  const row = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const customLimit = row.custom_limit_tokens;
+  return {
+    accountId: nonNegativeNumber(row.account_id),
+    usageDate: String(row.usage_date || ""),
+    inputTokens: nonNegativeNumber(row.input_tokens),
+    outputTokens: nonNegativeNumber(row.output_tokens),
+    usedTokens: nonNegativeNumber(row.used_tokens),
+    customLimitTokens: customLimit === null || customLimit === undefined ? null : nonNegativeNumber(customLimit),
+    limitTokens: nonNegativeNumber(row.limit_tokens),
+    defaultLimitTokens: nonNegativeNumber(row.default_limit_tokens),
+    remainingTokens: nonNegativeNumber(row.remaining_tokens),
+    quotaExceeded: row.quota_exceeded === true,
+    accountingHealth: String(row.accounting_health || "healthy")
+  };
 }
 
 export function buildInFilter(deviceIds: string[]): string {
@@ -362,6 +422,22 @@ export function normalizeCommunitySizes(list: unknown[]): CommunitySizeRow[] {
     .filter((row): row is CommunitySizeRow => row !== null);
 }
 
+export function normalizeCommunityPreviewUrls(value: unknown): string[] {
+  const normalize = (items: unknown[]): string[] =>
+    [...new Set(items.map((item) => String(item || "").trim()).filter(Boolean))];
+  if (Array.isArray(value)) return normalize(value);
+  if (typeof value !== "string") return [];
+  const text = value.trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed)) return normalize(parsed);
+  } catch {
+    // The legacy API can return a single URL instead of an array.
+  }
+  return [text];
+}
+
 export function normalizeCommunityVersions(list: unknown[], projectType: "game" | "widget"): CommunityVersionRow[] {
   return list
     .map((row) => {
@@ -380,7 +456,12 @@ export function normalizeCommunityVersions(list: unknown[], projectType: "game" 
         version,
         description: String(r.description || r.desc || "").trim(),
         status: String(r.status ?? "").trim(),
-        createdAt: r.created_at != null ? String(r.created_at) : r.createdAt != null ? String(r.createdAt) : null
+        createdAt: r.created_at != null ? String(r.created_at) : r.createdAt != null ? String(r.createdAt) : null,
+        updatedAt: r.updated_at != null ? String(r.updated_at) : r.updatedAt != null ? String(r.updatedAt) : null,
+        reviewAction: String(r.review_action || r.reviewAction || "").trim(),
+        reviewComment: String(r.review_comment || r.reviewComment || "").trim(),
+        reviewedAt: r.reviewed_at != null ? String(r.reviewed_at) : r.reviewedAt != null ? String(r.reviewedAt) : null,
+        preview: normalizeCommunityPreviewUrls(r.preview ?? r.preview_images ?? r.previewImages ?? r.previews)
       };
     })
     .filter((row): row is CommunityVersionRow => row !== null);
@@ -434,7 +515,7 @@ export class CommunityClient {
     account: string,
     password: string
   ): Promise<
-    | { ok: true; token: string; account: string }
+    | { ok: true; token: string; account: string; analyticsUserId: string | null }
     | CommunityApiError
   > {
     if (!this.config.baseApi) {
@@ -462,20 +543,31 @@ export class CommunityClient {
       const token = String(data?.token || "").trim();
       const userInfo = data?.user_info as Record<string, unknown> | undefined;
       const acct = String(userInfo?.account || account).trim();
+      const analyticsUserId = normalizeAnalyticsUserId(userInfo, acct);
       if (!token) {
         return { ok: false, code: "api_error", message: "Login response did not include a token." };
       }
-      return { ok: true, token, account: acct };
+      return { ok: true, token, account: acct, analyticsUserId };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, code: "network_error", message };
+      console.warn("[community] password sign-in request failed", {
+        error: authNetworkErrorDetails(error) || String(error)
+      });
+      return {
+        ok: false,
+        code: "network_error",
+        message: authNetworkErrorMessage(error, {
+          action: "Couldn’t sign in to Dartsnut",
+          endpoint: this.config.baseApi
+        })
+      };
     }
   }
 
   async loginWithGoogleIdToken(
-    idToken: string
+    idToken: string,
+    signal?: AbortSignal
   ): Promise<
-    | { ok: true; token: string; account: string }
+    | { ok: true; token: string; account: string; analyticsUserId: string | null; needsPasswordSetup: boolean }
     | CommunityApiError
   > {
     if (!this.config.baseApi) {
@@ -485,7 +577,8 @@ export class CommunityClient {
       const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/google/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ idToken: idToken.trim() })
+        body: JSON.stringify({ idToken: idToken.trim() }),
+        signal
       });
       const raw = await res.json().catch(() => null);
       const parsed = normalizeApiJson(raw) || {};
@@ -506,7 +599,102 @@ export class CommunityClient {
       if (!token) {
         return { ok: false, code: "api_error", message: "Login response did not include a token." };
       }
-      return { ok: true, token, account: acct || "Google user" };
+      const resolvedAccount = acct || "Google user";
+      return {
+        ok: true,
+        token,
+        account: resolvedAccount,
+        analyticsUserId: normalizeAnalyticsUserId(userInfo, resolvedAccount),
+        needsPasswordSetup: data?.needs_password_setup === true
+      };
+    } catch (error) {
+      console.warn("[community] Google sign-in request failed", {
+        error: authNetworkErrorDetails(error) || String(error)
+      });
+      return {
+        ok: false,
+        code: "network_error",
+        message: authNetworkErrorMessage(error, {
+          action: "Couldn’t sign in to Dartsnut",
+          endpoint: this.config.baseApi
+        })
+      };
+    }
+  }
+
+  async setPassword(
+    token: string,
+    password: string
+  ): Promise<{ ok: true; account: string } | CommunityApiError> {
+    if (!this.config.baseApi) {
+      return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
+    }
+    if (!token.trim()) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    try {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/community/member/set-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json", token: token.trim() },
+        body: JSON.stringify({ password })
+      });
+      const raw = await res.json().catch(() => null);
+      const parsed = normalizeApiJson(raw) || {};
+      const code = Number(parsed.code);
+      if (!isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
+        return {
+          ok: false,
+          code: mapApiErrorCode(code),
+          message: serverMessage || "Unable to set password.",
+          serverMessage
+        };
+      }
+      const data = parsed.data as Record<string, unknown> | null | undefined;
+      const userInfo = data?.user_info as Record<string, unknown> | undefined;
+      return { ok: true, account: String(userInfo?.account || "").trim() };
+    } catch (error) {
+      console.warn("[community] password setup request failed", {
+        error: authNetworkErrorDetails(error) || String(error)
+      });
+      return {
+        ok: false,
+        code: "network_error",
+        message: authNetworkErrorMessage(error, {
+          action: "Couldn’t save your password",
+          endpoint: this.config.baseApi
+        })
+      };
+    }
+  }
+
+  async getLlmQuota(
+    token: string
+  ): Promise<{ ok: true; quota: LlmQuotaStatus } | CommunityApiError> {
+    if (!this.config.baseApi) {
+      return { ok: false, code: "config_missing", message: "Community API URL is not configured." };
+    }
+    if (!token.trim()) {
+      return { ok: false, code: "session_expired", message: "Please sign in first." };
+    }
+    try {
+      const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}/agent/llm/quota`, {
+        method: "GET",
+        headers: { token: token.trim(), Accept: "application/json" }
+      });
+      const raw = await res.json().catch(() => null);
+      const parsed = normalizeApiJson(raw) || {};
+      const code = Number(parsed.code);
+      if (res.status === 403 || !isApiSuccess(code)) {
+        const serverMessage = apiServerMessage(parsed);
+        return {
+          ok: false,
+          code: res.status === 403 ? "session_expired" : mapApiErrorCode(code),
+          message: serverMessage || "Failed to load today’s Dartsnut LLM usage.",
+          serverMessage
+        };
+      }
+      return { ok: true, quota: normalizeLlmQuotaStatus(parsed.data) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, code: "network_error", message };
@@ -1115,12 +1303,21 @@ export class CommunityClient {
   async uploadGameZip(
     token: string,
     file: Blob,
-    filename: string
+    filename: string,
+    appSystemId: number | string,
+    appId: string
   ): Promise<
     | { ok: true; upload: CommunityUploadZipResult }
     | CommunityApiError
   > {
-    const result = await this.uploadFileForUrl(token, "/community/upload/upload-game-zip", file, filename, "package");
+    const result = await this.uploadFileForUrl(
+      token,
+      "/community/upload/upload-game-zip",
+      file,
+      filename,
+      "package",
+      { system_id: String(appSystemId), game_id: appId }
+    );
     if (!result.ok) {
       return result;
     }
@@ -1134,12 +1331,21 @@ export class CommunityClient {
   async uploadWidgetZip(
     token: string,
     file: Blob,
-    filename: string
+    filename: string,
+    appSystemId: number | string,
+    appId: string
   ): Promise<
     | { ok: true; upload: CommunityUploadZipResult }
     | CommunityApiError
   > {
-    const result = await this.uploadFileForUrl(token, "/community/upload/upload-widget-zip", file, filename, "package");
+    const result = await this.uploadFileForUrl(
+      token,
+      "/community/upload/upload-widget-zip",
+      file,
+      filename,
+      "package",
+      { system_id: String(appSystemId), widget_id: appId }
+    );
     if (!result.ok) {
       return result;
     }
@@ -1155,7 +1361,8 @@ export class CommunityClient {
     endpoint: string,
     file: Blob,
     filename: string,
-    label: string
+    label: string,
+    fields: Record<string, string> = {}
   ): Promise<
     | { ok: true; url: string; data: unknown }
     | CommunityApiError
@@ -1169,6 +1376,9 @@ export class CommunityClient {
     try {
       const formData = new FormData();
       formData.append("file", file, filename);
+      for (const [key, value] of Object.entries(fields)) {
+        formData.append(key, value);
+      }
       const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}${endpoint}`, {
         method: "POST",
         headers: { token: token.trim(), Accept: "application/json" },
@@ -1228,6 +1438,8 @@ export class CommunityClient {
           isWidget
             ? {
                 widget_system_id: Number(input.appSystemId),
+                widget_id: input.appId,
+                app_id: input.appId,
                 version: input.version,
                 widget_download_url: input.downloadUrl,
                 widget_download_md5: input.downloadMd5,
@@ -1238,6 +1450,8 @@ export class CommunityClient {
               }
             : {
                 game_system_id: Number(input.appSystemId),
+                game_id: input.appId,
+                app_id: input.appId,
                 version: input.version,
                 game_download_url: input.downloadUrl,
                 game_download_md5: input.downloadMd5,
@@ -1306,66 +1520,36 @@ export class CommunityClient {
       return { ok: false, code: "session_expired", message: "Please sign in first." };
     }
     const isWidget = input.projectType === "widget";
-    const appSystemKey = isWidget ? "widget_system_id" : "game_system_id";
     const versionId = typeof input.versionId === "number" ? input.versionId : String(input.versionId).trim();
-    const appSystemId =
-      typeof input.appSystemId === "number" ? input.appSystemId : String(input.appSystemId).trim();
-    const payload = {
-      id: versionId,
-      version_id: versionId,
-      [appSystemKey]: appSystemId,
-      submit_mode: "draft",
-      status: 0
-    };
-    const endpoints = [
-      `/community/${isWidget ? "widget" : "game"}-version/withdraw`,
-      `/community/${isWidget ? "widget" : "game"}-version/cancel-review`,
-      `/community/${isWidget ? "widget" : "game"}-version/cancel`,
-      `/community/${isWidget ? "widget" : "game"}-version/update`
-    ];
-    let lastMessage = `Failed to pull ${input.projectType} version out of review.`;
-    let lastServerMessage: string | undefined;
-    let lastCode: CommunityAuthErrorCode = "api_error";
-    for (const endpoint of endpoints) {
-      try {
-        const res = await this.fetchWithDartsnutHeaders(`${this.config.baseApi}${endpoint}`, {
+    try {
+      const res = await this.fetchWithDartsnutHeaders(
+        `${this.config.baseApi}/community/${isWidget ? "widget" : "game"}-version/withdraw`,
+        {
           method: "POST",
           headers: { token: token.trim(), "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify(payload)
-        });
-        const raw = await res.json().catch(() => null);
-        const parsed = normalizeApiJson(raw) || {};
-        const code = Number(parsed.code);
-        const serverMessage = apiServerMessage(parsed);
-        const message = serverMessage || lastMessage;
-        if (res.status === 403) {
-          return {
-            ok: false,
-            code: "session_expired",
-            message: message || "Please sign in again.",
-            serverMessage
-          };
+          body: JSON.stringify({ id: versionId })
         }
-        if (res.status === 404 || code === 404) {
-          lastMessage = message;
-          lastServerMessage = serverMessage;
-          continue;
-        }
-        if (!isApiSuccess(code)) {
-          lastCode = mapApiErrorCode(code);
-          lastMessage = message;
-          lastServerMessage = serverMessage;
-          continue;
-        }
-        const data = parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : {};
-        return { ok: true, status: String(data.status ?? "0") };
-      } catch (error) {
-        lastCode = "network_error";
-        lastMessage = error instanceof Error ? error.message : String(error);
-        lastServerMessage = undefined;
+      );
+      const raw = await res.json().catch(() => null);
+      const parsed = normalizeApiJson(raw) || {};
+      const code = Number(parsed.code);
+      const serverMessage = apiServerMessage(parsed);
+      if (res.status === 403) {
+        return { ok: false, code: "session_expired", message: serverMessage || "Please sign in again.", serverMessage };
       }
+      if (!isApiSuccess(code)) {
+        return {
+          ok: false,
+          code: mapApiErrorCode(code),
+          message: serverMessage || `Failed to withdraw ${input.projectType} version.`,
+          serverMessage
+        };
+      }
+      const data = parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : {};
+      return { ok: true, status: String(data.status ?? "-2") };
+    } catch (error) {
+      return { ok: false, code: "network_error", message: error instanceof Error ? error.message : String(error) };
     }
-    return { ok: false, code: lastCode, message: lastMessage, serverMessage: lastServerMessage };
   }
 
   async submitGameVersion(
@@ -1378,6 +1562,7 @@ export class CommunityClient {
     return this.submitAppVersion(token, {
       projectType: "game",
       appSystemId: input.gameSystemId,
+      appId: input.gameId,
       version: input.version,
       downloadUrl: input.gameDownloadUrl,
       downloadMd5: input.gameDownloadMd5,
@@ -1388,6 +1573,9 @@ export class CommunityClient {
   }
 }
 
-export function createCommunityClient(env: NodeJS.ProcessEnv = process.env): CommunityClient {
-  return new CommunityClient(readCommunityConfig(env));
+export function createCommunityClient(
+  env: NodeJS.ProcessEnv = process.env,
+  fetchImpl: FetchLike = fetch
+): CommunityClient {
+  return new CommunityClient(readCommunityConfig(env), fetchImpl);
 }

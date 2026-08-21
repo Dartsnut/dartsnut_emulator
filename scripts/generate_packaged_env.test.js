@@ -7,11 +7,12 @@ const test = require("node:test");
 
 const repoRoot = path.resolve(__dirname, "..");
 
-test("generate_packaged_env emits decryption key but not legacy Xiaomi credentials", () => {
+test("generate_packaged_env excludes all Dartsnut LLM credentials", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "packaged-env-"));
   try {
     fs.mkdirSync(path.join(tempRoot, "scripts"), { recursive: true });
-    fs.mkdirSync(path.join(tempRoot, "apps", "desktop"), { recursive: true });
+    fs.mkdirSync(path.join(tempRoot, "apps", "desktop", "dist-electron"), { recursive: true });
+    fs.writeFileSync(path.join(tempRoot, "apps", "desktop", "dist-electron", "dartsnutLlmConfig.js"), "legacy");
     fs.copyFileSync(
       path.join(repoRoot, "scripts", "generate_packaged_env.mjs"),
       path.join(tempRoot, "scripts", "generate_packaged_env.mjs")
@@ -19,12 +20,17 @@ test("generate_packaged_env emits decryption key but not legacy Xiaomi credentia
     fs.writeFileSync(
       path.join(tempRoot, ".env"),
       [
-        "DARTSNUT_MODEL_DECRYPTION_KEY=decrypt-secret",
         "DARTSNUT_GOOGLE_DESKTOP_CLIENT_ID=desktop-client",
         "DARTSNUT_GOOGLE_DESKTOP_CLIENT_SECRET=desktop-secret",
         "XIAOMI_BASE_URL=https://legacy.example.com",
         "XIAOMI_API_KEY=legacy-key",
-        "XIAOMI_MODEL=legacy-model"
+        "XIAOMI_MODEL=legacy-model",
+        "GPT_BASE_URL=https://gpt.example.com",
+        "GPT_API_KEY=gpt-key",
+        "GPT_MODEL=gpt-model",
+        "OPENAI_BASE_URL=https://openai.example.com",
+        "OPENAI_API_KEY=openai-key",
+        "OPENAI_MODEL=openai-model"
       ].join("\n")
     );
 
@@ -35,10 +41,17 @@ test("generate_packaged_env emits decryption key but not legacy Xiaomi credentia
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const generated = fs.readFileSync(path.join(tempRoot, "apps", "desktop", "packagedEnv.generated.ts"), "utf8");
-    assert.match(generated, /DARTSNUT_MODEL_DECRYPTION_KEY/);
+    assert.doesNotMatch(generated, /DARTSNUT_MODEL_DECRYPTION_KEY/);
     assert.match(generated, /DARTSNUT_GOOGLE_DESKTOP_CLIENT_ID/);
     assert.match(generated, /DARTSNUT_GOOGLE_DESKTOP_CLIENT_SECRET/);
-    assert.doesNotMatch(generated, /XIAOMI_BASE_URL|XIAOMI_API_KEY|XIAOMI_MODEL/);
+    assert.doesNotMatch(
+      generated,
+      /XIAOMI_(?:BASE_URL|API_KEY|MODEL)|GPT_(?:BASE_URL|API_KEY|MODEL)|OPENAI_(?:BASE_URL|API_KEY|MODEL)/
+    );
+    assert.equal(
+      fs.existsSync(path.join(tempRoot, "apps", "desktop", "dist-electron", "dartsnutLlmConfig.js")),
+      false
+    );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

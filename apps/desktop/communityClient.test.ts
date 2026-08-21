@@ -9,10 +9,13 @@ const {
   isSessionExpiredCode,
   mergeDeployDevices,
   normalizeApiJson,
+  normalizeAnalyticsUserId,
   normalizeBoundDevices,
   normalizeCommunityGameCategories,
   normalizeCommunityGameControls,
+  normalizeCommunityPreviewUrls,
   normalizeCommunityVersions,
+  normalizeLlmQuotaStatus,
   pickUploadMd5,
   pickUploadUrl,
   readCommunityConfig
@@ -80,7 +83,19 @@ test("normalizeCommunityGameControls maps control options", () => {
 test("normalizeCommunityVersions maps game and widget version rows", () => {
   assert.deepEqual(
     normalizeCommunityVersions([
-      { id: 9, game_system_id: 2, version: "1.2.3", status: 1, description: "review", created_at: "2026-01-02" },
+      {
+        id: 9,
+        game_system_id: 2,
+        version: "1.2.3",
+        status: -1,
+        description: "review",
+        created_at: "2026-01-02",
+        updated_at: "2026-01-03",
+        review_action: "reject",
+        review_comment: "Add clearer instructions.",
+        reviewed_at: "2026-01-03",
+        preview: '["https://cdn.example/one.png", "https://cdn.example/two.webp"]'
+      },
       { id: "", version: "" }
     ], "game"),
     [
@@ -90,8 +105,13 @@ test("normalizeCommunityVersions maps game and widget version rows", () => {
         projectType: "game",
         version: "1.2.3",
         description: "review",
-        status: "1",
-        createdAt: "2026-01-02"
+        status: "-1",
+        createdAt: "2026-01-02",
+        updatedAt: "2026-01-03",
+        reviewAction: "reject",
+        reviewComment: "Add clearer instructions.",
+        reviewedAt: "2026-01-03",
+        preview: ["https://cdn.example/one.png", "https://cdn.example/two.webp"]
       }
     ]
   );
@@ -99,6 +119,19 @@ test("normalizeCommunityVersions maps game and widget version rows", () => {
     normalizeCommunityVersions([{ id: "w1", widget_system_id: "7", version: "2.0.0" }], "widget")[0]?.appSystemId,
     "7"
   );
+});
+
+
+test("normalizeCommunityPreviewUrls accepts API arrays and serialized legacy arrays", () => {
+  assert.deepEqual(
+    normalizeCommunityPreviewUrls([" https://cdn.example/one.png ", "https://cdn.example/one.png", ""]),
+    ["https://cdn.example/one.png"]
+  );
+  assert.deepEqual(
+    normalizeCommunityPreviewUrls('["https://cdn.example/one.png", "https://cdn.example/two.webp"]'),
+    ["https://cdn.example/one.png", "https://cdn.example/two.webp"]
+  );
+  assert.deepEqual(normalizeCommunityPreviewUrls("https://cdn.example/only.jpg"), ["https://cdn.example/only.jpg"]);
 });
 
 test("upload result helpers accept community response aliases", () => {
@@ -131,6 +164,113 @@ test("CommunityClient adds source header to Dartsnut API requests", async () => 
   assert.equal(calls[0].init.headers.source, "agent");
 });
 
+test("Google login reports when the account needs a password", async () => {
+  const client = new CommunityClient(
+    readCommunityConfig({}),
+    async () => ({
+      status: 200,
+      json: async () => ({
+        code: 1001,
+        data: {
+          token: "google-token",
+          needs_password_setup: true,
+          user_info: { id: 8, account: "person@example.com" }
+        }
+      })
+    })
+  );
+
+  const result = await client.loginWithGoogleIdToken("google-id-token");
+
+  assert.deepEqual(result, {
+    ok: true,
+    token: "google-token",
+    account: "person@example.com",
+    analyticsUserId: "8",
+    needsPasswordSetup: true
+  });
+});
+
+test("setPassword sends the community token and new password", async () => {
+  const calls = [];
+  const client = new CommunityClient(
+    readCommunityConfig({}),
+    async (url, init) => {
+      calls.push({ url, init });
+      return {
+        status: 200,
+        json: async () => ({ code: 1001, data: { user_info: { account: "person@example.com" } } })
+      };
+    }
+  );
+
+  const result = await client.setPassword("community-token", "new-password");
+
+  assert.deepEqual(result, { ok: true, account: "person@example.com" });
+  assert.equal(calls[0]?.url, "https://api.dartsnut.com/community/member/set-password");
+  assert.equal(calls[0]?.init.headers.token, "community-token");
+  assert.deepEqual(JSON.parse(calls[0]?.init.body), { password: "new-password" });
+});
+
+test("normalizeLlmQuotaStatus maps the member quota response", () => {
+  assert.deepEqual(normalizeLlmQuotaStatus({
+    account_id: 7,
+    usage_date: "2026-07-30",
+    input_tokens: "1200",
+    output_tokens: 300,
+    used_tokens: "1500",
+    custom_limit_tokens: null,
+    limit_tokens: "10000000",
+    default_limit_tokens: 10000000,
+    remaining_tokens: "9998500",
+    quota_exceeded: false,
+    accounting_health: "healthy"
+  }), {
+    accountId: 7,
+    usageDate: "2026-07-30",
+    inputTokens: 1200,
+    outputTokens: 300,
+    usedTokens: 1500,
+    customLimitTokens: null,
+    limitTokens: 10000000,
+    defaultLimitTokens: 10000000,
+    remainingTokens: 9998500,
+    quotaExceeded: false,
+    accountingHealth: "healthy"
+  });
+});
+
+test("getLlmQuota reads the authenticated member quota", async () => {
+  const calls = [];
+  const client = new CommunityClient(
+    readCommunityConfig({}),
+    async (url, init) => {
+      calls.push({ url, init });
+      return {
+        status: 200,
+        json: async () => ({
+          code: 1001,
+          data: {
+            account_id: 7,
+            usage_date: "2026-07-30",
+            used_tokens: 42,
+            limit_tokens: 100,
+            remaining_tokens: 58
+          }
+        })
+      };
+    }
+  );
+
+  const result = await client.getLlmQuota("community-token");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.quota.usedTokens, 42);
+  assert.equal(calls[0]?.url, "https://api.dartsnut.com/agent/llm/quota");
+  assert.equal(calls[0]?.init.headers.token, "community-token");
+  assert.equal(calls[0]?.init.headers.source, "agent");
+});
+
 test("CommunityClient adds source header to Dartsnut Supabase requests", async () => {
   const calls = [];
   const client = new CommunityClient(
@@ -153,7 +293,7 @@ test("CommunityClient adds source header to Dartsnut Supabase requests", async (
   assert.equal(calls[0].init.headers.source, "agent");
 });
 
-test("withdrawAppVersion falls back across review withdrawal routes", async () => {
+test("uploadWidgetZip includes required widget identity form fields", async () => {
   const calls = [];
   const client = new CommunityClient(
     {
@@ -168,36 +308,96 @@ test("withdrawAppVersion falls back across review withdrawal routes", async () =
     },
     async (url, init) => {
       calls.push({ url, init });
-      if (String(url).endsWith("/community/game-version/withdraw")) {
-        return {
-          status: 404,
-          json: async () => ({ code: 404, msg: "missing" })
-        };
-      }
+      return { status: 200, json: async () => ({ code: 1001, data: { url: "https://cdn.example/widget.tar.gz", md5: "abc" } }) };
+    }
+  );
+
+  const result = await client.uploadWidgetZip("token-1", new Blob(["widget"]), "scoreboard.tar.gz", 12, "scoreboard");
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0]?.url, "https://api.example.com/community/upload/upload-widget-zip");
+  const form = calls[0]?.init.body;
+  assert.equal(form.get("system_id"), "12");
+  assert.equal(form.get("widget_id"), "scoreboard");
+});
+
+test("submitAppVersion includes the canonical widget app id", async () => {
+  const calls = [];
+  const client = new CommunityClient(
+    {
+      baseApi: "https://api.example.com",
+      supabaseUrl: "",
+      supabaseAnonKey: "",
+      supabaseDeviceTable: "remote_devices",
+      googleClientId: "",
+      googleDesktopClientId: "",
+      googleDesktopClientSecret: "",
+      hasSupabase: false
+    },
+    async (url, init) => {
+      calls.push({ url, init });
+      return { status: 200, json: async () => ({ code: 1001, data: { id: 8, status: 1 } }) };
+    }
+  );
+
+  const result = await client.submitAppVersion("token-1", {
+    projectType: "widget",
+    appSystemId: 12,
+    appId: "scoreboard",
+    version: "1.0.1",
+    downloadUrl: "https://cdn.example/scoreboard.tar.gz",
+    downloadMd5: "md5",
+    description: "Release notes",
+    preview: ["https://cdn.example/preview.png"]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0]?.url, "https://api.example.com/community/widget-version/add");
+  assert.deepEqual(JSON.parse(calls[0]?.init.body), {
+    widget_system_id: 12,
+    widget_id: "scoreboard",
+    app_id: "scoreboard",
+    version: "1.0.1",
+    widget_download_url: "https://cdn.example/scoreboard.tar.gz",
+    widget_download_md5: "md5",
+    description: "Release notes",
+    fields: "",
+    preview: ["https://cdn.example/preview.png"],
+    submit_mode: "review"
+  });
+});
+
+test("withdrawAppVersion calls the permanent withdrawal endpoint", async () => {
+  const calls = [];
+  const client = new CommunityClient(
+    {
+      baseApi: "https://api.example.com",
+      supabaseUrl: "",
+      supabaseAnonKey: "",
+      supabaseDeviceTable: "remote_devices",
+      googleClientId: "",
+      googleDesktopClientId: "",
+      googleDesktopClientSecret: "",
+      hasSupabase: false
+    },
+    async (url, init) => {
+      calls.push({ url, init });
       return {
         status: 200,
-        json: async () => ({ code: 1001, data: { status: 0 } })
+        json: async () => ({ code: 1001, data: { id: 9, status: -2 } })
       };
     }
   );
 
   const result = await client.withdrawAppVersion("token-1", {
     projectType: "game",
-    versionId: 9,
-    appSystemId: 2
+    versionId: 9
   });
 
-  assert.deepEqual(result, { ok: true, status: "0" });
-  assert.equal(calls.length, 2);
+  assert.deepEqual(result, { ok: true, status: "-2" });
+  assert.equal(calls.length, 1);
   assert.equal(calls[0]?.url, "https://api.example.com/community/game-version/withdraw");
-  assert.equal(calls[1]?.url, "https://api.example.com/community/game-version/cancel-review");
-  assert.deepEqual(JSON.parse(calls[1]?.init.body), {
-    id: 9,
-    version_id: 9,
-    game_system_id: 2,
-    submit_mode: "draft",
-    status: 0
-  });
+  assert.deepEqual(JSON.parse(calls[0]?.init.body), { id: 9 });
 });
 
 test("mergeDeployDevices pulls ip and ssid from state", () => {
@@ -238,4 +438,50 @@ test("readCommunityConfig reads desktop Google OAuth client id", () => {
   assert.equal(cfg.googleClientId, "web-client");
   assert.equal(cfg.googleDesktopClientId, "desktop-client");
   assert.equal(cfg.googleDesktopClientSecret, "desktop-secret");
+});
+
+
+test("normalizeAnalyticsUserId only accepts opaque member identifiers", () => {
+  assert.equal(normalizeAnalyticsUserId({ id: "member-123", account: "person@example.com" }, "person@example.com"), "member-123");
+  assert.equal(normalizeAnalyticsUserId({ id: "person@example.com", uuid: "" }, "person@example.com"), null);
+  assert.equal(normalizeAnalyticsUserId({ user_id: "192.168.1.4" }, "person@example.com"), null);
+});
+
+test("password login turns a nested fetch error into an actionable sign-in message", async () => {
+  const dnsError = Object.assign(new Error("getaddrinfo ENOTFOUND api.dartsnut.com"), {
+    code: "ENOTFOUND",
+    hostname: "api.dartsnut.com"
+  });
+  const fetchError = Object.assign(new TypeError("fetch failed"), { cause: dnsError });
+  const client = new CommunityClient(readCommunityConfig({}), async () => {
+    throw fetchError;
+  });
+
+  const result = await client.loginWithPassword("person@example.com", "password");
+
+  assert.deepEqual(result, {
+    ok: false,
+    code: "network_error",
+    message: "Couldn’t sign in to Dartsnut because api.dartsnut.com could not be found. Check your internet, DNS, or VPN settings, then try again."
+  });
+});
+
+
+test("createCommunityClient uses the injected cloud fetch", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return new Response(JSON.stringify({
+      code: 1001,
+      data: { token: "token", user_info: { account: "person@example.com" } }
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const { createCommunityClient } = require("./dist-electron/communityClient.js");
+  const client = createCommunityClient({}, fetchImpl);
+
+  const result = await client.loginWithPassword("person@example.com", "password");
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://api.dartsnut.com/community/member/login-in");
 });

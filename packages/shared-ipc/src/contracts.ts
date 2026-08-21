@@ -1,17 +1,15 @@
-import { POST_INTAKE_BUILD_REQUEST_PREFIX } from "./postIntakeCreatorPrompt";
+import type { ChatMediaAttachment } from "./chatMediaAttachments";
+import type { AgentProfileId } from "./agentProfiles";
 
 export const IPCChannels = {
   bootstrapState: "agent:bootstrap-state",
-  /** Main → renderer: workspace/bootstrap changed (temp allocation, pick folder, new project). */
+  /** Main -> renderer: active project/chat or workspace bootstrap changed. */
   bootstrapStateChanged: "agent:bootstrap-state-changed",
   pickWorkspace: "agent:pick-workspace",
-  /** Completes a blocking `dartsnut_ask_question` call for project type or widget size (chip row). */
-  intakeSubmitQuestionAnswer: "agent:intake-submit-question-answer",
   /** Completes a blocking machine selection/input question for MCP connection. */
   machineMcpSubmitQuestionAnswer: "agent:machine-mcp-submit-question-answer",
-  startNewProject: "agent:start-new-project",
-  /** Copy/move the tracked temp workspace to a user-chosen folder and clear temp tracking. */
-  saveTempWorkspace: "agent:save-temp-workspace",
+  /** Completes a blocking question asked by the active agent run. */
+  agentQuestionSubmitAnswer: "agent:question-submit-answer",
   /** Main → renderer: clear chat/logs/session UI (bootstrap comes from invoke return values). */
   sessionReset: "agent:session-reset",
   sendPrompt: "agent:send-prompt",
@@ -20,6 +18,15 @@ export const IPCChannels = {
   subscribeEvents: "agent:subscribe-events",
   getWorkspaceSessionSummary: "agent:get-workspace-session-summary",
   resetWorkspaceSession: "agent:reset-workspace-session",
+  projectsList: "agent:projects-list",
+  projectCreate: "agent:project-create",
+  projectRemove: "agent:project-remove",
+  projectSelect: "agent:project-select",
+  chatArchive: "agent:chat-archive",
+  chatGenerateTitle: "agent:chat-generate-title",
+  chatCreate: "agent:chat-create",
+  chatSelect: "agent:chat-select",
+  projectSwitchProgress: "agent:project-switch-progress",
   getProviderSettings: "agent:get-provider-settings",
   saveProviderSettings: "agent:save-provider-settings",
   getPythonRuntimeStatus: "agent:get-python-runtime-status",
@@ -44,7 +51,17 @@ export const IPCChannels = {
   appUpdateStatus: "app:update-status",
   /** Renderer → main: install an already-downloaded desktop app update and relaunch. */
   appUpdateInstallNow: "app:update-install-now",
+  /** Renderer invokes to read whether automatic update downloads are enabled. */
+  appUpdateAutoDownload: "app:update-auto-download",
+  /** Renderer invokes to persist automatic update download preference. */
+  appUpdateSetAutoDownload: "app:update-set-auto-download",
+  /** Renderer → main: download an available desktop app update on demand. */
+  appUpdateDownload: "app:update-download",
+  /** Renderer → main: manually check for a desktop app update. */
+  appUpdateCheck: "app:update-check",
   deployGetEligibility: "deploy:get-eligibility",
+  widgetConfigGet: "widget-config:get",
+  widgetConfigChanged: "widget-config:changed",
   /** Main → renderer: workspace `conf.json` created/changed; payload is {@link DeployEligibility}. */
   deployEligibilityChanged: "deploy:eligibility-changed",
   deployConnect: "deploy:connect",
@@ -57,12 +74,17 @@ export const IPCChannels = {
   deployLog: "deploy:log",
   communityGetSession: "community:get-session",
   communityLogin: "community:login",
+  communitySetPassword: "community:set-password",
+  communityCancelGoogleLogin: "community:cancel-google-login",
   communityLogout: "community:logout",
+  communityGetLlmQuota: "community:get-llm-quota",
   communityListDeployDevices: "community:list-deploy-devices",
   communityListMyGames: "community:list-my-games",
   communityGetPublishOptions: "community:get-publish-options",
+  communityListAppVersions: "community:list-app-versions",
   communityCreateApp: "community:create-app",
   communitySubmitAppVersion: "community:submit-app-version",
+  communityUpdateWorkspaceVersion: "community:update-workspace-version",
   /** Main → renderer: current package/upload/review stage for the blocking submission overlay. */
   communitySubmitProgress: "community:submit-progress",
   communityWithdrawAppVersion: "community:withdraw-app-version",
@@ -95,11 +117,12 @@ export interface WindowChromeInsets {
 }
 
 /** Matches renderer `ThemeId`; used to style Windows `titleBarOverlay` and `nativeTheme`. */
-export type ShellUiTheme = "dark" | "light";
+export type ShellUiTheme = "system" | "dark" | "light";
 
 export type AppUpdateStatusKind =
   | "idle"
   | "checking"
+  | "available"
   | "downloading"
   | "ready"
   | "not_available"
@@ -117,6 +140,14 @@ export type AppUpdateInstallResponse =
   | { ok: true }
   | { ok: false; reason: "not_ready" | "cancelled" };
 
+export type AppUpdateDownloadResponse =
+  | { ok: true }
+  | { ok: false; reason: "not_available" | "already_downloading" | "failed"; message?: string };
+
+export type AppUpdateCheckResponse =
+  | { ok: true }
+  | { ok: false; reason: "disabled" | "already_checking" | "already_ready" | "failed"; message?: string };
+
 export type ProviderStatus = "ready" | "missing_config" | "invalid";
 
 export interface PythonRuntimeProgress {
@@ -129,35 +160,38 @@ export interface PythonRuntimeProgress {
 
 export interface BootstrapState {
   workspaceRoot: string | null;
+  activeProjectId: string | null;
+  activeChatId: string | null;
   providerStatus: ProviderStatus;
   firstRunComplete: boolean;
-  /** True when `workspaceRoot` is the persisted unsaved temp project directory. */
-  isTemporaryWorkspace: boolean;
-  /** True when the active workspace has no `conf.json` yet (run creation intake before creator tools). */
-  needsCreationIntake: boolean;
 }
 
-/** IPC return from `saveTempWorkspace`. */
-export type SaveTempWorkspaceResponse =
-  | { ok: true; state: BootstrapState }
-  | {
-    ok: false;
-    reason:
-    | "not_temporary"
-    | "cancelled"
-    | "non_empty_destination"
-    | "copy_failed"
-    | "missing_workspace";
-    message?: string;
-  };
+export interface ProjectRecord { id: string; name: string; folderPath: string; createdAt: string; updatedAt: string; lastOpenedAt: string; migrationComplete?: boolean; }
+export interface ChatRecord { id: string; projectId: string; title: string; createdAt: string; updatedAt: string; archivedAt?: string; }
+export interface ProjectTree { projects: ProjectRecord[]; chats: ChatRecord[]; }
+export interface ProjectCreateRequest {
+  folderPath: string;
+  name?: string;
+  /** Creates and selects a persona-bound chat as part of project creation. */
+  agentProfileId?: AgentProfileId;
+}
+export interface ProjectSelectRequest { projectId: string | null; chatId?: string; }
+export interface ChatCreateRequest { projectId: string; agentProfileId: AgentProfileId; }
+export interface ChatGenerateTitleRequest { chatId: string; firstUserMessage: string; }
+export type ProjectSwitchProgress = { active: boolean; stage: "confirming" | "stopping-deployment" | "stopping-emulator" | "switching" | "reloading" | "ready" | "error"; message?: string };
 
 export type AgentSessionIntent = "auto" | "resume" | "fresh";
 
 export interface PromptRequest {
   prompt: string;
+  /** Media files dropped onto the chat composer. Main copies these into the workspace before the agent sees them. */
+  chatMediaAttachments?: ChatMediaAttachment[];
   projectType?: ProjectType;
   widgetSize?: WidgetSize;
   workspacePath?: string;
+  projectId?: string;
+  chatId?: string;
+  agentProfileId?: AgentProfileId;
   templateMode?: "game-creator" | "widget-creator" | "asset-applier";
   /**
    * Controls loading vs resetting on-disk workspace agent session (see `AgentSessionWorkspaceSummary`).
@@ -166,22 +200,6 @@ export interface PromptRequest {
   agentSession?: {
     intent: AgentSessionIntent;
   };
-  /**
-   * When true and no workspace is selected yet, main runs a short **creation intake** turn
-   * (host tools `dartsnut_ask_question` + `dartsnut_project_intake`), then may chain into the normal
-   * creator run once workspace + routing are resolved.
-   */
-  creationIntake?: boolean;
-  /**
-   * With `creationIntake`, records a size the user chose from the in-app widget size chip row.
-   * Main tells the model via an `[UI] …` line so intake can call `set_widget_size` without re-asking.
-   */
-  intakeWidgetSizeChoice?: WidgetSize;
-  /**
-   * With `creationIntake`, records **game** vs **widget** from the in-app type chip row.
-   * Main pre-seeds intake and adds an `[UI] …` line so the model calls `set_project_type` without re-asking.
-   */
-  intakeProjectTypeChoice?: ProjectType;
   /** Required when `templateMode === "asset-applier"`. */
   assetApply?: {
     slotIds: string[];
@@ -189,9 +207,19 @@ export interface PromptRequest {
   };
 }
 
-/** IPC return from `sendPrompt` — optional routing snapshot for the renderer session chrome. */
+export type DartsnutLlmFailureReason =
+  | "auth_required"
+  | "no_bound_machine"
+  | "daily_quota_exceeded"
+  | "run_already_active"
+  | "run_expired"
+  | "service_unavailable";
+
+/** IPC return from `sendPrompt` — optional routing snapshot or typed Dartsnut LLM rejection. */
 export interface SendPromptResponse {
   ok: boolean;
+  failureReason?: DartsnutLlmFailureReason;
+  message?: string;
   sessionRouting?: {
     templateMode: "game-creator" | "widget-creator";
     projectType: ProjectType;
@@ -221,12 +249,14 @@ export interface AgentSessionTranscriptLine {
 
 /** Snapshot for agent session banner + history hydrate. */
 export interface AgentSessionWorkspaceSummary {
+  chatId: string | null;
   hasPersistedSession: boolean;
   sessionId: string | null;
   updatedAt: string | null;
   templateMode: string | null;
   transcriptTail: AgentSessionTranscriptLine[];
   tokenUsage?: AgentSessionTokenUsage | null;
+  agentProfileId: AgentProfileId | null;
 }
 
 export type ProjectType = "game" | "widget";
@@ -235,27 +265,6 @@ export type WidgetSize = "128x160" | "128x128" | "128x64" | "64x32";
 
 /** Supported physical widget display sizes (WxH string tokens). */
 export const WIDGET_DISPLAY_SIZES: readonly WidgetSize[] = ["128x160", "128x128", "128x64", "64x32"];
-
-/**
- * Creation-intake assistant text must include this exact substring when (and only when) asking the
- * user to choose **game** vs **widget**. The desktop app then shows the Game/Widget chip row.
- */
-export const INTAKE_UI_SHOW_PROJECT_TYPE_MARKER = "@dartsnut-intake-ui:project-type";
-
-/**
- * Creation-intake assistant text must include this exact substring when (and only when) asking
- * the user to pick a **widget display size**. The desktop app then shows the size chip row.
- */
-export const INTAKE_UI_SHOW_WIDGET_SIZE_MARKER = "@dartsnut-intake-ui:widget-size";
-
-/** Payload from the renderer when the user picks a chip during `dartsnut_ask_question`. */
-export type IntakeSubmitQuestionAnswerRequest =
-  | { kind: "project_type"; value: ProjectType }
-  | { kind: "widget_size"; value: WidgetSize };
-
-export type IntakeSubmitQuestionAnswerResponse =
-  | { ok: true }
-  | { ok: false; reason: "no_pending" | "kind_mismatch" | "invalid_value" };
 
 export type MachineMcpQuestionMachine = {
   deviceId: string;
@@ -274,16 +283,32 @@ export type MachineMcpSubmitQuestionAnswerResponse =
   | { ok: true }
   | { ok: false; reason: "no_pending" | "invalid_value" };
 
+export type AgentQuestionOption = {
+  value: string;
+  label: string;
+};
+
+export type AgentQuestionPrompt = {
+  question: string;
+  options?: AgentQuestionOption[];
+  allowFreeText?: boolean;
+  freeTextPlaceholder?: string;
+};
+
+export type AgentQuestionAnswerRequest = {
+  questionId: string;
+  value: string;
+};
+
+export type AgentQuestionAnswerResponse =
+  | { ok: true }
+  | { ok: false; reason: "no_pending" | "stale_question" | "invalid_value" };
+
 const TRANSCRIPT_USER_REQUEST_SECTION = "\n\nUser request:\n";
 
-/** Prefix line inside the post-intake creator user prompt (see `buildPostIntakeCreatorUserPrompt`). */
-const TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX =
-  "Original first message (use only if it already states what to build):";
-
 /**
- * Routed agent turns send a long `user` message (creator template + JSON context + instructions).
- * The timeline should only show what the human typed (or nothing when the host supplied only
- * boilerplate after intake).
+ * Routed agent turns may append creation context before the human request.
+ * The timeline only shows what the human typed.
  */
 export function transcriptUserBubbleText(fullUserPrompt: string): string | null {
   const trimmed = fullUserPrompt.trim();
@@ -297,49 +322,7 @@ export function transcriptUserBubbleText(fullUserPrompt: string): string | null 
     return null;
   }
 
-  const buildAt = body.indexOf(POST_INTAKE_BUILD_REQUEST_PREFIX);
-  if (buildAt >= 0) {
-    const afterBuild = body.slice(buildAt + POST_INTAKE_BUILD_REQUEST_PREFIX.length).trim();
-    if (
-      afterBuild.length === 0 ||
-      afterBuild === "(none recorded before intake)" ||
-      afterBuild === "There was no substantive first message before intake."
-    ) {
-      return null;
-    }
-    return afterBuild;
-  }
-
-  const originalAt = body.indexOf(TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX);
-  if (originalAt >= 0) {
-    const afterOriginal = body.slice(originalAt + TRANSCRIPT_POST_INTAKE_ORIGINAL_PREFIX.length).trim();
-    return afterOriginal.length > 0 ? afterOriginal : null;
-  }
-
-  if (body === "There was no substantive first message before intake.") {
-    return null;
-  }
-  if (body.includes("Creation **intake just finished**")) {
-    return null;
-  }
-
   return body;
-}
-
-/** Remove intake UI control tokens from text shown in the chat timeline. */
-export function stripIntakeUiMarkers(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => {
-      const trimmed = line.trim();
-      if (trimmed === INTAKE_UI_SHOW_PROJECT_TYPE_MARKER || trimmed === INTAKE_UI_SHOW_WIDGET_SIZE_MARKER) {
-        return "";
-      }
-      return line
-        .replaceAll(INTAKE_UI_SHOW_PROJECT_TYPE_MARKER, "")
-        .replaceAll(INTAKE_UI_SHOW_WIDGET_SIZE_MARKER, "");
-    })
-    .join("\n");
 }
 
 export interface PickWorkspaceRequest {
@@ -353,7 +336,7 @@ export interface PickWorkspaceResponse {
   reason?: "cancelled" | "non_empty";
 }
 
-export interface UserDefineProviderSettings {
+export interface CustomProviderSettings {
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -363,48 +346,32 @@ export type ProviderId = "dartsnut-llm" | "custom";
 
 export interface ProviderSettings {
   activeProvider: ProviderId;
-  custom: UserDefineProviderSettings;
-  /** @deprecated Legacy alias for `custom`; kept for older callers during migration. */
-  userDefine?: UserDefineProviderSettings;
+  custom: CustomProviderSettings;
 }
 
 export type SaveProviderSettingsRequest = ProviderSettings;
 
+export type AgentSdkStreamEvent =
+  | {
+    type: "raw_model_stream_event";
+    source?: string;
+    data: unknown;
+  }
+  | {
+    type: "run_item_stream_event";
+    name: string;
+    item: unknown;
+  }
+  | {
+    type: "agent_updated_stream_event";
+    agent: unknown;
+  };
+
 export type AgentEvent =
-  | {
-    type: "stream";
-    delta: string;
-    at: number;
-  }
-  | {
-    /** Incremental model reasoning (e.g. wire `reasoning_content`); timeline renders separately from assistant content. */
-    type: "reasoning_stream";
-    /** Correlates all reasoning chunks and completion for a single completion step. */
-    reasoningId: string;
-    delta: string;
-    at: number;
-  }
-  | {
-    /** End of one completion step’s reasoning stream; renderer finalizes the active Thought block. */
-    type: "reasoning_done";
-    /** Must match the corresponding `reasoning_stream.reasoningId`. */
-    reasoningId: string;
-    at: number;
-  }
+  | AgentSdkStreamEvent
   | {
     type: "status";
     message: string;
-    at: number;
-  }
-  | {
-    /** Incremental tool-call argument streaming progress (used for large file writes). */
-    type: "tool_call_delta";
-    callId: string;
-    toolName: string;
-    /** Current accumulated argument JSON text from model streaming. */
-    argumentsJson: string;
-    /** Best-effort file path extracted from partial arguments, when available. */
-    path?: string;
     at: number;
   }
   | {
@@ -424,28 +391,18 @@ export type AgentEvent =
     sessionUsage: AgentSessionTokenUsage;
   }
   | {
-    type: "intake_widget_size_prompt";
-    at: number;
-    /** When true, the renderer shows the size chip row (`sizes`) after the model calls `dartsnut_ask_question` with `question_id` `widget_display_size`. When false, hide it. */
-    visible: boolean;
-    /** Supported WxH tokens for chips; set when `visible` is true. */
-    sizes?: WidgetSize[];
-  }
-  | {
-    type: "intake_project_type_prompt";
-    at: number;
-    /** When true, the renderer shows the Game / Widget chip row (`options`) after the model calls `dartsnut_ask_question` with `question_id` `project_type`. When false, hide it. */
-    visible: boolean;
-    options?: ProjectType[];
-  }
-  | {
     type: "machine_mcp_prompt";
     at: number;
     /** When true, renderer asks the user which machine/IP to use for MCP. */
     visible: boolean;
     machines?: MachineMcpQuestionMachine[];
     manualOnly?: boolean;
-  };
+  }
+  | ({
+    type: "agent_question";
+    questionId: string;
+    visible: boolean;
+  } & AgentQuestionPrompt);
 
 export type AssetKind = "static" | "gif" | "spritesheet";
 
@@ -549,9 +506,9 @@ export type ReadPreviewResponse =
   | { ok: true; dataUrl: string }
   | { ok: false; message: string };
 
-/** Result of parsing workspace root `conf.json` for deploy-to-machine eligibility. */
+/** Result of classifying the workspace project files for deploy-to-machine eligibility. */
 export type DeployEligibility =
-  | { ok: true; appId: string; projectType: ProjectType }
+  | { ok: true; appId: string; version: string; projectType: ProjectType }
   | { ok: false; reason: string };
 
 export interface DeployConnectRequest {
@@ -570,13 +527,11 @@ export interface DeployLaunchRequest {
   widgetParamsJson?: string;
 }
 
-/**
- * Validates workspace `conf.json` content for the debug deploy module.
- * Requires parseable JSON object with non-empty `id` and `type` of widget or game.
- */
 export type CommunitySessionInfo = {
   loggedIn: boolean;
   account: string | null;
+  analyticsUserId: string | null;
+  authMethod: "password" | "google" | null;
   hasSupabase: boolean;
   googleClientId: string;
   googleDesktopClientId: string;
@@ -589,10 +544,36 @@ export type CommunityLoginRequest =
   | { method: "googleOAuth" };
 
 export type CommunityLoginResponse =
+  | { ok: true; account: string; needsPasswordSetup: boolean }
+  | { ok: false; code: string; message: string };
+
+export type CommunitySetPasswordRequest = { password: string };
+
+export type CommunitySetPasswordResponse =
   | { ok: true; account: string }
   | { ok: false; code: string; message: string };
 
+export type CommunityCancelGoogleLoginResponse = { ok: true };
+
 export type CommunityLogoutResponse = { ok: true };
+
+export type CommunityLlmQuotaStatus = {
+  accountId: number;
+  usageDate: string;
+  inputTokens: number;
+  outputTokens: number;
+  usedTokens: number;
+  customLimitTokens: number | null;
+  limitTokens: number;
+  defaultLimitTokens: number;
+  remainingTokens: number;
+  quotaExceeded: boolean;
+  accountingHealth: string;
+};
+
+export type CommunityGetLlmQuotaResponse =
+  | { ok: true; quota: CommunityLlmQuotaStatus }
+  | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
 export type CommunityDeployDevice = {
   deviceId: string;
@@ -655,6 +636,11 @@ export type CommunityVersionSummary = {
   description: string;
   status: string;
   createdAt: string | null;
+  updatedAt: string | null;
+  reviewAction: string;
+  reviewComment: string;
+  reviewedAt: string | null;
+  preview: string[];
 };
 
 export type CommunityWorkspaceDefaults = {
@@ -677,9 +663,17 @@ export type CommunityGetPublishOptionsResponse =
       gameControls: CommunityControlOption[];
       widgetControls: CommunityControlOption[];
       widgetSizes: CommunitySizeOption[];
-      currentVersions: CommunityVersionSummary[];
       workspace: CommunityWorkspaceDefaults;
     }
+  | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
+
+export type CommunityListAppVersionsRequest = {
+  projectType: ProjectType;
+  appSystemId: number | string;
+};
+
+export type CommunityListAppVersionsResponse =
+  | { ok: true; versions: CommunityVersionSummary[]; total: number }
   | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
 export type CommunityCreateAppRequest = {
@@ -737,32 +731,23 @@ export type CommunitySubmitAppVersionResponse =
     }
   | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
 
+export type CommunityUpdateWorkspaceVersionRequest = {
+  version: string;
+};
+
+export type CommunityUpdateWorkspaceVersionResponse =
+  | { ok: true; workspace: CommunityWorkspaceDefaults }
+  | {
+      ok: false;
+      code: "no_workspace" | "invalid_version" | "invalid_workspace" | "write_failed";
+      message: string;
+    };
+
 export type CommunityWithdrawAppVersionRequest = {
   projectType: ProjectType;
   versionId: number | string;
-  appSystemId: number | string;
 };
 
 export type CommunityWithdrawAppVersionResponse =
   | { ok: true; status: string }
   | { ok: false; code: string; message: string; serverMessage?: string; authRequired?: boolean };
-
-export function validateDeployWorkspaceConf(raw: unknown): DeployEligibility {
-  if (!raw || typeof raw !== "object") {
-    return { ok: false, reason: "invalid_conf" };
-  }
-  const c = raw as Record<string, unknown>;
-  const id = c.id;
-  const type = c.type;
-  if (typeof id !== "string" || !id.trim()) {
-    return { ok: false, reason: "missing_id" };
-  }
-  const trimmedId = id.trim();
-  if (!/^[a-zA-Z0-9_-]+$/.test(trimmedId)) {
-    return { ok: false, reason: "invalid_id" };
-  }
-  if (type !== "widget" && type !== "game") {
-    return { ok: false, reason: "invalid_type" };
-  }
-  return { ok: true, appId: trimmedId, projectType: type };
-}

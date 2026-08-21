@@ -1,6 +1,6 @@
 {
   "name": "dartsnut-agent",
-  "version": "1.3.1",
+  "version": "1.6.0",
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
@@ -17,16 +17,22 @@
     "start:packaged": "open release/mac-arm64/Dartsnut\\ Agent.app",
     "package:mac": "pnpm run build && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --publish never",
     "package:win": "pnpm run build && pnpm exec electron-builder --win --publish never",
-    "package:win:portable": "pnpm run build && pnpm exec electron-builder --win portable:x64 --publish never"
+    "package:win:portable": "pnpm run build && pnpm exec electron-builder --win portable:x64 --publish never",
+    "test:analytics": "vitest run renderer/analytics.test.ts",
+    "test:renderer": "vitest run renderer/analytics.test.ts renderer/theme.test.ts renderer/emulatorCapture.test.ts renderer/emulatorDarts.test.ts renderer/emulatorProjectUi.test.ts renderer/rawTimeline.test.ts renderer/useChatPersonaController.test.ts renderer/widgetParams.test.ts renderer/AppUpdateOverlay.test.tsx renderer/RemoveProjectDialog.test.tsx",
+    "test:updater": "vitest run appUpdater.test.ts appUpdatePreferences.test.ts"
   },
   "dependencies": {
     "@dartsnut/agent-runtime": "workspace:*",
+    "@openai/agents": "0.15.0",
     "@dartsnut/emulator-protocol": "workspace:*",
     "@dartsnut/shared-ipc": "workspace:*",
     "clsx": "^2.1.1",
     "dotenv": "^16.5.0",
     "electron-updater": "^6.8.9",
+    "firebase": "^12.16.0",
     "highlight.js": "^11.11.1",
+    "lucide-react": "^1.31.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^9.0.1",
@@ -48,6 +54,7 @@
     "nodemon": "^3.1.10",
     "tailwindcss": "^4.3.0",
     "vite": "^6.3.5",
+    "vitest": "^3.2.4",
     "wait-on": "^8.0.3",
     "xmlbuilder": "^15.1.1"
   },

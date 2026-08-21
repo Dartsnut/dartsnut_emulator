@@ -1,18 +1,14 @@
 import type { AgentInputItem, Session } from "@openai/agents";
 import type { AgentSessionPersistence } from "./agentSessionPersistence";
-import type { ChatMessage } from "./providerClient";
-import {
-  agentInputItemsToChatMessages,
-  chatMessagesToAgentInputItems
-} from "./conversationProtocol";
+import type { AgentProfileId } from "@dartsnut/shared-ipc";
 
 export type DartsnutAgentsSessionOptions = {
   sessionId: string;
-  initialConversation?: ChatMessage[];
+  initialItems?: AgentInputItem[];
   sessionPersistence?: AgentSessionPersistence;
   sessionTemplateMode?: string | null;
   sessionSection?: string | null;
-  preferredUserLocale?: "en" | "zh-Hans" | "zh-Hant" | null;
+  agentProfileId?: AgentProfileId | null;
 };
 
 function cloneItems(items: AgentInputItem[]): AgentInputItem[] {
@@ -25,7 +21,7 @@ function cloneItems(items: AgentInputItem[]): AgentInputItem[] {
 export class DartsnutAgentsSession implements Session {
   private readonly sessionId: string;
   private readonly persistence?: AgentSessionPersistence;
-  private readonly manifestMeta: Omit<DartsnutAgentsSessionOptions, "sessionId" | "initialConversation" | "sessionPersistence">;
+  private readonly manifestMeta: Omit<DartsnutAgentsSessionOptions, "sessionId" | "initialItems" | "sessionPersistence">;
   private items: AgentInputItem[];
 
   constructor(options: DartsnutAgentsSessionOptions) {
@@ -34,16 +30,10 @@ export class DartsnutAgentsSession implements Session {
     this.manifestMeta = {
       sessionTemplateMode: options.sessionTemplateMode ?? null,
       sessionSection: options.sessionSection ?? null,
-      preferredUserLocale: options.preferredUserLocale ?? null
+      agentProfileId: options.agentProfileId ?? null
     };
-    const fromDisk = options.sessionPersistence?.readConversation() ?? [];
-    const seed = options.initialConversation ?? fromDisk;
-    this.items =
-      seed.length > 0
-        ? chatMessagesToAgentInputItems(seed)
-        : fromDisk.length > 0
-          ? chatMessagesToAgentInputItems(fromDisk)
-          : [];
+    const fromDisk = options.sessionPersistence?.readConversationItems() ?? [];
+    this.items = cloneItems(options.initialItems ?? fromDisk);
   }
 
   async getSessionId(): Promise<string> {
@@ -103,9 +93,8 @@ export class DartsnutAgentsSession implements Session {
       updatedAt: nowIso,
       templateMode: this.manifestMeta.sessionTemplateMode ?? null,
       section: this.manifestMeta.sessionSection ?? null,
-      preferredUserLocale: this.manifestMeta.preferredUserLocale ?? null
+      agentProfileId: this.manifestMeta.agentProfileId ?? null
     });
-    const messages = agentInputItemsToChatMessages(this.items);
-    this.persistence.saveConversationAtomic(messages);
+    this.persistence.saveConversationItemsAtomic(this.items);
   }
 }

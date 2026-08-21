@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type Dispatch, type MouseEvent, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { Camera, List, LoaderCircle, RotateCw, Square, Video, Volume2, VolumeX, X, ZoomIn } from "lucide-react";
+import type { WidgetConfigSnapshot, WidgetFieldValues } from "@dartsnut/shared-ipc";
 import {
   createHiddenVenvPrepDisplay,
   nextVenvPrepDisplay,
@@ -12,7 +14,16 @@ import {
   type VenvPrepDisplay,
 } from "@dartsnut/emulator-protocol";
 import { cn } from "./cn";
-import { applyWidgetParamsAndReload, formatWidgetParamsJson } from "./widgetParams";
+import { DART_LEGEND_INDEXES, resolveDartShortcut } from "./emulatorDarts";
+import {
+  CAPTURE_ZOOMS,
+  captureOutputSizes,
+  formatRecordingElapsed,
+  type CaptureMode,
+  type CaptureZoom,
+} from "./emulatorCapture";
+import { shouldShowWidgetParams } from "./emulatorProjectUi";
+import { applyWidgetParamsAndReload, type WidgetValueStore } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
 type DartCoord = { x: number; y: number } | null;
@@ -32,6 +43,10 @@ const defaultState: EmulatorStateSnapshot = {
   running: false,
   fps: 0,
   status: "Idle",
+  audioMuted: false,
+  gifRecording: false,
+  gifSaving: false,
+  gifElapsedMs: 0,
 };
 
 const DART_COLORS = Array.from({ length: 12 }, (_, idx) => {
@@ -64,17 +79,15 @@ function isEmulatorStoppedWithError(state: EmulatorStateSnapshot): boolean {
 }
 
 export type EmulatorPanelProps = {
-  widgetParamsText: string;
-  setWidgetParamsText: Dispatch<SetStateAction<string>>;
-  widgetParamsError: string | null;
-  setWidgetParamsError: Dispatch<SetStateAction<string | null>>;
+  widgetConfig: WidgetConfigSnapshot;
+  widgetValuesByConfig: WidgetValueStore;
+  onWidgetValuesChange: (configKey: string, values: WidgetFieldValues) => void;
 };
 
 export function EmulatorPanel({
-  widgetParamsText,
-  setWidgetParamsText,
-  widgetParamsError,
-  setWidgetParamsError,
+  widgetConfig,
+  widgetValuesByConfig,
+  onWidgetValuesChange,
 }: EmulatorPanelProps) {
   const CANVAS_BASE_WIDTH = 588;
   const CANVAS_BASE_HEIGHT = 800;
@@ -86,6 +99,9 @@ export function EmulatorPanel({
   const [captureFps, setCaptureFps] = useState(0);
   const [renderFps, setRenderFps] = useState(0);
   const [zoomOpen, setZoomOpen] = useState(false);
+  const [captureDialog, setCaptureDialog] = useState<CaptureMode | null>(null);
+  const [captureZoom, setCaptureZoom] = useState<CaptureZoom>(4);
+  const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
   const [logsOpen, setLogsOpen] = useState(false);
   const [logsPaused, setLogsPaused] = useState(false);
   const [emulatorLogs, setEmulatorLogs] = useState<UiEmulatorLogEntry[]>([]);
@@ -111,18 +127,24 @@ export function EmulatorPanel({
   const lastRightClickMsRef = useRef<number>(0);
   const zoomOpenRef = useRef(false);
   const captureToastTimerRef = useRef<number | null>(null);
+  const lastCaptureToastStatusRef = useRef<string | null>(null);
   const venvPrepDisplayRef = useRef<VenvPrepDisplay>(createHiddenVenvPrepDisplay());
   const venvPrepHideTimerRef = useRef<number | null>(null);
   const stateRef = useRef<EmulatorStateSnapshot>(defaultState);
   const normalizedWidgetType = state.widgetType?.toLowerCase() ?? null;
   const hasResolvedWorkspaceType = Boolean(state.widgetPath && normalizedWidgetType);
-  const showParamsPanel = hasResolvedWorkspaceType && normalizedWidgetType === "widget";
+  const showParamsPanel = shouldShowWidgetParams(normalizedWidgetType, widgetConfig.status);
   const showDartLegend = hasResolvedWorkspaceType && normalizedWidgetType === "game";
   const projectKindLabel =
     normalizedWidgetType === "widget" ? "Widget" : normalizedWidgetType === "game" ? "Game" : "Unknown";
   const stoppedWithError = isEmulatorStoppedWithError(state);
   const venvPreparing = venvPrepDisplay.visible;
   const venvPrepMessage = venvPrepDisplay.message;
+  const audioToggleLabel = state.audioMuted ? "Unmute emulator audio" : "Mute emulator audio";
+  const gifRecording = state.gifRecording === true;
+  const gifSaving = state.gifSaving === true;
+  const gifElapsed = formatRecordingElapsed(state.gifElapsedMs ?? 0);
+  const gifProgress = Math.min(1, Math.max(0, (state.gifElapsedMs ?? 0) / 30_000));
 
   useEffect(() => {
     zoomOpenRef.current = zoomOpen;
@@ -202,6 +224,7 @@ export function EmulatorPanel({
     activeWorkerSequenceRef.current = null;
     pendingFrameRef.current = null;
     latestFrameMetaRef.current = null;
+    setFrameSize(null);
     workerBusyRef.current = false;
     setDartCoords(Array.from({ length: 12 }, () => null));
     drawBackgroundOnly(canvasRef.current, meta, 1);
@@ -333,6 +356,11 @@ export function EmulatorPanel({
         return;
       }
       latestFrameMetaRef.current = { width: payload.width, height: payload.height };
+      setFrameSize((current) =>
+        current?.width === payload.width && current.height === payload.height
+          ? current
+          : { width: payload.width, height: payload.height }
+      );
       drawFrameToCanvas(canvasRef.current, payload.bitmap, { width: payload.width, height: payload.height }, 1);
       if (zoomOpenRef.current) {
         drawFrameToCanvas(
@@ -392,7 +420,11 @@ export function EmulatorPanel({
       if (!nextState.running && nextState.widgetPath == null) {
         wipePreviewCanvas();
       }
-      if (typeof nextState.status === "string" && nextState.status.startsWith("Screenshot captured: ")) {
+      const isCaptureComplete =
+        typeof nextState.status === "string" &&
+        (nextState.status.startsWith("Screenshot captured: ") || nextState.status.startsWith("GIF recorded: "));
+      if (isCaptureComplete && lastCaptureToastStatusRef.current !== nextState.status) {
+        lastCaptureToastStatusRef.current = nextState.status;
         setCaptureToast(nextState.status);
         setCaptureFolder(nextState.lastCapturePath || null);
         if (captureToastTimerRef.current !== null) {
@@ -506,12 +538,11 @@ export function EmulatorPanel({
           pressed: true,
         });
       }
-      if (/^f([1-9]|1[0-2])$/i.test(event.key)) {
-        const idx = Number(event.key.slice(1)) - 1;
-        if (idx >= 0 && idx < 12) {
-          currentDartIndexRef.current = idx;
-          setSelectedDartIndex(idx);
-        }
+      const dartIndex = resolveDartShortcut(event.key, stateRef.current.widgetType);
+      if (dartIndex !== null) {
+        event.preventDefault();
+        currentDartIndexRef.current = dartIndex;
+        setSelectedDartIndex(dartIndex);
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
@@ -558,20 +589,31 @@ export function EmulatorPanel({
     setDartCoords(Array.from({ length: 12 }, () => null));
   }
 
-  function formatParamsJsonInEditor() {
-    formatWidgetParamsJson(widgetParamsText, setWidgetParamsText, setWidgetParamsError);
-  }
-
   async function applyParamsAndReload() {
     await applyWidgetParamsAndReload({
-      widgetParamsText,
-      setWidgetParamsText,
-      setWidgetParamsError,
+      config: widgetConfig,
+      store: widgetValuesByConfig,
       onAfterApply: () => {
         setEmulatorLogs([]);
         setDartCoords(Array.from({ length: 12 }, () => null));
       },
     });
+  }
+
+  function openCaptureDialog(mode: CaptureMode) {
+    setCaptureZoom(mode === "gif" ? 4 : 1);
+    setCaptureDialog(mode);
+  }
+
+  async function confirmCapture() {
+    const mode = captureDialog;
+    if (!mode) return;
+    setCaptureDialog(null);
+    if (mode === "screenshot") {
+      await window.dartsnutApi.sendEmulatorCommand({ type: "capture_screenshot", zoom: captureZoom });
+      return;
+    }
+    await window.dartsnutApi.sendEmulatorCommand({ type: "start_gif_recording", zoom: captureZoom });
   }
 
   function toCanvasCoord(event: MouseEvent<HTMLCanvasElement>) {
@@ -610,6 +652,52 @@ export function EmulatorPanel({
         </header>
       ) : null}
       <div className="relative flex min-h-0 flex-1 flex-col items-stretch justify-start gap-0 overflow-hidden p-0 text-[var(--color-emulator-canvas-hint)]">
+        {gifRecording || gifSaving ? (
+          <div
+            className="absolute inset-x-0 top-0 z-20 flex h-11 items-center border-b border-[var(--color-emulator-border)] bg-[color-mix(in_srgb,var(--color-emulator-bg)_94%,black)] shadow-sm"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="mx-auto flex w-full max-w-[440px] min-w-0 items-center gap-3 px-3">
+              {gifSaving ? (
+                <>
+                  <LoaderCircle size={15} className="shrink-0 animate-spin text-[var(--color-accent)]" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-text-strong)]">
+                    Saving GIF
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] font-bold text-red-500">
+                    <span className="size-1.5 rounded-full bg-red-500 motion-safe:animate-pulse" aria-hidden />
+                    REC
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-3 font-mono text-[11px] tabular-nums">
+                      <span className="font-semibold text-[var(--color-text-strong)]">{gifElapsed}</span>
+                      <span className="text-[var(--color-text-subtle)]">00:30</span>
+                    </div>
+                    <div className="mt-1 h-0.5 overflow-hidden bg-[var(--color-zoom-popover-border)]">
+                      <div
+                        className="h-full bg-red-500 transition-[width] duration-200 ease-linear"
+                        style={{ width: `${gifProgress * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className={cn(emuToolbarIconBtn, "pointer-events-auto size-7 border-red-500/45 text-red-500 hover:bg-red-500/15")}
+                    onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "stop_gif_recording" })}
+                    aria-label="Stop GIF recording"
+                    title="Stop GIF recording"
+                  >
+                    <Square size={12} fill="currentColor" aria-hidden />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
         <div className="box-border flex min-h-0 min-w-0 w-full flex-1 flex-row items-center justify-center gap-2 overflow-hidden p-0">
           <div className="flex shrink-0 flex-col items-center gap-2 p-2">
             <div className="emulator-canvas-frame relative">
@@ -705,101 +793,110 @@ export function EmulatorPanel({
               disabled={!bridgeReady || !widgetPath.trim()}
               onClick={() => void applyWidgetPathAndReload(widgetPath)}
               aria-label="Start or reload"
+              data-analytics-id="emulator_start_reload"
+              data-analytics-area="emulator"
               title="Start / Reload"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36M20.49 15a9 9 0 01-14.85 3.36"
-                />
-              </svg>
+              <RotateCw size={16} aria-hidden />
             </button>
             <button
               type="button"
               className={emuToolbarIconBtn}
               disabled={!bridgeReady}
-              onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "capture_screenshot" })}
+              onClick={() => void window.dartsnutApi.sendEmulatorCommand({ type: "set_audio_muted", muted: !state.audioMuted })}
+              aria-label={audioToggleLabel}
+              data-analytics-id="emulator_audio_toggle"
+              data-analytics-area="emulator"
+              title={audioToggleLabel}
+            >
+              {state.audioMuted ? <VolumeX size={16} aria-hidden /> : <Volume2 size={16} aria-hidden />}
+            </button>
+            <button
+              type="button"
+              className={emuToolbarIconBtn}
+              disabled={!bridgeReady || !frameSize}
+              onClick={() => openCaptureDialog("screenshot")}
               aria-label="Capture screenshot"
+              data-analytics-id="emulator_capture"
+              data-analytics-area="emulator"
               title={
                 normalizedWidgetType === "widget"
                   ? "Capture device mockup and widget surface"
                   : "Capture screenshot"
               }
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"
-                />
-                <circle cx="12" cy="13" r="4" fill="none" stroke="currentColor" strokeWidth="2" />
-              </svg>
+              <Camera size={16} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className={cn(
+                emuToolbarIconBtn,
+                gifRecording && "border-red-500/60 bg-red-500/20 text-red-500 hover:bg-red-500/25"
+              )}
+              disabled={!bridgeReady || gifSaving || (!gifRecording && !frameSize)}
+              onClick={() => {
+                if (gifRecording) {
+                  void window.dartsnutApi.sendEmulatorCommand({ type: "stop_gif_recording" });
+                } else {
+                  openCaptureDialog("gif");
+                }
+              }}
+              aria-label={gifSaving ? "Saving GIF" : gifRecording ? "Stop GIF recording" : "Record GIF"}
+              aria-pressed={gifRecording}
+              data-analytics-id="emulator_record_gif"
+              data-analytics-area="emulator"
+              title={gifSaving ? "Saving GIF" : gifRecording ? "Stop GIF recording" : "Record GIF"}
+            >
+              {gifSaving ? (
+                <LoaderCircle size={16} className="animate-spin" aria-hidden />
+              ) : gifRecording ? (
+                <Square size={14} fill="currentColor" aria-hidden />
+              ) : (
+                <Video size={16} aria-hidden />
+              )}
             </button>
             <button
               type="button"
               className={emuToolbarIconBtn}
               onClick={() => setZoomOpen(true)}
               aria-label="Zoom 2x"
+              data-analytics-id="emulator_zoom"
+              data-analytics-area="emulator"
               title="Zoom 2x"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                <circle cx="11" cy="11" r="8" fill="none" stroke="currentColor" strokeWidth="2" />
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M21 21l-4.35-4.35M11 8v6M8 11h6"
-                />
-              </svg>
+              <ZoomIn size={16} aria-hidden />
             </button>
             <button
               type="button"
               className={emuToolbarIconBtn}
               onClick={() => setLogsOpen((prev) => !prev)}
               aria-label={logsOpen ? "Hide Python logs" : "Show Python logs"}
+              data-analytics-id="emulator_logs_toggle"
+              data-analytics-area="emulator"
               title={logsOpen ? "Hide logs" : "Logs"}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-                <path
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"
-                />
-              </svg>
+              <List size={16} aria-hidden />
             </button>
           </div>
         </div>
         {showParamsPanel ? (
-          <div className="mx-3.5 mb-0 mt-0">
+          <div className="mx-3.5 mb-3.5 mt-0">
             <WidgetParamsEditor
               bridgeReady={bridgeReady}
-              widgetParamsText={widgetParamsText}
-              setWidgetParamsText={setWidgetParamsText}
-              widgetParamsError={widgetParamsError}
-              setWidgetParamsError={setWidgetParamsError}
-              onFormat={formatParamsJsonInEditor}
+              config={widgetConfig}
+              store={widgetValuesByConfig}
+              onValuesChange={onWidgetValuesChange}
               onApplyReload={applyParamsAndReload}
             />
           </div>
         ) : null}
         {showDartLegend ? (
           <div
-            className="box-border grid w-full shrink-0 grid-cols-6 justify-items-center gap-2 px-2 pb-2"
+            className="mb-3.5 box-border grid w-full shrink-0 grid-cols-6 justify-items-center gap-2 px-2 pb-2"
             aria-label="Dart indexes"
           >
-            {DART_COLORS.map((color, idx) => {
+            {DART_LEGEND_INDEXES.map((idx, legendIndex) => {
+              const color = DART_COLORS[idx];
               const isSelected = idx === selectedDartIndex;
               const isPlaced = dartCoords[idx] !== null;
               const useLightText = idx % 4 === 0 || idx % 4 === 1;
@@ -814,7 +911,7 @@ export function EmulatorPanel({
                     isSelected && "outline outline-2 outline-offset-2 outline-[var(--color-text-strong)]"
                   )}
                   style={{ backgroundColor: color }}
-                  title={`F${idx + 1}${isPlaced ? " • placed" : " • not placed"}${isSelected ? " • selected" : ""}`}
+                  title={`F${legendIndex + 1}${isPlaced ? " • placed" : " • not placed"}${isSelected ? " • selected" : ""}`}
                   onClick={() => {
                     currentDartIndexRef.current = idx;
                     setSelectedDartIndex(idx);
@@ -874,6 +971,89 @@ export function EmulatorPanel({
               width={CANVAS_BASE_WIDTH * 2}
               height={CANVAS_BASE_HEIGHT * 2}
             />
+          </div>
+        </div>
+      ) : null}
+      {captureDialog ? (
+        <div
+          className="fixed inset-0 z-[2100] flex items-center justify-center bg-[var(--color-zoom-overlay)] p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCaptureDialog(null);
+          }}
+          role="presentation"
+        >
+          <div
+            className="w-full max-w-sm rounded-lg border border-[var(--color-zoom-popover-border)] bg-[var(--color-zoom-popover-bg)] shadow-[var(--shadow-md)]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="capture-dialog-title"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setCaptureDialog(null);
+            }}
+          >
+            <div className="flex items-center justify-between border-b border-[var(--color-zoom-popover-border)] px-4 py-3">
+              <h2 id="capture-dialog-title" className="text-sm font-semibold">
+                {captureDialog === "gif" ? "Record GIF" : "Capture screenshot"}
+              </h2>
+              <button
+                type="button"
+                className={emuToolbarIconBtn}
+                onClick={() => setCaptureDialog(null)}
+                aria-label="Close"
+              >
+                <X size={16} aria-hidden />
+              </button>
+            </div>
+            <div className="space-y-4 p-4">
+              <div>
+                <div className="mb-2 text-xs font-medium text-[var(--color-text-subtle)]">Zoom</div>
+                <div className="grid grid-cols-3 overflow-hidden rounded-md border border-[var(--color-zoom-popover-border)]">
+                  {CAPTURE_ZOOMS.map((zoom) => (
+                    <button
+                      key={zoom}
+                      type="button"
+                      className={cn(
+                        "h-9 border-0 bg-transparent text-xs font-semibold text-[var(--color-emulator-text)] transition-colors",
+                        zoom !== 1 && "border-l border-l-[var(--color-zoom-popover-border)]",
+                        captureZoom === zoom && "bg-[var(--color-emulator-toolbar-bg-hover)] text-[var(--color-text-strong)]"
+                      )}
+                      aria-pressed={captureZoom === zoom}
+                      onClick={() => setCaptureZoom(zoom)}
+                    >
+                      {zoom}x
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-1.5" aria-live="polite">
+                {(frameSize ? captureOutputSizes(captureDialog, frameSize.width, frameSize.height, captureZoom) : []).map(
+                  (output) => (
+                    <div
+                      key={output.label}
+                      className="flex items-center justify-between text-xs text-[var(--color-text-subtle)]"
+                    >
+                      <span>{output.label}</span>
+                      <span className="font-mono tabular-nums text-[var(--color-text-strong)]">
+                        {output.width} x {output.height}
+                      </span>
+                    </div>
+                  )
+                )}
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <button type="button" className={emuToolbarBtn} onClick={() => setCaptureDialog(null)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={cn(emuToolbarBtn, "bg-[var(--color-accent)] text-white")}
+                  disabled={!frameSize}
+                  onClick={() => void confirmCapture()}
+                >
+                  {captureDialog === "gif" ? "Start recording" : "Capture"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       ) : null}

@@ -1,9 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
-import dotenv from "dotenv";
-import type { ProviderSettings, UserDefineProviderSettings } from "@dartsnut/shared-ipc";
+import type { ProviderSettings, CustomProviderSettings } from "@dartsnut/shared-ipc";
 
-export type { ProviderSettings, UserDefineProviderSettings };
+export type { ProviderSettings, CustomProviderSettings };
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -13,32 +10,19 @@ export interface ProviderConfig {
   fetchImpl?: typeof fetch;
 }
 
-export interface ProviderConfigOverrides {
-  baseUrl?: string;
-  apiKey?: string;
-  model?: string;
-  fetchImpl?: typeof fetch;
-}
-
 export interface LoadProviderConfigInput {
   providerSettings?: ProviderSettings;
-  userDefine?: UserDefineProviderSettings;
   fetchImpl?: typeof fetch;
 }
 
-const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_GPT_MODEL = "gpt-4.1-mini";
-
-type ProcessWithResourcesPath = NodeJS.Process & { resourcesPath?: string };
-
 /**
- * Ensure base URL joins SDK paths like `/chat/completions` as `.../v1/chat/completions`.
- * A bare origin (`https://host`) would otherwise hit `https://host/chat/completions` and often 404.
+ * Ensure base URL joins SDK paths like `/responses` as `.../v1/responses`.
+ * A bare origin (`https://host`) would otherwise hit `https://host/responses` and often 404.
  */
 export function normalizeProviderBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
   if (!trimmed) {
-    return DEFAULT_OPENAI_BASE_URL;
+    return "";
   }
   try {
     const u = new URL(trimmed);
@@ -51,153 +35,38 @@ export function normalizeProviderBaseUrl(baseUrl: string): string {
   }
 }
 
-export function findEnvFile(cwd: string = process.cwd()): string | undefined {
-  const candidates: string[] = [];
-  const repoRoot = process.env.DARTSNUT_REPO_ROOT?.trim();
-  if (repoRoot) {
-    candidates.push(path.join(repoRoot, ".env"));
-  }
-  candidates.push(
-    path.join(cwd, ".env"),
-    path.join(cwd, "..", ".env"),
-    path.join(cwd, "..", "..", ".env"),
-    path.join(cwd, "..", "..", "..", ".env")
-  );
-  const resourcesPath = (process as ProcessWithResourcesPath).resourcesPath;
-  if (
-    process.env.DARTSNUT_ALLOW_RESOURCES_ENV_FILE !== "0" &&
-    typeof resourcesPath === "string" &&
-    resourcesPath.trim()
-  ) {
-    candidates.push(path.join(resourcesPath, ".env"));
-  }
-  return candidates.find((candidate) => fs.existsSync(candidate));
-}
-
-function loadEnvFromDisk() {
-  const envPath = findEnvFile();
-  if (!envPath) {
-    return;
-  }
-  dotenv.config({ path: envPath });
-}
-
-function readEnvTriple(
-  prefix: string,
-  defaults?: { baseUrl?: string; model?: string }
-): { baseUrl: string; apiKey: string; model: string } {
-  const baseUrl = process.env[`${prefix}_BASE_URL`]?.trim() ?? defaults?.baseUrl ?? "";
-  const apiKey = process.env[`${prefix}_API_KEY`]?.trim() ?? "";
-  const model = process.env[`${prefix}_MODEL`]?.trim() ?? defaults?.model ?? "";
-  return { baseUrl, apiKey, model };
-}
-
-/** Reads GPT_* with OPENAI_* fallback from the repo `.env` (not a selectable provider preset). */
-export function readUserDefineDefaultsFromEnv(): UserDefineProviderSettings {
-  loadEnvFromDisk();
-  const gpt = readEnvTriple("GPT", {
-    baseUrl: DEFAULT_OPENAI_BASE_URL,
-    model: DEFAULT_GPT_MODEL
-  });
-  const hasGpt =
-    Boolean(process.env.GPT_BASE_URL?.trim()) ||
-    Boolean(process.env.GPT_API_KEY?.trim()) ||
-    Boolean(process.env.GPT_MODEL?.trim());
-  if (hasGpt) {
-    return { baseUrl: gpt.baseUrl, apiKey: gpt.apiKey, model: gpt.model };
-  }
-  const legacy = readEnvTriple("OPENAI", {
-    baseUrl: DEFAULT_OPENAI_BASE_URL,
-    model: gpt.model || DEFAULT_GPT_MODEL
-  });
+export function resolveCustomProviderConfig(custom?: CustomProviderSettings): ProviderConfig {
+  const values = custom ?? { baseUrl: "", apiKey: "", model: "" };
   return {
-    baseUrl: legacy.baseUrl || gpt.baseUrl,
-    apiKey: legacy.apiKey || gpt.apiKey,
-    model: legacy.model || gpt.model
-  };
-}
-
-/** Reads the bundled Dartsnut LLM (Xiaomi MiMo) OpenAI-compatible endpoint from env. */
-export function readDartsnutLlmDefaultsFromEnv(): UserDefineProviderSettings {
-  loadEnvFromDisk();
-  return readEnvTriple("XIAOMI");
-}
-
-export function mergeUserDefineWithEnvDefaults(
-  userDefine: UserDefineProviderSettings
-): UserDefineProviderSettings {
-  const envDefaults = readUserDefineDefaultsFromEnv();
-  return {
-    baseUrl: userDefine.baseUrl.trim() || envDefaults.baseUrl,
-    apiKey: userDefine.apiKey.trim() || envDefaults.apiKey,
-    model: userDefine.model.trim() || envDefaults.model
-  };
-}
-
-export function resolveUserDefineConfig(userDefine?: UserDefineProviderSettings): ProviderConfig {
-  const merged = mergeUserDefineWithEnvDefaults(
-    userDefine ?? { baseUrl: "", apiKey: "", model: "" }
-  );
-  return {
-    baseUrl: normalizeProviderBaseUrl(merged.baseUrl),
-    apiKey: merged.apiKey,
-    model: merged.model
-  };
-}
-
-export function resolveCustomProviderConfig(custom?: UserDefineProviderSettings): ProviderConfig {
-  const userValues = custom ?? { baseUrl: "", apiKey: "", model: "" };
-  return {
-    baseUrl: normalizeProviderBaseUrl(userValues.baseUrl.trim()),
-    apiKey: userValues.apiKey.trim(),
-    model: userValues.model.trim()
+    baseUrl: normalizeProviderBaseUrl(values.baseUrl),
+    apiKey: values.apiKey.trim(),
+    model: values.model.trim()
   };
 }
 
 export function resolveProviderSettingsConfig(providerSettings?: ProviderSettings): ProviderConfig {
   if (providerSettings?.activeProvider === "dartsnut-llm") {
-    const builtin = readDartsnutLlmDefaultsFromEnv();
-    return {
-      baseUrl: normalizeProviderBaseUrl(builtin.baseUrl),
-      apiKey: builtin.apiKey,
-      model: builtin.model
-    };
+    // Dartsnut LLM is configured only by the authenticated desktop API bridge.
+    // The shared runtime must never load or retain the upstream provider credentials.
+    return { baseUrl: "", apiKey: "", model: "" };
   }
-  return resolveCustomProviderConfig(providerSettings?.custom ?? providerSettings?.userDefine);
+  return resolveCustomProviderConfig(providerSettings?.custom);
 }
 
-/** @deprecated Use {@link resolveUserDefineConfig}. */
-export function resolveProviderConfig(overrides?: ProviderConfigOverrides): ProviderConfig {
-  const base = resolveUserDefineConfig();
-  const mergedBase = overrides?.baseUrl?.trim() || base.baseUrl;
+export function loadProviderConfig(input: LoadProviderConfigInput = {}): ProviderConfig {
   return {
-    baseUrl: normalizeProviderBaseUrl(mergedBase),
-    apiKey: overrides?.apiKey?.trim() || base.apiKey,
-    model: overrides?.model?.trim() || base.model,
-    fetchImpl: overrides?.fetchImpl
+    ...resolveProviderSettingsConfig(input.providerSettings),
+    fetchImpl: input.fetchImpl
   };
-}
-
-export function loadProviderConfig(input?: LoadProviderConfigInput | ProviderConfigOverrides): ProviderConfig {
-  if (input && "providerSettings" in input) {
-    return {
-      ...resolveProviderSettingsConfig(input.providerSettings),
-      fetchImpl: input.fetchImpl
-    };
-  }
-  if (input && "userDefine" in input) {
-    return {
-      ...resolveUserDefineConfig(input.userDefine),
-      fetchImpl: input.fetchImpl
-    };
-  }
-  return resolveProviderConfig(input);
 }
 
 export function validateProviderConfig(config: ProviderConfig): {
   ok: boolean;
   error?: string;
 } {
+  if (!config.baseUrl) {
+    return { ok: false, error: "Provider endpoint is not set." };
+  }
   if (!config.apiKey) {
     return { ok: false, error: "API key is not set." };
   }

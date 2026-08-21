@@ -11,14 +11,24 @@
   },
   "include": [
     "main.ts",
+    "agentRunCoordinator.ts",
     "appUpdater.ts",
-    "dartsnutLlmConfig.ts",
+    "appUpdatePreferences.ts",
+    "dartsnutLlmBridge.ts",
+    "bufferedModelFetch.ts",
+    "responsesCompatibility.ts",
+    "desktopNetwork.ts",
+    "authNetworkError.ts",
     "packagedEnv.generated.ts",
     "preload.ts",
     "pythonRuntime.ts",
     "assetManager.ts",
     "communityClient.ts",
+    "communityVersionHistory.ts",
+    "workspaceProjectMetadata.ts",
+    "widgetConfig.ts",
     "googleOAuth.ts",
-    "communityAuth.ts"
+    "communityAuth.ts",
+    "emulatorAgentTools.ts"
   ]
 }

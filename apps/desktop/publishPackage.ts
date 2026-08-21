@@ -3,30 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
-const PUBLISH_ALLOWED_ROOT_FILES = new Set(["conf.json", "pyproject.toml"]);
-const PUBLISH_ALLOWED_EXTENSIONS = new Set([
-  ".aac",
-  ".aif",
-  ".aiff",
-  ".avif",
-  ".bmp",
-  ".flac",
-  ".gif",
-  ".jpeg",
-  ".jpg",
-  ".m4a",
-  ".mid",
-  ".midi",
-  ".mp3",
-  ".oga",
-  ".ogg",
-  ".opus",
-  ".png",
-  ".py",
-  ".svg",
-  ".wav",
-  ".webp"
-]);
 const PUBLISH_SKIP_DIRECTORIES = new Set([
   ".dartsnut",
   ".git",
@@ -40,14 +16,17 @@ const PUBLISH_SKIP_DIRECTORIES = new Set([
   "node_modules",
   "venv"
 ]);
+const PUBLISH_SKIP_FILE_NAMES = new Set([".ds_store", "thumbs.db"]);
 
 export function isPublishAllowedFile(relativePath: string): boolean {
   const normalized = relativePath.split(path.sep).join("/");
   const baseName = path.basename(normalized).toLowerCase();
-  if (!normalized.includes("/") && PUBLISH_ALLOWED_ROOT_FILES.has(baseName)) {
-    return true;
+  const parentDirectories = path.posix.dirname(normalized).split("/");
+  if (parentDirectories.some((directory) => PUBLISH_SKIP_DIRECTORIES.has(directory))) {
+    return false;
   }
-  return PUBLISH_ALLOWED_EXTENSIONS.has(path.extname(baseName));
+  const isEnvironmentFile = baseName === ".env" || baseName.startsWith(".env.");
+  return !PUBLISH_SKIP_FILE_NAMES.has(baseName) && !isEnvironmentFile;
 }
 
 function assertPublishRootFolderName(folderName: string): void {

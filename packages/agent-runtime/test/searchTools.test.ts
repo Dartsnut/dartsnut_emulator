@@ -12,11 +12,9 @@ function ctx(partial: Partial<DartsnutRunContext>, workspacePath: string): Darts
   return {
     workspacePath,
     templateMode: partial.templateMode ?? null,
-    intakeReady: partial.intakeReady ?? false,
     artifacts: partial.artifacts ?? { confJson: false, mainPy: false, initialPassComplete: false },
     assetApplierMode: partial.assetApplierMode ?? false,
     skillsDir: partial.skillsDir ?? path.join(process.cwd(), "skills"),
-    preferredUserLocale: partial.preferredUserLocale ?? null,
     projectType: partial.projectType,
     widgetSize: partial.widgetSize
   };
@@ -34,60 +32,68 @@ function findTool(tools: Tool[], name: string): Tool | undefined {
   return tools.find((t) => t.type === "function" && (t as any).name === name);
 }
 
-describe("intake gate on file mutations", () => {
-  it("blocks write_file / replace_in_file / copy_asset_file until intake is ready", async () => {
+describe("file mutations without intake", () => {
+  it("allows a blank workspace to be scaffolded immediately", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-gate-"));
-    const runContext = ctx({ intakeReady: false }, workspace);
+    const runContext = ctx({}, workspace);
     const tools = buildAgentTools({
       workspacePolicy: new WorkspacePolicy(workspace),
-      profile: "full",
-      getRunContext: () => runContext
-    });
-    const write = await exec(findTool(tools, "write_file"), { path: "main.py", content: "x=1\n" });
-    expect(write.ok).toBe(false);
-    expect(write.error).toMatch(/Record the project type/i);
-    expect(fs.existsSync(path.join(workspace, "main.py"))).toBe(false);
-  });
-
-  it("allows writes once intake is ready", async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-gate-"));
-    const runContext = ctx({ intakeReady: true, projectType: "widget", widgetSize: "128x128" }, workspace);
-    const tools = buildAgentTools({
-      workspacePolicy: new WorkspacePolicy(workspace),
-      profile: "full",
-      getRunContext: () => runContext
-    });
-    const write = await exec(findTool(tools, "write_file"), { path: "conf.json", content: "{}\n" });
-    expect(write.ok).toBe(true);
-    expect(fs.existsSync(path.join(workspace, "conf.json"))).toBe(true);
-  });
-
-  it("allows writes when a conf.json already exists even if intake not re-run", async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-gate-"));
-    fs.writeFileSync(path.join(workspace, "conf.json"), "{}\n", "utf-8");
-    const runContext = ctx(
-      { intakeReady: false, artifacts: { confJson: true, mainPy: false, initialPassComplete: false } },
-      workspace
-    );
-    const tools = buildAgentTools({
-      workspacePolicy: new WorkspacePolicy(workspace),
-      profile: "full",
-      getRunContext: () => runContext
+      profile: "full"
     });
     const write = await exec(findTool(tools, "write_file"), { path: "main.py", content: "x=1\n" });
     expect(write.ok).toBe(true);
+    expect(fs.existsSync(path.join(workspace, "main.py"))).toBe(true);
   });
+});
 
-  it("does not gate asset-applier mode", async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-gate-"));
-    const runContext = ctx({ intakeReady: false, assetApplierMode: true }, workspace);
+describe("agent questions", () => {
+  it("blocks tool execution until option answer arrives", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-question-"));
+    let resolveAnswer: ((answer: string | null) => void) | null = null;
+    let prompt: any;
     const tools = buildAgentTools({
       workspacePolicy: new WorkspacePolicy(workspace),
-      profile: "asset-applier",
-      getRunContext: () => runContext
+      profile: "full",
+      askUserQuestionHandler: async (nextPrompt) => {
+        prompt = nextPrompt;
+        return await new Promise<string | null>((resolve) => {
+          resolveAnswer = resolve;
+        });
+      }
     });
-    const write = await exec(findTool(tools, "write_file"), { path: "assets_loader.py", content: "x=1\n" });
-    expect(write.ok).toBe(true);
+    const pending = exec(findTool(tools, "ask_user_question"), {
+      question: "What color should the clock be?",
+      options: [
+        { value: "blue", label: "Blue" },
+        { value: "green", label: "Green" }
+      ]
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(prompt).toEqual({
+      question: "What color should the clock be?",
+      options: [
+        { value: "blue", label: "Blue" },
+        { value: "green", label: "Green" }
+      ]
+    });
+    resolveAnswer?.("blue");
+    await expect(pending).resolves.toEqual({ ok: true, answer: "blue" });
+  });
+
+  it("supports free-text answers and cancellation", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-question-"));
+    let resolveAnswer: ((answer: string | null) => void) | null = null;
+    const tools = buildAgentTools({
+      workspacePolicy: new WorkspacePolicy(workspace),
+      profile: "full",
+      askUserQuestionHandler: async () => await new Promise<string | null>((resolve) => {
+        resolveAnswer = resolve;
+      })
+    });
+    const pending = exec(findTool(tools, "ask_user_question"), { question: "What should we call it?" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    resolveAnswer?.(null);
+    await expect(pending).resolves.toEqual({ ok: false, cancelled: true });
   });
 });
 
@@ -100,6 +106,8 @@ describe("search + file tools", () => {
     await fsp.writeFile(path.join(workspace, "fonts", "tiny.py"), "FONT = 'tiny'\n", "utf-8");
     await fsp.mkdir(path.join(workspace, "node_modules"), { recursive: true });
     await fsp.writeFile(path.join(workspace, "node_modules", "skip.py"), "ALPHA = 999\n", "utf-8");
+    await fsp.mkdir(path.join(workspace, ".venv", "lib"), { recursive: true });
+    await fsp.writeFile(path.join(workspace, ".venv", "lib", "skip.py"), "ALPHA = 998\n", "utf-8");
     return workspace;
   }
 
@@ -115,6 +123,7 @@ describe("search + file tools", () => {
     const paths = res.matches.map((m: any) => m.path);
     expect(paths).toContain("main.py");
     expect(paths).not.toContain("node_modules/skip.py");
+    expect(paths).not.toContain(".venv/lib/skip.py");
     const mainMatch = res.matches.find((m: any) => m.path === "main.py");
     expect(mainMatch.line).toBe(2);
 
@@ -139,6 +148,19 @@ describe("search + file tools", () => {
     expect(res.files).toContain("main.py");
     expect(res.files).toContain("fonts/tiny.py");
     expect(res.files).not.toContain("node_modules/skip.py");
+    expect(res.files).not.toContain(".venv/lib/skip.py");
+  });
+
+  it("list_files skips generated environments and bounds output", async () => {
+    const workspace = await seedWorkspace();
+    const tools = buildTools(workspace);
+    const res = await exec(findTool(tools, "list_files"), { max_results: 2 });
+
+    expect(res.ok).toBe(true);
+    expect(res.files).toHaveLength(2);
+    expect(res.truncated).toBe(true);
+    expect(res.files.some((file: string) => file.startsWith(".venv/"))).toBe(false);
+    expect(res.files.some((file: string) => file.startsWith("node_modules/"))).toBe(false);
   });
 
   it("read_file returns whole file by default and numbered slice with offset/limit", async () => {
@@ -178,6 +200,63 @@ describe("search + file tools", () => {
     expect(fs.readFileSync(path.join(workspace, "dup.py"), "utf-8")).toBe("x = 2\nx = 2\n");
   });
 
+  it("copy_chat_attachment copies a dropped file to the agent-chosen workspace path", async () => {
+    const workspace = await seedWorkspace();
+    const source = path.join(os.tmpdir(), `dartsnut-chat-source-${Date.now()}.png`);
+    await fsp.writeFile(source, "png-data", "utf-8");
+    const tools = buildAgentTools({
+      workspacePolicy: new WorkspacePolicy(workspace),
+      profile: "full",
+      assetRoots: {
+        chatAttachments: [
+          { id: "chat-asset-1", path: source, name: "source.png", mimeType: "image/png", kind: "image" }
+        ]
+      }
+    });
+
+    const res = await exec(findTool(tools, "copy_chat_attachment"), {
+      attachment_id: "chat-asset-1",
+      path: "assets/title/source.png"
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.path).toBe("assets/title/source.png");
+    expect(await fsp.readFile(path.join(workspace, "assets/title/source.png"), "utf-8")).toBe("png-data");
+  });
+
+  it("copy_chat_attachment only replaces existing files when overwrite is explicit", async () => {
+    const workspace = await seedWorkspace();
+    const source = path.join(os.tmpdir(), `dartsnut-chat-replace-${Date.now()}.png`);
+    await fsp.writeFile(source, "new", "utf-8");
+    await fsp.mkdir(path.join(workspace, "assets"), { recursive: true });
+    await fsp.writeFile(path.join(workspace, "assets/existing.png"), "old", "utf-8");
+    const tools = buildAgentTools({
+      workspacePolicy: new WorkspacePolicy(workspace),
+      profile: "full",
+      assetRoots: {
+        chatAttachments: [
+          { id: "chat-asset-2", path: source, name: "replacement.png", mimeType: "image/png", kind: "image" }
+        ]
+      }
+    });
+
+    const blocked = await exec(findTool(tools, "copy_chat_attachment"), {
+      attachment_id: "chat-asset-2",
+      path: "assets/existing.png"
+    });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error).toMatch(/already exists/i);
+    expect(await fsp.readFile(path.join(workspace, "assets/existing.png"), "utf-8")).toBe("old");
+
+    const replaced = await exec(findTool(tools, "copy_chat_attachment"), {
+      attachment_id: "chat-asset-2",
+      path: "assets/existing.png",
+      overwrite: true
+    });
+    expect(replaced.ok).toBe(true);
+    expect(await fsp.readFile(path.join(workspace, "assets/existing.png"), "utf-8")).toBe("new");
+  });
+
   it("check_python delegates to the host handler", async () => {
     const workspace = await seedWorkspace();
     let received: { paths?: string[] } | undefined;
@@ -192,5 +271,51 @@ describe("search + file tools", () => {
     const res = await exec(findTool(tools, "check_python"), { paths: ["main.py"] });
     expect(res.ok).toBe(true);
     expect(received?.paths).toEqual(["main.py"]);
+  });
+
+  it("emulator autonomy tools delegate to host handlers with structured arguments", async () => {
+    const workspace = await seedWorkspace();
+    const calls: Array<{ name: string; args: unknown }> = [];
+    const tools = buildAgentTools({
+      workspacePolicy: new WorkspacePolicy(workspace),
+      profile: "full",
+      hostReloadEmulatorHandler: async (args) => {
+        calls.push({ name: "reload", args });
+        return JSON.stringify({ ok: true, reloaded: true });
+      },
+      hostObserveEmulatorHandler: async (args) => {
+        calls.push({ name: "observe", args });
+        return JSON.stringify({ ok: true, frame: { width: 128, height: 160, surfaceHash: "h" } });
+      },
+      hostControlEmulatorInputHandler: async (args) => {
+        calls.push({ name: "input", args });
+        return JSON.stringify({ ok: true, applied: true });
+      },
+      hostRunEmulatorScenarioHandler: async (args) => {
+        calls.push({ name: "scenario", args });
+        return JSON.stringify({ ok: true, trace: [] });
+      },
+    });
+
+    await exec(findTool(tools, "reload_emulator"), {
+      params: { mode: "demo" },
+      clear_inputs: true,
+      wait_for_frame_ms: 500,
+    });
+    await exec(findTool(tools, "observe_emulator"), { include_png: true, max_log_lines: 12 });
+    await exec(findTool(tools, "control_emulator_input"), {
+      action: { type: "tap_button", button: "A", duration_ms: 25 },
+    });
+    await exec(findTool(tools, "run_emulator_scenario"), {
+      steps: [{ type: "observe", include_png: false }],
+      timeout_ms: 1000,
+    });
+
+    expect(calls).toEqual([
+      { name: "reload", args: { params: { mode: "demo" }, clear_inputs: true, wait_for_frame_ms: 500 } },
+      { name: "observe", args: { include_png: true, max_log_lines: 12 } },
+      { name: "input", args: { action: { type: "tap_button", button: "A", duration_ms: 25 } } },
+      { name: "scenario", args: { steps: [{ type: "observe", include_png: false }], timeout_ms: 1000 } },
+    ]);
   });
 });

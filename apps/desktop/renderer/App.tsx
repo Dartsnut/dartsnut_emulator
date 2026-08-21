@@ -158,12 +158,12 @@ const PERSONA_AGE_GROUPS: readonly { id: PersonaAgeGroup; label: string }[] = [
 ];
 
 const PERSONA_CARD_SUMMARIES: Record<Exclude<AgentProfileId, "export">, string> = {
-  "child-curious": "Patient, playful, one question at a time.",
-  "child-creator": "Colorful ideas with creative momentum.",
-  "teen-builder": "Technical choices, clearly explained.",
-  "teen-explorer": "Fast exploration with practical tradeoffs.",
-  "adult-vibe": "Polished direction with creative checkpoints.",
-  "adult-shipper": "Practical decisions focused on shipping."
+  "child-curious": "Warm guidance for everyday ideas you can build.",
+  "child-creator": "Playful experiments with bright launch energy.",
+  "teen-builder": "Expressive projects with clear technical thinking.",
+  "teen-explorer": "Fast exploration across tools and tradeoffs.",
+  "adult-vibe": "Personal taste meets useful technology.",
+  "adult-shipper": "Focused execution from concept to launch."
 };
 
 function isValidMachineHost(value: string): boolean {
@@ -665,9 +665,9 @@ const TimelineEntryView = memo(function TimelineEntryView({
       )}
     >
       {entry.role === "agent" && entry.id.startsWith("greeting") ? (
-        <div className={cn("greeting-card", agentProfile && `greeting-card--${agentProfile.gender}`)} role="status">
+        <div className={cn("greeting-card", agentProfile && `greeting-card--${agentProfile.group}`)} role="status">
           <p className="greeting-card__eyebrow">
-            {agentProfile?.group === "export" ? "Neon Pit · ready" : `${agentProfile?.group ?? "agent"} guide · ${agentProfile?.pronouns ?? "ready"} · ready`}
+            {agentProfile?.group === "export" ? "Life/Tech · ready" : `${agentProfile?.group ?? "agent"} studio · ready`}
           </p>
           <p className="greeting-card__title">{agentProfile?.name ?? "Dartsnut Agent"}</p>
           <p className="greeting-card__body">{agentProfile?.greeting ?? entry.text}</p>
@@ -3247,7 +3247,6 @@ export function App() {
                         <span className="agent-profile-card__content">
                           <span className="agent-profile-card__identity">
                             <span className="agent-profile-card__name">{profile.name}</span>
-                            <span className="agent-profile-card__pronouns">{profile.pronouns}</span>
                           </span>
                           <span className="agent-profile-card__description">
                             {PERSONA_CARD_SUMMARIES[profile.id as Exclude<AgentProfileId, "export">]}

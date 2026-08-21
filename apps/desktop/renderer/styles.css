@@ -1351,9 +1351,10 @@ kbd,
   background: linear-gradient(180deg, var(--color-neon-coral), var(--color-neon-mint));
 }
 
-.greeting-card--female::before { background: linear-gradient(180deg, #ff7eb6, #c19cff); }
-.greeting-card--male::before { background: linear-gradient(180deg, #49a8ff, #55d6a7); }
-.greeting-card--neutral::before { background: linear-gradient(180deg, var(--color-neon-coral), var(--color-neon-mint)); }
+.greeting-card--child::before { background: linear-gradient(180deg, #ffca66, var(--color-neon-mint)); }
+.greeting-card--teen::before { background: linear-gradient(180deg, #7bb7ff, var(--color-neon-mint)); }
+.greeting-card--adult::before { background: linear-gradient(180deg, #c19cff, var(--color-neon-coral)); }
+.greeting-card--export::before { background: linear-gradient(180deg, var(--color-neon-coral), var(--color-neon-mint)); }
 
 .greeting-card__eyebrow {
   margin: 0;
@@ -1471,7 +1472,6 @@ kbd,
 .agent-profile-card__content { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .agent-profile-card__identity { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .agent-profile-card__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650; }
-.agent-profile-card__pronouns { flex: 0 0 auto; color: var(--color-text-subtle); font-size: 10px; }
 .agent-profile-card__description { color: var(--color-text-muted); font-size: 12px; line-height: 1.35; }
 .agent-profile-card__select { flex: 0 0 auto; margin-left: auto; color: var(--color-text-subtle); transform: rotate(-90deg); }
 .agent-profile-standard {

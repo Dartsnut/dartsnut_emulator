@@ -12,4 +12,20 @@ describe("agent profiles", () => {
     expect(isAgentProfileId("missing")).toBe(false);
     expect(normalizeAgentProfileId("missing")).toBe("export");
   });
+
+  it("uses life-tech branding without gender metadata", () => {
+    expect(AGENT_PROFILES.map((profile) => profile.name)).toEqual([
+      "Mia · Life Spark",
+      "Leo · Play Lab",
+      "Zoe · Build Lab",
+      "Jay · Signal Scout",
+      "Maya · Future Craft",
+      "Noah · Launch Desk",
+      "Dartsnut Agent"
+    ]);
+    for (const profile of AGENT_PROFILES) {
+      expect(profile).not.toHaveProperty("gender");
+      expect(profile).not.toHaveProperty("pronouns");
+    }
+  });
 });

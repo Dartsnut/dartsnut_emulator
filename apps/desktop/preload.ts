@@ -66,7 +66,8 @@ import {
   type ShellUiTheme,
   type AgentSessionWorkspaceSummary,
   type WidgetConfigScope,
-  type WidgetConfigSnapshot
+  type WidgetConfigSnapshot,
+  type RendererErrorPayload
 } from "@dartsnut/shared-ipc";
 import {
   EMULATOR_IPC_CHANNELS,
@@ -77,6 +78,12 @@ import {
 } from "@dartsnut/emulator-protocol";
 
 const api = {
+  rendererReady: () => ipcRenderer.invoke(IPCChannels.rendererReady) as Promise<void>,
+  reportRendererError: (payload: RendererErrorPayload) => ipcRenderer.invoke(IPCChannels.reportRendererError, payload) as Promise<void>,
+  openStartupLogs: () => ipcRenderer.invoke(IPCChannels.openStartupLogs) as Promise<void>,
+  copyStartupDiagnostics: () => ipcRenderer.invoke(IPCChannels.copyStartupDiagnostics) as Promise<void>,
+  resetRendererState: () => ipcRenderer.invoke(IPCChannels.resetRendererState) as Promise<void>,
+  restartWithoutGpu: () => ipcRenderer.invoke(IPCChannels.restartWithoutGpu) as Promise<void>,
   getBootstrapState: () => ipcRenderer.invoke(IPCChannels.bootstrapState) as Promise<BootstrapState>,
   getWorkspaceSessionSummary: (chatId?: string) =>
     ipcRenderer.invoke(IPCChannels.getWorkspaceSessionSummary, chatId) as Promise<AgentSessionWorkspaceSummary>,

@@ -106,8 +106,9 @@ describe("buildDartsnutAgent", () => {
     expect(child.instructions).toContain("do not start building yet");
     expect(child.instructions).toContain("two or three simple choices");
     expect(child.instructions).toContain("include stopping here as one of the choices");
-    expect(child.instructions).toContain("pronouns: she/her");
-    expect(child.instructions).toContain("warm, expressive, colorful details");
+    expect(child.instructions).toContain("Persona identity: Mia · Life Spark.");
+    expect(child.instructions).not.toContain("pronouns:");
+    expect(child.instructions).toContain("warm, expressive, colorful life-tech details");
     expect(child.instructions).not.toContain("Otherwise proceed without intake ceremony");
     expect(exportAgent.instructions).not.toContain("Speak to a child");
     expect(exportAgent.instructions).toContain("Ask one concise natural-language question only");

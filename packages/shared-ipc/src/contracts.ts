@@ -93,8 +93,20 @@ export const IPCChannels = {
    * Main → renderer: mirror main-process terminal lines into DevTools.
    * Payload must stay free of raw LLM request/response bodies (metadata and safe summaries only).
    */
-  mainProcessConsoleMirror: "agent:main-process-console-mirror"
+  mainProcessConsoleMirror: "agent:main-process-console-mirror",
+  rendererReady: "agent:renderer-ready",
+  reportRendererError: "agent:report-renderer-error",
+  openStartupLogs: "agent:open-startup-logs",
+  copyStartupDiagnostics: "agent:copy-startup-diagnostics",
+  resetRendererState: "agent:reset-renderer-state",
+  restartWithoutGpu: "agent:restart-without-gpu"
 } as const;
+
+export type RendererErrorPayload = {
+  message: string;
+  stack?: string;
+  source?: string;
+};
 
 /** Main → renderer mirror for DevTools; never include raw chat payloads. */
 export type MainProcessConsoleMirrorPayload = {

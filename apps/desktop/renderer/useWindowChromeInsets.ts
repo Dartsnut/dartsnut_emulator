@@ -13,7 +13,17 @@ function applyWindowChromeInsetsCssVars(insets: WindowChromeInsets): void {
 export function useWindowChromeInsets(): void {
   useLayoutEffect(() => {
     const bridge = window.dartsnutApi;
-    void bridge.getWindowChromeInsets().then(applyWindowChromeInsetsCssVars);
-    return bridge.onWindowChromeInsets(applyWindowChromeInsetsCssVars);
+    if (!bridge) {
+      applyWindowChromeInsetsCssVars({ top: 0, left: 0, right: 0, bottom: 0 });
+      return;
+    }
+    void bridge.getWindowChromeInsets()
+      .then(applyWindowChromeInsetsCssVars)
+      .catch(() => applyWindowChromeInsetsCssVars({ top: 0, left: 0, right: 0, bottom: 0 }));
+    try {
+      return bridge.onWindowChromeInsets(applyWindowChromeInsetsCssVars);
+    } catch {
+      return undefined;
+    }
   }, []);
 }

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import dotenv from "dotenv";
 import { spawn, spawnSync } from "node:child_process";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, screen, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, session, shell } from "electron";
 import type { MessageBoxOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { AgentRunCoordinator } from "./agentRunCoordinator";
@@ -95,7 +95,6 @@ import {
   buildPromptWithChatMediaAttachments,
   parseWidgetFontCatalogFromManifest,
   type WidgetFontCatalogEntry,
-  type RendererErrorPayload,
   type WidgetConfigScope,
   type WidgetConfigSnapshot
 } from "@dartsnut/shared-ipc";
@@ -203,49 +202,6 @@ let emulatorBridgeTeardownDone = false;
 /** Current backend-backed LLM run, closed immediately when a user stops or quits the app. */
 let activeDartsnutLlmBridgeRun: DartsnutLlmBridgeRun | null = null;
 let desktopNetwork: DesktopNetwork | null = null;
-let rendererRecoveryReloads = 0;
-let startupShown = false;
-const startupDiagnostics: string[] = [];
-const STARTUP_LOG_MAX_BYTES = 1024 * 1024;
-
-function startupLogPath(): string {
-  return path.join(app.getPath("userData"), "logs", "startup.log");
-}
-
-function safeStartupText(value: unknown): string {
-  return String(value instanceof Error ? value.message : value)
-    .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
-    .replace(/([?&](?:token|api[_-]?key|access[_-]?token)=)[^&#\s]+/gi, "$1[REDACTED]")
-    .slice(0, 4000);
-}
-
-function recordStartupDiagnostic(stage: string, details?: unknown): void {
-  const line = JSON.stringify({
-    at: new Date().toISOString(),
-    stage,
-    ...(details === undefined ? {} : { details: safeStartupText(details) })
-  });
-  startupDiagnostics.push(line);
-  while (startupDiagnostics.length > 200) startupDiagnostics.shift();
-  try {
-    const file = startupLogPath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    if (fs.existsSync(file) && fs.statSync(file).size > STARTUP_LOG_MAX_BYTES) fs.writeFileSync(file, "", "utf8");
-    fs.appendFileSync(file, `${line}\n`, "utf8");
-  } catch {
-    // Diagnostics must never prevent startup.
-  }
-}
-
-function startupDiagnosticsText(): string {
-  return [
-    `Dartsnut Agent ${app.getVersion()}`,
-    `Electron ${process.versions.electron ?? "unknown"} / Chromium ${process.versions.chrome ?? "unknown"}`,
-    `Platform ${process.platform}/${process.arch}`,
-    `GPU safe mode ${process.argv.includes("--disable-gpu") ? "enabled" : "disabled"}`,
-    ...startupDiagnostics
-  ].join("\n");
-}
 
 function cloudFetch(): typeof fetch {
   return desktopNetwork?.fetch ?? fetch;
@@ -2474,7 +2430,6 @@ async function buildSession(
 }
 
 async function createWindow() {
-  recordStartupDiagnostic("window-create");
   readProofState();
   readEmulatorState();
   const restoredWindowState = readWindowState();
@@ -2493,7 +2448,6 @@ async function createWindow() {
     ...restoredBounds,
     minWidth: MIN_WINDOW_WIDTH,
     minHeight: MIN_WINDOW_HEIGHT,
-    show: false,
     backgroundColor: WINDOWS_SHELL_UI.dark.windowBackground,
     ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
     ...(process.platform === "win32"
@@ -2528,34 +2482,13 @@ async function createWindow() {
   };
   win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (isMainFrame) {
-      recordStartupDiagnostic("did-fail-load", { errorCode, errorDescription, validatedURL });
-      if (rendererRecoveryReloads < 1 && win && !win.isDestroyed()) {
-        rendererRecoveryReloads += 1;
-        void win.webContents.reloadIgnoringCache();
-      }
+      console.error("[renderer] navigation failed", { errorCode, errorDescription, validatedURL });
     }
-  });
-  win.webContents.on("preload-error", (_event, preloadPath, error) => {
-    recordStartupDiagnostic("preload-error", { preloadPath, error });
   });
   win.webContents.on("render-process-gone", (_event, details) => {
-    recordStartupDiagnostic("render-process-gone", details);
-    if (rendererRecoveryReloads < 1 && win && !win.isDestroyed()) {
-      rendererRecoveryReloads += 1;
-      void win.webContents.reloadIgnoringCache();
-    }
-  });
-  win.webContents.on("unresponsive", () => recordStartupDiagnostic("unresponsive"));
-  win.webContents.on("responsive", () => recordStartupDiagnostic("responsive"));
-  win.webContents.on("console-message", (_event, level, message, line, sourceId) => {
-    if (level >= 2) recordStartupDiagnostic("renderer-console", { level, message, line, sourceId });
+    console.error("[renderer] process gone", details);
   });
   win.webContents.on("did-finish-load", () => {
-    recordStartupDiagnostic("document-loaded");
-    if (!startupShown && win && !win.isDestroyed()) {
-      startupShown = true;
-      win.show();
-    }
     void syncShellUiThemeFromDomSnapshot().catch(() => {
       /* Theme sync uses executeJavaScript; failures are non-fatal. */
     });
@@ -2563,13 +2496,6 @@ async function createWindow() {
     setTimeout(emitChromeInsetsAndPushStyles, 50);
     setTimeout(emitChromeInsetsAndPushStyles, 300);
   });
-  setTimeout(() => {
-    if (!startupShown && win && !win.isDestroyed()) {
-      recordStartupDiagnostic("startup-visibility-timeout");
-      startupShown = true;
-      win.show();
-    }
-  }, 2500);
   if (process.env.VITE_DEV_SERVER_URL) {
     await win.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
@@ -2611,7 +2537,6 @@ app.whenReady().then(async () => {
         });
       }
     });
-    recordStartupDiagnostic("proxy-ready");
     try {
       await configureSystemProxySession(session.fromPartition("electron-updater", { cache: false }));
     } catch (error) {
@@ -2628,7 +2553,6 @@ app.whenReady().then(async () => {
       message: "Checking runtime..."
     });
     devLog.info("[runtime] Starting runtime initialization");
-    recordStartupDiagnostic("runtime-initialization-started");
     const runtime = await ensureRuntime(
       runtimeDir(),
       path.join(repoRoot, "requirements.txt"),
@@ -2640,7 +2564,6 @@ app.whenReady().then(async () => {
     );
 
     pythonExec = runtime.pythonPath;
-    recordStartupDiagnostic("runtime-initialization-finished");
     devLog.info("[runtime] Runtime ready", { pythonPath: pythonExec, uvPath: runtime.uvPath });
 
     setPythonRuntimeStatus(null);
@@ -2730,46 +2653,6 @@ app.on("will-quit", () => {
   assetManager.stop();
   stopDeployConfWatcher();
   void disconnectDeployMachine();
-});
-
-ipcMain.handle(IPCChannels.rendererReady, () => {
-  recordStartupDiagnostic("renderer-ready");
-  if (!startupShown && win && !win.isDestroyed()) {
-    startupShown = true;
-    win.show();
-  }
-});
-
-ipcMain.handle(IPCChannels.reportRendererError, (_event: unknown, payload: RendererErrorPayload) => {
-  recordStartupDiagnostic("renderer-error", {
-    source: payload?.source,
-    message: payload?.message,
-    stack: payload?.stack
-  });
-});
-
-ipcMain.handle(IPCChannels.openStartupLogs, async () => {
-  await shell.openPath(path.dirname(startupLogPath()));
-});
-
-ipcMain.handle(IPCChannels.copyStartupDiagnostics, () => {
-  clipboard.writeText(startupDiagnosticsText());
-});
-
-ipcMain.handle(IPCChannels.resetRendererState, async () => {
-  if (!win || win.isDestroyed()) return;
-  await win.webContents.executeJavaScript(`(() => {
-    for (const key of ["dartsnut-theme", "dartsnut-analytics-enabled", "dartsnut-chat-pane-width", "dartsnut-chat-pane-ratio", "dartsnut-workspace-menu-width", "dartsnut-workspace-menu-collapsed"]) localStorage.removeItem(key);
-    sessionStorage.clear();
-  })()`);
-  await win.webContents.reload();
-});
-
-ipcMain.handle(IPCChannels.restartWithoutGpu, () => {
-  if (process.argv.includes("--disable-gpu")) return;
-  recordStartupDiagnostic("gpu-safe-restart-requested");
-  app.relaunch({ args: [...process.argv.slice(1), "--disable-gpu"] });
-  app.quit();
 });
 
 ipcMain.handle(IPCChannels.windowChromeInsets, (): WindowChromeInsets => {

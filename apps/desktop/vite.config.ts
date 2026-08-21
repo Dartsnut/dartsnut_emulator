@@ -12,18 +12,7 @@ const emulatorProtocolEntry = path.resolve(__dirname, "../../packages/emulator-p
 
 export default defineConfig({
   base: "./",
-  plugins: [
-    react(),
-    tailwindcss(),
-    {
-      name: "desktop-file-origin-assets",
-      transformIndexHtml(html) {
-        // Electron loads packaged assets from file://; crossorigin on local module assets
-        // can turn a valid file into an opaque CORS request in WebKit/Electron.
-        return html.replace(/\s+crossorigin(?:="[^"]*")?/g, "");
-      }
-    }
-  ],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       "@dartsnut/shared-ipc": sharedIpcEntry,

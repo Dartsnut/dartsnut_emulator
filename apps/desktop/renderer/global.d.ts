@@ -61,7 +61,6 @@ import type {
   CommunityWithdrawAppVersionRequest,
   CommunityWithdrawAppVersionResponse,
   WindowChromeInsets,
-  RendererErrorPayload,
   type ShellUiTheme,
   type MainProcessConsoleMirrorPayload,
   type WidgetConfigScope,
@@ -77,12 +76,6 @@ import type {
 declare global {
   interface Window {
     dartsnutApi: {
-      rendererReady: () => Promise<void>;
-      reportRendererError: (payload: RendererErrorPayload) => Promise<void>;
-      openStartupLogs: () => Promise<void>;
-      copyStartupDiagnostics: () => Promise<void>;
-      resetRendererState: () => Promise<void>;
-      restartWithoutGpu: () => Promise<void>;
       getBootstrapState: () => Promise<BootstrapState>;
       getWorkspaceSessionSummary: (chatId?: string) => Promise<AgentSessionWorkspaceSummary>;
       listProjects: () => Promise<ProjectTree>;

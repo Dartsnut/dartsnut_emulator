@@ -12,7 +12,6 @@ const emulatorProtocolEntry = path.resolve(__dirname, "../../packages/emulator-p
 
 export default defineConfig({
   base: "./",
-  envDir: path.resolve(__dirname, "../.."),
   plugins: [
     react(),
     tailwindcss(),

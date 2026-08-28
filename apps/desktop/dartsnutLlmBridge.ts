@@ -130,6 +130,24 @@ function requestPath(input: RequestInfo | URL): string {
   }
 }
 
+function assertBridgeModelEndpoint(input: RequestInfo | URL, baseApi: string): void {
+  let requested: URL;
+  let bridgeBase: URL;
+  try {
+    requested = new URL(input instanceof Request ? input.url : String(input));
+    bridgeBase = new URL(trimBaseApi(baseApi));
+  } catch {
+    throw new Error("Dartsnut LLM bridge request URL is invalid.");
+  }
+  const allowedPaths = new Set([
+    `${bridgeBase.pathname.replace(/\/$/, "")}/agent/llm/v1/chat/completions`.replace(/\/+/g, "/"),
+    `${bridgeBase.pathname.replace(/\/$/, "")}/agent/llm/v1/responses`.replace(/\/+/g, "/")
+  ]);
+  if (requested.origin !== bridgeBase.origin || !allowedPaths.has(requested.pathname)) {
+    throw new Error("Dartsnut LLM bridge refused a request outside its model endpoints.");
+  }
+}
+
 function summarizeResponsesRequest(input: RequestInfo | URL, init?: RequestInit): Record<string, unknown> {
   const body = typeof init?.body === "string" ? init.body : undefined;
   let parsed: Record<string, unknown> | null = null;
@@ -321,6 +339,7 @@ export async function startDartsnutLlmBridgeRun(options: {
   let finishPromise: Promise<void> | null = null;
   let finishReason: string | null = null;
   const bridgeFetch: FetchLike = async (input, init) => {
+    assertBridgeModelEndpoint(input, options.baseApi);
     let response: Response;
     const requestAt = Date.now();
     const requestSummary = summarizeResponsesRequest(input, init);

@@ -35,4 +35,23 @@ describe("fetchBufferedModelResponse", () => {
       "https://example.com/v1/responses"
     )).rejects.toThrow("net::ERR_CONNECTION_CLOSED");
   });
+
+  it("returns after first SSE record without buffering the whole stream", async () => {
+    let release: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(new TextEncoder().encode("data: first\n\n"));
+        await blocked;
+        controller.enqueue(new TextEncoder().encode("data: second\n\n"));
+        controller.close();
+      }
+    });
+    const response = await fetchBufferedModelResponse(
+      vi.fn(async () => new Response(stream, { headers: { "content-type": "text/event-stream" } })),
+      "https://example.com/v1/responses"
+    );
+    release?.();
+    expect(await response.text()).toBe("data: first\n\ndata: second\n\n");
+  });
 });

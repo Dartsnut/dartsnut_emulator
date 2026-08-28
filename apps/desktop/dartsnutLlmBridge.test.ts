@@ -80,6 +80,29 @@ test("starts run and injects account token plus run id into model requests", asy
   assert.match(serializedDiagnostics, /second-caller/);
 });
 
+test("refuses to attach member credentials outside bridge model endpoints", async () => {
+  const calls = [];
+  const result = await startDartsnutLlmBridgeRun({
+    baseApi: "https://api.dartsnut.com",
+    token: "community-secret",
+    runId: "run-endpoint-guard",
+    fetchImpl: async (input, init) => {
+      calls.push({ input: String(input), init });
+      return new Response(JSON.stringify({ code: 1001 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  await assert.rejects(
+    result.run.modelConfig.fetchImpl("https://evil.example/v1/responses", {}),
+    /outside its model endpoints/
+  );
+  assert.equal(calls.length, 1);
+});
+
 test("logs model request shape without prompt or tool arguments", async () => {
   const diagnostics = [];
   const fetchImpl = async (input) => new Response(

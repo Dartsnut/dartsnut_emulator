@@ -21,25 +21,22 @@ describe("PoloAI Responses compatibility", () => {
         response: {
           output: [
             { type: "message", status: "completed" },
-            { type: "function_call", status: "done" },
+            { type: "function_call", status: "completed" },
             { type: "message", status: "completed" }
           ]
         }
       },
-      normalizedCount: 1
+      normalizedCount: 2
     });
   });
 
-  it("only rewrites finished status in incomplete responses", () => {
+  it("uses incomplete status for invalid output in an incomplete response", () => {
     const input = {
       type: "response.incomplete",
-      response: { output: [{ type: "message", status: "finished" }, { type: "message", status: null }] }
+      response: { output: [{ type: "message", status: null }] }
     };
     expect(normalizePoloAiTerminalPayload(input)).toEqual({
-      payload: {
-        type: "response.incomplete",
-        response: { output: [{ type: "message", status: "incomplete" }, { type: "message", status: null }] }
-      },
+      payload: { type: "response.incomplete", response: { output: [{ type: "message", status: "incomplete" }] } },
       normalizedCount: 1
     });
   });

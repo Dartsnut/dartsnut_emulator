@@ -83,6 +83,39 @@ describe("ProjectStore lazy chat persistence", () => {
   });
 });
 
+describe("ProjectStore legacy migration", () => {
+  it("drops incomplete legacy sessions without blocking project migration", () => {
+    const userDataPath = makeTemporaryRoot();
+    const projectFolder = path.join(makeTemporaryRoot(), "game");
+    const legacy = path.join(projectFolder, ".dartsnut", "agent-session");
+    fs.mkdirSync(legacy, { recursive: true });
+    const transcript = path.join(legacy, "transcript.jsonl");
+    fs.writeFileSync(transcript, "recoverable\n");
+    const store = new ProjectStore(userDataPath);
+    const project = store.ensureProject(projectFolder, "Game");
+
+    expect(() => store.migrateLegacy(project)).not.toThrow();
+    expect(store.list().chats).toEqual([]);
+    expect(fs.existsSync(transcript)).toBe(false);
+    expect(store.getProject(project.id)?.migrationComplete).toBe(true);
+  });
+
+  it("drops legacy sessions with unsafe session IDs without throwing", () => {
+    const userDataPath = makeTemporaryRoot();
+    const projectFolder = path.join(makeTemporaryRoot(), "game");
+    const legacy = path.join(projectFolder, ".dartsnut", "agent-session");
+    fs.mkdirSync(legacy, { recursive: true });
+    fs.writeFileSync(path.join(legacy, "manifest.json"), JSON.stringify({ sessionId: "../../outside" }));
+    const store = new ProjectStore(userDataPath);
+    const project = store.ensureProject(projectFolder, "Game");
+
+    expect(() => store.migrateLegacy(project)).not.toThrow();
+    expect(store.list().chats).toEqual([]);
+    expect(fs.existsSync(legacy)).toBe(false);
+    expect(store.getProject(project.id)?.migrationComplete).toBe(true);
+  });
+});
+
 describe("ProjectStore project removal", () => {
   it("removes project metadata and every chat cache without touching source files", () => {
     const userDataPath = makeTemporaryRoot();

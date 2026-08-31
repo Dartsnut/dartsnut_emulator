@@ -35,6 +35,7 @@ import type {
   DeployConnectResponse,
   DeployEligibility,
   DeployActionResponse,
+  DeployFrameEvent,
   DeployLaunchRequest,
   CommunitySessionInfo,
   CommunityCancelGoogleLoginResponse,
@@ -141,9 +142,11 @@ declare global {
       deployDisconnect: () => Promise<DeployActionResponse>;
       deployRun: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
       deployReload: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
+      deployApplyWidgetParams: (request: DeployLaunchRequest) => Promise<DeployActionResponse>;
       deployStop: () => Promise<DeployActionResponse>;
       deployOpenLocalNetworkSettings: () => Promise<DeployActionResponse>;
       onDeployLog: (listener: (line: string) => void) => () => void;
+      onDeployFrame: (listener: (event: DeployFrameEvent) => void) => () => void;
       communityGetSession: () => Promise<CommunitySessionInfo>;
       communityLogin: (request: CommunityLoginRequest) => Promise<CommunityLoginResponse>;
       communitySetPassword: (request: CommunitySetPasswordRequest) => Promise<CommunitySetPasswordResponse>;

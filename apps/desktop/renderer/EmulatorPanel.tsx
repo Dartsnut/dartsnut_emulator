@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Camera, List, LoaderCircle, RotateCw, Square, Video, Volume2, VolumeX, X, ZoomIn } from "lucide-react";
-import type { WidgetConfigSnapshot, WidgetFieldValues } from "@dartsnut/shared-ipc";
+import type { DeployFrameEvent, WidgetConfigSnapshot, WidgetFieldValues } from "@dartsnut/shared-ipc";
 import {
   createHiddenVenvPrepDisplay,
   nextVenvPrepDisplay,
@@ -131,6 +131,7 @@ export function EmulatorPanel({
   const venvPrepDisplayRef = useRef<VenvPrepDisplay>(createHiddenVenvPrepDisplay());
   const venvPrepHideTimerRef = useRef<number | null>(null);
   const stateRef = useRef<EmulatorStateSnapshot>(defaultState);
+  const remoteSideloadActiveRef = useRef(false);
   const normalizedWidgetType = state.widgetType?.toLowerCase() ?? null;
   const hasResolvedWorkspaceType = Boolean(state.widgetPath && normalizedWidgetType);
   const showParamsPanel = shouldShowWidgetParams(normalizedWidgetType, widgetConfig.status);
@@ -417,7 +418,7 @@ export function EmulatorPanel({
           venvPrepHideTimerRef.current = null;
         }, hideDelayMs);
       }
-      if (!nextState.running && nextState.widgetPath == null) {
+      if (!remoteSideloadActiveRef.current && !nextState.running && nextState.widgetPath == null) {
         wipePreviewCanvas();
       }
       const isCaptureComplete =
@@ -439,7 +440,7 @@ export function EmulatorPanel({
     });
 
     const stopFrame = window.dartsnutApi.onEmulatorFrame((frame: EmulatorFrame) => {
-      if (stateRef.current.widgetPath == null) {
+      if (remoteSideloadActiveRef.current || stateRef.current.widgetPath == null) {
         return;
       }
       const now = performance.now();
@@ -448,6 +449,27 @@ export function EmulatorPanel({
       if (!frameWorkerRef.current) return;
       const job: PendingFrameJob = {
         ...frame,
+        generation: frameRenderGenerationRef.current,
+      };
+      if (workerBusyRef.current) {
+        pendingFrameRef.current = job;
+        return;
+      }
+      postFrameJob(job);
+    });
+
+    const stopDeployFrame = window.dartsnutApi.onDeployFrame?.((event: DeployFrameEvent) => {
+      remoteSideloadActiveRef.current = event.active;
+      if (!event.active) {
+        if (!stateRef.current.running) wipePreviewCanvas();
+        return;
+      }
+      const now = performance.now();
+      captureTimesRef.current.push(now);
+      updateNormalizedFps(now);
+      if (!frameWorkerRef.current) return;
+      const job: PendingFrameJob = {
+        ...event.frame,
         generation: frameRenderGenerationRef.current,
       };
       if (workerBusyRef.current) {
@@ -475,6 +497,7 @@ export function EmulatorPanel({
     return () => {
       stopState();
       stopFrame();
+      stopDeployFrame?.();
       stopLog();
       frameWorkerRef.current?.terminate();
       frameWorkerRef.current = null;

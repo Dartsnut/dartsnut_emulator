@@ -16,6 +16,10 @@ import {
   remoteAppPythonBin,
   remoteLegacyPythonBin,
 } from "./deployMachineScripts";
+import {
+  SideloadWebSocketClient,
+  type SideloadFrameEvent,
+} from "./deployMachineSideload";
 
 const SSH_USER = "rpi";
 const SSH_PASSWORD = "rpi";
@@ -33,6 +37,8 @@ const REMOTE_DARTSNUT_ROOT = "/home/rpi/dartsnut_rpi";
 const REMOTE_UV_BIN = `${REMOTE_DARTSNUT_ROOT}/uv`;
 
 export type DeployLogFn = (line: string) => void;
+export type DeployFrameFn = (frame: SideloadFrameEvent | null) => void;
+export type DeployMode = "safe_sideload" | "legacy_unsafe";
 
 function runTarCreate(workspaceRoot: string, outFile: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -162,13 +168,38 @@ export class DeployMachineSession {
 
   private remoteUsesUv = false;
 
-  constructor(private readonly emitLog: DeployLogFn) { }
+  private deployModeValue: DeployMode = "legacy_unsafe";
+
+  private readonly sideloadClient: SideloadWebSocketClient;
+
+  constructor(
+    private readonly emitLog: DeployLogFn,
+    private readonly emitFrame: DeployFrameFn = () => { },
+  ) {
+    this.sideloadClient = new SideloadWebSocketClient({
+      onLog: (entry) => this.emitLog(`[sideload][${entry.stream}] ${entry.text}`),
+      onFrame: (frame) => this.emitFrame(frame),
+      onExit: (event) => {
+        this.emitFrame(null);
+        this.emitLog(`[sideload] exited: ${event.reason}${event.exitCode == null ? "" : ` (code ${event.exitCode})`}`);
+      },
+      onStatus: (message) => this.emitLog(`[sideload] ${message}`),
+    });
+  }
 
   get connected(): boolean {
     return this.client !== null;
   }
 
-  async connect(host: string): Promise<{ deviceName: string | null }> {
+  get deployMode(): DeployMode {
+    return this.deployModeValue;
+  }
+
+  get safeSideloadSupported(): boolean {
+    return this.deployModeValue === "safe_sideload";
+  }
+
+  async connect(host: string): Promise<{ deviceName: string | null; deployMode: DeployMode }> {
     await this.disconnect();
     const trimmed = host.trim();
     if (!trimmed) {
@@ -238,16 +269,59 @@ export class DeployMachineSession {
     });
     await this.probeRemoteUv();
     const deviceName = await this.readDeviceName();
-    return { deviceName };
+    const capabilities = await this.sideloadClient.connectAndProbe(trimmed);
+    this.deployModeValue = capabilities ? "safe_sideload" : "legacy_unsafe";
+    if (capabilities) {
+      this.emitLog(
+        `[deploy] Safe sideload protocol v${capabilities.protocolVersion} · heartbeat ${capabilities.heartbeatIntervalSeconds}s/${capabilities.heartbeatExpirySeconds}s`,
+      );
+    } else {
+      this.emitLog("[deploy] WARNING: legacy unsafe deploy; firmware has no safe sideload protocol.");
+    }
+    return { deviceName, deployMode: this.deployModeValue };
   }
 
   async disconnect(): Promise<void> {
     this.stopLogTail();
+    await this.stopSideload().catch(() => { });
+    await this.sideloadClient.close(false).catch(() => { });
+    this.emitFrame(null);
     this.remoteUsesUv = false;
+    this.deployModeValue = "legacy_unsafe";
     if (this.client) {
       this.client.end();
       this.client = null;
     }
+  }
+
+  async startSideload(
+    workspaceRoot: string,
+    appId: string,
+    size: readonly [number, number],
+    params: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.safeSideloadSupported) throw new Error("Safe sideload protocol is unavailable.");
+    const sizeName = `${size[0]}x${size[1]}`;
+    const supported = this.sideloadClient.capabilities?.supportedSizes ?? [];
+    if (!supported.includes(sizeName)) throw new Error(`Firmware does not support sideload size ${sizeName}.`);
+    const sessionId = await this.sideloadClient.start(workspaceRoot, appId, size, params);
+    this.emitLog(`[sideload] running ${appId} (${sizeName}) · session ${sessionId}`);
+  }
+
+  async stopSideload(): Promise<void> {
+    if (!this.sideloadClient.active) {
+      this.emitFrame(null);
+      return;
+    }
+    await this.sideloadClient.stop();
+    this.emitFrame(null);
+    this.emitLog("[sideload] stopped; production display restored");
+  }
+
+  async applySideloadParams(params: Record<string, unknown>): Promise<void> {
+    if (!this.safeSideloadSupported) throw new Error("Safe sideload protocol is unavailable.");
+    await this.sideloadClient.updateParams(params);
+    this.emitLog("[sideload] widget parameters applied without uploading source files");
   }
 
   private async probeRemoteUv(): Promise<void> {

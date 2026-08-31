@@ -63,6 +63,7 @@ export const DeployPanel = memo(function DeployPanel({
   const [host, setHost] = useState("");
   const [deviceName, setDeviceName] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [deployMode, setDeployMode] = useState<"safe_sideload" | "legacy_unsafe" | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -203,6 +204,7 @@ export const DeployPanel = memo(function DeployPanel({
     setBusyAction("connect");
     setDeviceName(null);
     setConnected(false);
+    setDeployMode(null);
     try {
       const result: DeployConnectResponse = await api.deployConnect({ host });
       if (!result.ok) {
@@ -213,6 +215,7 @@ export const DeployPanel = memo(function DeployPanel({
       setLocalNetworkRetryPrompt(false);
       setConnected(true);
       setDeviceName(result.deviceName ?? null);
+      setDeployMode(result.deployMode);
     } catch (e) {
       setLocalNetworkRetryPrompt(false);
       setLastError(e instanceof Error ? e.message : String(e));
@@ -235,6 +238,7 @@ export const DeployPanel = memo(function DeployPanel({
       }
       setConnected(false);
       setDeviceName(null);
+      setDeployMode(null);
     } catch (e) {
       setLastError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -287,7 +291,7 @@ export const DeployPanel = memo(function DeployPanel({
     setLastError(null);
     setBusyAction("reload");
     try {
-      const result = await api.deployReload({ widgetParamsJson: normalized });
+      const result = await api.deployApplyWidgetParams({ widgetParamsJson: normalized });
       if (!result.ok) {
         setLastError(result.error);
       }
@@ -358,6 +362,16 @@ export const DeployPanel = memo(function DeployPanel({
           {settingsOpenError ? (
             <span className="text-xs text-[var(--color-error-text)]">{settingsOpenError}</span>
           ) : null}
+        </div>
+      ) : null}
+
+      {connected && deployMode === "legacy_unsafe" ? (
+        <div className="shrink-0 rounded-lg border border-[rgba(245,158,11,0.42)] bg-[rgba(245,158,11,0.10)] px-3 py-2 text-[13px] text-[var(--color-warning-text)]">
+          Legacy unsafe deploy. This firmware stops production service, writes to fixed pdoshm, and cannot recover through heartbeat. Update firmware for isolated sideload sessions.
+        </div>
+      ) : connected && deployMode === "safe_sideload" ? (
+        <div className="shrink-0 rounded-lg border border-edge bg-[var(--color-surface-elevated)] px-3 py-2 text-xs text-[var(--color-text-subtle)]">
+          Safe local sideload · production config and remote sync stay unchanged
         </div>
       ) : null}
 

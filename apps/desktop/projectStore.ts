@@ -141,14 +141,27 @@ export class ProjectStore {
     const legacy = resolveAgentSessionDir(project.folderPath);
     if (!fs.existsSync(legacy)) { project.migrationComplete = true; this.save(); return; }
     const files = ["manifest.json", "transcript.jsonl", "transactions.jsonl", "conversation.json", "model-chain.json", "usage.json"];
-    const chatId = (() => { try { const m = JSON.parse(fs.readFileSync(path.join(legacy, "manifest.json"), "utf8")) as { sessionId?: string }; return m.sessionId || randomUUID(); } catch { return randomUUID(); } })();
-    let chat = this.getChat(chatId);
-    if (!chat) { const stamp = now(); chat = { id: chatId, projectId: project.id, title: "Migrated chat", createdAt: stamp, updatedAt: stamp }; this.data.chats.push(chat); }
-    const target = this.chatDir(chat.id); fs.mkdirSync(target, { recursive: true });
-    for (const file of files) { const src = path.join(legacy, file); if (fs.existsSync(src)) fs.copyFileSync(src, path.join(target, file)); }
-    if (!fs.existsSync(path.join(target, "manifest.json"))) throw new Error("Legacy session manifest missing after migration.");
-    for (const file of files) { const src = path.join(legacy, file); if (fs.existsSync(src)) fs.rmSync(src); }
-    try { fs.rmdirSync(legacy); fs.rmdirSync(path.dirname(legacy)); } catch { /* non-empty or unrelated files */ }
+    let chatId: string;
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(legacy, "manifest.json"), "utf8")) as { sessionId?: string };
+      if (!manifest.sessionId) throw new Error("Legacy session manifest has no session ID.");
+      chatId = manifest.sessionId;
+    } catch {
+      try { fs.rmSync(legacy, { recursive: true, force: true }); } catch { /* best effort */ }
+      project.migrationComplete = true; project.updatedAt = now(); this.save(); return;
+    }
+    const existingChat = this.getChat(chatId);
+    const chat = existingChat ?? (() => { const stamp = now(); const created = { id: chatId, projectId: project.id, title: "Migrated chat", createdAt: stamp, updatedAt: stamp }; this.data.chats.push(created); return created; })();
+    let target: string | null = null;
+    try {
+      target = this.chatDir(chat.id); fs.mkdirSync(target, { recursive: true });
+      for (const file of files) { const src = path.join(legacy, file); if (fs.existsSync(src)) fs.copyFileSync(src, path.join(target, file)); }
+      if (!fs.existsSync(path.join(target, "manifest.json"))) throw new Error("Legacy session manifest missing after migration.");
+    } catch {
+      if (target) { try { fs.rmSync(target, { recursive: true, force: true }); } catch { /* best effort */ } }
+      if (!existingChat) this.data.chats = this.data.chats.filter((candidate) => candidate !== chat);
+    }
+    try { fs.rmSync(legacy, { recursive: true, force: true }); } catch { /* best effort */ }
     project.migrationComplete = true; project.updatedAt = now(); this.save();
   }
 }

@@ -35,6 +35,7 @@ import {
   type DeployActionResponse,
   type DeployConnectRequest,
   type DeployConnectResponse,
+  type DeployConnectionState,
   type DeployEligibility,
   type DeployFrameEvent,
   type DeployLaunchRequest,
@@ -478,6 +479,10 @@ function emitDeployLog(line: string): void {
   sendToRenderer(IPCChannels.deployLog, line);
 }
 
+function emitDeployConnection(state: DeployConnectionState): void {
+  sendToRenderer(IPCChannels.deployConnectionChanged, state);
+}
+
 function emitDeployFrame(frame: SideloadFrameEvent | null): void {
   if (!frame) {
     sendToRenderer(IPCChannels.deployFrame, { active: false } satisfies DeployFrameEvent);
@@ -517,7 +522,7 @@ function emitCommunitySubmitProgress(stage: CommunitySubmitProgressStage, messag
 
 function getDeployMachineSession(): DeployMachineSession {
   if (!deployMachineSession) {
-    deployMachineSession = new DeployMachineSession(emitDeployLog, emitDeployFrame);
+    deployMachineSession = new DeployMachineSession(emitDeployLog, emitDeployFrame, emitDeployConnection);
   }
   return deployMachineSession;
 }
@@ -546,6 +551,7 @@ async function disconnectDeployMachine(): Promise<void> {
     await deployMachineSession.disconnect().catch(() => { });
     deployMachineSession = null;
   }
+  emitDeployConnection({ connected: false, deviceName: null, deployMode: null });
 }
 
 async function restoreDeployMachineForQuit(): Promise<void> {
@@ -1455,14 +1461,28 @@ function emitProjectSwitchProgress(progress: ProjectSwitchProgress): void {
 }
 
 async function stopRuntimeForProjectTransition(confirmStop = true): Promise<"ready" | "stopped" | "cancelled"> {
-  const runtimeActive = Boolean(emulatorState.running || deployMachineSession?.connected);
+  const runtimeActive = Boolean(emulatorState.running || deployMachineSession?.connected || deployMachineSession?.connecting);
   if (!runtimeActive) return "ready";
   if (confirmStop) {
     const { response } = await showAppMessageBox({ type: "question", buttons: ["Switch project", "Cancel"], defaultId: 1, cancelId: 1, title: "Switch project", message: "Emulator or remote deployment is active. Stop it and switch project?" });
     if (response !== 0) return "cancelled";
   }
   emitProjectSwitchProgress({ active: true, stage: "stopping-deployment", message: "Stopping remote deployment…" });
-  if (deployMachineSession?.connected) await disconnectDeployMachine();
+  if (deployMachineSession?.connected || deployMachineSession?.connecting) {
+    const session = deployMachineSession;
+    try {
+      if (session?.safeSideloadSupported) {
+        await session.stopSideload();
+      } else if (session?.connected && !session.connecting) {
+        session.stopLogTail();
+        await session.killDebugPython();
+        await session.killAppMainPyProcesses();
+        await session.restartSystemdService();
+      }
+    } finally {
+      await disconnectDeployMachine();
+    }
+  }
   emitProjectSwitchProgress({ active: true, stage: "stopping-emulator", message: "Stopping emulator…" });
   if (emulatorState.running) await gracefulStopEmulatorBridge();
   return "stopped";
@@ -3661,8 +3681,12 @@ ipcMain.handle(
 ipcMain.handle(IPCChannels.deployDisconnect, async (): Promise<DeployActionResponse> => {
   try {
     const session = getDeployMachineSession();
-    if (!session.connected) {
+    if (!session.connected && !session.connecting) {
       return { ok: false, error: "SSH not connected." };
+    }
+    if (!session.connected) {
+      await disconnectDeployMachine();
+      return { ok: true };
     }
     if (session.safeSideloadSupported) {
       emitDeployLog("[sideload] Disconnect — stop local session and restore production…");

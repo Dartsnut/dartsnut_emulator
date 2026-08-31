@@ -3,6 +3,7 @@ import type {
   CommunityDeployDevice,
   CommunitySessionInfo,
   DeployConnectResponse,
+  DeployConnectionState,
   WidgetConfigSnapshot,
   WidgetFieldValues
 } from "@dartsnut/shared-ipc";
@@ -25,6 +26,7 @@ type ApiErrorSnackbarState = {
 
 export type DeployPanelProps = {
   active: boolean;
+  workspaceIdentity: string | null;
   showWidgetParams: boolean;
   widgetConfig: WidgetConfigSnapshot;
   widgetValuesByConfig: WidgetValueStore;
@@ -50,6 +52,7 @@ function formatDeviceOptionLabel(device: CommunityDeployDevice): string {
 
 export const DeployPanel = memo(function DeployPanel({
   active,
+  workspaceIdentity,
   showWidgetParams,
   widgetConfig,
   widgetValuesByConfig,
@@ -70,6 +73,8 @@ export const DeployPanel = memo(function DeployPanel({
   const logRef = useRef<HTMLPreElement | null>(null);
   const [localNetworkRetryPrompt, setLocalNetworkRetryPrompt] = useState(false);
   const [settingsOpenError, setSettingsOpenError] = useState<string | null>(null);
+  const connectionGenerationRef = useRef(0);
+  const previousWorkspaceIdentityRef = useRef(workspaceIdentity);
 
   const [devices, setDevices] = useState<CommunityDeployDevice[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
@@ -144,6 +149,34 @@ export const DeployPanel = memo(function DeployPanel({
   }, [active, api, loggedIn, onAuthRequired, onCommunitySessionChange]);
 
   useEffect(() => {
+    if (previousWorkspaceIdentityRef.current === workspaceIdentity) return;
+    previousWorkspaceIdentityRef.current = workspaceIdentity;
+    connectionGenerationRef.current += 1;
+    setConnected(false);
+    setDeviceName(null);
+    setDeployMode(null);
+    setLastError(null);
+    setLocalNetworkRetryPrompt(false);
+    setSettingsOpenError(null);
+    setBusyAction(null);
+    setLogLines([]);
+  }, [workspaceIdentity]);
+
+  useEffect(() => {
+    if (!api?.onDeployConnectionChanged) return;
+    return api.onDeployConnectionChanged((state: DeployConnectionState) => {
+      setConnected(state.connected);
+      setDeviceName(state.connected ? state.deviceName : null);
+      setDeployMode(state.connected ? state.deployMode : null);
+      // `deployConnect` tears down any previous session first, which emits a
+      // transient disconnected event. Keep the visible Connecting state until
+      // the connect request itself settles; only finish an explicit disconnect
+      // from the authoritative disconnected event.
+      if (!state.connected) setBusyAction((action) => action === "disconnect" ? null : action);
+    });
+  }, [api]);
+
+  useEffect(() => {
     void loadDevices();
   }, [loadDevices, communitySessionVersion]);
 
@@ -205,22 +238,28 @@ export const DeployPanel = memo(function DeployPanel({
     setDeviceName(null);
     setConnected(false);
     setDeployMode(null);
+    const generation = ++connectionGenerationRef.current;
     try {
       const result: DeployConnectResponse = await api.deployConnect({ host });
       if (!result.ok) {
+        if (generation !== connectionGenerationRef.current) return;
         setLocalNetworkRetryPrompt(Boolean(result.needsLocalNetworkPermission));
         setLastError(result.error);
         return;
       }
+      if (generation !== connectionGenerationRef.current) return;
       setLocalNetworkRetryPrompt(false);
       setConnected(true);
       setDeviceName(result.deviceName ?? null);
       setDeployMode(result.deployMode);
     } catch (e) {
+      if (generation !== connectionGenerationRef.current) return;
       setLocalNetworkRetryPrompt(false);
       setLastError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusyAction(null);
+      if (generation === connectionGenerationRef.current) {
+        setBusyAction(null);
+      }
     }
   }
 

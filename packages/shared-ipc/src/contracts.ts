@@ -65,6 +65,7 @@ export const IPCChannels = {
   /** Main → renderer: workspace `conf.json` created/changed; payload is {@link DeployEligibility}. */
   deployEligibilityChanged: "deploy:eligibility-changed",
   deployConnect: "deploy:connect",
+  deployConnectionChanged: "deploy:connection-changed",
   deployDisconnect: "deploy:disconnect",
   deployRun: "deploy:run",
   deployReload: "deploy:reload",
@@ -533,6 +534,12 @@ export interface DeployConnectRequest {
 export type DeployConnectResponse =
   | { ok: true; deviceName: string | null; deployMode: "safe_sideload" | "legacy_unsafe" }
   | { ok: false; error: string; needsLocalNetworkPermission?: true; canRetry?: true };
+
+export type DeployConnectionState = {
+  connected: boolean;
+  deviceName: string | null;
+  deployMode: "safe_sideload" | "legacy_unsafe" | null;
+};
 
 export type DeployActionResponse = { ok: true } | { ok: false; error: string };
 

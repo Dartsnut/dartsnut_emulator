@@ -35,6 +35,7 @@ import {
   type UnbindSlotResponse,
   type DeployConnectRequest,
   type DeployConnectResponse,
+  type DeployConnectionState,
   type DeployEligibility,
   type DeployActionResponse,
   type DeployFrameEvent,
@@ -228,6 +229,11 @@ const api = {
   },
   deployConnect: (request: DeployConnectRequest) =>
     ipcRenderer.invoke(IPCChannels.deployConnect, request) as Promise<DeployConnectResponse>,
+  onDeployConnectionChanged: (listener: (state: DeployConnectionState) => void) => {
+    const handler = (_event: unknown, state: DeployConnectionState) => listener(state);
+    ipcRenderer.on(IPCChannels.deployConnectionChanged, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.deployConnectionChanged, handler);
+  },
   deployDisconnect: () =>
     ipcRenderer.invoke(IPCChannels.deployDisconnect) as Promise<DeployActionResponse>,
   deployRun: (request?: DeployLaunchRequest) =>

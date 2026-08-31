@@ -33,6 +33,7 @@ import type {
   UnbindSlotResponse,
   DeployConnectRequest,
   DeployConnectResponse,
+  DeployConnectionState,
   DeployEligibility,
   DeployActionResponse,
   DeployFrameEvent,
@@ -139,6 +140,7 @@ declare global {
       deployGetEligibility: () => Promise<DeployEligibility>;
       onDeployEligibility: (listener: (eligibility: DeployEligibility) => void) => () => void;
       deployConnect: (request: DeployConnectRequest) => Promise<DeployConnectResponse>;
+      onDeployConnectionChanged: (listener: (state: DeployConnectionState) => void) => () => void;
       deployDisconnect: () => Promise<DeployActionResponse>;
       deployRun: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;
       deployReload: (request?: DeployLaunchRequest) => Promise<DeployActionResponse>;

@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import type { ProjectType } from "@dartsnut/shared-ipc";
+import type { DeployConnectionState } from "@dartsnut/shared-ipc";
 import { Client, type Channel, type SFTPWrapper } from "ssh2";
 import {
   buildDebugLaunchScript,
@@ -163,6 +164,7 @@ function fastPut(client: Client, localPath: string, remotePath: string): Promise
  */
 export class DeployMachineSession {
   private client: Client | null = null;
+  private pendingClient: Client | null = null;
 
   private tailChannel: Channel | null = null;
 
@@ -175,6 +177,7 @@ export class DeployMachineSession {
   constructor(
     private readonly emitLog: DeployLogFn,
     private readonly emitFrame: DeployFrameFn = () => { },
+    private readonly emitConnection: (state: DeployConnectionState) => void = () => { },
   ) {
     this.sideloadClient = new SideloadWebSocketClient({
       onLog: (entry) => this.emitLog(`[sideload][${entry.stream}] ${entry.text}`),
@@ -186,6 +189,13 @@ export class DeployMachineSession {
       onStatus: (message) => this.emitLog(`[sideload] ${message}`),
     });
   }
+
+  get connecting(): boolean {
+    return this.connectPromise !== null;
+  }
+
+  private connectPromise: Promise<void> | null = null;
+  private connectionEpoch = 0;
 
   get connected(): boolean {
     return this.client !== null;
@@ -201,11 +211,29 @@ export class DeployMachineSession {
 
   async connect(host: string): Promise<{ deviceName: string | null; deployMode: DeployMode }> {
     await this.disconnect();
+    const epoch = ++this.connectionEpoch;
+    const run = this.connectInternal(host, epoch);
+    const trackedRun = run.then(() => undefined, () => undefined);
+    this.connectPromise = trackedRun;
+    try {
+      return await run;
+    } catch (error) {
+      if (epoch === this.connectionEpoch) {
+        await this.disconnect();
+      }
+      throw error;
+    } finally {
+      if (this.connectPromise === trackedRun) this.connectPromise = null;
+    }
+  }
+
+  private async connectInternal(host: string, epoch: number): Promise<{ deviceName: string | null; deployMode: DeployMode }> {
     const trimmed = host.trim();
     if (!trimmed) {
       throw new Error("Host is empty.");
     }
     const c = new Client();
+    this.pendingClient = c;
     let ready = false;
     let settled = false;
     const settle = (fn: () => void): void => {
@@ -218,7 +246,7 @@ export class DeployMachineSession {
 
     await new Promise<void>((resolve, reject) => {
       const handleError = (err: Error): void => {
-        if (this.client === c) {
+        if (this.client === c || this.pendingClient === c) {
           this.emitLog(`[deploy] SSH error: ${err.message}`);
         }
         if (!ready) {
@@ -246,6 +274,7 @@ export class DeployMachineSession {
         });
       });
       c.once("close", () => {
+        if (this.pendingClient === c) this.pendingClient = null;
         if (!ready) {
           settle(() => {
             clearTimeout(t);
@@ -261,16 +290,27 @@ export class DeployMachineSession {
       });
     });
     this.client = c;
+    this.pendingClient = null;
+    if (epoch !== this.connectionEpoch) {
+      c.end();
+      throw new Error("SSH connection cancelled.");
+    }
     c.on("close", () => {
       if (this.client === c) {
         this.client = null;
         this.stopLogTail();
+        this.deployModeValue = "legacy_unsafe";
+        this.emitConnection({ connected: false, deviceName: null, deployMode: null });
       }
     });
     await this.probeRemoteUv();
+    if (epoch !== this.connectionEpoch) throw new Error("SSH connection cancelled.");
     const deviceName = await this.readDeviceName();
+    if (epoch !== this.connectionEpoch) throw new Error("SSH connection cancelled.");
     const capabilities = await this.sideloadClient.connectAndProbe(trimmed);
+    if (epoch !== this.connectionEpoch) throw new Error("SSH connection cancelled.");
     this.deployModeValue = capabilities ? "safe_sideload" : "legacy_unsafe";
+    this.emitConnection({ connected: true, deviceName, deployMode: this.deployModeValue });
     if (capabilities) {
       this.emitLog(
         `[deploy] Safe sideload protocol v${capabilities.protocolVersion} · heartbeat ${capabilities.heartbeatIntervalSeconds}s/${capabilities.heartbeatExpirySeconds}s`,
@@ -282,6 +322,7 @@ export class DeployMachineSession {
   }
 
   async disconnect(): Promise<void> {
+    this.connectionEpoch += 1;
     this.stopLogTail();
     await this.stopSideload().catch(() => { });
     await this.sideloadClient.close(false).catch(() => { });
@@ -292,6 +333,11 @@ export class DeployMachineSession {
       this.client.end();
       this.client = null;
     }
+    if (this.pendingClient) {
+      this.pendingClient.end();
+      this.pendingClient = null;
+    }
+    this.emitConnection({ connected: false, deviceName: null, deployMode: null });
   }
 
   async startSideload(

@@ -68,10 +68,13 @@ export const IPCChannels = {
   deployDisconnect: "deploy:disconnect",
   deployRun: "deploy:run",
   deployReload: "deploy:reload",
+  deployApplyWidgetParams: "deploy:apply-widget-params",
   deployStop: "deploy:stop",
   deployOpenLocalNetworkSettings: "deploy:open-local-network-settings",
   /** Main → renderer: remote debug log line or status message. */
   deployLog: "deploy:log",
+  /** Main → renderer: safe sideload display frame, or inactive state after stop/expiry. */
+  deployFrame: "deploy:frame",
   communityGetSession: "community:get-session",
   communityLogin: "community:login",
   communitySetPassword: "community:set-password",
@@ -528,10 +531,14 @@ export interface DeployConnectRequest {
 }
 
 export type DeployConnectResponse =
-  | { ok: true; deviceName: string | null }
+  | { ok: true; deviceName: string | null; deployMode: "safe_sideload" | "legacy_unsafe" }
   | { ok: false; error: string; needsLocalNetworkPermission?: true; canRetry?: true };
 
 export type DeployActionResponse = { ok: true } | { ok: false; error: string };
+
+export type DeployFrameEvent =
+  | { active: false }
+  | { active: true; frame: { width: number; height: number; rgbBase64: string; timestampMs: number } };
 
 /** Optional payload for `deploy:run` / `deploy:reload` when the workspace is a widget. */
 export interface DeployLaunchRequest {

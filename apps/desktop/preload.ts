@@ -37,6 +37,7 @@ import {
   type DeployConnectResponse,
   type DeployEligibility,
   type DeployActionResponse,
+  type DeployFrameEvent,
   type DeployLaunchRequest,
   type CommunitySessionInfo,
   type CommunityCancelGoogleLoginResponse,
@@ -76,6 +77,8 @@ import {
   type EmulatorLogEntry,
   type EmulatorStateSnapshot,
 } from "@dartsnut/emulator-protocol";
+
+const DEPLOY_APPLY_WIDGET_PARAMS = "deploy:apply-widget-params";
 
 const api = {
   rendererReady: () => ipcRenderer.invoke(IPCChannels.rendererReady) as Promise<void>,
@@ -235,6 +238,8 @@ const api = {
     (request === undefined
       ? ipcRenderer.invoke(IPCChannels.deployReload)
       : ipcRenderer.invoke(IPCChannels.deployReload, request)) as Promise<DeployActionResponse>,
+  deployApplyWidgetParams: (request: DeployLaunchRequest) =>
+    ipcRenderer.invoke(DEPLOY_APPLY_WIDGET_PARAMS, request) as Promise<DeployActionResponse>,
   deployStop: () => ipcRenderer.invoke(IPCChannels.deployStop) as Promise<DeployActionResponse>,
   deployOpenLocalNetworkSettings: () =>
     ipcRenderer.invoke(IPCChannels.deployOpenLocalNetworkSettings) as Promise<DeployActionResponse>,
@@ -242,6 +247,11 @@ const api = {
     const handler = (_: unknown, line: string) => listener(line);
     ipcRenderer.on(IPCChannels.deployLog, handler);
     return () => ipcRenderer.removeListener(IPCChannels.deployLog, handler);
+  },
+  onDeployFrame: (listener: (event: DeployFrameEvent) => void) => {
+    const handler = (_: unknown, event: DeployFrameEvent) => listener(event);
+    ipcRenderer.on(IPCChannels.deployFrame, handler);
+    return () => ipcRenderer.removeListener(IPCChannels.deployFrame, handler);
   },
   communityGetSession: () =>
     ipcRenderer.invoke(IPCChannels.communityGetSession) as Promise<CommunitySessionInfo>,

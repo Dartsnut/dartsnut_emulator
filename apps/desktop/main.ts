@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import dotenv from "dotenv";
 import { spawn, spawnSync } from "node:child_process";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, screen, session, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, nativeTheme, screen, session, shell } from "electron";
 import type { MessageBoxOptions } from "electron";
 import { createAgentEventBatcher, type AgentEventBatcher } from "./agentEventBatcher";
 import { AgentRunCoordinator } from "./agentRunCoordinator";
@@ -36,6 +36,7 @@ import {
   type DeployConnectRequest,
   type DeployConnectResponse,
   type DeployEligibility,
+  type DeployFrameEvent,
   type DeployLaunchRequest,
   type ManifestSnapshot,
   type PickWorkspaceRequest,
@@ -155,9 +156,11 @@ import { executePixelLabGenerationForAgent } from "./pixellabAgentTool";
 import { AssetManager } from "./assetManager";
 import { ProjectStore } from "./projectStore";
 import { DeployMachineSession } from "./deployMachine";
+import type { SideloadFrameEvent } from "./deployMachineSideload";
 import { createCommunityClient, type CommunityClient } from "./communityClient";
 import { clearCommunityAuth, readCommunityAuth, writeCommunityAuth } from "./communityAuth";
 import { readWidgetConfigSnapshot, watchWidgetConfigFile, widgetConfigPathForScope } from "./widgetConfig";
+const DEPLOY_APPLY_WIDGET_PARAMS = "deploy:apply-widget-params";
 import { signInWithGoogleOAuth } from "./googleOAuth";
 import {
   configureSystemProxySession,
@@ -475,6 +478,38 @@ function emitDeployLog(line: string): void {
   sendToRenderer(IPCChannels.deployLog, line);
 }
 
+function emitDeployFrame(frame: SideloadFrameEvent | null): void {
+  if (!frame) {
+    sendToRenderer(IPCChannels.deployFrame, { active: false } satisfies DeployFrameEvent);
+    return;
+  }
+  try {
+    const image = nativeImage.createFromBuffer(Buffer.from(frame.frame, "base64"));
+    const size = image.getSize();
+    const bitmap = image.toBitmap();
+    if (size.width !== frame.width || size.height !== frame.height || bitmap.length !== size.width * size.height * 4) {
+      throw new Error("invalid PNG dimensions");
+    }
+    const rgb = Buffer.allocUnsafe(size.width * size.height * 3);
+    for (let src = 0, dst = 0; src < bitmap.length; src += 4, dst += 3) {
+      rgb[dst] = bitmap[src + 2];
+      rgb[dst + 1] = bitmap[src + 1];
+      rgb[dst + 2] = bitmap[src];
+    }
+    sendToRenderer(IPCChannels.deployFrame, {
+      active: true,
+      frame: {
+        width: size.width,
+        height: size.height,
+        rgbBase64: rgb.toString("base64"),
+        timestampMs: Date.now(),
+      },
+    } satisfies DeployFrameEvent);
+  } catch (error) {
+    emitDeployLog(`[sideload] frame decode failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function emitCommunitySubmitProgress(stage: CommunitySubmitProgressStage, message: string): void {
   const progress: CommunitySubmitProgress = { stage, message };
   sendToRenderer(IPCChannels.communitySubmitProgress, progress);
@@ -482,7 +517,7 @@ function emitCommunitySubmitProgress(stage: CommunitySubmitProgressStage, messag
 
 function getDeployMachineSession(): DeployMachineSession {
   if (!deployMachineSession) {
-    deployMachineSession = new DeployMachineSession(emitDeployLog);
+    deployMachineSession = new DeployMachineSession(emitDeployLog, emitDeployFrame);
   }
   return deployMachineSession;
 }
@@ -520,6 +555,11 @@ async function restoreDeployMachineForQuit(): Promise<void> {
     return;
   }
   try {
+    if (session.safeSideloadSupported) {
+      emitDeployLog("[sideload] Quit — stopping local sideload session…");
+      await session.stopSideload();
+      return;
+    }
     emitDeployLog("[deploy] Quit — restore machine, stop debug apps, restart dartsnut_python.service…");
     const elig = readDeployEligibilityFromWorkspace();
     const failures = await session.cleanupForQuit(elig.ok ? elig.appId : undefined);
@@ -532,6 +572,27 @@ async function restoreDeployMachineForQuit(): Promise<void> {
   } finally {
     await disconnectDeployMachine();
   }
+}
+
+function readSideloadSizeFromWorkspace(projectType: ProjectType): readonly [number, number] {
+  if (projectType === "game") return [128, 160];
+  if (!workspaceRoot) throw new Error("No workspace open.");
+  const classification = readWorkspaceProjectClassification(workspaceRoot);
+  if (!classification.ok || classification.projectType !== "widget") {
+    throw new Error("Could not read widget size.");
+  }
+  const rawSize = classification.conf?.size;
+  const size = Array.isArray(rawSize) && rawSize.length === 2
+    ? `${Number(rawSize[0])}x${Number(rawSize[1])}`
+    : String(rawSize ?? "").trim().replace(/\s*,\s*/, "x");
+  const supported: Record<string, readonly [number, number]> = {
+    "128x128": [128, 128],
+    "128x64": [128, 64],
+    "64x32": [64, 32],
+  };
+  const dimensions = supported[size];
+  if (!dimensions) throw new Error(`Unsupported widget sideload size: ${size || "missing"}.`);
+  return dimensions;
 }
 
 function readDeployEligibilityFromWorkspace(): DeployEligibility {
@@ -3568,12 +3629,15 @@ ipcMain.handle(
   async (_event: unknown, request: DeployConnectRequest): Promise<DeployConnectResponse> => {
     try {
       const session = getDeployMachineSession();
-      const { deviceName } = await session.connect(request.host.trim());
+      const { deviceName, deployMode } = await session.connect(request.host.trim());
       try {
+        if (deployMode === "safe_sideload") {
+          return { ok: true, deviceName, deployMode };
+        }
         emitDeployLog("[deploy] Stopping any ~/dartsnut_rpi/apps/*/main.py still running on device…");
         await session.killAppMainPyProcesses();
         await session.restartDartsnutPythonServiceIfInactive();
-        return { ok: true, deviceName };
+        return { ok: true, deviceName, deployMode };
       } catch (cleanupError) {
         await disconnectDeployMachine();
         throw cleanupError;
@@ -3599,6 +3663,12 @@ ipcMain.handle(IPCChannels.deployDisconnect, async (): Promise<DeployActionRespo
     const session = getDeployMachineSession();
     if (!session.connected) {
       return { ok: false, error: "SSH not connected." };
+    }
+    if (session.safeSideloadSupported) {
+      emitDeployLog("[sideload] Disconnect — stop local session and restore production…");
+      await session.stopSideload();
+      await disconnectDeployMachine();
+      return { ok: true };
     }
     emitDeployLog("[deploy] Disconnect — stop log tail, kill debug Python, restart dartsnut_python.service…");
     session.stopLogTail();
@@ -3638,6 +3708,17 @@ ipcMain.handle(
       if (!session.connected) {
         throw new Error("SSH not connected. Enter the device IP and click Connect.");
       }
+      if (session.safeSideloadSupported) {
+        emitDeployLog("[sideload] Run — upload local files and start exclusive session…");
+        await session.startSideload(
+          workspaceRoot,
+          elig.appId,
+          readSideloadSizeFromWorkspace(elig.projectType),
+          widgetParams ?? {},
+        );
+        return { ok: true };
+      }
+      emitDeployLog("[deploy] WARNING: using legacy unsafe deploy; production service will stop.");
       emitDeployLog("[deploy] Run — sync, stop service, start debug Python…");
       await session.syncWorkspace(workspaceRoot, elig.appId);
       await session.stopSystemdService();
@@ -3678,6 +3759,17 @@ ipcMain.handle(
       if (!session.connected) {
         throw new Error("SSH not connected.");
       }
+      if (session.safeSideloadSupported) {
+        emitDeployLog("[sideload] Reload — replace exclusive local session…");
+        await session.startSideload(
+          workspaceRoot,
+          elig.appId,
+          readSideloadSizeFromWorkspace(elig.projectType),
+          widgetParams ?? {},
+        );
+        return { ok: true };
+      }
+      emitDeployLog("[deploy] WARNING: using legacy unsafe deploy; production service will stop.");
       emitDeployLog("[deploy] Reload — sync, restart debug Python…");
       await session.syncWorkspace(workspaceRoot, elig.appId);
       await session.stopSystemdService();
@@ -3694,6 +3786,34 @@ ipcMain.handle(
   },
 );
 
+ipcMain.handle(
+  DEPLOY_APPLY_WIDGET_PARAMS,
+  async (_event: unknown, request?: DeployLaunchRequest): Promise<DeployActionResponse> => {
+    const elig = readDeployEligibilityFromWorkspace();
+    if (!elig.ok || elig.projectType !== "widget") {
+      return { ok: false, error: "Widget workspace required." };
+    }
+    let params: Record<string, unknown>;
+    try {
+      params = parseDeployWidgetParamsJson(request?.widgetParamsJson) ?? {};
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    try {
+      const session = getDeployMachineSession();
+      if (!session.connected || !session.safeSideloadSupported) {
+        throw new Error("No active safe sideload session. Run widget first.");
+      }
+      await session.applySideloadParams(params);
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      emitDeployLog(`[sideload] Apply parameters failed: ${message}`);
+      return { ok: false, error: message };
+    }
+  },
+);
+
 ipcMain.handle(IPCChannels.deployStop, async (): Promise<DeployActionResponse> => {
   const elig = readDeployEligibilityFromWorkspace();
   if (!elig.ok) {
@@ -3703,6 +3823,11 @@ ipcMain.handle(IPCChannels.deployStop, async (): Promise<DeployActionResponse> =
     const session = getDeployMachineSession();
     if (!session.connected) {
       throw new Error("SSH not connected.");
+    }
+    if (session.safeSideloadSupported) {
+      emitDeployLog("[sideload] Stop — restore production display…");
+      await session.stopSideload();
+      return { ok: true };
     }
     emitDeployLog("[deploy] Stop — remove app folder, restore dartsnut_python.service…");
     session.stopLogTail();

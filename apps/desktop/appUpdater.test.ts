@@ -46,6 +46,7 @@ async function loadUpdater(preference: boolean | null = null, packaged = true) {
   mocks.updater.setFeedURL.mockClear();
   mocks.updater.checkForUpdates.mockClear();
   mocks.updater.downloadUpdate.mockClear();
+  mocks.updater.quitAndInstall.mockClear();
   if (preference !== null) {
     fs.writeFileSync(path.join(root, "app-update-preferences.json"), JSON.stringify({ autoDownload: preference }));
   }
@@ -69,6 +70,13 @@ describe("app updater", () => {
 
     mocks.handlers.get("update-downloaded")?.({ version: "1.5.5" });
     expect(updater.getAppUpdateStatus().kind).toBe("ready");
+
+    // A trailing progress event must not hide the install prompt.
+    mocks.handlers.get("download-progress")?.({ percent: 99.4 });
+    expect(updater.getAppUpdateStatus()).toMatchObject({ kind: "ready", percent: 100 });
+    expect(updater.installDownloadedAppUpdate()).toBe(true);
+    expect(updater.isAppUpdateInstallRequested()).toBe(true);
+    expect(mocks.updater.quitAndInstall).toHaveBeenCalledWith(false, true);
   });
 
   it("retains automatic downloads when preference is enabled", async () => {

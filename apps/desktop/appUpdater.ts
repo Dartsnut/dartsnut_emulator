@@ -23,6 +23,7 @@ let updateReady = false;
 let started = false;
 let downloadInProgress = false;
 let checkInProgress = false;
+let updateInstallRequested = false;
 let rendererSender: SendToRenderer | null = null;
 
 const AUTO_UPDATE_PREFERENCES_FILE = "app-update-preferences.json";
@@ -78,15 +79,21 @@ export function isDownloadedAppUpdateReady(): boolean {
   return updateReady;
 }
 
-export function installDownloadedAppUpdate(): void {
+export function isAppUpdateInstallRequested(): boolean {
+  return updateInstallRequested;
+}
+
+export function installDownloadedAppUpdate(): boolean {
   if (!updateReady) {
-    return;
+    return false;
   }
   if (devUpdatePreviewMode()) {
     devLog.info("[updater] Dev preview install requested; skipping relaunch");
-    return;
+    return true;
   }
+  updateInstallRequested = true;
   autoUpdater.quitAndInstall(false, true);
+  return true;
 }
 
 export async function downloadAvailableAppUpdate(): Promise<AppUpdateDownloadResponse> {
@@ -260,6 +267,12 @@ export function startAppUpdateCheck(sendToRenderer: SendToRenderer): void {
   });
 
   autoUpdater.on("download-progress", (progress) => {
+    // electron-updater may deliver one final progress event after
+    // `update-downloaded`. Keep terminal ready state stable so the renderer
+    // does not replace the install prompt with the transient download pill.
+    if (updateReady || latestStatus.kind === "ready") {
+      return;
+    }
     updateStatus(sendToRenderer, {
       kind: "downloading",
       percent: Math.max(0, Math.min(100, progress.percent)),

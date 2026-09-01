@@ -187,6 +187,7 @@ import {
   checkForAppUpdate,
   installDownloadedAppUpdate,
   isDownloadedAppUpdateReady,
+  isAppUpdateInstallRequested,
   startAppUpdateCheck
 } from "./appUpdater";
 import { normalizePoloAiResponse } from "./responsesCompatibility";
@@ -2785,6 +2786,10 @@ app.on("before-quit", (event) => {
   }
   assetManager.stop();
   stopDeployConfWatcher();
+  if (isAppUpdateInstallRequested()) {
+    quitCleanupComplete = true;
+    return;
+  }
   if (quitCleanupComplete) {
     return;
   }
@@ -2878,10 +2883,9 @@ ipcMain.handle(IPCChannels.appUpdateCheck, (): Promise<AppUpdateCheckResponse> =
   checkForAppUpdate()
 );
 ipcMain.handle(IPCChannels.appUpdateInstallNow, async (): Promise<AppUpdateInstallResponse> => {
-  if (!isDownloadedAppUpdateReady()) {
+  if (!isDownloadedAppUpdateReady() || !installDownloadedAppUpdate()) {
     return { ok: false, reason: "not_ready" };
   }
-  installDownloadedAppUpdate();
   return { ok: true };
 });
 

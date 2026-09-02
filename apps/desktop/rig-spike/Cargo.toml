@@ -1,0 +1,12 @@
+[package]
+name = "dartsnut-rig-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Dependency-free contract spike for the planned Rig agent runtime"
+
+[dependencies]
+rig-agent = { version = "0.42", features = ["test-utils"] }
+
+[lib]
+path = "src/lib.rs"

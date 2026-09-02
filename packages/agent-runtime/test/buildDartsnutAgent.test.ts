@@ -22,7 +22,7 @@ describe("buildDartsnutAgent", () => {
     const ctx = makeContext(workspace);
     const agent = buildDartsnutAgent({
       model: "gpt-4.1-mini",
-      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace), supportsHostedTools: true },
+      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
       contextSnapshot: ctx
     });
     expect(agent.name).toBe(DARTSNUT_MAIN_AGENT_NAME);
@@ -38,7 +38,7 @@ describe("buildDartsnutAgent", () => {
     const ctx = makeContext(workspace);
     const agent = buildDartsnutAgent({
       model: "gpt-4.1-mini",
-      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace), supportsHostedTools: true },
+      toolsBase: { workspacePolicy: new WorkspacePolicy(workspace) },
       contextSnapshot: ctx
     });
     const toolNames = agent.tools.map((tool) => "name" in tool ? String(tool.name) : "");
@@ -49,8 +49,8 @@ describe("buildDartsnutAgent", () => {
     expect(toolNames).toContain("control_emulator_input");
     expect(toolNames).toContain("run_emulator_scenario");
     expect(toolNames).toContain("pixellab_generate");
-    expect(toolNames).toContain("web_search");
-    expect(toolNames).toContain("code_interpreter");
+    expect(toolNames).not.toContain("web_search");
+    expect(toolNames).not.toContain("code_interpreter");
   });
 
   it("uses the constrained asset-applier tool set in asset-applier mode", () => {

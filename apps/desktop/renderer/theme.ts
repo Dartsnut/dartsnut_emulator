@@ -87,6 +87,8 @@ export function applyTheme(theme: ThemeId): void {
   }
   const resolved = resolveThemePreference(theme);
   document.documentElement.dataset.theme = resolved;
+  // Keep Tailwind's `.dark` variants aligned with the semantic theme attribute.
+  document.documentElement.classList?.toggle("dark", resolved === "dark");
   setStoredTheme(theme);
   if (typeof window !== "undefined" && window.dartsnutApi?.setShellUiTheme) {
     void window.dartsnutApi.setShellUiTheme(theme);

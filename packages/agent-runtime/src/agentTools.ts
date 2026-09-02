@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";
-import { codeInterpreterTool, tool, webSearchTool } from "@openai/agents";
+import { tool } from "@openai/agents";
 import type { Tool, ToolInputParameters } from "@openai/agents";
 import { DEFERRED_SKILL_IDS, readDeferredSkillMarkdown } from "./skillBundle";
 import type { DeferredSkillId } from "./skillBundle";
@@ -531,8 +531,5 @@ export function buildAgentTools(options: AgentToolsOptions): Tool[] {
   const tools = requested.size === 0
     ? Object.values(registry)
     : [...requested].map((name) => registry[name]).filter((entry): entry is Tool => Boolean(entry));
-  if (options.profile === "full" && options.supportsHostedTools === true) {
-    tools.push(webSearchTool(), codeInterpreterTool({ container: { type: "auto" } }));
-  }
   return tools;
 }

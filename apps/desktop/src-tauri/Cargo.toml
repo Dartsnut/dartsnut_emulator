@@ -1,0 +1,52 @@
+[package]
+name = "dartsnut-agent"
+version = "1.7.4"
+description = "Dartsnut Agent desktop application"
+authors = ["Dartsnut"]
+edition = "2021"
+rust-version = "1.85"
+
+[lib]
+name = "dartsnut_agent_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-updater = "2.11"
+tauri-plugin-opener = "2.5"
+tauri-plugin-dialog = "2.4"
+tauri-plugin-clipboard-manager = "2.3"
+tauri-plugin-fs = "2.4"
+tauri-plugin-store = "2.3"
+tauri-plugin-window-state = "2.2"
+tauri-plugin-process = "2.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+thiserror = "2"
+russh = { version = "0.63.1", default-features = false, features = ["ring", "rsa"] }
+russh-sftp = "2.4.0"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "stream", "multipart", "rustls-no-provider", "system-proxy"] }
+futures-util = "0.3"
+tungstenite = "0.24"
+png = "0.18"
+bytes = "1"
+rand = "0.9"
+sha2 = "0.10"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4", "serde"] }
+dotenvy = "0.15"
+tar = "0.4"
+flate2 = "1"
+quick-xml = { version = "0.37", features = ["serialize"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+rig-agent = { version = "0.42" }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

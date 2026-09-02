@@ -92,10 +92,6 @@ export interface RunPromptOptions {
   userPrompt?: string;
 }
 
-export function promptRequestsHostedTools(prompt: string): boolean {
-  return /\b(web search|search (?:the )?(?:web|internet)|browse (?:the )?(?:web|internet)|latest online|current online|code interpreter|python sandbox|run python|data analysis)\b/i.test(prompt);
-}
-
 function isInvalidPreviousResponseError(error: unknown): boolean {
   const apiError = error as { code?: unknown; message?: unknown; error?: { code?: unknown; message?: unknown } };
   if (apiError?.code === "INVALID_PREVIOUS_RESPONSE" || apiError?.error?.code === "INVALID_PREVIOUS_RESPONSE") {
@@ -173,7 +169,6 @@ export class SessionEngine {
       skillLibrary: this.options.skillLibrary,
       assetRoots: this.options.assetRoots,
       toolSchemas: this.toolSchemas,
-      supportsHostedTools: modelConfig.supportsHostedTools === true && promptRequestsHostedTools(userPrompt),
       hostReloadEmulatorHandler: this.options.hostReloadEmulatorHandler,
       hostGetEmulatorLogsHandler: this.options.hostGetEmulatorLogsHandler,
       hostCheckPythonHandler: this.options.hostCheckPythonHandler,
@@ -269,7 +264,6 @@ export class SessionEngine {
       model: cfg.model,
       endpointKind: cfg.endpointKind,
       hasPreviousResponseId: Boolean(previousResponseId),
-      hostedToolsEnabled: toolsBase.supportsHostedTools,
       toolCount: toolNames.length,
       toolNames,
       maxTurns: SessionEngine.MAIN_AGENT_MAX_TURNS,

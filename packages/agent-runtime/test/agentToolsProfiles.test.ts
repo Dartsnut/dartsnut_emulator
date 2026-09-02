@@ -9,7 +9,6 @@ function toolNames(workspace: string, profile: "full" | "asset-applier"): string
   const tools = buildAgentTools({
     workspacePolicy: new WorkspacePolicy(workspace),
     profile,
-    supportsHostedTools: profile === "full"
   });
   return tools.map((tool) => "name" in tool ? String(tool.name) : "");
 }
@@ -35,9 +34,7 @@ describe("buildAgentTools profiles", () => {
       "check_python",
       "pixellab_generate",
       "dartsnut_machine_mcp",
-      "ask_user_question",
-      "web_search",
-      "code_interpreter"
+      "ask_user_question"
     ]) {
       expect(names).toContain(expected);
     }

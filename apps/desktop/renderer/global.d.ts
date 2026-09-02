@@ -182,6 +182,7 @@ declare global {
         unbindSlot: (request: UnbindSlotRequest) => Promise<UnbindSlotResponse>;
         applyAssets: (request: ApplyAssetsRequest) => Promise<ApplyAssetsResponse>;
         readPreview: (request: ReadPreviewRequest) => Promise<ReadPreviewResponse>;
+        pickSourceFile: () => Promise<{ ok: true; path: string } | { ok: false; reason: "cancelled" }>;
         getPathForFile: (file: File) => string;
       };
     };

@@ -2,137 +2,47 @@
   "name": "dartsnut-agent",
   "version": "1.7.4",
   "private": true,
-  "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently --kill-others --success first -n renderer,tsc,agent,electron \"pnpm run dev:renderer\" \"pnpm run dev:electron:tsc\" \"pnpm run dev:agent-runtime\" \"pnpm run dev:electron:run\"",
-    "dev:agent-runtime": "pnpm --dir ../../packages/agent-runtime exec tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "dev": "pnpm run dev:tauri",
+    "dev:tauri": "tauri dev",
     "dev:renderer": "vite --host 127.0.0.1 --port 5173 --strictPort",
-    "dev:electron:tsc": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
-    "dev:electron:run": "wait-on tcp:5173 file:dist-electron/main.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js",
-    "generate:packaged-env": "node ../../scripts/generate_packaged_env.mjs",
-    "build": "pnpm run generate:packaged-env && pnpm --dir ../../packages/shared-ipc run build && pnpm --dir ../../packages/emulator-protocol run build && pnpm --dir ../../packages/agent-runtime run build && tsc -p tsconfig.electron.json && vite build",
-    "package": "pnpm run build && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --win --publish never",
-    "package:dir": "pnpm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac --dir -c.mac.identity=null -c.mac.notarize=false --publish never",
-    "package:dir:win": "pnpm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --win --dir --publish never",
-    "start:packaged": "open release/mac-arm64/Dartsnut\\ Agent.app",
-    "package:mac": "pnpm run build && dotenv -e .env.macos-notarize -- pnpm exec electron-builder --mac --publish never",
-    "package:win": "pnpm run build && pnpm exec electron-builder --win --publish never",
-    "package:win:portable": "pnpm run build && pnpm exec electron-builder --win portable:x64 --publish never",
+    "build:python-runtime": "node ../../scripts/build_bundled_python.mjs",
+    "build": "pnpm run build:tauri",
+    "build:renderer": "vite build",
+    "build:tauri": "pnpm run build:renderer && tauri build",
+    "package:tauri:mac": "pnpm run build:renderer && tauri build --target aarch64-apple-darwin --bundles dmg --config src-tauri/tauri.release.conf.json",
+    "package:tauri:win": "pnpm run build:renderer && tauri build --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.release.conf.json",
+    "package:mac": "pnpm run package:tauri:mac",
+    "package:win": "pnpm run package:tauri:win",
+    "package": "pnpm run build:tauri",
+    "start:packaged": "open src-tauri/target/release/bundle/macos/Dartsnut\\ Agent.app",
+    "test": "vitest run",
     "test:analytics": "vitest run renderer/analytics.test.ts",
-    "test:renderer": "vitest run renderer/analytics.test.ts renderer/theme.test.ts renderer/emulatorCapture.test.ts renderer/emulatorDarts.test.ts renderer/emulatorProjectUi.test.ts renderer/rawTimeline.test.ts renderer/useChatPersonaController.test.ts renderer/widgetParams.test.ts renderer/AppUpdateOverlay.test.tsx renderer/RemoveProjectDialog.test.tsx",
-    "test:updater": "vitest run appUpdater.test.ts appUpdatePreferences.test.ts"
+    "test:renderer": "vitest run renderer/analytics.test.ts renderer/theme.test.ts renderer/WindowControls.test.tsx renderer/tauriApi.contract.test.ts renderer/emulatorCapture.test.ts renderer/emulatorDarts.test.ts renderer/emulatorProjectUi.test.ts renderer/rawTimeline.test.ts renderer/useChatPersonaController.test.ts renderer/widgetParams.test.ts renderer/AppUpdateOverlay.test.tsx renderer/RemoveProjectDialog.test.tsx",
+    "test:updater": "vitest run appUpdatePreferences.test.ts && cargo test --offline --manifest-path src-tauri/Cargo.toml updates"
   },
   "dependencies": {
-    "@dartsnut/agent-runtime": "workspace:*",
-    "@openai/agents": "0.15.0",
     "@dartsnut/emulator-protocol": "workspace:*",
     "@dartsnut/shared-ipc": "workspace:*",
+    "@tauri-apps/api": "^2.11.1",
     "clsx": "^2.1.1",
-    "dotenv": "^16.5.0",
-    "electron-updater": "^6.8.9",
     "firebase": "^12.16.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^1.31.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
     "remark-gfm": "^4.0.0",
-    "ssh2": "^1.16.0",
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.0",
-    "@types/react": "^19.1.2",
-    "@types/react-dom": "^19.1.2",
-    "@types/ssh2": "^1.15.5",
+    "@tauri-apps/cli": "^2.11.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.4.1",
-    "concurrently": "^9.1.2",
-    "cross-env": "^7.0.3",
-    "dotenv-cli": "^8.0.0",
-    "electron": "35.1.4",
-    "electron-builder": "^26.0.12",
-    "nodemon": "^3.1.10",
     "tailwindcss": "^4.3.0",
     "vite": "^6.3.5",
-    "vitest": "^3.2.4",
-    "wait-on": "^8.0.3",
-    "xmlbuilder": "^15.1.1"
-  },
-  "build": {
-    "appId": "com.dartsnut.agent",
-    "productName": "Dartsnut Agent",
-    "npmRebuild": false,
-    "directories": {
-      "output": "release"
-    },
-    "publish": [
-      {
-        "provider": "generic",
-        "url": "https://dartsnutstore.oss-cn-hongkong.aliyuncs.com/agent-update/"
-      }
-    ],
-    "files": [
-      "dist/**",
-      "dist-electron/**",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "../../services/emulator-core",
-        "to": "services/emulator-core"
-      },
-      {
-        "from": "../../assets",
-        "to": "assets"
-      },
-      {
-        "from": "../../packages/agent-runtime/skills",
-        "to": "packages/agent-runtime/skills"
-      },
-      {
-        "from": "../../scripts/asset_preprocess.py",
-        "to": "scripts/asset_preprocess.py"
-      },
-      {
-        "from": "../../PixelDarts.png",
-        "to": "PixelDarts.png"
-      },
-      {
-        "from": "../../requirements.txt",
-        "to": "requirements.txt"
-      }
-    ],
-    "mac": {
-      "identity": "Apple Development: Hao Pan (78R7UX7VV7)",
-      "notarize": false,
-      "extendInfo": {
-        "NSLocalNetworkUsageDescription": "Dartsnut needs local network access to connect to your Dartsnut over SSH."
-      },
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "arm64"
-          ]
-        }
-      ]
-    },
-    "win": {
-      "icon": "build/icon.ico",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    }
+    "vitest": "^3.2.4"
   }
 }

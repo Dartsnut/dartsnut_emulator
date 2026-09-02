@@ -107,6 +107,39 @@ export function AssetManagerPanel({
     };
   }, [manifest, workspacePath, api, previewDataUrls]);
 
+  // Tauri exposes real filesystem paths through native drag/drop events. DOM
+  // `DataTransfer` only carries browser File objects, whose paths are hidden.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/webview")
+      .then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((event) => {
+        if (disposed || event.payload.type !== "drop" || event.payload.paths.length === 0) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        const target = document.elementFromPoint(
+          event.payload.position.x / scale,
+          event.payload.position.y / scale
+        );
+        const slotId = target?.closest<HTMLElement>("[data-asset-slot-id]")?.dataset.assetSlotId;
+        if (slotId) {
+          void handleBindFromPath(slotId, event.payload.paths[0]);
+        }
+      }))
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        // Electron/dev browser fallback uses DOM drop handling below.
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [api, workspacePath]);
+
   const pendingSet = useMemo(() => new Set(pendingChangeSlotIds), [pendingChangeSlotIds]);
   const hasPendingChanges = pendingChangeSlotIds.length > 0;
 
@@ -178,7 +211,14 @@ export function AssetManagerPanel({
     }
   }
 
-  function pickFileForSlot(slotId: string) {
+  async function pickFileForSlot(slotId: string) {
+    if (api?.assets?.pickSourceFile) {
+      const picked = await api.assets.pickSourceFile();
+      if (picked.ok) {
+        await handleBindFromPath(slotId, picked.path);
+      }
+      return;
+    }
     const input = fileInputsRef.current[slotId];
     if (input) {
       input.value = "";
@@ -254,6 +294,7 @@ export function AssetManagerPanel({
           return (
             <li
               key={slot.id}
+              data-asset-slot-id={slot.id}
               className={cn(
                 "grid grid-cols-[60px_1fr_auto] items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-2.5 shadow-[var(--shadow-sm)] transition-[border-color,background,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]",
                 busy && "opacity-70",
@@ -324,7 +365,7 @@ export function AssetManagerPanel({
                   className="ui-btn-secondary whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                   data-analytics-id="asset_choose_file"
                   data-analytics-area="assets"
-                  onClick={() => pickFileForSlot(slot.id)}
+                  onClick={() => void pickFileForSlot(slot.id)}
                   disabled={busy}
                 >
                   {slot.binding ? "Replace" : "Choose File"}

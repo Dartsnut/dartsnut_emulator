@@ -133,6 +133,46 @@ test("collectReleaseArtifacts rejects wrong-version artifacts", () => {
   }
 });
 
+test("collectTauriArtifacts selects signed installer, update, and latest metadata", () => {
+  const root = tempDir();
+  try {
+    writeArtifact(root, "Dartsnut Agent_1.7.4_aarch64.dmg");
+    writeArtifact(root, "Dartsnut.Agent_1.7.4_aarch64.app.tar.gz");
+    writeArtifact(root, "Dartsnut.Agent_1.7.4_aarch64.app.tar.gz.sig");
+    writeArtifact(root, "latest.json", "Dartsnut.Agent_1.7.4_aarch64.app.tar.gz");
+    const artifacts = helpers.collectTauriArtifacts(
+      root,
+      { platform: "darwin" },
+      "1.7.4"
+    );
+    assert.match(artifacts.installer, /\.dmg$/);
+    assert.deepEqual(artifacts.liveUpdateFiles.map((filePath) => path.basename(filePath)), [
+      "Dartsnut.Agent_1.7.4_aarch64.app.tar.gz",
+      "latest.json",
+      "Dartsnut.Agent_1.7.4_aarch64.app.tar.gz.sig"
+    ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("collectTauriArtifacts discovers Tauri sibling bundle directories", () => {
+  const root = tempDir();
+  try {
+    fs.mkdirSync(path.join(root, "dmg"));
+    fs.mkdirSync(path.join(root, "macos"));
+    writeArtifact(path.join(root, "dmg"), "Dartsnut Agent_1.7.4_aarch64.dmg");
+    writeArtifact(path.join(root, "macos"), "Dartsnut.Agent_1.7.4_aarch64.app.tar.gz");
+    writeArtifact(path.join(root, "macos"), "Dartsnut.Agent_1.7.4_aarch64.app.tar.gz.sig");
+    writeArtifact(root, "latest.json", "Dartsnut.Agent_1.7.4_aarch64.app.tar.gz");
+    const artifacts = helpers.collectTauriArtifacts(root, { platform: "darwin" }, "1.7.4");
+    assert.match(artifacts.installer, /dmg[\\/]Dartsnut Agent_1\.7\.4_aarch64\.dmg$/);
+    assert.match(artifacts.liveUpdateFiles[0], /macos[\\/]Dartsnut\.Agent_1\.7\.4_aarch64\.app\.tar\.gz$/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("publishBuiltArtifacts updates matching release and uploads metadata last", async () => {
   const calls = [];
   const existing = { id: 7, platform: "mac", version: "1.5.4" };

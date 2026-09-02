@@ -1,10 +1,13 @@
 import React, { Component, type ErrorInfo, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { installTauriApi } from "./tauriApi";
 import { initializeAnalytics, installAnalyticsClickTracking } from "./analytics";
 import "./themes.css";
 import "./tailwind.css";
 import "./styles.css";
+
+installTauriApi();
 
 function reportRendererError(error: unknown, source: string): void {
   const normalized = error instanceof Error ? error : new Error(String(error));

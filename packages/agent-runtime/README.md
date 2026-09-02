@@ -1,6 +1,9 @@
 # @dartsnut/agent-runtime
 
-Agent session engine, provider client, skills, and workspace tools for Dartsnut desktop.
+Legacy TypeScript agent/session compatibility package. Tauri desktop production
+runtime lives in `apps/desktop/src-tauri` and does not bundle this package's
+OpenAI/Electron bridge. Package remains for plugin export tooling and migration
+tests; new desktop behavior must be implemented in Rust.
 
 ## Tests
 

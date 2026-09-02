@@ -3,10 +3,5 @@ packages:
   - "packages/*"
 allowBuilds:
   '@firebase/util': true
-  cpu-features: true
-  electron: true
-  electron-winstaller: true
   esbuild: true
   protobufjs: true
-  sqlite3: true
-  ssh2: true

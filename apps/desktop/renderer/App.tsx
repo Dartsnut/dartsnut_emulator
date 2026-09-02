@@ -120,6 +120,7 @@ import {
 } from "./rawTimeline";
 import { applyTheme, resolveThemeFromEnvironment, type ThemeId } from "./theme";
 import { useWindowChromeInsets } from "./useWindowChromeInsets";
+import { WindowControls } from "./WindowControls";
 import {
   chatPaneRatioFromWidth,
   chatPaneWidthFromRatio,
@@ -953,6 +954,7 @@ function summarizeFileToolCallDelta(event: FunctionCallPreview): string {
 export function App() {
   useWindowChromeInsets();
 
+
   useLayoutEffect(() => {
     const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
     const platform = /Macintosh|Mac OS X/i.test(ua)
@@ -1058,6 +1060,63 @@ export function App() {
     deployEligibility.ok &&
     (deployEligibility.projectType === "game" || deployEligibility.projectType === "widget")
   );
+  const chatDisabled = useMemo(() => {
+    if (!bootstrap) {
+      return true;
+    }
+    return sending || Boolean(agentQuestion) || machineMcpPicker.visible;
+  }, [agentQuestion, bootstrap, machineMcpPicker.visible, sending]);
+
+  // Tauri native drag/drop provides filesystem paths; browser DataTransfer
+  // intentionally hides them. Handle drops over composer directly so media
+  // attachments keep working after Electron removal.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/webview")
+      .then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((event) => {
+        if (disposed || event.payload.type !== "drop" || chatDisabled || event.payload.paths.length === 0) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        const target = document.elementFromPoint(
+          event.payload.position.x / scale,
+          event.payload.position.y / scale
+        );
+        if (!target?.closest(".ui-composer")) {
+          return;
+        }
+        const accepted: ChatMediaAttachment[] = [];
+        for (const filePath of event.payload.paths) {
+          const name = filePath.split(/[\\/]/).pop() || "media file";
+          const kind = inferChatMediaAttachmentKind("", name);
+          if (!kind) continue;
+          accepted.push({
+            id: createChatMediaAttachmentId(),
+            path: filePath,
+            name,
+            mimeType: "application/octet-stream",
+            kind,
+            size: 0
+          });
+        }
+        if (accepted.length > 0) {
+          setChatMediaAttachments((previous) => mergeChatMediaAttachments(previous, accepted));
+          setChatAttachmentError(null);
+        } else {
+          setChatAttachmentError("Drop image, audio, or video files from your computer.");
+        }
+      }))
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [chatDisabled]);
   const showEmulator = validProject;
   const showRuntimeSetup = pythonRuntimeProgress.running || Boolean(pythonRuntimeProgress.error);
   const showEmulatorPane = screen === "main" && showEmulator && !showRuntimeSetup;
@@ -1922,9 +1981,6 @@ export function App() {
               toolName: String(item.name ?? "tool"),
               argumentsJson: typeof item.arguments === "string" ? item.arguments : ""
             });
-          } else if (item?.type === "web_search_call" || item?.type === "code_interpreter_call") {
-            const toolName = item.type === "web_search_call" ? "web_search" : "code_interpreter";
-            trackAgentEvent("agent_tool_used", { tool_name: toolName, phase: "call" });
           }
           return;
         }
@@ -2385,12 +2441,6 @@ export function App() {
     personaState
   ]);
 
-  const chatDisabled = useMemo(() => {
-    if (!bootstrap) {
-      return true;
-    }
-    return sending || Boolean(agentQuestion) || machineMcpPicker.visible;
-  }, [agentQuestion, bootstrap, machineMcpPicker.visible, sending]);
   const greetingOnlyTimeline = entries.length > 0 && entries.every(
     (entry) => entry.role === "agent" && (entry.id === "greeting-initial" || entry.id.startsWith("greeting-"))
   );
@@ -2970,9 +3020,13 @@ export function App() {
       style={mainGridStyle}
       aria-busy={submissionLock.active}
     >
-      <div className="window-chrome-drag-strip" aria-hidden />
+      <div className="app-titlebar" data-tauri-drag-region>
+        <WindowControls />
+        <span className="app-titlebar__title" data-tauri-drag-region>Dartsnut Agent</span>
+      </div>
       <header
         className="workspace-header flex min-h-10 items-center gap-2 [app-region:drag] [-webkit-app-region:drag]"
+        data-tauri-drag-region
         style={{
           paddingLeft: "calc(6px + var(--chrome-margin-inline-start))",
           paddingTop: "5px",
@@ -3132,13 +3186,13 @@ export function App() {
       </aside>
       <section className="main-workspace-panel col-start-2 col-end-3 row-start-2 min-h-0 min-w-0">
         <div className="main-workspace-panel__chrome">
-          <div className="main-workspace-panel__drag-region" aria-hidden />
+          <div className="main-workspace-panel__drag-region" data-tauri-drag-region aria-hidden />
           <div className="main-workspace-panel__controls">
             <UpdateDownloadPill status={appUpdate} />
             {screen === "main" && showDeployDrawer ? (
               <button
                 type="button"
-                className="header-deploy-toggle max-[1100px]:hidden"
+                className="header-deploy-toggle"
                 aria-label={deployDrawerOpen ? "Collapse Deploy and Community panel" : "Open Deploy and Community panel"}
                 aria-expanded={deployDrawerOpen}
                 title={deployDrawerOpen ? "Collapse right panel" : "Open right panel"}
@@ -3667,7 +3721,7 @@ export function App() {
       {showDeployDrawer ? (
         <div
           className={cn(
-            "deploy-drawer-viewport max-[1100px]:hidden",
+            "deploy-drawer-viewport",
             deployDrawerOpen ? "deploy-drawer-viewport--open" : "deploy-drawer-viewport--closed"
           )}
         >

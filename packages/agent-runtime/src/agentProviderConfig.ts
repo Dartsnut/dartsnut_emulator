@@ -11,8 +11,6 @@ export interface AgentModelConfig {
   endpointKind: AgentEndpointKind;
   /** Stable non-secret identity for response chains when transport credentials rotate per run. */
   chainScope?: string;
-  /** Hosted OpenAI tools require explicit provider support on compatible gateways. */
-  supportsHostedTools?: boolean;
   /** Some compatible HTTP gateways only support response continuation over WebSocket. */
   supportsResponseContinuation?: boolean;
 }
@@ -58,7 +56,6 @@ export function buildAgentModelConfig(input: {
     apiKey,
     fetchImpl: input.fetchImpl,
     endpointKind: isOpenAiFirstParty(baseUrl) ? "openai" : "openai-compatible",
-    supportsHostedTools: isOpenAiFirstParty(baseUrl),
     supportsResponseContinuation: providerHost(baseUrl) !== "poloai.top"
   };
 }

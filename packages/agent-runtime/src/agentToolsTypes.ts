@@ -27,7 +27,6 @@ export type AgentToolsOptions = {
     chatAttachments?: ChatMediaAttachment[];
   };
   profile?: AgentToolProfile;
-  supportsHostedTools?: boolean;
   toolSchemas?: AgentToolSchema[];
   hostReloadEmulatorHandler?: HostReloadEmulatorHandler;
   hostGetEmulatorLogsHandler?: HostGetEmulatorLogsHandler;

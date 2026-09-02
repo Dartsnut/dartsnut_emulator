@@ -296,14 +296,6 @@
   --color-zoom-overlay: rgba(0, 0, 0, 0.6);
 }
 
-:root[data-platform="darwin"] {
-  --chrome-margin-inline-start: 76px;
-}
-
-:root[data-platform="win32"] {
-  --chrome-margin-inline-end: 0px;
-}
-
 [data-theme="light"] {
   color-scheme: light;
 

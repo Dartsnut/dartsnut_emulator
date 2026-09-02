@@ -2,7 +2,7 @@
 
 The **Deploy** panel appears when root `pyproject.toml` has non-empty `[project].name` and `[project].version`, plus direct `pydartsnut` dependency. No `conf.json` means a game; a widget `conf.json` must include `size` and `fields`. It syncs under **`~/dartsnut_rpi/apps/<project.name>/`** over SSH (default dev credential **`rpi` / `rpi`**).
 
-**Desktop OS:** Bundling uses the **`tar`** CLI on your machine (Electron main process). **Windows 10+** ships **`tar.exe`** (BSD/libarchive) with the flags we use (`--format ustar`, gzip); **macOS** and typical Linux installs are supported. **ssh2** is pure Node and works on Windows without OpenSSH being required for the app (TCP from Electron to the Pi).
+**Desktop OS:** Tauri backend creates deterministic USTAR/gzip archives in Rust and uses `russh`/`russh-sftp` for SSH/SFTP. No OpenSSH or Node SSH runtime is required.
 
 ## Controls
 

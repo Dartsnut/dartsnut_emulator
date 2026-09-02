@@ -145,6 +145,42 @@ export function collectReleaseArtifacts(releaseDir, target, version, buildStarte
   return artifacts;
 }
 
+/** Collect Tauri 2 bundle/update artifacts from a bundle output directory. */
+export function collectTauriArtifacts(bundleRoot, target, version, buildStartedAt = 0) {
+  if (!fs.existsSync(bundleRoot)) throw new Error(`Tauri bundle directory does not exist: ${bundleRoot}`);
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const filePath = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(filePath);
+      else files.push({ name: entry.name, path: filePath });
+    }
+  };
+  walk(bundleRoot);
+  const names = files.map(({ name }) => name);
+  const installerExt = target.platform === "darwin" ? ".dmg" : ".exe";
+  const installerName = oneVersionedFile(names, version, installerExt, "Tauri installer");
+  const installer = files.find(({ name }) => name === installerName);
+  const updateCandidates = files.filter(({ name }) =>
+    /\.(app\.tar\.gz|nsis\.zip)$/.test(name) && versionPattern(version).test(name)
+  );
+  const updateBinary = updateCandidates[0] || installer;
+  const signature = files.find(({ name }) => name === `${updateBinary.name}.sig`) || files.find(({ name }) => name === `${installer.name}.sig`);
+  const metadata = files.find(({ name }) => name === "latest.json") || files.find(({ name }) => name === "latest-" + target.platform + ".json");
+  if (!metadata) throw new Error("Missing Tauri updater latest.json metadata");
+  if (!signature) throw new Error(`Missing Tauri updater signature for ${updateBinary.name}`);
+  const metadataBody = fs.readFileSync(metadata.path, "utf8");
+  if (!metadataBody.includes(updateBinary.name)) {
+    throw new Error(`Tauri updater metadata does not reference ${updateBinary.name}`);
+  }
+  const selected = [installer, updateBinary, metadata, signature].filter(Boolean);
+  for (const file of selected) assertFresh(file.path, buildStartedAt);
+  return {
+    installer: installer.path,
+    liveUpdateFiles: selected.slice(1).map((file) => file.path)
+  };
+}
+
 export function parseEnvFile(source) {
   const values = {};
   for (const rawLine of source.split(/\r?\n/)) {

@@ -1,8 +1,10 @@
 import path from "node:path";
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   collectReleaseArtifacts,
+  collectTauriArtifacts,
   createReleaseApi,
   loadReleaseConfig,
   normalizeVersionArgs,
@@ -48,12 +50,20 @@ try {
   await runPackage(target.packageScript);
   stage("package complete");
 
-  const artifacts = collectReleaseArtifacts(
-    path.join(repoRoot, "apps", "desktop", "release"),
-    target,
-    version,
-    buildStartedAt
+  const tauriBundle = path.join(
+    repoRoot,
+    "apps",
+    "desktop",
+    "src-tauri",
+    "target",
+    target.platform === "darwin" ? "aarch64-apple-darwin" : "x86_64-pc-windows-msvc",
+    "release",
+    "bundle",
+    target.platform === "darwin" ? "dmg" : "nsis"
   );
+  const artifacts = fs.existsSync(tauriBundle)
+    ? collectTauriArtifacts(tauriBundle, target, version, buildStartedAt)
+    : collectReleaseArtifacts(path.join(repoRoot, "apps", "desktop", "release"), target, version, buildStartedAt);
   stage("release artifacts validated");
 
   await publishBuiltArtifacts({

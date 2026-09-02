@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@dartsnut/shared-ipc";
 import type { RunStreamEvent } from "@openai/agents";
-import { promptRequestsHostedTools, SessionEngine } from "../src/sessionEngine";
+import { SessionEngine } from "../src/sessionEngine";
 import { WorkspacePolicy } from "../src/workspacePolicy";
 import { agentModelChainKey, buildAgentModelConfig } from "../src/agentProviderConfig";
 import { resetAgentsBootstrapForTests } from "../src/agentsBootstrap";
@@ -94,13 +94,7 @@ function toolOutput(name: string, callId: string): RunStreamEvent {
 }
 
 describe("SessionEngine (@openai/agents)", () => {
-  it("enables hosted tools only for explicit hosted-tool requests", () => {
-    expect(promptRequestsHostedTools("Build a Pong game")).toBe(false);
-    expect(promptRequestsHostedTools("Search the web for current weather APIs")).toBe(true);
-    expect(promptRequestsHostedTools("Use code interpreter for data analysis")).toBe(true);
-  });
-
-  it("does not send hosted tools for ordinary project prompts", async () => {
+  it("keeps hosted tools disabled for revised feature set", async () => {
     resetAgentsBootstrapForTests();
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-hosted-tools-"));
     let names: string[] = [];
@@ -109,17 +103,14 @@ describe("SessionEngine (@openai/agents)", () => {
         names = agent.tools.map((tool) => "name" in tool ? String(tool.name) : "");
         return createMockStream({ finalOutput: "Done." });
       },
-      agentModelConfig: {
-        ...buildAgentModelConfig({ model: "gpt-4.1-mini", apiKey: "test-key" }),
-        supportsHostedTools: true
-      },
+      agentModelConfig: buildAgentModelConfig({ model: "gpt-4.1-mini", apiKey: "test-key" }),
       workspacePolicy: new WorkspacePolicy(workspace)
     });
-
-    await engine.runPrompt("Build a Pong game", () => {});
+    await engine.runPrompt("Search the web", () => {});
     expect(names).not.toContain("web_search");
     expect(names).not.toContain("code_interpreter");
   });
+
   it("executes tool calls and emits final response", async () => {
     resetAgentsBootstrapForTests();
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dartsnut-agents-engine-"));

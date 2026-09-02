@@ -117,6 +117,7 @@ declare global {
       getProviderSettings: () => Promise<ProviderSettings>;
       getPythonRuntimeStatus: () => Promise<string | null>;
       getPythonRuntimeProgress: () => Promise<PythonRuntimeProgress>;
+      retryPythonRuntimeSetup: () => Promise<boolean>;
       saveProviderSettings: (request: SaveProviderSettingsRequest) => Promise<ProviderSettings>;
       onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
       onMainProcessConsoleMirror: (listener: (payload: MainProcessConsoleMirrorPayload) => void) => () => void;

@@ -80,15 +80,6 @@ body {
   app-region: drag;
 }
 
-.app-titlebar__title {
-  grid-column: 2;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0;
-  pointer-events: none;
-}
-
 [data-theme="light"] .app-titlebar {
   background: transparent;
   color: rgba(0, 0, 0, 0.72);
@@ -151,10 +142,6 @@ body {
 .window-controls--macos .window-control--close { background: #ff5f57; }
 .window-controls--macos .window-control--minimize { background: #febc2e; }
 .window-controls--macos .window-control--maximize { background: #28c840; }
-
-:root[data-platform="darwin"] .app-titlebar__title {
-  visibility: hidden;
-}
 
 .workspace-header {
   position: absolute;

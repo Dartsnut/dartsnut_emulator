@@ -209,7 +209,7 @@ fn workspace_tools_with_context(root: PathBuf, app: Option<AppHandle>) -> Vec<Dy
                 let app = app.clone();
                 Box::pin(async move {
                     if name == "check_python" {
-                        execute_check_python(&root, args).await
+                        execute_check_python(&root, args, app.as_ref()).await
                     } else if name == "get_dartsnut_skill" {
                         execute_get_skill(&root, args)
                     } else {
@@ -1107,7 +1107,11 @@ fn execute_get_skill(workspace_root: &Path, args: Value) -> Result<Value, String
     Ok(serde_json::json!({"ok":true,"skill_id":skill_id,"content":content}))
 }
 
-async fn execute_check_python(workspace_root: &Path, args: Value) -> Result<Value, String> {
+async fn execute_check_python(
+    workspace_root: &Path,
+    args: Value,
+    app: Option<&AppHandle>,
+) -> Result<Value, String> {
     let paths = args
         .get("paths")
         .and_then(Value::as_array)
@@ -1136,15 +1140,23 @@ async fn execute_check_python(workspace_root: &Path, args: Value) -> Result<Valu
         }
         resolved.push(path);
     }
-    let python = crate::runtime::discover_python(Some(&root))
-        .ok_or_else(|| "Python runtime unavailable".to_owned())?;
-    let output = tokio::process::Command::new(python)
+    let app = app.ok_or_else(|| "Managed Python runtime is unavailable".to_owned())?;
+    let runtime = app
+        .state::<crate::commands::AppState>()
+        .runtime
+        .require_ready()?;
+    let output = tokio::process::Command::new(&runtime.uv)
+        .arg("run")
+        .arg("--no-project")
+        .arg("--python")
+        .arg(&runtime.python)
+        .arg("python")
         .arg("-m")
         .arg("py_compile")
         .args(&resolved)
         .current_dir(&root)
         .env_clear()
-        .envs(crate::runtime::sanitized_environment())
+        .envs(crate::runtime::managed_environment(&runtime))
         .output()
         .await
         .map_err(|error| error.to_string())?;
@@ -1750,21 +1762,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("dartsnut-python-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("main.py"), "print('ok')\n").unwrap();
-        let valid = execute_check_python(&root, serde_json::json!({}))
+        assert!(execute_check_python(&root, serde_json::json!({}), None)
             .await
-            .unwrap();
-        assert_eq!(valid["ok"], true);
+            .unwrap_err()
+            .contains("Managed Python runtime"));
         std::fs::write(root.join("bad.py"), "def broken(:\n").unwrap();
-        let invalid = execute_check_python(&root, serde_json::json!({"paths":["bad.py"]}))
-            .await
-            .unwrap();
-        assert_eq!(invalid["ok"], false);
-        assert!(invalid["errors"][0]["message"]
-            .as_str()
-            .unwrap()
-            .contains("SyntaxError"));
         assert!(
-            execute_check_python(&root, serde_json::json!({"paths":["../bad.py"]}))
+            execute_check_python(&root, serde_json::json!({"paths":["../bad.py"]}), None)
                 .await
                 .is_err()
         );

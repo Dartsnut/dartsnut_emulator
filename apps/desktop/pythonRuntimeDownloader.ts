@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { stripInheritedPythonHome } from "./pythonEnvSanitize";
 
+// Historical Electron-only implementation. Tauri runtime targets are authoritative in
+// src-tauri/src/runtime.rs; do not copy or update release targets from this file.
 export const PYTHON_VERSION = "3.12.7";
 export const PYTHON_RELEASE = "20241016";
 export const UV_VERSION = "0.11.19";

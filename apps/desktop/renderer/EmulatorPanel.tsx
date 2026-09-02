@@ -22,7 +22,7 @@ import {
   type CaptureMode,
   type CaptureZoom,
 } from "./emulatorCapture";
-import { shouldShowWidgetParams } from "./emulatorProjectUi";
+import { canStartOrReloadEmulator, shouldShowWidgetParams } from "./emulatorProjectUi";
 import { applyWidgetParamsAndReload, type WidgetValueStore } from "./widgetParams";
 import { WidgetParamsEditor } from "./WidgetParamsEditor";
 
@@ -79,12 +79,14 @@ function isEmulatorStoppedWithError(state: EmulatorStateSnapshot): boolean {
 }
 
 export type EmulatorPanelProps = {
+  workspacePath: string;
   widgetConfig: WidgetConfigSnapshot;
   widgetValuesByConfig: WidgetValueStore;
   onWidgetValuesChange: (configKey: string, values: WidgetFieldValues) => void;
 };
 
 export function EmulatorPanel({
+  workspacePath,
   widgetConfig,
   widgetValuesByConfig,
   onWidgetValuesChange,
@@ -93,7 +95,6 @@ export function EmulatorPanel({
   const CANVAS_BASE_HEIGHT = 800;
   const bridgeReady = Boolean(window.dartsnutApi?.sendEmulatorCommand);
   const [state, setState] = useState<EmulatorStateSnapshot>(defaultState);
-  const [widgetPath, setWidgetPath] = useState("");
   const [selectedDartIndex, setSelectedDartIndex] = useState(0);
   const [dartCoords, setDartCoords] = useState<DartCoord[]>(Array.from({ length: 12 }, () => null));
   const [captureFps, setCaptureFps] = useState(0);
@@ -146,6 +147,7 @@ export function EmulatorPanel({
   const gifSaving = state.gifSaving === true;
   const gifElapsed = formatRecordingElapsed(state.gifElapsedMs ?? 0);
   const gifProgress = Math.min(1, Math.max(0, (state.gifElapsedMs ?? 0) / 30_000));
+  const canStartOrReload = canStartOrReloadEmulator(bridgeReady, workspacePath);
 
   useEffect(() => {
     zoomOpenRef.current = zoomOpen;
@@ -480,6 +482,9 @@ export function EmulatorPanel({
     });
 
     const stopLog = window.dartsnutApi.onEmulatorLog((entry: EmulatorLogEntry) => {
+      if (typeof entry?.text !== "string") {
+        return;
+      }
       if (entry.text.startsWith("[python-setup]")) {
         return;
       }
@@ -594,15 +599,6 @@ export function EmulatorPanel({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, []);
-
-  useEffect(() => {
-    void (async () => {
-      const response = await window.dartsnutApi.getLastWidgetPath();
-      if (response?.path) {
-        setWidgetPath(response.path);
-      }
-    })();
   }, []);
 
   async function applyWidgetPathAndReload(nextPath: string) {
@@ -813,8 +809,8 @@ export function EmulatorPanel({
             <button
               type="button"
               className={emuToolbarIconBtn}
-              disabled={!bridgeReady || !widgetPath.trim()}
-              onClick={() => void applyWidgetPathAndReload(widgetPath)}
+              disabled={!canStartOrReload}
+              onClick={() => void applyWidgetPathAndReload(workspacePath)}
               aria-label="Start or reload"
               data-analytics-id="emulator_start_reload"
               data-analytics-area="emulator"

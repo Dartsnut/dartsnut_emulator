@@ -95,6 +95,7 @@ import {
   updateAnalyticsUser
 } from "./analytics";
 import { shouldSetInitialChatTitle } from "./chatTitlePolicy";
+import { normalizeWidgetConfigSnapshot } from "./widgetParams";
 import { readyAgentProfileId, useChatPersonaController } from "./useChatPersonaController";
 import { AskQuestionCard } from "./AskQuestionCard";
 import { AssetManagerPanel } from "./AssetManagerPanel";
@@ -988,7 +989,6 @@ export function App() {
   const [composerDragActive, setComposerDragActive] = useState(false);
   const [sending, setSending] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
-  const [pythonRuntimeStatus, setPythonRuntimeStatus] = useState<string | null>(null);
   const [pythonRuntimeProgress, setPythonRuntimeProgress] = useState<PythonRuntimeProgress>({
     running: false,
     stage: null,
@@ -1880,9 +1880,6 @@ export function App() {
       const message = error instanceof Error ? error.message : "Failed to load provider settings.";
       setProviderSettingsError(message);
     });
-    api.getPythonRuntimeStatus().then(setPythonRuntimeStatus).catch(() => {
-      setPythonRuntimeStatus(null);
-    });
     api.getPythonRuntimeProgress().then(setPythonRuntimeProgress).catch(() => {
       setPythonRuntimeProgress({ running: false, stage: null, percent: 0, message: null });
     });
@@ -2170,12 +2167,6 @@ export function App() {
       }
       appendRawAgentEvent(event);
     });
-    const unsubscribePythonRuntime = api.onPythonRuntimeStatus((status) => {
-      setPythonRuntimeStatus(status);
-      if (status) {
-        devLog.info("[python-runtime]", status);
-      }
-    });
     const unsubscribePythonRuntimeProgress = api.onPythonRuntimeProgress((progress) => {
       setPythonRuntimeProgress(progress);
       if (progress.message) {
@@ -2212,7 +2203,6 @@ export function App() {
     return () => {
       unsubscribe();
       unsubscribeBootstrap();
-      unsubscribePythonRuntime();
       unsubscribePythonRuntimeProgress();
       unsubscribeCommunitySubmitProgress();
       unsubscribeAppUpdateStatus();
@@ -2277,19 +2267,20 @@ export function App() {
   }, [api, bootstrap?.workspaceRoot]);
 
   const acceptWidgetConfig = useCallback((snapshot: WidgetConfigSnapshot) => {
-    setWidgetConfigs((previous) => ({ ...previous, [snapshot.scope]: snapshot }));
-    if (snapshot.status !== "ready") {
+    const normalizedSnapshot = normalizeWidgetConfigSnapshot(snapshot);
+    setWidgetConfigs((previous) => ({ ...previous, [normalizedSnapshot.scope]: normalizedSnapshot }));
+    if (normalizedSnapshot.status !== "ready") {
       return;
     }
     setWidgetValuesByConfig((previous) => {
-      const current = previous[snapshot.configKey];
+      const current = previous[normalizedSnapshot.configKey];
       return {
         ...previous,
-        [snapshot.configKey]: {
-          fields: snapshot.fields,
+        [normalizedSnapshot.configKey]: {
+          fields: normalizedSnapshot.fields,
           values: current
-            ? reconcileWidgetFieldValues(current.fields, current.values, snapshot.fields)
-            : createDefaultWidgetFieldValues(snapshot.fields)
+            ? reconcileWidgetFieldValues(current.fields, current.values, normalizedSnapshot.fields)
+            : createDefaultWidgetFieldValues(normalizedSnapshot.fields)
         }
       };
     });
@@ -3022,7 +3013,6 @@ export function App() {
     >
       <div className="app-titlebar" data-tauri-drag-region>
         <WindowControls />
-        <span className="app-titlebar__title" data-tauri-drag-region>Dartsnut Agent</span>
       </div>
       <header
         className="workspace-header flex min-h-10 items-center gap-2 [app-region:drag] [-webkit-app-region:drag]"
@@ -3228,7 +3218,16 @@ export function App() {
                 <span className="tabular-nums">{runtimeProgressPercent}%</span>
               </div>
               {pythonRuntimeProgress.error ? (
-                <div className="runtime-setup-panel__error">{pythonRuntimeProgress.error}</div>
+                <div className="runtime-setup-panel__error">
+                  <div>{pythonRuntimeProgress.error}</div>
+                  <button
+                    type="button"
+                    className="mt-3 rounded-md border border-current px-3 py-1.5 font-medium"
+                    onClick={() => void api?.retryPythonRuntimeSetup()}
+                  >
+                    Retry runtime setup
+                  </button>
+                </div>
               ) : null}
             </div>
           </div>
@@ -3338,25 +3337,15 @@ export function App() {
             <span>{activeChat.title}</span>
           </div> : null}
 
-          {runtimeError || pythonRuntimeStatus ? (
+          {runtimeError ? (
             <div className="chat-rail-overlay chat-rail-overlay--top pointer-events-none absolute inset-x-0 top-0 z-10">
               <div className="pointer-events-auto flex min-w-0 flex-col gap-2">
-                {runtimeError ? (
-                  <div
-                    className="m-0 rounded-lg border border-[var(--color-runtime-error-border)] bg-[var(--color-runtime-error-bg)] p-2 text-xs"
-                    role="status"
-                  >
-                    {runtimeError}
-                  </div>
-                ) : null}
-                {pythonRuntimeStatus ? (
-                  <div
-                    className="m-0 rounded-lg border border-[var(--color-runtime-status-border)] bg-[var(--color-runtime-status-bg)] p-2 text-xs text-[var(--color-runtime-status-text)]"
-                    role="status"
-                  >
-                    {pythonRuntimeStatus}
-                  </div>
-                ) : null}
+                <div
+                  className="m-0 rounded-lg border border-[var(--color-runtime-error-border)] bg-[var(--color-runtime-error-bg)] p-2 text-xs"
+                  role="status"
+                >
+                  {runtimeError}
+                </div>
               </div>
             </div>
           ) : null}
@@ -3710,6 +3699,7 @@ export function App() {
         <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-0 flex-1 flex-col">
               <EmulatorPanel
+                workspacePath={bootstrap?.workspaceRoot ?? ""}
                 widgetConfig={widgetConfigs.emulator}
                 widgetValuesByConfig={widgetValuesByConfig}
                 onWidgetValuesChange={updateWidgetValues}

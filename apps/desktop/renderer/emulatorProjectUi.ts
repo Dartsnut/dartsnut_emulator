@@ -9,3 +9,10 @@ export function shouldShowWidgetParams(
   if (normalizedProjectType === "game") return false;
   return configStatus === "ready";
 }
+
+export function canStartOrReloadEmulator(
+  bridgeReady: boolean,
+  workspacePath: string | null | undefined,
+): boolean {
+  return bridgeReady && Boolean(workspacePath?.trim());
+}

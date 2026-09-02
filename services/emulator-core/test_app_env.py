@@ -38,6 +38,19 @@ def _write_workspace(workspace: Path, app_type: str = "game") -> None:
 
 
 class AppEnvTests(unittest.TestCase):
+    def test_package_indexes_are_ordered_by_probe_latency(self):
+        module = _load_app_env_module()
+
+        def probe(url: str):
+            latency = 0.4 if url == module.PYPI_MIRRORS[0] else 0.02
+            return url, latency
+
+        with mock.patch.object(module, "_probe_package_index", side_effect=probe):
+            self.assertEqual(
+                module._ordered_package_indexes(),
+                [module.PYPI_MIRRORS[1], module.PYPI_MIRRORS[0]],
+            )
+
     def test_classifies_game_without_conf(self):
         module = _load_app_env_module()
         with tempfile.TemporaryDirectory() as workspace_dir:
@@ -122,6 +135,8 @@ class AppEnvTests(unittest.TestCase):
 
         with (
             mock.patch.dict(module.os.environ, inherited, clear=True),
+            mock.patch.object(module.os.path, "isfile", return_value=True),
+            mock.patch.object(module, "_ordered_package_indexes", return_value=module.PYPI_MIRRORS),
             mock.patch.object(module.subprocess, "run") as run,
         ):
             module._uv_sync("/workspace/demo")
@@ -142,10 +157,7 @@ class AppEnvTests(unittest.TestCase):
         self.assertEqual(env["PYTHONNOUSERSITE"], "1")
         self.assertEqual(env["UV_PYTHON"], "/runtime/bin/python")
         self.assertEqual(env["KEEP_ME"], "yes")
-        if module.sys.platform == "win32":
-            self.assertNotIn("PYTHONHOME", env)
-        else:
-            self.assertEqual(env["PYTHONHOME"], "/runtime")
+        self.assertNotIn("PYTHONHOME", env)
 
     def test_workspace_launch_env_removes_python_and_uv_overrides(self):
         module = _load_app_env_module()
@@ -161,7 +173,10 @@ class AppEnvTests(unittest.TestCase):
             "KEEP_ME": "yes",
         }
 
-        with mock.patch.dict(module.os.environ, {"UV_PYTHON": "/runtime/bin/python"}, clear=True):
+        with (
+            mock.patch.dict(module.os.environ, {"UV_PYTHON": "/runtime/bin/python"}, clear=True),
+            mock.patch.object(module.os.path, "isfile", return_value=True),
+        ):
             env = module.workspace_launch_env(base_env)
 
         for key in module._WORKSPACE_ENV_REMOVE:
@@ -203,7 +218,13 @@ class AppEnvTests(unittest.TestCase):
         )
 
         with (
-            mock.patch.dict(module.os.environ, {"DARTSNUT_UV_BIN": "/tmp/uv"}, clear=True),
+            mock.patch.dict(
+                module.os.environ,
+                {"DARTSNUT_UV_BIN": "/tmp/uv", "UV_PYTHON": "/runtime/bin/python"},
+                clear=True,
+            ),
+            mock.patch.object(module.os.path, "isfile", return_value=True),
+            mock.patch.object(module, "_ordered_package_indexes", return_value=module.PYPI_MIRRORS),
             mock.patch.object(module.subprocess, "run", side_effect=failure),
             mock.patch.object(module.time, "sleep"),
         ):

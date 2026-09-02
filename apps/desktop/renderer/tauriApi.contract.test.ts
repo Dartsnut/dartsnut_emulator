@@ -21,7 +21,7 @@ describe("Tauri bridge command contract", () => {
       "getWindowChromeInsets", "getAppUpdateStatus", "installAppUpdateNow", "getAppUpdateAutoDownload",
       "setAppUpdateAutoDownload", "downloadAppUpdate", "checkAppUpdate", "setShellUiTheme",
       "pickWorkspace", "machineMcpSubmitQuestionAnswer", "agentQuestionSubmitAnswer", "sendPrompt",
-      "cancelAgent", "getProviderSettings", "getPythonRuntimeStatus", "getPythonRuntimeProgress",
+      "cancelAgent", "getProviderSettings", "getPythonRuntimeStatus", "getPythonRuntimeProgress", "retryPythonRuntimeSetup",
       "saveProviderSettings", "onAgentEvent", "onMainProcessConsoleMirror", "onWindowChromeInsets",
       "onAppUpdateStatus", "onSessionReset", "onBootstrapStateChanged", "onPythonRuntimeStatus",
       "onPythonRuntimeProgress", "sendEmulatorCommand", "pickWidgetPath", "getLastWidgetPath",

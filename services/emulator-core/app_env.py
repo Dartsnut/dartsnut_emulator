@@ -1,4 +1,4 @@
-"""Per-workspace virtualenv setup for emulator preview (mirrors dartsnut_rpi app_env)."""
+"""Per-workspace virtualenv setup for emulator preview."""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ import json
 import os
 import re
 import subprocess
-import sys
 import time
 import tomllib
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from typing import Any
 
@@ -17,6 +19,7 @@ PYPI_MIRRORS = [
     "https://mirrors.ustc.edu.cn/pypi/simple",
 ]
 RETRIES_PER_MIRROR = 3
+PACKAGE_INDEX_PROBE_TIMEOUT = 4.0
 LogFn = Callable[[str, str], None]
 StatusFn = Callable[[str], None]
 
@@ -25,8 +28,8 @@ def _uv_bin() -> str:
     return os.environ.get("DARTSNUT_UV_BIN", "").strip()
 
 
-def _bundled_python() -> str:
-    return os.environ.get("UV_PYTHON", "").strip() or sys.executable
+def _managed_python() -> str:
+    return os.environ.get("UV_PYTHON", "").strip()
 
 
 def _pyproject_path(workspace_dir: str) -> str:
@@ -98,66 +101,68 @@ def _clean_workspace_env(base_env: dict[str, str] | None = None) -> dict[str, st
     return env
 
 
-def _python_home_for(python_exe: str) -> str | None:
-    if sys.platform == "win32":
-        return None
-    bin_dir = os.path.dirname(os.path.abspath(python_exe))
-    if os.path.basename(bin_dir) != "bin":
-        return None
-    return os.path.dirname(bin_dir)
-
-
 def _uv_env() -> dict[str, str]:
     env = _clean_workspace_env()
     env["UV_NO_PYTHON_DOWNLOADS"] = "never"
     env["UV_NO_MANAGED_PYTHON"] = "1"
-    python_exe = _bundled_python()
+    python_exe = _managed_python()
     if python_exe:
         env["UV_PYTHON"] = python_exe
-        python_home = _python_home_for(python_exe)
-        if python_home:
-            env["PYTHONHOME"] = python_home
-
-    # Use preferred PyPI index URL if available (set by TypeScript side)
-    pypi_index = os.environ.get("DARTSNUT_PYPI_INDEX_URL", "").strip()
-    if pypi_index:
-        env["UV_INDEX_URL"] = pypi_index
 
     return env
 
 
+def _probe_package_index(url: str) -> tuple[str, float] | None:
+    started = time.monotonic()
+    probe_url = f"{url.rstrip('/')}/pygame-ce/"
+    request = urllib.request.Request(probe_url, headers={"Range": "bytes=0-0"})
+    try:
+        with urllib.request.urlopen(request, timeout=PACKAGE_INDEX_PROBE_TIMEOUT) as response:
+            if response.status not in (200, 206):
+                return None
+            if not response.read(1):
+                return None
+    except (OSError, urllib.error.URLError, ValueError):
+        return None
+    return url, time.monotonic() - started
+
+
+def _ordered_package_indexes() -> list[str]:
+    with ThreadPoolExecutor(max_workers=len(PYPI_MIRRORS)) as executor:
+        probes = list(executor.map(_probe_package_index, PYPI_MIRRORS))
+    available = sorted((probe for probe in probes if probe is not None), key=lambda item: item[1])
+    return [url for url, _latency in available]
+
+
 def _uv_sync(workspace_dir: str) -> None:
-    """Run uv sync with automatic mirror fallback on PyPI failures."""
+    """Run uv sync using fastest reachable package index, with fallback."""
     uv = _uv_bin()
     if not uv:
         raise RuntimeError("DARTSNUT_UV_BIN is not configured")
+    python_exe = _managed_python()
+    if not python_exe or not os.path.isfile(python_exe):
+        raise RuntimeError("UV_PYTHON does not point to the managed Python runtime")
 
     env = _uv_env()
-    preferred_mirror = env.get("UV_INDEX_URL", "").strip()
-
-    # Try preferred mirror first if we have one, otherwise try all mirrors
-    mirrors_to_try = []
-    if preferred_mirror and preferred_mirror in PYPI_MIRRORS:
-        mirrors_to_try.append(preferred_mirror)
-        mirrors_to_try.extend([m for m in PYPI_MIRRORS if m != preferred_mirror])
-    else:
-        mirrors_to_try = PYPI_MIRRORS[:]
+    indexes_to_try = _ordered_package_indexes()
+    if not indexes_to_try:
+        raise RuntimeError("No package download source is reachable")
 
     last_error = None
 
-    for mirror in mirrors_to_try:
+    for index_url in indexes_to_try:
         for attempt in range(1, RETRIES_PER_MIRROR + 1):
             try:
-                mirror_env = dict(env)
-                mirror_env["UV_INDEX_URL"] = mirror
+                index_env = dict(env)
+                index_env["UV_INDEX_URL"] = index_url
 
-                # uv sync is exact by default; bundled uv 0.11.19 exposes only the --inexact opt-out.
+                # uv sync is exact by default; --inexact is the opt-out.
                 subprocess.run(
                     [uv, "sync", "--directory", workspace_dir],
                     check=True,
                     capture_output=True,
                     text=True,
-                    env=mirror_env,
+                    env=index_env,
                 )
                 return  # Success!
 
@@ -169,12 +174,11 @@ def _uv_sync(workspace_dir: str) -> None:
                 if attempt < RETRIES_PER_MIRROR:
                     time.sleep(2 ** (attempt - 1))
 
-    # All mirrors exhausted
+    # All indexes exhausted
     if last_error:
         stderr = (last_error.stderr or "").strip()
         raise RuntimeError(
-            f"Failed to sync dependencies after trying all PyPI mirrors.\n"
-            f"Mirrors attempted: {', '.join(mirrors_to_try)}\n"
+            f"Failed to sync dependencies after trying available sources.\n"
             f"Last error: {stderr or str(last_error)}"
         )
     else:
@@ -188,10 +192,12 @@ def ensure_workspace_venv(
     log: LogFn | None = None,
     status: StatusFn | None = None,
 ) -> bool:
-    """Create or refresh <workspace>/.venv using bundled uv. Returns False on failure."""
+    """Create or refresh <workspace>/.venv using managed uv. Returns False on failure."""
     uv = _uv_bin()
     if not uv or not os.path.isfile(uv):
-        return True
+        if log:
+            log("Managed uv runtime is unavailable", "stderr")
+        return False
 
     main_py = os.path.join(workspace_dir, "main.py")
     if not os.path.isfile(main_py):
@@ -234,7 +240,8 @@ def workspace_launch_env(base_env: dict[str, str] | None = None) -> dict[str, st
     env.setdefault("PYTHONUNBUFFERED", "1")
     env["UV_NO_PYTHON_DOWNLOADS"] = "never"
     env["UV_NO_MANAGED_PYTHON"] = "1"
-    python_exe = _bundled_python()
-    if python_exe:
-        env["UV_PYTHON"] = python_exe
+    python_exe = _managed_python()
+    if not python_exe or not os.path.isfile(python_exe):
+        raise RuntimeError("UV_PYTHON does not point to the managed Python runtime")
+    env["UV_PYTHON"] = python_exe
     return env

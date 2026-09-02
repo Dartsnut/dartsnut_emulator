@@ -207,6 +207,7 @@ export function createTauriApi(): NonNullable<Window["dartsnutApi"]> & TauriBrid
     getProviderSettings: () => invoke<ProviderSettings>("get_provider_settings"),
     getPythonRuntimeStatus: () => invoke<string | null>("get_python_runtime_status"),
     getPythonRuntimeProgress: () => invoke<PythonRuntimeProgress>("get_python_runtime_progress"),
+    retryPythonRuntimeSetup: () => invoke<boolean>("retry_python_runtime_setup"),
     saveProviderSettings: (request: SaveProviderSettingsRequest) => invoke<ProviderSettings>("save_provider_settings", request),
     onAgentEvent: (listener: Listener<AgentEvent>) => subscribe("agent:events", listener),
     onMainProcessConsoleMirror: (listener: Listener<MainProcessConsoleMirrorPayload>) => subscribe("agent:main-process-console-mirror", listener),

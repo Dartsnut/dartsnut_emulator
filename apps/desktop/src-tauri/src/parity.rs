@@ -49,6 +49,13 @@ fn workspace_path_allowed(state: &crate::commands::AppState, requested: &str) ->
     requested == active
 }
 
+fn capture_path_within_root(requested: &Path, root: &Path) -> bool {
+    !requested
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+        && (requested == root || requested.starts_with(root))
+}
+
 pub(crate) fn community_base_url() -> String {
     std::env::var("DARTSNUT_BASE_API")
         .ok()
@@ -653,14 +660,25 @@ pub fn emulator_open_capture_folder(
         .workspace_root
         .lock()
         .ok()
-        .and_then(|value| value.clone())
-        .or_else(|| app.path().app_data_dir().ok());
+        .and_then(|value| value.clone());
     let Some(workspace) = workspace else {
         return Err("workspace unavailable".to_owned());
     };
     let workspace = std::fs::canonicalize(workspace).map_err(|_| "workspace unavailable")?;
-    if !requested.starts_with(&workspace) {
-        return Err("capture folder escapes allowed workspace".to_owned());
+    let downloads_capture = app
+        .path()
+        .download_dir()
+        .ok()
+        .map(|path| path.join("Dartsnut"));
+    let allowed = std::iter::once(workspace)
+        .chain(downloads_capture.into_iter())
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .any(|root| capture_path_within_root(&requested, &root));
+    if !allowed {
+        return Err("capture folder is outside allowed locations".to_owned());
+    }
+    if !requested.is_dir() {
+        return Err("capture folder is not a directory".to_owned());
     }
     tauri_plugin_opener::open_path(requested, None::<&str>).map_err(|error| error.to_string())
 }
@@ -1734,86 +1752,89 @@ pub async fn assets_bind_slot(app: AppHandle, payload: Option<Value>) -> Value {
     {
         return json!({"ok":false,"error":{"slotId":slot_id,"code":"io_error","message":"invalid slot id"}});
     }
-    if let Some(script_root) = app
-        .path()
-        .resource_dir()
-        .ok()
-        .or_else(|| std::env::current_dir().ok())
+    let mut script_candidates = Vec::new();
+    if let Ok(root) = app.path().resource_dir() {
+        script_candidates.push(root.join("scripts/asset_preprocess.py"));
+    }
+    script_candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .join("scripts/asset_preprocess.py"),
+    );
+    if let Ok(root) = std::env::current_dir() {
+        script_candidates.push(root.join("scripts/asset_preprocess.py"));
+    }
+    let Some(script) = script_candidates.into_iter().find(|path| path.is_file()) else {
+        return json!({"ok":false,"error":{"slotId":slot_id,"code":"io_error","message":"asset preprocessor script not found"}});
+    };
+    let runtime = match app
+        .state::<crate::commands::AppState>()
+        .runtime
+        .require_ready()
     {
-        let script = script_root.join("scripts/asset_preprocess.py");
-        if script.is_file() {
-            let python = crate::runtime::discover_python(Some(&script_root));
-            if let Some(python) = python {
-                let output = tokio::process::Command::new(python)
-                    .arg(&script)
-                    .arg("--slot")
-                    .arg(slot_id)
-                    .arg("--kind")
-                    .arg(kind)
-                    .arg("--size")
-                    .arg(format!("{}x{}", size.0, size.1))
-                    .arg("--frames")
-                    .arg(frames.to_string())
-                    .arg("--source")
-                    .arg(source)
-                    .arg("--workspace")
-                    .arg(workspace)
-                    .env_clear()
-                    .envs(crate::runtime::sanitized_environment())
-                    .output()
-                    .await;
-                if let Ok(output) = output {
-                    if let Ok(result) = serde_json::from_slice::<Value>(&output.stdout) {
-                        if result.get("ok").and_then(Value::as_bool) == Some(true) {
-                            if let Some(binding) = result.get("binding").cloned() {
-                                if let Some(slot) = manifest
-                                    .get_mut("slots")
-                                    .and_then(Value::as_array_mut)
-                                    .and_then(|slots| slots.get_mut(slot_index))
-                                {
-                                    slot["binding"] = binding;
-                                }
-                                let tmp = manifest_path.with_extension("json.tmp");
-                                if std::fs::write(
-                                    &tmp,
-                                    serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
-                                )
-                                .and_then(|_| std::fs::rename(&tmp, &manifest_path))
-                                .is_ok()
-                                {
-                                    mark_asset_pending(Path::new(workspace), slot_id);
-                                    return result;
-                                }
-                            }
-                        } else if result.is_object() {
-                            return result;
-                        }
-                    }
-                }
-            }
+        Ok(runtime) => runtime,
+        Err(message) => {
+            return json!({"ok":false,"error":{"slotId":slot_id,"code":"runtime_not_ready","message":message}});
         }
+    };
+    let output = match tokio::process::Command::new(&runtime.uv)
+        .arg("run")
+        .arg("--no-project")
+        .arg("--python")
+        .arg(&runtime.python)
+        .arg(&script)
+        .arg("--slot")
+        .arg(slot_id)
+        .arg("--kind")
+        .arg(kind)
+        .arg("--size")
+        .arg(format!("{}x{}", size.0, size.1))
+        .arg("--frames")
+        .arg(frames.to_string())
+        .arg("--source")
+        .arg(source)
+        .arg("--workspace")
+        .arg(workspace)
+        .env_clear()
+        .envs(crate::runtime::managed_environment(&runtime))
+        .output()
+        .await
+    {
+        Ok(output) => output,
+        Err(error) => {
+            return json!({"ok":false,"error":{"slotId":slot_id,"code":"io_error","message":format!("could not run managed asset preprocessor: {error}")}});
+        }
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return json!({"ok":false,"error":{"slotId":slot_id,"code":"preprocessor_crashed","message":if stderr.is_empty() { "managed asset preprocessor failed".to_owned() } else { stderr }}});
     }
-    let ext = source_path
-        .extension()
-        .and_then(|x| x.to_str())
-        .unwrap_or("bin");
-    let source_rel = format!("assets/_sources/{slot_id}.{ext}");
-    let destination = std::path::Path::new(workspace).join(&source_rel);
-    if let Some(parent) = destination.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let result = match serde_json::from_slice::<Value>(&output.stdout) {
+        Ok(result) => result,
+        Err(error) => {
+            return json!({"ok":false,"error":{"slotId":slot_id,"code":"preprocessor_crashed","message":format!("managed asset preprocessor returned invalid output: {error}")}});
+        }
+    };
+    if result.get("ok").and_then(Value::as_bool) != Some(true) {
+        let code = result
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("preprocessor_crashed");
+        let message = result
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("managed asset preprocessor failed");
+        return json!({"ok":false,"error":{"slotId":slot_id,"code":code,"message":message}});
     }
-    if let Err(error) = std::fs::copy(source_path, &destination) {
-        return json!({"ok":false,"error":{"slotId":slot_id,"code":"io_error","message":error.to_string()}});
-    }
-    let result_kind = slot.get("kind").cloned().unwrap_or(Value::Null);
-    let result_binding =
-        json!({"source":source_rel,"frames":[],"meta":format!("assets/{slot_id}/meta.json")});
+    let Some(binding) = result.get("binding").cloned() else {
+        return json!({"ok":false,"error":{"slotId":slot_id,"code":"preprocessor_crashed","message":"managed asset preprocessor returned no binding"}});
+    };
     if let Some(slot) = manifest
         .get_mut("slots")
         .and_then(Value::as_array_mut)
         .and_then(|slots| slots.get_mut(slot_index))
     {
-        slot["binding"] = result_binding.clone();
+        slot["binding"] = binding;
     }
     let tmp = manifest_path.with_extension("json.tmp");
     if std::fs::write(
@@ -1826,7 +1847,7 @@ pub async fn assets_bind_slot(app: AppHandle, payload: Option<Value>) -> Value {
         return json!({"ok":false,"error":{"slotId":slot_id,"code":"io_error","message":"could not persist asset manifest"}});
     }
     mark_asset_pending(Path::new(workspace), slot_id);
-    json!({"ok":true,"slotId":slot_id,"kind":result_kind,"frames":1,"binding":result_binding})
+    result
 }
 #[tauri::command]
 pub fn assets_unbind_slot(
@@ -1969,6 +1990,7 @@ pub fn emit_placeholder_events(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn query_encoding_is_url_safe() {
@@ -1991,5 +2013,20 @@ mod tests {
         let rows = normalize_apps(&[json!({"id":3,"game_id":"g1","game_name":"Game"})], "game");
         assert_eq!(rows[0]["appId"], "g1");
         assert_eq!(rows[0]["appName"], "Game");
+    }
+
+    #[test]
+    fn capture_path_check_respects_path_component_boundaries() {
+        let root = PathBuf::from("/tmp/workspace");
+        assert!(capture_path_within_root(&root.join("capture"), &root));
+        assert!(capture_path_within_root(&root, &root));
+        assert!(!capture_path_within_root(
+            Path::new("/tmp/workspace-other/capture"),
+            &root
+        ));
+        assert!(!capture_path_within_root(
+            Path::new("/tmp/workspace/../etc"),
+            &root
+        ));
     }
 }

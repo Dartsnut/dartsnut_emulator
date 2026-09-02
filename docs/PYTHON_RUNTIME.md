@@ -1,127 +1,88 @@
-# Python runtime (Dartsnut Agent desktop)
+# Managed Python runtime
 
-Packaged Dartsnut Agent ships its own Python stack so users do not install Python separately.
+Dartsnut Agent's Tauri backend owns every local Python process. Development and packaged builds use the same managed Python and uv binaries. Host Python, host uv, `PATH` discovery, signed app resources, and `DARTSNUT_PYTHON` are never runtime candidates.
 
-## What is bundled
+## Pinned targets
 
-| Asset | Build output | Packaged location |
-| --- | --- | --- |
-| Python venv + emulator deps | `apps/desktop/resources/python-runtime/` | `Contents/Resources/python-runtime` (mac) |
-| `uv` binary (platform-specific) | `apps/desktop/resources/uv/` | `Contents/Resources/uv` (mac) |
+`apps/desktop/src-tauri/src/runtime.rs` is the only authoritative target manifest.
 
-Built by:
-
-```bash
-pnpm bundle:python
-```
-
-`bundle:python` runs before `package:*` scripts.
-
-### Python interpreter
-
-- Source: [python-build-standalone](https://github.com/astral-sh/python-build-standalone) (`install_only_stripped`)
-- Targets: macOS arm64, Windows x64
-- Dependencies: see root `requirements.txt` (aligned with cross-platform packages from `dartsnut_rpi`, excluding Pi-only libs)
-
-### uv runner
-
-- Source: [Astral uv releases](https://github.com/astral-sh/uv/releases) (pinned in `scripts/build_bundled_python.mjs`)
-- Matches the model used on device firmware (`dartsnut_rpi` vendored `uv` + `uv sync` / `uv run`)
-
-## How scripts are launched
-
-### Packaged app
-
-### Bridge and asset scripts (global emulator deps)
-
-The bridge process and one-shot tools (e.g. asset preprocess) use **bundled** `python-runtime` with `uv run --no-project` when `DARTSNUT_UV_BIN` is set (packaged builds):
-
-### Workspace widget/game preview (per-project venv)
-
-When a workspace is loaded, the bridge mirrors `dartsnut_rpi` `ensure_app_venv`:
-
-1. Validate the workspace `pyproject.toml` before syncing. It must have `[project]` name, version, and direct `pydartsnut` dependency; no default `pyproject.toml` is materialized at launch.
-2. Before every preview, run exact-default `uv sync --directory <workspace>` using bundled uv + bundled base Python (`UV_PYTHON`). The existing `.venv` is reused, but undeclared packages are removed.
-3. Launch with `uv run --no-sync --directory <workspace> main.py …` so the exact preparation step is the only dependency sync and the workspace `.venv` is used.
-
-Workspace sync and launch strip inherited Python path, Python home, user-site, virtualenv, and uv project overrides so host or bundled-runtime packages cannot mask missing project dependencies.
-
-```bash
-uv run --no-project --python <bundled-venv-python> <script.py> [args...]
-```
-
-Offline env vars (set by `apps/desktop/pythonRuntime.ts`):
-
-| Variable | Value | Purpose |
-| --- | --- | --- |
-| `UV_NO_PYTHON_DOWNLOADS` | `never` | Do not fetch Python at runtime |
-| `UV_NO_MANAGED_PYTHON` | `1` | Disable uv-managed interpreters |
-| `UV_NO_PROJECT` | `1` | Do not walk up for `pyproject.toml` / `.venv` (also avoids runtime dep sync) |
-| `DARTSNUT_UV_BIN` | bundled `uv` binary | Widget/game spawns in `core.py` |
-| `UV_PYTHON` | bundled venv `python` | Pin interpreter |
-| `VIRTUAL_ENV` | bundled venv dir | Activate bundled site-packages |
-| `PYTHONUNBUFFERED` | `1` | Line-buffered stdout/stderr |
-
-**Why `--no-project` is required:** without it, `uv run` from a repo-like cwd can recreate `.venv` and sync a project.
-
-### Dev (`pnpm dev`)
-
-- Spawns `.venv/bin/python` directly (after `pnpm setup:python`)
-- Does not require bundled `uv` unless you built resources locally
-
-### Overrides
-
-- `DARTSNUT_PYTHON` — force a specific interpreter (direct spawn, no uv wrapper)
-
-## What is intentionally excluded
-
-Emulator `requirements.txt` does **not** include Raspberry Pi–only packages from `dartsnut_rpi` (`bluezero`, `dbus-python`, `pybluez-dartsnut`, `evdev`, widget `aiohttp`, firmware `fastapi`/`uvicorn`/`websockets`). Those are installed on the device via firmware `uv sync` when deploying.
-
-## Troubleshooting (Windows)
-
-### “Bundled Python runtime is not ready”
-
-The packaged app expects a **Windows-built** venv at:
-
-`resources/python-runtime/Scripts/python.exe` (next to the `.exe`)
-
-**Build on the Windows machine** (do not copy a Mac `python-runtime` folder):
-
-```bash
-pnpm bundle:python -- --target win-x64
-pnpm --dir apps/desktop run package:win
-```
-
-Verify before packaging:
-
-```text
-apps/desktop/resources/python-runtime/Scripts/python.exe
-apps/desktop/resources/python-runtime/.bundled-python.json   → "target": "win-x64"
-apps/desktop/resources/uv/uv.exe
-```
-
-After packaging, check the portable output:
-
-```text
-release/Dartsnut Agent.exe   (or win-unpacked/resources/python-runtime/...)
-```
-
-**Offline / flaky network:** cache downloads manually (see `scripts/build_bundled_python.mjs`):
-
-| Asset | Cache path |
+| Component | Target |
 | --- | --- |
-| Python 3.12.7 standalone | `.cache/python-build-standalone/cpython-3.12.7+20241016-x86_64-pc-windows-msvc-shared-install_only_stripped.tar.gz` |
-| uv 0.11.19 | `.cache/uv/0.11.19/uv-x86_64-pc-windows-msvc.zip` |
+| Python | `3.14.7` |
+| python-build-standalone release | `20260901` |
+| uv | `0.12.8` |
+| Platforms | macOS arm64, Windows x64 |
 
-`uv pip install` still needs PyPI (or a prebuilt venv) unless you copy a completed `apps/desktop/resources/python-runtime/` from a successful build.
+Each platform archive has a committed SHA-256 digest. Runtime URLs contain exact versions; `LatestRelease` URLs are forbidden.
 
-**Shared MSVC runtime:** the Windows standalone build is `*-shared-*`; install [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if `python.exe` fails to start with a DLL error.
+Before changing target constants or hashes, confirm every archive exists on both GitHub Releases and USTC's GitHub Release mirror. uv `0.12.8` is intentionally pinned because USTC does not mirror `0.12.9`.
 
-**Wrong-platform bundle:** if `.bundled-python.json` says `darwin-arm64` inside a Windows package, rebuild `bundle:python` on Windows.
+## Storage and startup
 
-## Related files
+Tauri stores runtime state under `app.path().app_data_dir()/runtime`:
 
-- `scripts/build_bundled_python.mjs` — download Python + uv, create venv, install deps
-- `apps/desktop/pythonRuntime.ts` — spawn helpers for bridge and asset pipeline
-- `apps/desktop/main.ts` — bridge process lifecycle
-- `apps/desktop/assetManager.ts` — asset preprocess invocations
+```text
+runtime/
+  python-3.14.7/
+    base/
+    env/
+  uv-0.12.8/
+  cache/
+  staging/
+  runtime.json
+```
+
+Every startup validates metadata, platform, requirements hash, executables, exact Python and uv versions, and core imports (`pygame`, `PIL`, `numpy`, and `pydartsnut`). A valid install needs no network request. Invalid or incomplete state is rebuilt from verified cached archives when possible.
+
+`runtime.json` is written only after extraction, dependency installation, and validation succeed. Interrupted staging never becomes ready. Old versioned runtimes are pruned only after new target is ready.
+
+## Download source selection
+
+For each missing archive, Tauri concurrently probes exact official and USTC URLs with `GET` and `Range: bytes=0-0`. A probe is valid only for HTTP `200` or `206` and a non-empty first response chunk.
+
+- GitHub/CDN redirects are accepted for official downloads.
+- A USTC response redirected away from `mirrors.ustc.edu.cn` is rejected. USTC uses that redirect when mirrored asset is absent.
+- Fastest valid probe wins. If selected download fails, truncates, times out, or fails SHA-256 verification, other valid source is tried once.
+- Downloads use temporary files. Only committed SHA-256 content enters cache.
+
+Progress reports probe, download, verify, extract, install, and validate stages without exposing selected download source or pinned versions in UI. Source and probe latency remain internal metadata. Failure leaves retryable error; UI calls `retry_python_runtime_setup`.
+
+Exact URL patterns:
+
+```text
+https://github.com/astral-sh/python-build-standalone/releases/download/<release>/<archive>
+https://mirrors.ustc.edu.cn/github-release/astral-sh/python-build-standalone/<release>/<archive>
+
+https://github.com/astral-sh/uv/releases/download/<version>/<archive>
+https://mirrors.ustc.edu.cn/github-release/astral-sh/uv/<version>/<archive>
+```
+
+## Execution policy
+
+Bridge, asset preprocessing, and syntax checks always use:
+
+```text
+<managed-uv> run --no-project --python <managed-python> ...
+```
+
+Tauri passes exact `DARTSNUT_UV_BIN` and `UV_PYTHON` paths to emulator bridge. It also sets `UV_NO_MANAGED_PYTHON=1`, `UV_NO_PYTHON_DOWNLOADS=never`, and strips inherited Python/uv overrides.
+
+Before every game or widget launch, bridge runs:
+
+```text
+<managed-uv> sync --directory <workspace>
+<managed-uv> run --no-sync --directory <workspace> main.py ...
+```
+
+`UV_PYTHON` pins workspace sync to managed Python. Launch requires workspace `.venv`; missing managed binaries or workspace Python is fatal. No `sys.executable` fallback exists.
+
+Before installing runtime dependencies such as `pygame-ce`, Tauri concurrently probes the exact `pygame-ce` project page on PyPI and USTC, then uses the faster successful index. Download failure falls back to the other successful index. Workspace `uv sync` repeats the same concurrent source selection before downloading project dependencies. Successful runtime index URL is recorded only as internal metadata.
+
+## Version bump checklist
+
+1. Choose stable Python, python-build-standalone release, and uv versions available on official and USTC sources for both supported platforms.
+2. Update three target constants, archive mappings if needed, and all four committed SHA-256 values in `runtime.rs`.
+3. Update manifest tests and this document.
+4. Test fresh install, verified-cache offline startup, macOS arm64 release, and Windows x64 release.
+
+Historical Electron runtime files and `bundle:python` tooling are not used by Tauri builds and are not runtime authority.

@@ -499,8 +499,13 @@ export function reconcileWidgetFieldValues(
   for (const field of nextFields) {
     const previousField = previousById.get(field.id);
     const previousValue = previousValues[field.id];
-    if (previousField?.type === field.type && validateFieldValue(field, previousValue) === null) {
-      nextValues[field.id] = cloneValue(previousValue);
+    const mergedValue = isRecord(field.defaultValue) && isRecord(previousValue)
+      ? { ...field.defaultValue, ...previousValue }
+      : previousValue;
+    if (previousField?.type !== field.type || previousValue === undefined) {
+      nextValues[field.id] = cloneValue(field.defaultValue);
+    } else if (validateFieldValue(field, mergedValue) === null) {
+      nextValues[field.id] = cloneValue(mergedValue);
     } else {
       nextValues[field.id] = cloneValue(field.defaultValue);
     }

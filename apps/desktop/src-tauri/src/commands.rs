@@ -26,6 +26,7 @@ pub struct AppState {
     pub deploy: Mutex<Option<Arc<crate::deploy::ssh::SshConnection>>>,
     pub sideload: Mutex<Option<Arc<crate::deploy::sideload::SideloadClient>>>,
     pub emulator: crate::emulator::EmulatorRuntime,
+    pub runtime: crate::runtime::RuntimeManager,
     pub update: Mutex<crate::commands::PendingUpdate>,
 }
 
@@ -53,6 +54,7 @@ impl Default for AppState {
             deploy: Mutex::new(None),
             sideload: Mutex::new(None),
             emulator: crate::emulator::EmulatorRuntime::default(),
+            runtime: crate::runtime::RuntimeManager::default(),
             update: Mutex::new(PendingUpdate {
                 state: crate::updates::UpdateState::idle(env!("CARGO_PKG_VERSION")),
                 update: None,
@@ -413,27 +415,18 @@ pub fn save_provider_settings(app: AppHandle, payload: Value) -> Value {
 }
 
 #[tauri::command]
-pub fn get_python_runtime_status(app: AppHandle) -> Option<String> {
-    let candidates = [
-        app.path()
-            .resource_dir()
-            .ok()
-            .map(|p| p.join("python-runtime")),
-        app.path()
-            .app_data_dir()
-            .ok()
-            .map(|p| p.join("python-runtime")),
-    ];
-    candidates
-        .into_iter()
-        .flatten()
-        .find(|path| path.is_dir())
-        .map(|_| "ready".to_owned())
+pub fn get_python_runtime_status(state: State<'_, AppState>) -> Option<String> {
+    state.runtime.status()
 }
 
 #[tauri::command]
-pub fn get_python_runtime_progress() -> Value {
-    json!({ "running": false, "stage": null, "percent": 0, "message": null })
+pub fn get_python_runtime_progress(state: State<'_, AppState>) -> crate::runtime::RuntimeProgress {
+    state.runtime.progress()
+}
+
+#[tauri::command]
+pub fn retry_python_runtime_setup(app: AppHandle, state: State<'_, AppState>) -> bool {
+    state.runtime.start(app)
 }
 
 #[tauri::command]
@@ -446,29 +439,85 @@ pub fn deploy_get_eligibility(state: State<'_, AppState>) -> Value {
     else {
         return json!({ "ok": false, "reason": "workspace_not_selected" });
     };
-    let conf = root.join("conf.json");
-    if !conf.is_file() {
-        return json!({"ok":false,"reason":"missing_conf"});
-    }
-    let body = fs::read_to_string(conf)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .unwrap_or(Value::Null);
-    let app_id = body
-        .get("appId")
-        .or_else(|| body.get("app_id"))
-        .and_then(Value::as_str)
-        .unwrap_or("dartsnut-app");
-    let version = body
-        .get("version")
-        .and_then(Value::as_str)
-        .unwrap_or("0.0.0");
-    let project_type = if root.join("main.py").is_file() {
-        "game"
-    } else {
-        "widget"
+    let pyproject = fs::read_to_string(root.join("pyproject.toml")).ok();
+    let conf = fs::read_to_string(root.join("conf.json")).ok();
+    classify_dartsnut_project_files(pyproject.as_deref(), conf.as_deref())
+}
+
+fn classify_dartsnut_project_files(
+    pyproject_text: Option<&str>,
+    conf_json_text: Option<&str>,
+) -> Value {
+    let Some(pyproject_text) = pyproject_text else {
+        return json!({"ok":false,"reason":"missing_pyproject"});
     };
-    json!({"ok":true,"appId":app_id,"version":version,"projectType":project_type})
+    let Ok(pyproject) = toml::from_str::<toml::Value>(pyproject_text) else {
+        return json!({"ok":false,"reason":"invalid_pyproject"});
+    };
+    let Some(project) = pyproject.get("project").and_then(toml::Value::as_table) else {
+        return json!({"ok":false,"reason":"invalid_pyproject"});
+    };
+    let app_id = project
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(app_id) = app_id else {
+        return json!({"ok":false,"reason":"missing_project_name"});
+    };
+    let version = project
+        .get("version")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(version) = version else {
+        return json!({"ok":false,"reason":"missing_project_version"});
+    };
+    let Some(dependencies) = project
+        .get("dependencies")
+        .and_then(toml::Value::as_array)
+        .filter(|items| items.iter().all(|item| item.as_str().is_some()))
+    else {
+        return json!({"ok":false,"reason":"invalid_pyproject"});
+    };
+    let package_name = regex::Regex::new(r"^\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
+        .expect("package requirement regex must compile");
+    let has_pydartsnut = dependencies.iter().any(|dependency| {
+        let Some(requirement) = dependency.as_str() else {
+            return false;
+        };
+        package_name
+            .captures(requirement)
+            .and_then(|captures| captures.get(1))
+            .map(|name| {
+                name.as_str()
+                    .chars()
+                    .filter(|character| !matches!(character, '.' | '_' | '-'))
+                    .collect::<String>()
+                    .eq_ignore_ascii_case("pydartsnut")
+            })
+            .unwrap_or(false)
+    });
+    if !has_pydartsnut {
+        return json!({"ok":false,"reason":"missing_pydartsnut"});
+    }
+
+    let Some(conf_json_text) = conf_json_text else {
+        return json!({"ok":true,"appId":app_id,"version":version,"projectType":"game"});
+    };
+    let Ok(conf) = serde_json::from_str::<Value>(conf_json_text) else {
+        return json!({"ok":false,"reason":"broken_widget"});
+    };
+    let Some(conf) = conf.as_object() else {
+        return json!({"ok":false,"reason":"broken_widget"});
+    };
+    if conf.get("type").and_then(Value::as_str) == Some("game") {
+        return json!({"ok":true,"appId":app_id,"version":version,"projectType":"game"});
+    }
+    if !conf.contains_key("size") || !conf.contains_key("fields") {
+        return json!({"ok":false,"reason":"broken_widget"});
+    }
+    json!({"ok":true,"appId":app_id,"version":version,"projectType":"widget"})
 }
 
 #[tauri::command]
@@ -592,7 +641,14 @@ pub fn set_app_update_auto_download(
 
 #[cfg(test)]
 mod tests {
-    use super::health;
+    use super::{classify_dartsnut_project_files, health};
+
+    const PYPROJECT: &str = r#"
+[project]
+name = "demo"
+version = "1.2.3"
+dependencies = ["Py_DartsNut[extra] >= 1"]
+"#;
 
     #[test]
     fn health_reports_canonical_identity() {
@@ -600,5 +656,37 @@ mod tests {
         assert_eq!(status.status, "ok");
         assert_eq!(status.app_id, "com.dartsnut.agent");
         assert!(!status.scaffold);
+    }
+
+    #[test]
+    fn project_without_conf_is_eligible_game() {
+        let result = classify_dartsnut_project_files(Some(PYPROJECT), None);
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["appId"], "demo");
+        assert_eq!(result["version"], "1.2.3");
+        assert_eq!(result["projectType"], "game");
+    }
+
+    #[test]
+    fn project_with_widget_conf_is_eligible_widget() {
+        let result = classify_dartsnut_project_files(
+            Some(PYPROJECT),
+            Some(r#"{"size":[128,64],"fields":[]}"#),
+        );
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["projectType"], "widget");
+    }
+
+    #[test]
+    fn invalid_project_metadata_stays_ineligible() {
+        let missing_dependency = PYPROJECT.replace("Py_DartsNut[extra] >= 1", "requests");
+        assert_eq!(
+            classify_dartsnut_project_files(Some(&missing_dependency), None)["reason"],
+            "missing_pydartsnut"
+        );
+        assert_eq!(
+            classify_dartsnut_project_files(Some(PYPROJECT), Some("{}"))["reason"],
+            "broken_widget"
+        );
     }
 }

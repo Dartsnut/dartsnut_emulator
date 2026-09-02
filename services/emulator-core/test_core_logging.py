@@ -10,6 +10,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -66,6 +67,22 @@ def _write_game_project(workspace: Path, game_dir_name: str) -> None:
     )
 
 
+@contextmanager
+def _managed_runtime(module):
+    with (
+        mock.patch.dict(
+            module.os.environ,
+            {
+                "DARTSNUT_UV_BIN": "/tmp/dartsnut-uv-test",
+                "UV_PYTHON": "/tmp/dartsnut-python-test",
+            },
+            clear=False,
+        ),
+        mock.patch.object(module.os.path, "isfile", return_value=True),
+    ):
+        yield
+
+
 class LifecycleLoggingTests(unittest.TestCase):
     def test_load_game_without_conf_uses_pyproject_identity(self):
         module = _load_core_module()
@@ -93,7 +110,9 @@ class LifecycleLoggingTests(unittest.TestCase):
             core.apply_command({"type": "set_path", "path": "demo"})
 
             with (
+                _managed_runtime(module),
                 mock.patch.object(module.time, "sleep", lambda _: None),
+                mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=True),
                 mock.patch.object(module.subprocess, "Popen", side_effect=OSError("spawn broken")),
             ):
                 state = core.apply_command({"type": "reload_widget"})
@@ -148,6 +167,7 @@ class LifecycleLoggingTests(unittest.TestCase):
             core._last_frame_h = 160
 
             with (
+                _managed_runtime(module),
                 mock.patch.object(module.time, "sleep", lambda _: None),
                 mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=True),
                 mock.patch.object(module.subprocess, "Popen", side_effect=OSError("spawn broken")),
@@ -160,6 +180,29 @@ class LifecycleLoggingTests(unittest.TestCase):
 
 
 class WidgetLaunchCommandTests(unittest.TestCase):
+    def test_widget_launch_rejects_missing_managed_uv_before_spawn(self):
+        module = _load_core_module()
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            demo_dir = workspace / "demo"
+            _write_widget_conf(workspace, "demo")
+            (demo_dir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            with mock.patch.object(module.EmulatorCore, "_init_shared_memory", lambda self: None):
+                core = module.EmulatorCore(workspace_root=str(workspace))
+            self.addCleanup(core.shutdown)
+            core.apply_command({"type": "set_path", "path": "demo"})
+
+            with (
+                mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=True),
+                mock.patch.dict(module.os.environ, {}, clear=True),
+                mock.patch.object(module.subprocess, "Popen") as popen,
+            ):
+                state = core.apply_command({"type": "reload_widget"})
+
+            popen.assert_not_called()
+            self.assertEqual(state["status"], "Command failed")
+            self.assertIn("Managed uv runtime is unavailable", state["lastError"])
+
     def test_widget_launch_uses_clean_uv_workspace_run_after_sync(self):
         module = _load_core_module()
         with tempfile.TemporaryDirectory() as workspace_dir:
@@ -180,7 +223,11 @@ class WidgetLaunchCommandTests(unittest.TestCase):
 
             def fake_isfile(path: str) -> bool:
                 normalized = str(path)
-                return normalized == uv_bin or normalized == str(venv_python)
+                return normalized in {
+                    uv_bin,
+                    "/tmp/dartsnut-python-test",
+                    str(venv_python),
+                }
 
             def fake_popen(command, **kwargs):
                 captured["command"] = command
@@ -279,7 +326,9 @@ class WidgetLaunchEnvTests(unittest.TestCase):
                 return proc
 
             with (
+                _managed_runtime(module),
                 mock.patch.object(module.time, "sleep", lambda _: None),
+                mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=True),
                 mock.patch.object(module.subprocess, "Popen", side_effect=_capture_popen),
             ):
                 core.start_widget_process_for_current()
@@ -314,7 +363,9 @@ class WidgetLaunchEnvTests(unittest.TestCase):
                 return proc
 
             with (
+                _managed_runtime(module),
                 mock.patch.object(module.time, "sleep", lambda _: None),
+                mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=True),
                 mock.patch.object(module.subprocess, "Popen", side_effect=_capture_popen),
             ):
                 core.start_widget_process_for_current()
@@ -349,8 +400,10 @@ class WidgetLaunchEnvTests(unittest.TestCase):
                 return proc
 
             with (
+                _managed_runtime(module),
                 mock.patch.object(module.time, "sleep", lambda _: None),
                 mock.patch.dict(module.os.environ, {"SDL_AUDIODRIVER": "coreaudio"}, clear=False),
+                mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=True),
                 mock.patch.object(module.subprocess, "Popen", side_effect=_capture_popen),
             ):
                 core.start_widget_process_for_current()
@@ -389,6 +442,7 @@ class WidgetLaunchEnvTests(unittest.TestCase):
                 return new_proc
 
             with (
+                _managed_runtime(module),
                 mock.patch.object(module.time, "sleep", lambda _: None),
                 mock.patch.object(module, "_kill_process_tree") as kill_tree,
                 mock.patch.object(module.EmulatorCore, "_ensure_workspace_venv", return_value=True),

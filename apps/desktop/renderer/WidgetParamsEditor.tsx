@@ -8,7 +8,7 @@ import type {
 } from "@dartsnut/shared-ipc";
 import { createDefaultWidgetFieldValues } from "@dartsnut/shared-ipc";
 import type { ReactNode } from "react";
-import { resolveWidgetParams, valuesForWidgetConfig, type WidgetValueStore } from "./widgetParams";
+import { editorLocationValue, resolveWidgetParams, valuesForWidgetConfig, type WidgetValueStore } from "./widgetParams";
 
 const emuToolbarBtn = "ui-toolbar-btn";
 
@@ -151,7 +151,7 @@ function FieldControl({
       </div>
     );
   } else if (field.type === "location") {
-    const location = (value && typeof value === "object" ? value : field.defaultValue) as WidgetLocationValue;
+    const location = editorLocationValue(value, field.defaultValue);
     const update = (key: keyof WidgetLocationValue, next: string) => onChange({ ...location, [key]: next });
     control = (
       <div className="grid grid-cols-2 gap-1.5">

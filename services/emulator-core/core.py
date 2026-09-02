@@ -333,15 +333,13 @@ class EmulatorCore:
             "Scripts" if sys.platform == "win32" else "bin",
             "python.exe" if sys.platform == "win32" else "python",
         )
-        if uv_bin and os.path.isfile(uv_bin) and os.path.isfile(venv_python):
-            app_env = _load_app_env()
-            command = [uv_bin, "run", "--no-sync", "--directory", launch_cwd, "main.py", *script_args]
-            child_env = app_env.workspace_launch_env()
-        else:
-            main_py = os.path.join(launch_cwd, "main.py")
-            command = [sys.executable, main_py, *script_args]
-            child_env = os.environ.copy()
-            child_env.pop("UV_NO_SYNC", None)
+        if not uv_bin or not os.path.isfile(uv_bin):
+            raise RuntimeError("Managed uv runtime is unavailable")
+        if not os.path.isfile(venv_python):
+            raise RuntimeError(f"Workspace Python environment is unavailable: {venv_python}")
+        app_env = _load_app_env()
+        command = [uv_bin, "run", "--no-sync", "--directory", launch_cwd, "main.py", *script_args]
+        child_env = app_env.workspace_launch_env()
         return command, child_env
 
     def start_widget_process_for_current(self) -> None:

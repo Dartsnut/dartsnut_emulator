@@ -5,6 +5,17 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 
+fn renderer_event_for_bridge_event(event: &str) -> Option<&'static str> {
+    match event {
+        "state" | "ready" | "heartbeat" => Some("emulator:state"),
+        "frame" => Some("emulator:frame"),
+        "log" => Some("emulator:log"),
+        "error" => Some("emulator:error"),
+        "diag" => None,
+        _ => Some("emulator:event"),
+    }
+}
+
 pub struct EmulatorRuntime {
     stdin: Mutex<Option<ChildStdin>>,
     child: Mutex<Option<Child>>,
@@ -122,14 +133,20 @@ impl EmulatorRuntime {
                 script.display()
             ));
         }
-        let python = crate::runtime::discover_python(Some(&root))
-            .ok_or_else(|| "Python runtime unavailable".to_owned())?;
-        let mut child = Command::new(python);
+        let runtime = app
+            .state::<crate::commands::AppState>()
+            .runtime
+            .require_ready()?;
+        let mut child = Command::new(&runtime.uv);
         child
+            .arg("run")
+            .arg("--no-project")
+            .arg("--python")
+            .arg(&runtime.python)
             .arg(&script)
             .current_dir(&root)
             .env_clear()
-            .envs(crate::runtime::sanitized_environment())
+            .envs(crate::runtime::managed_environment(&runtime))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
@@ -153,12 +170,8 @@ impl EmulatorRuntime {
                         .and_then(Value::as_str)
                         .unwrap_or("log");
                     let payload = message.get("payload").cloned().unwrap_or(Value::Null);
-                    let tauri_event = match event {
-                        "state" | "ready" | "heartbeat" => "emulator:state",
-                        "frame" => "emulator:frame",
-                        "log" | "diag" => "emulator:log",
-                        "error" => "emulator:error",
-                        _ => "emulator:event",
+                    let Some(tauri_event) = renderer_event_for_bridge_event(event) else {
+                        continue;
                     };
                     let _ = app_handle.emit(tauri_event, payload);
                 }
@@ -281,5 +294,16 @@ impl EmulatorRuntime {
 
     pub fn last_path(&self) -> Option<String> {
         self.last_path.lock().ok().and_then(|value| value.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::renderer_event_for_bridge_event;
+
+    #[test]
+    fn diagnostic_telemetry_is_not_forwarded_as_a_log() {
+        assert_eq!(renderer_event_for_bridge_event("diag"), None);
+        assert_eq!(renderer_event_for_bridge_event("log"), Some("emulator:log"));
     }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseWidgetFieldDefinitions, type WidgetConfigSnapshot } from "@dartsnut/shared-ipc";
-import { resolveWidgetParams, valuesForWidgetConfig } from "./widgetParams";
+import { parseWidgetFieldDefinitions, reconcileWidgetFieldValues, type WidgetConfigSnapshot } from "@dartsnut/shared-ipc";
+import { editorLocationValue, normalizeWidgetConfigSnapshot, resolveWidgetParams, valuesForWidgetConfig } from "./widgetParams";
 
 function readyConfig(fields: unknown, errors: string[] = []): WidgetConfigSnapshot {
   const parsed = parseWidgetFieldDefinitions(fields);
@@ -31,6 +31,36 @@ describe("widget params resolver", () => {
     })).toMatchObject({ ok: true, params: { count: 5, enabled: true } });
   });
 
+  it("hydrates missing or invalid stored values from field defaults", () => {
+    const config = readyConfig([
+      { id: "title", name: "Title", type: "text", default: "Hello" },
+      { id: "city", name: "City", type: "location", default: { name: "Tokyo", timezone: "Asia/Tokyo", lat: 35.6, lng: 139.7 } },
+    ]);
+    const values = reconcileWidgetFieldValues(config.fields, { city: { name: "Tokyo", lat: 35.6, lng: 139.7, timezone: "UTC" } }, config.fields);
+    expect(values).toEqual({ title: "Hello", city: { name: "Tokyo", timezone: "UTC", lat: 35.6, lng: 139.7 } });
+  });
+
+  it("loads config defaults when no values have been stored", () => {
+    const config = readyConfig([
+      { id: "title", name: "Title", type: "text", default: "Hello" },
+      { id: "enabled", name: "Enabled", type: "toggle", default: true },
+    ]);
+    expect(valuesForWidgetConfig(config, {})).toEqual({ title: "Hello", enabled: true });
+  });
+
+  it("normalizes native snapshots that still use raw default keys", () => {
+    const snapshot = {
+      scope: "workspace" as const,
+      status: "ready" as const,
+      configKey: "/workspace/conf.json",
+      confPath: "/workspace/conf.json",
+      fields: [{ id: "location", name: "Location", type: "location", default: { name: "Hongkong", lat: 22.3, lng: 114.1, timezone: "Asia/Hong_Kong" } }],
+      errors: [],
+    } as unknown as WidgetConfigSnapshot;
+    const normalized = normalizeWidgetConfigSnapshot(snapshot);
+    expect(normalized.fields[0]).toMatchObject({ defaultValue: { name: "Hongkong", timezone: "Asia/Hong_Kong" } });
+  });
+
   it("blocks unavailable configs, schema errors, and invalid field values", () => {
     const unavailable: WidgetConfigSnapshot = {
       scope: "emulator",
@@ -49,5 +79,15 @@ describe("widget params resolver", () => {
       "/workspace/conf.json": { fields: invalid.status === "ready" ? invalid.fields : [], values: { color: "red" } },
     });
     expect(result).toMatchObject({ ok: false, fieldErrors: { color: expect.stringContaining("#RRGGBB") } });
+  });
+
+  it("normalizes malformed location values before editor rendering", () => {
+    expect(editorLocationValue(undefined, undefined)).toEqual({ name: "", timezone: "", lat: "", lng: "" });
+    expect(editorLocationValue(null, { name: "Fallback", timezone: "UTC", lat: 1, lng: 2 })).toEqual({
+      name: "Fallback", timezone: "UTC", lat: 1, lng: 2,
+    });
+    expect(editorLocationValue({ name: undefined, timezone: null, lat: "x", lng: false }, {})).toEqual({
+      name: "", timezone: "", lat: "x", lng: "",
+    });
   });
 });

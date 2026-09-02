@@ -168,10 +168,11 @@ export type ProviderStatus = "ready" | "missing_config" | "invalid";
 
 export interface PythonRuntimeProgress {
   running: boolean;
-  stage: string | null;
+  stage: "check" | "probe" | "download" | "verify" | "extract" | "install" | "validate" | "complete" | "error" | null;
   percent: number;
   message: string | null;
   error?: string;
+  artifact?: string;
 }
 
 export interface BootstrapState {

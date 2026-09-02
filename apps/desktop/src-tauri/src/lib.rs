@@ -101,6 +101,7 @@ pub fn run() {
             commands::save_provider_settings,
             commands::get_python_runtime_status,
             commands::get_python_runtime_progress,
+            commands::retry_python_runtime_setup,
             commands::deploy_get_eligibility,
             commands::get_widget_config,
             commands::community_get_session,
@@ -163,6 +164,9 @@ pub fn run() {
                 window.set_decorations(false)?;
             }
             app.emit(BRIDGE_READY_EVENT, commands::health())?;
+            let handle = app.handle().clone();
+            let runtime = handle.state::<commands::AppState>().runtime.clone();
+            runtime.start(handle);
             Ok(())
         })
         .run(tauri::generate_context!())

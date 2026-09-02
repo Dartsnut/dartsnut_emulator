@@ -5,18 +5,22 @@
 html,
 body {
   height: 100%;
+  background: transparent;
   /* Electron `hiddenInset` / title-bar drag: `overflow: hidden` on html/body breaks `-webkit-app-region: drag`. */
   overflow: visible;
 }
 
 #root {
   height: 100%;
+  border-radius: var(--window-corner-radius);
+  clip-path: inset(0 round var(--window-corner-radius));
   overflow: visible;
 }
 
 .app-shell {
   position: relative;
   isolation: isolate;
+  border-radius: var(--window-corner-radius);
   overflow-x: clip;
   overflow-y: visible;
   --main-panel-chrome-height: 40px;
@@ -180,6 +184,11 @@ body {
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: var(--color-bg-page);
   box-shadow: -8px 0 28px rgba(0, 0, 0, 0.18), var(--shadow-inset-subtle);
+}
+
+/* Windows caption controls occupy a transparent overlay band above the content. */
+:root[data-platform="win32"] .main-workspace-panel {
+  margin-top: var(--window-control-inset-top);
 }
 
 .main-workspace-panel__chrome {
@@ -1302,7 +1311,7 @@ body {
   font-size: 13px;
   font-feature-settings: "kern" 1, "liga" 1;
   -webkit-font-smoothing: antialiased;
-  background: var(--color-bg-page);
+  background: transparent;
   color: var(--color-text-primary);
 }
 

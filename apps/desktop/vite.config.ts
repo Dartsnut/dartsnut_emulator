@@ -13,6 +13,13 @@ const emulatorProtocolEntry = path.resolve(__dirname, "../../packages/emulator-p
 export default defineConfig({
   base: "./",
   envDir: path.resolve(__dirname, "../.."),
+  server: {
+    // Cargo rewrites and locks Windows DLLs while compiling. Vite does not need
+    // to watch Rust build artifacts (Tauri watches the Rust sources itself).
+    watch: {
+      ignored: ["**/src-tauri/target/**", "**/rig-spike/target/**"]
+    }
+  },
   plugins: [
     react(),
     tailwindcss(),

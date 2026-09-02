@@ -28,6 +28,7 @@ pub struct AppState {
     pub emulator: crate::emulator::EmulatorRuntime,
     pub runtime: crate::runtime::RuntimeManager,
     pub update: Mutex<crate::commands::PendingUpdate>,
+    pub(crate) provider_settings: Mutex<ProviderSettingsFile>,
 }
 
 pub struct PendingUpdate {
@@ -63,6 +64,7 @@ impl Default for AppState {
                 downloading: false,
                 auto_download: true,
             }),
+            provider_settings: Mutex::new(ProviderSettingsFile::default()),
         }
     }
 }
@@ -84,7 +86,7 @@ pub fn health() -> HealthStatus {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapState {
     pub workspace_root: Option<String>,
@@ -110,6 +112,22 @@ pub(crate) fn bootstrap_state(state: &AppState) -> BootstrapState {
         .lock()
         .ok()
         .and_then(|value| value.clone());
+    let provider = state
+        .provider_settings
+        .lock()
+        .ok()
+        .map(|v| v.clone())
+        .unwrap_or_default();
+    let provider_status = if provider.active_provider == "dartsnut-llm" {
+        "ready"
+    } else if provider.custom.base_url.trim().is_empty()
+        || provider.custom.model.trim().is_empty()
+        || provider.custom.api_key.trim().is_empty()
+    {
+        "missing_config"
+    } else {
+        "ready"
+    };
     BootstrapState {
         workspace_root: state
             .workspace_root
@@ -119,7 +137,7 @@ pub(crate) fn bootstrap_state(state: &AppState) -> BootstrapState {
             .map(|p| p.to_string_lossy().into_owned()),
         active_project_id,
         active_chat_id,
-        provider_status: "missing_config".to_owned(),
+        provider_status: provider_status.to_owned(),
         first_run_complete: false,
     }
 }
@@ -211,7 +229,7 @@ pub fn create_project(app: AppHandle, state: State<'_, AppState>, payload: Value
             *state.workspace_root.lock().unwrap() = Some(PathBuf::from(&project.folder_path));
             let chat = store.create_chat(&project.id, None).ok();
             *state.active_chat_id.lock().unwrap() = chat.as_ref().map(|value| value.id.clone());
-            json!({ "state": { "workspaceRoot": project.folder_path, "activeProjectId": project.id, "activeChatId": chat.map(|value| value.id), "providerStatus": "missing_config", "firstRunComplete": false }, "tree": tree_value(store) })
+            json!({ "state": bootstrap_state(&state), "tree": tree_value(store) })
         }
         Err(error) => json!({ "ok": false, "error": error.to_string() }),
     }
@@ -234,7 +252,7 @@ pub fn remove_project(app: AppHandle, state: State<'_, AppState>, payload: Value
             *state.active_project_id.lock().unwrap() = None;
             *state.active_chat_id.lock().unwrap() = None;
             *state.workspace_root.lock().unwrap() = None;
-            json!({ "state": { "workspaceRoot": null, "activeProjectId": null, "activeChatId": null, "providerStatus": "missing_config", "firstRunComplete": false }, "tree": tree_value(store) })
+            json!({ "state": bootstrap_state(&state), "tree": tree_value(store) })
         }
         Err(error) => json!({ "ok": false, "error": error.to_string() }),
     }
@@ -256,7 +274,7 @@ pub fn create_chat(app: AppHandle, state: State<'_, AppState>, payload: Value) -
         Ok(chat) => {
             *state.active_project_id.lock().unwrap() = Some(project_id.to_owned());
             *state.active_chat_id.lock().unwrap() = Some(chat.id.clone());
-            json!({ "state": { "workspaceRoot": null, "activeProjectId": project_id, "activeChatId": chat.id, "providerStatus": "missing_config", "firstRunComplete": false }, "tree": tree_value(store) })
+            json!({ "state": bootstrap_state(&state), "tree": tree_value(store) })
         }
         Err(error) => json!({ "ok": false, "error": error.to_string() }),
     }
@@ -343,8 +361,14 @@ pub fn select_chat(app: AppHandle, state: State<'_, AppState>, payload: Value) -
 }
 
 #[tauri::command]
-pub fn get_provider_settings(app: AppHandle) -> Value {
-    serde_json::to_value(read_provider_settings(&app)).unwrap_or_else(|_| json!({"activeProvider":"custom","custom":{"baseUrl":"https://api.openai.com/v1","apiKey":"","model":"gpt-4.1-mini"}}))
+pub fn get_provider_settings(app: AppHandle, state: State<'_, AppState>) -> Value {
+    let settings = read_provider_settings(&app);
+    if let Ok(mut current) = state.provider_settings.lock() {
+        *current = settings.clone();
+    }
+    serde_json::to_value(settings).unwrap_or_else(
+        |_| json!({"activeProvider":"dartsnut-llm","custom":{"baseUrl":"","apiKey":"","model":""}}),
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -354,7 +378,16 @@ pub(crate) struct ProviderSettingsFile {
     pub(crate) custom: CustomProviderSettings,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+impl Default for ProviderSettingsFile {
+    fn default() -> Self {
+        Self {
+            active_provider: "dartsnut-llm".to_owned(),
+            custom: CustomProviderSettings::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CustomProviderSettings {
     pub(crate) base_url: String,
@@ -386,11 +419,13 @@ fn provider_file(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn save_provider_settings(app: AppHandle, payload: Value) -> Value {
+pub fn save_provider_settings(app: AppHandle, state: State<'_, AppState>, payload: Value) -> Value {
     let Ok(settings) = serde_json::from_value::<ProviderSettingsFile>(payload.clone()) else {
         return json!({ "ok": false, "error": "invalid provider settings" });
     };
-    if settings.custom.base_url.trim().is_empty() || settings.custom.model.trim().is_empty() {
+    if settings.active_provider != "dartsnut-llm"
+        && (settings.custom.base_url.trim().is_empty() || settings.custom.model.trim().is_empty())
+    {
         return json!({ "ok": false, "error": "baseUrl and model are required" });
     }
     let Ok(path) = provider_file(&app) else {
@@ -409,6 +444,9 @@ pub fn save_provider_settings(app: AppHandle, payload: Value) -> Value {
         .is_err()
     {
         return json!({ "ok": false, "error": "could not persist provider settings" });
+    }
+    if let Ok(mut current) = state.provider_settings.lock() {
+        *current = settings.clone();
     }
     serde_json::to_value(settings)
         .unwrap_or_else(|_| json!({ "ok": false, "error": "could not encode provider settings" }))

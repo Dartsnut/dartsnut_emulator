@@ -89,6 +89,40 @@ pub(crate) fn community_token(app: &AppHandle) -> Option<String> {
         .map(str::to_owned)
 }
 
+pub(crate) async fn community_llm_start_run(app: &AppHandle, run_id: &str) -> Result<(), String> {
+    let token = community_token(app)
+        .ok_or_else(|| "Sign in to your Dartsnut account to use Dartsnut LLM.".to_owned())?;
+    let (status, raw) = community_request(
+        reqwest::Method::POST,
+        "/agent/llm/runs/start",
+        Some(&token),
+        Some(json!({"run_id": run_id})),
+    )
+    .await?;
+    if status < 200 || status >= 300 || raw.get("code").and_then(Value::as_i64) != Some(1001) {
+        let message = raw
+            .get("desc")
+            .or_else(|| raw.get("msg"))
+            .and_then(Value::as_str)
+            .unwrap_or("Dartsnut LLM run could not be started.");
+        return Err(message.to_owned());
+    }
+    Ok(())
+}
+
+pub(crate) async fn community_llm_finish_run(app: &AppHandle, run_id: &str) {
+    let Some(token) = community_token(app) else {
+        return;
+    };
+    let _ = community_request(
+        reqwest::Method::POST,
+        "/agent/llm/runs/finish",
+        Some(&token),
+        Some(json!({"run_id": run_id})),
+    )
+    .await;
+}
+
 fn community_error(code: &str, message: impl Into<String>, server: Option<&str>) -> Value {
     let mut value = json!({"ok":false,"code":code,"message":message.into()});
     if let Some(server) = server {
@@ -1984,7 +2018,11 @@ pub fn assets_read_preview(
 }
 
 pub fn emit_placeholder_events(app: &AppHandle) {
-    let _ = app.emit("agent:bootstrap-state-changed", json!({"workspaceRoot":null,"activeProjectId":null,"activeChatId":null,"providerStatus":"missing_config","firstRunComplete":false}));
+    let state = app.state::<crate::commands::AppState>();
+    let _ = app.emit(
+        "agent:bootstrap-state-changed",
+        crate::commands::bootstrap_state(&state),
+    );
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@
 
 use base64::Engine;
 use futures_util::StreamExt;
+use reqwest::header::HeaderMap;
 use rig_agent::prelude::{CompletionClient, MultiTurnStreamItem, StreamingPrompt};
 use rig_agent::{
     core::streaming::{StreamedAssistantContent, StreamedUserContent},
@@ -95,8 +96,32 @@ pub async fn build_agent_with_context_async(
     workspace_root: Option<PathBuf>,
     app: Option<AppHandle>,
 ) -> Result<Agent, String> {
+    build_agent_with_context_async_headers(
+        base_url,
+        api_key,
+        model,
+        preamble,
+        workspace_root,
+        app,
+        None,
+    )
+    .await
+}
+
+pub async fn build_agent_with_context_async_headers(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    preamble: Option<&str>,
+    workspace_root: Option<PathBuf>,
+    app: Option<AppHandle>,
+    headers: Option<HeaderMap>,
+) -> Result<Agent, String> {
     crate::ensure_rustls_crypto_provider();
-    let http_client = crate::proxy::client_for_url_async(base_url).await?;
+    let http_client = match headers {
+        Some(headers) => crate::proxy::client_for_url_with_headers_async(base_url, headers).await?,
+        None => crate::proxy::client_for_url_async(base_url).await?,
+    };
     build_agent_with_http_client(
         base_url,
         api_key,
@@ -1553,13 +1578,52 @@ pub async fn stream_prompt_with_app<F>(
     workspace_root: Option<PathBuf>,
     cancel: Arc<AtomicBool>,
     app: Option<AppHandle>,
+    on_event: F,
+) -> Result<StreamOutcome, String>
+where
+    F: FnMut(StreamEvent) + Send,
+{
+    stream_prompt_with_app_headers(
+        base_url,
+        api_key,
+        model,
+        prompt,
+        previous_response_id,
+        workspace_root,
+        cancel,
+        app,
+        None,
+        on_event,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn stream_prompt_with_app_headers<F>(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    prompt: &str,
+    previous_response_id: Option<String>,
+    workspace_root: Option<PathBuf>,
+    cancel: Arc<AtomicBool>,
+    app: Option<AppHandle>,
+    headers: Option<HeaderMap>,
     mut on_event: F,
 ) -> Result<StreamOutcome, String>
 where
     F: FnMut(StreamEvent) + Send,
 {
-    let agent =
-        build_agent_with_context_async(base_url, api_key, model, None, workspace_root, app).await?;
+    let agent = build_agent_with_context_async_headers(
+        base_url,
+        api_key,
+        model,
+        None,
+        workspace_root,
+        app,
+        headers,
+    )
+    .await?;
     let mut request = agent.stream_prompt(prompt).max_turns(MAX_TURNS);
     if let Some(previous_response_id) = previous_response_id {
         request = request.replace_additional_params(

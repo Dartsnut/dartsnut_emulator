@@ -1,4 +1,5 @@
 use crate::commands::AppState;
+use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
@@ -217,9 +218,9 @@ fn emit(app: &AppHandle, value: Value) {
 pub async fn send_prompt(
     app: AppHandle,
     state: State<'_, AppState>,
-    raw: Value,
+    payload: Value,
 ) -> Result<Value, String> {
-    let payload_value = raw.get("payload").cloned().unwrap_or(raw);
+    let payload_value = payload.get("payload").cloned().unwrap_or(payload);
     let payload: PromptRequest =
         serde_json::from_value(payload_value).map_err(|e| e.to_string())?;
     if payload.prompt.trim().is_empty() {
@@ -328,20 +329,65 @@ async fn run_prompt(
         json!({"type":"status","message":"Agent running","at":now_ms()}),
     );
     let settings = crate::commands::read_provider_settings(app);
-    let base_url = settings.custom.base_url.as_str();
-    let api_key = settings.custom.api_key.as_str();
-    let model = settings.custom.model.as_str();
-    crate::rig_runtime::validate_agent_configuration(base_url, api_key, model)
-        .map_err(|error| format!("Rig agent configuration failed: {error}"))?;
+    let (base_url, api_key, model, bridge_run_id, bridge_headers): (
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<HeaderMap>,
+    ) = if settings.active_provider == "dartsnut-llm" {
+        let run_id = uuid::Uuid::new_v4().to_string();
+        if let Err(error) = crate::parity::community_llm_start_run(app, &run_id).await {
+            let failure_reason = if error.contains("Sign in") {
+                "auth_required"
+            } else {
+                "service_unavailable"
+            };
+            return Ok(
+                json!({"ok":false,"failureReason":failure_reason,"message":format!("Dartsnut LLM unavailable: {error}")}),
+            );
+        }
+        let token = crate::parity::community_token(app)
+            .ok_or_else(|| "Sign in to your Dartsnut account to use Dartsnut LLM.".to_owned())?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "token",
+            HeaderValue::from_str(&token)
+                .map_err(|_| "Invalid Dartsnut session token".to_owned())?,
+        );
+        headers.insert("source", HeaderValue::from_static("agent"));
+        headers.insert(
+            "x-dartsnut-source",
+            HeaderValue::from_static("desktop-tauri"),
+        );
+        headers.insert(
+            "x-dartsnut-agent-run-id",
+            HeaderValue::from_str(&run_id).map_err(|_| "Invalid Dartsnut run ID".to_owned())?,
+        );
+        (
+            format!("{}/agent/llm/v1", crate::parity::community_base_url()),
+            "dartsnut-api-bridge".to_owned(),
+            "dartsnut-llm".to_owned(),
+            Some(run_id),
+            Some(headers),
+        )
+    } else {
+        let base = settings.custom.base_url.as_str();
+        let key = settings.custom.api_key.as_str();
+        let mdl = settings.custom.model.as_str();
+        crate::rig_runtime::validate_agent_configuration(base, key, mdl)
+            .map_err(|error| format!("Rig agent configuration failed: {error}"))?;
+        (base.to_owned(), key.to_owned(), mdl.to_owned(), None, None)
+    };
     let mut last_error = String::new();
     for attempt in 1..=MAX_ATTEMPTS {
         if cancel.load(Ordering::Relaxed) {
             return Ok(json!({"ok":false,"message":"cancelled"}));
         }
-        let result = crate::rig_runtime::stream_prompt_with_app(
-            base_url,
-            api_key,
-            model,
+        let result = crate::rig_runtime::stream_prompt_with_app_headers(
+            &base_url,
+            &api_key,
+            &model,
             &effective_prompt,
             session.previous_response_id.clone(),
             app.path().app_data_dir().ok().and_then(|_| {
@@ -353,6 +399,7 @@ async fn run_prompt(
             }),
             cancel.clone(),
             Some(app.clone()),
+            bridge_headers.clone(),
             |event| match event {
                 crate::rig_runtime::StreamEvent::TextDelta(delta) => emit(
                     app,
@@ -370,6 +417,9 @@ async fn run_prompt(
         )
         .await;
         if cancel.load(Ordering::Relaxed) {
+            if let Some(run_id) = bridge_run_id.as_deref() {
+                crate::parity::community_llm_finish_run(app, run_id).await;
+            }
             return Ok(json!({"ok":false,"message":"cancelled"}));
         }
         match result {
@@ -387,6 +437,9 @@ async fn run_prompt(
                     app,
                     json!({"type":"final","content":outcome.output,"at":now_ms()}),
                 );
+                if let Some(run_id) = bridge_run_id.as_deref() {
+                    crate::parity::community_llm_finish_run(app, run_id).await;
+                }
                 return Ok(json!({"ok":true}));
             }
             Err(e) => last_error = e.to_string(),
@@ -398,6 +451,9 @@ async fn run_prompt(
             );
             sleep(Duration::from_millis(100 * attempt as u64)).await;
         }
+    }
+    if let Some(run_id) = bridge_run_id.as_deref() {
+        crate::parity::community_llm_finish_run(app, run_id).await;
     }
     emit(
         app,

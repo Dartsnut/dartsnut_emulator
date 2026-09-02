@@ -1108,13 +1108,19 @@ export function App() {
         }
       }))
       .then((stop) => {
-        if (disposed) stop();
-        else unlisten = stop;
+        if (disposed) {
+          try { void Promise.resolve(stop()).catch(() => undefined); } catch { /* already removed */ }
+          return;
+        }
+        unlisten = stop;
       })
       .catch(() => undefined);
     return () => {
+      if (disposed) return;
       disposed = true;
-      unlisten?.();
+      const stop = unlisten;
+      unlisten = undefined;
+      try { void Promise.resolve(stop?.()).catch(() => undefined); } catch { /* already removed */ }
     };
   }, [chatDisabled]);
   const showEmulator = validProject;

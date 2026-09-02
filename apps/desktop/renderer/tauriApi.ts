@@ -134,19 +134,37 @@ export interface TauriBridgeApi {
 const invoke = <T>(command: string, args?: unknown): Promise<T> =>
   tauriInvoke<T>(command, args === undefined ? undefined : { payload: args });
 
+function safelyUnlisten(stop: (() => void) | undefined): void {
+  if (!stop) return;
+  try {
+    void Promise.resolve(stop()).catch(() => undefined);
+  } catch {
+    // Tauri may already have removed this listener during WebView teardown.
+  }
+}
+
 function subscribe<T>(event: string, listener: Listener<T>): () => void {
   let unlisten: UnlistenFn | undefined;
   let disposed = false;
-  void tauriListen<T>(event, (message) => listener(message.payload)).then((stop) => {
-    if (disposed) {
-      stop();
-    } else {
-      unlisten = stop;
-    }
-  });
+  void tauriListen<T>(event, (message) => listener(message.payload))
+    .then((stop) => {
+      if (disposed) {
+        safelyUnlisten(stop);
+      } else {
+        unlisten = stop;
+      }
+    })
+    .catch(() => {
+      // Listener setup is best effort; app remains usable without optional events.
+    });
   return () => {
+    if (disposed) {
+      return;
+    }
     disposed = true;
-    unlisten?.();
+    const stop = unlisten;
+    unlisten = undefined;
+    safelyUnlisten(stop);
   };
 }
 

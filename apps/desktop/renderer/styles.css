@@ -90,7 +90,7 @@ body {
   grid-column: 3;
   justify-self: end;
   display: inline-flex;
-  height: 100%;
+  height: 32px;
   align-items: stretch;
   pointer-events: auto;
   -webkit-app-region: no-drag;
@@ -99,49 +99,96 @@ body {
 
 .window-control {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 46px;
-  height: 100%;
+  height: 32px;
+  padding: 0;
   border: 0;
   background: transparent;
-  color: var(--color-text-primary);
+  color: #fff;
   cursor: default;
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
 
-.window-controls:not(.window-controls--macos) .window-control:hover { background: color-mix(in srgb, var(--color-text-primary) 8%, transparent); }
-.window-controls:not(.window-controls--macos) .window-control--close:hover { background: #c42b1c; color: #fff; }
-.window-control--minimize::before { content: ""; position: absolute; width: 10px; height: 1px; background: currentColor; left: 18px; top: 16px; }
-.window-control--maximize::before { content: ""; position: absolute; width: 10px; height: 10px; border: 1px solid currentColor; left: 18px; top: 11px; }
-.window-control--close::before, .window-control--close::after { content: ""; position: absolute; width: 12px; height: 1px; background: currentColor; left: 17px; top: 16px; }
-.window-control--close::before { transform: rotate(45deg); }
-.window-control--close::after { transform: rotate(-45deg); }
+.window-controls--windows .window-control:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.window-controls--windows .window-control:active {
+  background: rgba(255, 255, 255, 0.04);
+}
+[data-theme="light"] .window-controls--windows .window-control { color: rgba(0, 0, 0, 0.9); }
+[data-theme="light"] .window-controls--windows .window-control:hover { background: rgba(0, 0, 0, 0.05); }
+[data-theme="light"] .window-controls--windows .window-control:active { background: rgba(0, 0, 0, 0.03); }
+.window-controls--windows .window-control--close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+.window-controls--windows .window-control--close:active { background: rgba(196, 43, 28, 0.9); color: #fff; }
 
+.window-controls--gnome {
+  height: auto;
+  margin-right: 10px;
+  align-items: center;
+  gap: 13px;
+}
+.window-controls--gnome .window-control {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #373737;
+  color: #fff;
+}
+.window-controls--gnome .window-control:hover { background: #424242; }
+.window-controls--gnome .window-control:active { background: #565656; }
+.window-controls--gnome .window-control--minimize svg,
+.window-controls--gnome .window-control--close svg { width: 8px; height: 8px; }
+.window-controls--gnome .window-control--maximize svg { width: 8px; height: 8px; }
+[data-theme="light"] .window-controls--gnome .window-control { background: #dadada; color: #3d3d3d; }
+[data-theme="light"] .window-controls--gnome .window-control:hover { background: #d1d1d1; }
+[data-theme="light"] .window-controls--gnome .window-control:active { background: #bfbfbf; }
 .window-controls--macos {
   grid-column: 1;
   justify-self: start;
   height: 100%;
   align-items: center;
   gap: 8px;
-  padding: 0 14px;
+  padding: 0 12px;
 }
 
 .window-controls--macos .window-control {
+  position: relative;
   width: 12px;
   height: 12px;
-  border: 0.5px solid rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 50%;
-  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+  color: rgba(0, 0, 0, 0.6);
 }
 
-.window-controls--macos .window-control::before,
-.window-controls--macos .window-control::after {
+.window-controls--macos .window-control__glyph {
   display: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
 }
 
-.window-controls--macos .window-control--close { background: #ff5f57; }
-.window-controls--macos .window-control--minimize { background: #febc2e; }
-.window-controls--macos .window-control--maximize { background: #28c840; }
+/* macOS shows traffic-light glyphs only while the group is hovered. */
+.window-controls--macos:hover .window-control__glyph,
+.window-controls--macos .window-control:focus-visible .window-control__glyph {
+  display: inline-flex;
+}
+.window-controls--macos .window-control:active {
+  color: rgba(0, 0, 0, 0.6);
+}
+.window-controls--macos .window-control--close { background: #ff544d; }
+.window-controls--macos .window-control--minimize { background: #ffbd2e; }
+.window-controls--macos .window-control--maximize { background: #28c93f; }
+.window-controls--macos .window-control--close:active { background: #bf403a; }
+.window-controls--macos .window-control--minimize:active { background: #bf9122; }
+.window-controls--macos .window-control--maximize:active { background: #1e9930; }
+[data-theme="dark"] .window-controls--macos .window-control { border: 0; }
 
 .workspace-header {
   position: absolute;

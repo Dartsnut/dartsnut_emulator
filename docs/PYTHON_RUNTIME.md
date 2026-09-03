@@ -32,9 +32,9 @@ runtime/
   runtime.json
 ```
 
-Every startup validates metadata, platform, requirements hash, executables, exact Python and uv versions, and core imports (`pygame`, `PIL`, `numpy`, and `pydartsnut`). A valid install needs no network request. Invalid or incomplete state is rebuilt from verified cached archives when possible.
+Startup bootstraps only managed Python, uv, and an empty managed venv. It validates metadata, platform, executables, and exact Python and uv versions; it does not read the repository `requirements.txt`, install packages, or import-check workspace packages. A valid bootstrap needs no package-index request. Workspace and tool dependencies are prepared lazily by their owning workflows.
 
-`runtime.json` is written only after extraction, dependency installation, and validation succeed. Interrupted staging never becomes ready. Old versioned runtimes are pruned only after new target is ready.
+`runtime.json` is written after bootstrap extraction and validation succeed. Interrupted staging never becomes ready. Old versioned runtimes are pruned only after new target is ready.
 
 ## Download source selection
 
@@ -76,7 +76,7 @@ Before every game or widget launch, bridge runs:
 
 `UV_PYTHON` pins workspace sync to managed Python. Launch requires workspace `.venv`; missing managed binaries or workspace Python is fatal. No `sys.executable` fallback exists.
 
-Before installing runtime dependencies such as `pygame-ce`, Tauri concurrently probes the exact `pygame-ce` project page on PyPI and USTC, then uses the faster successful index. Download failure falls back to the other successful index. Workspace `uv sync` repeats the same concurrent source selection before downloading project dependencies. Successful runtime index URL is recorded only as internal metadata.
+Workspace launch performs `uv sync --directory <workspace>` on demand; this is where project dependencies such as `pygame-ce`, `numpy`, and `pydartsnut` are installed. Asset binding installs pinned `Pillow` (`12.1.1`) on first use if `import PIL` fails, then launches the preprocessor. Repeated launches skip already-importable Pillow. Package-index selection belongs to the workspace/tool workflow; startup does not probe PyPI or persist a package index.
 
 ## Version bump checklist
 

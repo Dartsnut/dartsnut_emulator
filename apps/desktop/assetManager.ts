@@ -141,6 +141,8 @@ function runPreprocessor(options: RunPreprocessorOptions): Promise<PreprocessRes
 interface AssetManagerOptions {
   launchScript: (scriptPath: string, scriptArgs: string[]) => PythonScriptLaunch;
   scriptPath: string;
+  /** Ensure image-tooling dependencies before invoking the Pillow-backed script. */
+  ensureDependencies?: () => void | Promise<void>;
   onSnapshot?: (snapshot: ManifestSnapshot) => void;
 }
 
@@ -226,6 +228,12 @@ export class AssetManager {
       "--workspace",
       workspacePath
     ];
+    try {
+      await this.options.ensureDependencies?.();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: bindError(slotId, "pillow_unavailable", message) };
+    }
     const result = await runPreprocessor({
       launch: this.options.launchScript(this.options.scriptPath, scriptArgs),
       slot,

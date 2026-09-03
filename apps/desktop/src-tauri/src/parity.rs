@@ -705,7 +705,7 @@ pub fn emulator_open_capture_folder(
         .ok()
         .map(|path| path.join("Dartsnut"));
     let allowed = std::iter::once(workspace)
-        .chain(downloads_capture.into_iter())
+        .chain(downloads_capture)
         .filter_map(|path| std::fs::canonicalize(path).ok())
         .any(|root| capture_path_within_root(&requested, &root));
     if !allowed {
@@ -1811,11 +1811,17 @@ pub async fn assets_bind_slot(app: AppHandle, payload: Option<Value>) -> Value {
             return json!({"ok":false,"error":{"slotId":slot_id,"code":"runtime_not_ready","message":message}});
         }
     };
+    let asset_python = match crate::runtime::ensure_pillow(&runtime).await {
+        Ok(path) => path,
+        Err(message) => {
+            return json!({"ok":false,"error":{"slotId":slot_id,"code":"pillow_unavailable","message":message}})
+        }
+    };
     let output = match tokio::process::Command::new(&runtime.uv)
         .arg("run")
         .arg("--no-project")
         .arg("--python")
-        .arg(&runtime.python)
+        .arg(&asset_python)
         .arg(&script)
         .arg("--slot")
         .arg(slot_id)

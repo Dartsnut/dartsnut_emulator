@@ -39,6 +39,8 @@ bytes = "1"
 rand = "0.9"
 sha2 = "0.10"
 base64 = "0.22"
+libc = "0.2"
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Memory"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 dotenvy = "0.15"
 tar = "0.4"

@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { stripInheritedPythonHome } from "./pythonEnvSanitize";
 
@@ -13,21 +12,6 @@ export const UV_VERSION = "0.11.19";
 
 const PYTHON_BASE_URL = `https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_RELEASE}`;
 const UV_BASE_URL = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;
-
-const PYPI_MIRRORS = [
-  {
-    name: "PyPI (default)",
-    indexUrl: "https://pypi.org/simple",
-    helpUrl: "https://pypi.org",
-  },
-  {
-    name: "USTC Mirror (China)",
-    indexUrl: "https://mirrors.ustc.edu.cn/pypi/simple",
-    helpUrl: "https://mirrors.ustc.edu.cn/help/pypi.html",
-  },
-] as const;
-
-const RETRIES_PER_MIRROR = 3;
 
 type Platform = "darwin-arm64" | "win-x64";
 
@@ -71,6 +55,7 @@ export interface RuntimeMetadata {
   uvVersion: string;
   installedAt: string;
   platform: Platform;
+  /** Legacy fields retained for reading older metadata only. */
   pypiIndexUrl?: string;
   depsInstalledAt?: string;
 }
@@ -215,97 +200,11 @@ function isRuntimeValid(runtimeDir: string, platform: Platform): boolean {
     return (
       metadata.pythonVersion === PYTHON_VERSION &&
       metadata.uvVersion === UV_VERSION &&
-      metadata.platform === platform &&
-      // Configuration is only complete if dependencies are installed
-      Boolean(metadata.depsInstalledAt)
+      metadata.platform === platform
     );
   } catch {
     return false;
   }
-}
-
-async function installDependencies(
-  uvBin: string,
-  runtimePython: string,
-  requirementsPath: string,
-  pythonRuntimeDir: string,
-  preferredIndexUrl: string | undefined,
-  onProgress: ProgressCallback
-): Promise<string> {
-  // On macOS the venv carries a copied stdlib and PYTHONHOME must point at it.
-  // On Windows the venv has no stdlib; the interpreter resolves it via
-  // pyvenv.cfg, and an inherited PYTHONHOME/PYTHONPATH from the user's machine
-  // overrides that and breaks interpreter init ("No module named 'encodings'").
-  // So strip any inherited value on Windows; set it explicitly off-Windows.
-  const pythonEnv =
-    process.platform === "win32"
-      ? stripInheritedPythonHome({ ...process.env })
-      : { ...process.env, PYTHONHOME: pythonRuntimeDir };
-
-  // Try preferred mirror first if we have one
-  const mirrorsToTry = preferredIndexUrl
-    ? [
-        { name: "Saved mirror", indexUrl: preferredIndexUrl, helpUrl: "" },
-        ...PYPI_MIRRORS.filter(m => m.indexUrl !== preferredIndexUrl)
-      ]
-    : PYPI_MIRRORS;
-
-  let lastError: Error | null = null;
-
-  for (const mirror of mirrorsToTry) {
-    onProgress({
-      stage: "install_deps",
-      percent: 0,
-      message: `Installing dependencies from ${mirror.name}...`
-    });
-
-    for (let attempt = 1; attempt <= RETRIES_PER_MIRROR; attempt++) {
-      try {
-        const args = [
-          "pip", "install",
-          "--python", runtimePython,
-          "--index-url", mirror.indexUrl,
-          "-r", requirementsPath
-        ];
-
-        const result = spawnSync(uvBin, args, {
-          stdio: "pipe",
-          env: pythonEnv,
-        });
-
-        if (result.status === 0) {
-          onProgress({ stage: "install_deps", percent: 100, message: "Dependencies installed" });
-          return mirror.indexUrl;
-        }
-
-        const stderr = result.stderr?.toString() || "";
-        lastError = new Error(`Failed (attempt ${attempt}/${RETRIES_PER_MIRROR}): ${stderr}`);
-
-        // Wait before retry (exponential backoff: 1s, 2s, 4s)
-        if (attempt < RETRIES_PER_MIRROR) {
-          await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 1) * 1000));
-        }
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-      }
-    }
-
-    // All retries failed for this mirror, try next one
-    console.warn(`Mirror ${mirror.name} failed after ${RETRIES_PER_MIRROR} attempts`);
-  }
-
-  // All mirrors exhausted
-  throw new Error(
-    `Failed to install dependencies after trying all mirrors.\n\n` +
-    `Mirrors attempted:\n` +
-    mirrorsToTry.map(m => `  - ${m.name}: ${m.indexUrl}`).join('\n') +
-    `\n\nLast error: ${lastError?.message || 'Unknown error'}\n\n` +
-    `Troubleshooting:\n` +
-    `  1. Check your internet connection\n` +
-    `  2. Check if PyPI is accessible: ${PYPI_MIRRORS[0].indexUrl}\n` +
-    `  3. Try USTC mirror help: ${PYPI_MIRRORS[1].helpUrl}\n` +
-    `  4. Clear app cache and try again`
-  );
 }
 
 async function ensureUvBinary(
@@ -366,10 +265,11 @@ async function ensureUvBinary(
 
 export async function ensureRuntime(
   runtimeDir: string,
-  requirementsPath: string,
   onProgress: ProgressCallback,
   options: { fetchImpl?: FetchLike } = {}
 ): Promise<{ pythonPath: string; uvPath: string }> {
+  // Startup intentionally bootstraps only Python, uv, and an empty venv. The
+  // workspace/tool dependencies are installed by their owning lazy workflow.
   const fetchImpl = options.fetchImpl ?? fetch;
   const platform = detectPlatform();
 
@@ -503,34 +403,63 @@ export async function ensureRuntime(
     }
   }
 
-  // Write metadata AFTER Python/uv setup but BEFORE pip install
-  // This prevents re-downloading Python/uv if pip install fails
+  // Persist bootstrap metadata as soon as Python and uv are usable. Dependency
+  // installation is intentionally handled by lazy workspace/tool workflows.
   const metadataPath = path.join(runtimeDir, ".metadata.json");
-  let metadata: RuntimeMetadata = {
+  const metadata: RuntimeMetadata = {
     pythonVersion: PYTHON_VERSION,
     uvVersion: UV_VERSION,
     installedAt: new Date().toISOString(),
     platform,
-    // depsInstalledAt is NOT set yet - indicates pip install not done
   };
-  fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
-
-  // Install dependencies with mirror fallback
-  const workingMirror = await installDependencies(
-    uvBin,
-    runtimePython,
-    requirementsPath,
-    pythonRuntimeDir,
-    undefined,  // No preferred mirror on first install
-    onProgress
-  );
-
-  // Update metadata with successful pip install
-  metadata.depsInstalledAt = new Date().toISOString();
-  metadata.pypiIndexUrl = workingMirror;
   fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
 
   onProgress({ stage: "complete", percent: 100, message: "Runtime ready" });
 
   return { pythonPath: runtimePython, uvPath: uvBin };
+}
+
+export const PILLOW_VERSION = "12.1.1";
+
+function runtimePythonEnv(pythonRuntimeDir: string): NodeJS.ProcessEnv {
+  if (process.platform === "win32") {
+    return stripInheritedPythonHome({ ...process.env });
+  }
+  return { ...process.env, PYTHONHOME: pythonRuntimeDir };
+}
+
+/** Install Pillow only when an image asset workflow needs it. */
+export function ensurePillow(
+  runtimeDir: string,
+  onProgress?: ProgressCallback,
+): { pythonPath: string; uvPath: string } {
+  detectPlatform();
+  const pythonRuntimeDir = path.join(runtimeDir, `python-${PYTHON_VERSION}`);
+  const uvBinName = process.platform === "win32" ? "uv.exe" : "uv";
+  const uvPath = path.join(runtimeDir, `uv-${UV_VERSION}`, uvBinName);
+  const pythonPath = venvPythonPath(pythonRuntimeDir);
+  if (!fs.existsSync(pythonPath) || !fs.existsSync(uvPath)) {
+    throw new Error("Managed Python runtime is unavailable; bootstrap it before installing Pillow");
+  }
+
+  const toolDir = path.join(runtimeDir, "asset-tools");
+  const toolPython = venvPythonPath(toolDir);
+  const env = runtimePythonEnv(pythonRuntimeDir);
+  if (!fs.existsSync(toolPython)) {
+    run(uvPath, ["venv", "--python", pythonPath, toolDir], { env });
+  }
+  const toolEnv = runtimePythonEnv(toolDir);
+  const probe = spawnSync(toolPython, ["-c", "import PIL"], { stdio: "pipe", env: toolEnv });
+  if (probe.status !== 0) {
+    onProgress?.({ stage: "install_deps", percent: 0, message: "Installing image tooling (Pillow)..." });
+    run(uvPath, ["pip", "install", "--python", toolPython, `Pillow==${PILLOW_VERSION}`], { env: toolEnv });
+  }
+
+  const verified = spawnSync(toolPython, ["-c", "import PIL"], { stdio: "pipe", env: toolEnv });
+  if (verified.status !== 0) {
+    const stderr = verified.stderr?.toString().trim();
+    throw new Error(`Pillow installation did not make PIL importable${stderr ? `: ${stderr}` : ""}`);
+  }
+  onProgress?.({ stage: "install_deps", percent: 100, message: "Image tooling ready" });
+  return { pythonPath: toolPython, uvPath };
 }

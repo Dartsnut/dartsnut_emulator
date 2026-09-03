@@ -1,4 +1,5 @@
-use tauri::{Emitter, Manager, WindowEvent};
+use std::sync::atomic::Ordering;
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
 
 pub const BRIDGE_READY_EVENT: &str = "dartsnut:bridge-ready";
@@ -25,6 +26,20 @@ pub fn ensure_rustls_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     }
+}
+
+async fn shutdown_resources(app: &tauri::AppHandle) {
+    let state = app.state::<commands::AppState>();
+    if let Ok(mut slot) = state.sideload.lock() {
+        if let Some(client) = slot.take() {
+            client.close();
+        }
+    }
+    let connection = state.deploy.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(connection) = connection {
+        let _ = connection.close().await;
+    }
+    state.emulator.stop().await;
 }
 
 pub fn run() {
@@ -61,27 +76,21 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(commands::AppState::default())
         .on_window_event(|window, event| {
-            if !matches!(event, WindowEvent::CloseRequested { .. }) {
+            let WindowEvent::CloseRequested { api, .. } = event else {
+                return;
+            };
+            let app = window.app_handle().clone();
+            let state = app.state::<commands::AppState>();
+            // CloseRequested is allowed to destroy the last window immediately.
+            // Hold it until Rust has stopped widget descendants and shared memory.
+            if state.quit_cleanup_started.swap(true, Ordering::SeqCst) {
                 return;
             }
-            let app = window.app_handle().clone();
-            let state: tauri::State<'_, commands::AppState> = app.state();
-            if let Ok(mut slot) = state.sideload.lock() {
-                if let Some(client) = slot.take() {
-                    client.close();
-                }
-            }
-            let connection = state.deploy.lock().ok().and_then(|mut slot| slot.take());
-            let app_for_task = app.clone();
+            api.prevent_close();
+            let window = window.clone();
             tauri::async_runtime::spawn(async move {
-                if let Some(connection) = connection {
-                    let _ = connection.close().await;
-                }
-                app_for_task
-                    .state::<commands::AppState>()
-                    .emulator
-                    .stop()
-                    .await;
+                shutdown_resources(&app).await;
+                let _ = window.close();
             });
         })
         .invoke_handler(tauri::generate_handler![
@@ -169,6 +178,24 @@ pub fn run() {
             runtime.start(handle);
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Dartsnut Agent");
+        .build(tauri::generate_context!())
+        .expect("error while building Dartsnut Agent")
+        .run(|app, event| {
+            let RunEvent::ExitRequested { api, code, .. } = event else {
+                return;
+            };
+            let state = app.state::<commands::AppState>();
+            // Menu/app exits do not necessarily produce WindowEvent::CloseRequested.
+            // Prevent exit, perform identical cleanup, then request exit again; the
+            // second event observes the guard and is allowed through.
+            if state.quit_cleanup_started.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            api.prevent_exit();
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                shutdown_resources(&app).await;
+                app.exit(code.unwrap_or(0));
+            });
+        });
 }

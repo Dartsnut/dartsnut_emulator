@@ -1,5 +1,4 @@
 import path from "node:path";
-import fs from "node:fs";
 import { app } from "electron";
 import { PYTHON_VERSION, UV_VERSION } from "./pythonRuntimeDownloader";
 import { stripInheritedPythonHome } from "./pythonEnvSanitize";
@@ -33,19 +32,6 @@ export function pythonRuntimeDir(): string {
 export function uvBinaryPath(): string {
   const binName = process.platform === "win32" ? "uv.exe" : "uv";
   return path.join(runtimeDir(), `uv-${UV_VERSION}`, binName);
-}
-
-export function getPreferredPypiIndexUrl(): string | undefined {
-  try {
-    const metadataPath = path.join(runtimeDir(), ".metadata.json");
-    if (!fs.existsSync(metadataPath)) {
-      return undefined;
-    }
-    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
-    return metadata.pypiIndexUrl;
-  } catch {
-    return undefined;
-  }
 }
 
 export const DARTSNUT_UV_BIN_ENV = "DARTSNUT_UV_BIN";
@@ -95,12 +81,6 @@ export function buildUvOfflineEnv(
   };
   if (uvBin) {
     env[DARTSNUT_UV_BIN_ENV] = uvBin;
-  }
-
-  // Add preferred PyPI index URL if we have one
-  const pypiIndexUrl = getPreferredPypiIndexUrl();
-  if (pypiIndexUrl) {
-    env.DARTSNUT_PYPI_INDEX_URL = pypiIndexUrl;
   }
 
   const venvDir = venvDirForPython(pythonPath);

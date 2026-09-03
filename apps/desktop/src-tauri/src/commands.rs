@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -29,6 +30,8 @@ pub struct AppState {
     pub runtime: crate::runtime::RuntimeManager,
     pub update: Mutex<crate::commands::PendingUpdate>,
     pub(crate) provider_settings: Mutex<ProviderSettingsFile>,
+    /// Prevents window-close and app-exit paths from racing cleanup.
+    pub quit_cleanup_started: AtomicBool,
 }
 
 pub struct PendingUpdate {
@@ -65,6 +68,7 @@ impl Default for AppState {
                 auto_download: true,
             }),
             provider_settings: Mutex::new(ProviderSettingsFile::default()),
+            quit_cleanup_started: AtomicBool::new(false),
         }
     }
 }

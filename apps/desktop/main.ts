@@ -14,7 +14,7 @@ import {
   syncWorkspaceProjectMetadata
 } from "./workspaceProjectMetadata";
 import { buildPythonScriptLaunch, pythonRuntimeDir, runtimeDir, uvBinaryPath, venvPythonPath } from "./pythonRuntime";
-import { ensureRuntime, type DownloadProgress } from "./pythonRuntimeDownloader";
+import { ensurePillow, ensureRuntime, type DownloadProgress } from "./pythonRuntimeDownloader";
 import {
   IPCChannels,
   type AgentEvent,
@@ -370,6 +370,7 @@ if (app.isPackaged) {
   dotenv.config({ path: repoEnvPath });
 }
 let pythonExec: string | null = null;
+let assetPythonExec: string | null = null;
 let pythonRuntimeStatus: string | null = null;
 let pythonRuntimeProgress: PythonRuntimeProgress = {
   running: false,
@@ -383,11 +384,21 @@ const assetPreprocessScriptRelativePath = "scripts/asset_preprocess.py";
 const assetManager = new AssetManager({
   launchScript: (scriptPath, scriptArgs) =>
     buildPythonScriptLaunch({
-      pythonPath: pythonExec!,
+      pythonPath: assetPythonExec ?? pythonExec!,
       scriptPath,
       scriptArgs,
     }),
   scriptPath: path.join(repoRoot, assetPreprocessScriptRelativePath),
+  ensureDependencies: () => {
+    if (!pythonExec) {
+      throw new Error("Managed Python runtime is unavailable");
+    }
+    const tool = ensurePillow(runtimeDir(), (progress) => {
+      setPythonRuntimeProgressFromDownload(progress);
+      devLog.info("[runtime] Progress", { stage: progress.stage, percent: progress.percent });
+    });
+    assetPythonExec = tool.pythonPath;
+  },
   onSnapshot: (snapshot: ManifestSnapshot) => {
     sendToRenderer(IPCChannels.assetsSubscribeManifest, snapshot);
   }
@@ -1390,14 +1401,16 @@ async function gracefulStopEmulatorBridge(
 
   if (proc.exitCode === null) {
     try {
-      proc.kill();
+      if (process.platform !== "win32" && proc.pid) process.kill(-proc.pid, "SIGTERM");
+      else proc.kill();
     } catch {
       /* ignore */
     }
     await sleepMs(400);
     if (proc.exitCode === null) {
       try {
-        proc.kill("SIGKILL");
+        if (process.platform !== "win32" && proc.pid) process.kill(-proc.pid, "SIGKILL");
+        else proc.kill("SIGKILL");
       } catch {
         /* ignore */
       }
@@ -1421,7 +1434,8 @@ function stopPythonBridgeProcess(): void {
     return;
   }
   try {
-    bridgeProcess.kill();
+    if (process.platform !== "win32" && bridgeProcess.pid) process.kill(-bridgeProcess.pid, "SIGKILL");
+    else bridgeProcess.kill();
   } catch {
     /* ignore */
   }
@@ -2339,6 +2353,7 @@ function spawnBridgeAfterStop() {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: repoRoot,
     env: launch.env,
+    detached: process.platform !== "win32",
   });
   bridgeRuntimeKey = launch.runtimeKey;
   emulatorState.status = `Bridge starting with ${launch.label}`;
@@ -2713,7 +2728,6 @@ app.whenReady().then(async () => {
     recordStartupDiagnostic("runtime-initialization-started");
     const runtime = await ensureRuntime(
       runtimeDir(),
-      path.join(repoRoot, "requirements.txt"),
       (progress) => {
         setPythonRuntimeProgressFromDownload(progress);
         devLog.info("[runtime] Progress", { stage: progress.stage, percent: progress.percent });

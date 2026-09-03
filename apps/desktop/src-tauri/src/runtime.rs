@@ -20,16 +20,12 @@ use tokio::sync::watch;
 pub const TARGET_PYTHON_VERSION: &str = "3.14.7";
 pub const TARGET_PYTHON_RELEASE: &str = "20260901";
 pub const TARGET_UV_VERSION: &str = "0.12.8";
+pub const PILLOW_VERSION: &str = "12.1.1";
 
 const RUNTIME_SCHEMA_VERSION: u32 = 1;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 const USTC_HOST: &str = "mirrors.ustc.edu.cn";
-const PYPI_MIRRORS: [&str; 2] = [
-    "https://pypi.org/simple",
-    "https://mirrors.ustc.edu.cn/pypi/simple",
-];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimePlatform {
@@ -131,7 +127,7 @@ fn uv_target(platform: RuntimePlatform) -> ArtifactTarget {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeProgress {
     pub running: bool,
@@ -158,25 +154,11 @@ pub enum RuntimeStage {
     Error,
 }
 
-impl Default for RuntimeProgress {
-    fn default() -> Self {
-        Self {
-            running: false,
-            stage: None,
-            percent: 0,
-            message: None,
-            error: None,
-            artifact: None,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct ManagedRuntimePaths {
     pub python: PathBuf,
     pub uv: PathBuf,
     pub environment_dir: PathBuf,
-    pub pypi_index_url: Option<String>,
 }
 
 #[derive(Default)]
@@ -254,8 +236,8 @@ impl RuntimeManager {
                             stage: Some(RuntimeStage::Complete),
                             percent: 100,
                             message: Some("Runtime ready".to_owned()),
+                            error: None,
                             artifact: Some("runtime".to_owned()),
-                            ..RuntimeProgress::default()
                         },
                     );
                     let _ = app.emit("agent:python-runtime-status", Option::<String>::None);
@@ -273,7 +255,6 @@ impl RuntimeManager {
                             error: Some(error),
                             percent: previous.percent,
                             artifact: previous.artifact,
-                            ..RuntimeProgress::default()
                         },
                     );
                     let _ = app.emit("agent:python-runtime-status", Option::<String>::None);
@@ -337,13 +318,11 @@ struct RuntimeMetadata {
     python_release: String,
     uv_version: String,
     platform: RuntimePlatform,
-    requirements_sha256: String,
     installed_at: String,
     python_source: DownloadSource,
     uv_source: DownloadSource,
     python_probe_ms: Option<u64>,
     uv_probe_ms: Option<u64>,
-    pypi_index_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -389,12 +368,11 @@ impl RuntimeLayout {
         }
     }
 
-    fn paths(&self, pypi_index_url: Option<String>) -> ManagedRuntimePaths {
+    fn paths(&self) -> ManagedRuntimePaths {
         ManagedRuntimePaths {
             python: self.python.clone(),
             uv: self.uv.clone(),
             environment_dir: self.environment_dir.clone(),
-            pypi_index_url,
         }
     }
 }
@@ -410,14 +388,11 @@ async fn ensure_managed_runtime(
         .map_err(|error| format!("Could not resolve application data directory: {error}"))?
         .join("runtime");
     let layout = RuntimeLayout::new(root, platform);
-    let requirements = locate_resource(app, "requirements.txt")
-        .ok_or_else(|| "Bundled requirements.txt was not found".to_owned())?;
-    let requirements_hash = sha256_file(&requirements).map_err(|error| error.to_string())?;
 
     fs::create_dir_all(&layout.root).map_err(|error| error.to_string())?;
     if let Some(metadata) = read_metadata(&layout.metadata) {
-        if metadata_matches(&metadata, platform, &requirements_hash, &layout) {
-            let paths = layout.paths(metadata.pypi_index_url.clone());
+        if metadata_matches(&metadata, platform, &layout) {
+            let paths = layout.paths();
             manager.update(
                 app,
                 RuntimeStage::Validate,
@@ -426,7 +401,7 @@ async fn ensure_managed_runtime(
                 None,
                 None,
             );
-            if validate_runtime(&paths).await.is_ok() {
+            if validate_bootstrap_runtime(&paths).await.is_ok() {
                 return Ok(paths);
             }
         }
@@ -535,7 +510,6 @@ async fn ensure_managed_runtime(
         python: base_python.clone(),
         uv: layout.uv.clone(),
         environment_dir: layout.python_base.clone(),
-        pypi_index_url: None,
     };
     let mut bootstrap_environment = managed_environment(&bootstrap_paths);
     bootstrap_environment.retain(|(key, _)| key != "VIRTUAL_ENV");
@@ -557,18 +531,16 @@ async fn ensure_managed_runtime(
         ));
     }
 
-    let paths = layout.paths(None);
-    let pypi_index_url = install_requirements(app, manager, &client, &paths, &requirements).await?;
-    let paths = layout.paths(Some(pypi_index_url.clone()));
+    let paths = layout.paths();
     manager.update(
         app,
         RuntimeStage::Validate,
         92,
-        "Validating Python, uv, and emulator dependencies…",
+        "Validating Python and uv bootstrap…",
         Some("runtime"),
         None,
     );
-    validate_runtime(&paths).await?;
+    validate_bootstrap_runtime(&paths).await?;
 
     let metadata = RuntimeMetadata {
         schema_version: RUNTIME_SCHEMA_VERSION,
@@ -576,34 +548,16 @@ async fn ensure_managed_runtime(
         python_release: TARGET_PYTHON_RELEASE.to_owned(),
         uv_version: TARGET_UV_VERSION.to_owned(),
         platform,
-        requirements_sha256: requirements_hash,
         installed_at: chrono::Utc::now().to_rfc3339(),
         python_source: python_download.source,
         uv_source: uv_download.source,
         python_probe_ms: python_download.probe_ms,
         uv_probe_ms: uv_download.probe_ms,
-        pypi_index_url: Some(pypi_index_url),
     };
     write_metadata(&layout.metadata, &metadata)?;
     remove_if_exists(&layout.staging)?;
     prune_old_versions(&layout.root)?;
     Ok(paths)
-}
-
-fn locate_resource(app: &AppHandle, relative: &str) -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Ok(root) = app.path().resource_dir() {
-        candidates.push(root.join(relative));
-    }
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../..")
-            .join(relative),
-    );
-    if let Ok(root) = env::current_dir() {
-        candidates.push(root.join(relative));
-    }
-    candidates.into_iter().find(|path| path.is_file())
 }
 
 fn read_metadata(path: &Path) -> Option<RuntimeMetadata> {
@@ -615,7 +569,6 @@ fn read_metadata(path: &Path) -> Option<RuntimeMetadata> {
 fn metadata_matches(
     metadata: &RuntimeMetadata,
     platform: RuntimePlatform,
-    requirements_hash: &str,
     layout: &RuntimeLayout,
 ) -> bool {
     metadata.schema_version == RUNTIME_SCHEMA_VERSION
@@ -623,7 +576,6 @@ fn metadata_matches(
         && metadata.python_release == TARGET_PYTHON_RELEASE
         && metadata.uv_version == TARGET_UV_VERSION
         && metadata.platform == platform
-        && metadata.requirements_sha256 == requirements_hash
         && layout.python.is_file()
         && layout.uv.is_file()
 }
@@ -765,6 +717,7 @@ async fn probe_source(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn download_archive(
     app: &AppHandle,
     manager: &RuntimeManager,
@@ -893,115 +846,7 @@ fn extract_archive(path: &Path, destination: &Path, kind: ArchiveKind) -> Result
     Ok(())
 }
 
-async fn install_requirements(
-    app: &AppHandle,
-    manager: &RuntimeManager,
-    client: &reqwest::Client,
-    paths: &ManagedRuntimePaths,
-    requirements: &Path,
-) -> Result<String, String> {
-    manager.update(
-        app,
-        RuntimeStage::Probe,
-        69,
-        "Checking package download speed…",
-        Some("requirements.txt"),
-        None,
-    );
-    let (primary, secondary) = tokio::join!(
-        probe_package_index(client, PYPI_MIRRORS[0]),
-        probe_package_index(client, PYPI_MIRRORS[1])
-    );
-    let mirrors = ordered_package_indexes(primary, secondary);
-    if mirrors.is_empty() {
-        return Err("No package download source is reachable".to_owned());
-    }
-    let mut last_error = String::new();
-    for (mirror_index, mirror) in mirrors.iter().enumerate() {
-        for attempt in 1..=3 {
-            manager.update(
-                app,
-                RuntimeStage::Install,
-                70 + (mirror_index * 8 + attempt * 2) as u8,
-                format!("Installing emulator dependencies… (attempt {attempt}/3)"),
-                Some("requirements.txt"),
-                None,
-            );
-            let mut environment = managed_environment(paths);
-            environment.push(("UV_INDEX_URL".to_owned(), (*mirror).to_owned()));
-            match run_checked(
-                &paths.uv,
-                &[
-                    OsString::from("pip"),
-                    OsString::from("install"),
-                    OsString::from("--python"),
-                    paths.python.as_os_str().to_owned(),
-                    OsString::from("--index-url"),
-                    OsString::from(mirror),
-                    OsString::from("-r"),
-                    requirements.as_os_str().to_owned(),
-                ],
-                Some(environment),
-            )
-            .await
-            {
-                Ok(_) => return Ok((*mirror).to_owned()),
-                Err(error) => last_error = error,
-            }
-            if attempt < 3 {
-                tokio::time::sleep(Duration::from_secs(1 << (attempt - 1))).await;
-            }
-        }
-    }
-    Err(format!(
-        "Failed to install emulator dependencies: {last_error}"
-    ))
-}
-
-async fn probe_package_index(
-    client: &reqwest::Client,
-    url: &'static str,
-) -> Option<(&'static str, u64)> {
-    let started = Instant::now();
-    let probe_url = format!("{}/pygame-ce/", url.trim_end_matches('/'));
-    let response = tokio::time::timeout(
-        PROBE_TIMEOUT,
-        client.get(probe_url).header(RANGE, "bytes=0-0").send(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    if !matches!(response.status().as_u16(), 200 | 206) {
-        return None;
-    }
-    let mut stream = response.bytes_stream();
-    let remaining = PROBE_TIMEOUT.checked_sub(started.elapsed())?;
-    let first = tokio::time::timeout(remaining, stream.next())
-        .await
-        .ok()??
-        .ok()?;
-    if first.is_empty() {
-        return None;
-    }
-    Some((
-        url,
-        started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-    ))
-}
-
-fn ordered_package_indexes(
-    primary: Option<(&'static str, u64)>,
-    secondary: Option<(&'static str, u64)>,
-) -> Vec<&'static str> {
-    let mut candidates = [primary, secondary]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    candidates.sort_by_key(|(_, latency_ms)| *latency_ms);
-    candidates.into_iter().map(|(url, _)| url).collect()
-}
-
-async fn validate_runtime(paths: &ManagedRuntimePaths) -> Result<(), String> {
+async fn validate_bootstrap_runtime(paths: &ManagedRuntimePaths) -> Result<(), String> {
     let uv_output = run_checked(
         &paths.uv,
         &[OsString::from("--version")],
@@ -1014,8 +859,6 @@ async fn validate_runtime(paths: &ManagedRuntimePaths) -> Result<(), String> {
             uv_output.stdout.trim()
         ));
     }
-    let mut environment = managed_environment(paths);
-    environment.push(("PYGAME_HIDE_SUPPORT_PROMPT".to_owned(), "1".to_owned()));
     let output = run_checked(
         &paths.uv,
         &[
@@ -1025,11 +868,9 @@ async fn validate_runtime(paths: &ManagedRuntimePaths) -> Result<(), String> {
             paths.python.as_os_str().to_owned(),
             OsString::from("python"),
             OsString::from("-c"),
-            OsString::from(
-                "import sys, pygame, PIL, numpy, pydartsnut; print(sys.version.split()[0])",
-            ),
+            OsString::from("import sys; print(sys.version.split()[0])"),
         ],
-        Some(environment),
+        Some(managed_environment(paths)),
     )
     .await?;
     if output.stdout.lines().last().map(str::trim) != Some(TARGET_PYTHON_VERSION) {
@@ -1117,10 +958,99 @@ pub fn managed_environment(paths: &ManagedRuntimePaths) -> Vec<(String, String)>
         ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
         ("PYTHONUNBUFFERED".to_owned(), "1".to_owned()),
     ]);
-    if let Some(index) = &paths.pypi_index_url {
-        values.push(("DARTSNUT_PYPI_INDEX_URL".to_owned(), index.clone()));
-    }
     values
+}
+
+/// Install image tooling only when an asset workflow needs it.
+///
+/// Runtime startup deliberately validates only the Python/uv bootstrap. The
+/// asset preprocessor imports Pillow, so its caller must invoke this helper
+/// immediately before launching that tool. Successful installation is
+/// idempotent: an already importable Pillow is left untouched.
+pub async fn ensure_pillow(paths: &ManagedRuntimePaths) -> Result<PathBuf, String> {
+    let runtime_root = paths
+        .python
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .ok_or_else(|| "managed runtime layout unavailable".to_owned())?;
+    let tool_dir = runtime_root.join("asset-tools");
+    let tool_python = if cfg!(windows) {
+        tool_dir.join("Scripts/python.exe")
+    } else {
+        tool_dir.join("bin/python")
+    };
+    let manifest = tool_dir.join("requirements.txt");
+    if !manifest.is_file() {
+        fs::create_dir_all(&tool_dir).map_err(|error| error.to_string())?;
+        fs::write(&manifest, format!("Pillow=={PILLOW_VERSION}\n"))
+            .map_err(|error| error.to_string())?;
+    }
+    let environment = managed_environment(paths);
+    if !tool_python.is_file() {
+        run_checked(
+            &paths.uv,
+            &[
+                OsString::from("venv"),
+                OsString::from("--python"),
+                paths.python.as_os_str().to_owned(),
+                tool_dir.as_os_str().to_owned(),
+            ],
+            Some(environment.clone()),
+        )
+        .await?;
+    }
+    if run_checked(
+        &paths.uv,
+        &[
+            OsString::from("run"),
+            OsString::from("--no-project"),
+            OsString::from("--python"),
+            tool_python.as_os_str().to_owned(),
+            OsString::from("python"),
+            OsString::from("-c"),
+            OsString::from("import PIL"),
+        ],
+        Some(environment.clone()),
+    )
+    .await
+    .is_ok()
+    {
+        return Ok(tool_python);
+    }
+
+    run_checked(
+        &paths.uv,
+        &[
+            OsString::from("pip"),
+            OsString::from("install"),
+            OsString::from("--requirement"),
+            manifest.as_os_str().to_owned(),
+            OsString::from("--python"),
+            tool_python.as_os_str().to_owned(),
+        ],
+        Some(environment.clone()),
+    )
+    .await
+    .map_err(|error| format!("Could not install Pillow: {error}"))?;
+
+    run_checked(
+        &paths.uv,
+        &[
+            OsString::from("run"),
+            OsString::from("--no-project"),
+            OsString::from("--python"),
+            tool_python.as_os_str().to_owned(),
+            OsString::from("python"),
+            OsString::from("-c"),
+            OsString::from("import PIL"),
+        ],
+        Some(environment),
+    )
+    .await
+    .map(|_| tool_python)
+    .map_err(|error| format!("Pillow installation did not make PIL importable: {error}"))
 }
 
 fn remove_if_exists(path: &Path) -> Result<(), String> {
@@ -1362,19 +1292,6 @@ mod tests {
     }
 
     #[test]
-    fn package_indexes_are_ordered_by_probe_latency() {
-        assert_eq!(
-            ordered_package_indexes(Some((PYPI_MIRRORS[0], 400)), Some((PYPI_MIRRORS[1], 25))),
-            vec![PYPI_MIRRORS[1], PYPI_MIRRORS[0]]
-        );
-        assert_eq!(
-            ordered_package_indexes(Some((PYPI_MIRRORS[0], 10)), None),
-            vec![PYPI_MIRRORS[0]]
-        );
-        assert!(ordered_package_indexes(None, None).is_empty());
-    }
-
-    #[test]
     fn progress_payload_does_not_expose_runtime_versions_or_source() {
         let payload = serde_json::to_value(RuntimeProgress {
             running: false,
@@ -1391,7 +1308,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_requires_exact_targets_hash_platform_and_binaries() {
+    fn metadata_requires_exact_targets_platform_and_binaries() {
         let root = env::temp_dir().join(format!("dartsnut-metadata-{}", uuid::Uuid::new_v4()));
         let layout = RuntimeLayout::new(root.clone(), RuntimePlatform::DarwinArm64);
         fs::create_dir_all(layout.python.parent().unwrap()).unwrap();
@@ -1404,31 +1321,53 @@ mod tests {
             python_release: TARGET_PYTHON_RELEASE.to_owned(),
             uv_version: TARGET_UV_VERSION.to_owned(),
             platform: RuntimePlatform::DarwinArm64,
-            requirements_sha256: "requirements".to_owned(),
             installed_at: "now".to_owned(),
             python_source: DownloadSource::Official,
             uv_source: DownloadSource::Ustc,
             python_probe_ms: Some(10),
             uv_probe_ms: Some(20),
-            pypi_index_url: None,
         };
         assert!(metadata_matches(
             &metadata,
             RuntimePlatform::DarwinArm64,
-            "requirements",
-            &layout
-        ));
-        assert!(!metadata_matches(
-            &metadata,
-            RuntimePlatform::DarwinArm64,
-            "changed",
             &layout
         ));
         fs::remove_file(&layout.uv).unwrap();
         assert!(!metadata_matches(
             &metadata,
             RuntimePlatform::DarwinArm64,
-            "requirements",
+            &layout
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_requirements_hash_does_not_gate_bootstrap_metadata() {
+        let root =
+            env::temp_dir().join(format!("dartsnut-legacy-metadata-{}", uuid::Uuid::new_v4()));
+        let layout = RuntimeLayout::new(root.clone(), RuntimePlatform::DarwinArm64);
+        fs::create_dir_all(layout.python.parent().unwrap()).unwrap();
+        fs::create_dir_all(layout.uv.parent().unwrap()).unwrap();
+        fs::write(&layout.python, b"python").unwrap();
+        fs::write(&layout.uv, b"uv").unwrap();
+        let metadata: RuntimeMetadata = serde_json::from_str(&format!(
+            r#"{{
+                    "schemaVersion": {},
+                    "pythonVersion": "{}",
+                    "pythonRelease": "{}",
+                    "uvVersion": "{}",
+                    "platform": "darwin-arm64",
+                    "requirementsSha256": "stale-root-requirements",
+                    "installedAt": "now",
+                    "pythonSource": "official",
+                    "uvSource": "cache"
+                }}"#,
+            RUNTIME_SCHEMA_VERSION, TARGET_PYTHON_VERSION, TARGET_PYTHON_RELEASE, TARGET_UV_VERSION
+        ))
+        .unwrap();
+        assert!(metadata_matches(
+            &metadata,
+            RuntimePlatform::DarwinArm64,
             &layout
         ));
         let _ = fs::remove_dir_all(root);
